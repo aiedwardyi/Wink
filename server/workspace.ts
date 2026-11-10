@@ -9,7 +9,7 @@
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -52,6 +52,25 @@ export function ensureWorkspace(botId: string): string {
 
 export function workspaceDir(botId: string): string {
   return join(WORKSPACES_DIR, botId);
+}
+
+function unlinkLinks(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) unlinkSync(path);
+    else if (stat.isDirectory()) unlinkLinks(path);
+  }
+}
+
+/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
+export function removeWorkspace(botId: string): void {
+  const dir = workspaceDir(botId);
+  const stat = lstatSync(dir, { throwIfNoEntry: false });
+  if (!stat) return;
+  if (stat.isSymbolicLink()) return unlinkSync(dir);
+  unlinkLinks(dir);
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** MEMORY.md under the load budget: first MEMORY_MAX_LINES lines or

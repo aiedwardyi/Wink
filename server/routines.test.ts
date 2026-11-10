@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -257,6 +257,24 @@ describe("RoutineManager", () => {
       name: "Survives malformed provenance",
       sourceThreadId: undefined,
     }]);
+  });
+
+  it("sets a routines.json that did not load aside before the first save", () => {
+    const h = harness();
+    const file = h.options.file!;
+    const cut = '{"version":1,"routines":[{"id":"kept","name":"Morning brief"';
+    writeFileSync(file, cut);
+    const manager = new RoutineManager(h.options);
+    expect(manager.listRoutines()).toEqual([]);
+    expect(readFileSync(file, "utf8")).toBe(cut);
+    const input = { name: "New", prompt: "Check the queue", botId: "maus-1", schedule: { type: "daily" as const, time: "09:00", weekdays: [1] } };
+    manager.create(input);
+    manager.create({ ...input, name: "Newer" });
+    const kept = readdirSync(dirname(file)).filter((name) => /^routines\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(dirname(file), kept[0]!), "utf8")).toBe(cut);
+    expect(new RoutineManager(h.options).listRoutines().map((routine) => routine.name).sort()).toEqual(["New", "Newer"]);
+    expect(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "routines.ts"), "utf8")).toContain("writeFileAtomic(this.file,");
   });
 
   it("reports a chat-confirmed run-now to its invoking thread without rebinding the routine", () => {

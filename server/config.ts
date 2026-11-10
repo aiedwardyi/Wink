@@ -16,7 +16,7 @@ import {
   type BrokeredCredentialId,
   type CustomKey,
 } from "../shared/credential-request.ts";
-import { writeFileAtomic } from "./atomic.ts";
+import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { hostMatchesRemote } from "./remote-access.ts";
@@ -465,11 +465,14 @@ export function applyCredentialAllowlist(
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");
   let disk: JsonObject = {};
+  let damaged = false;
   try {
     const parsed = jsonObjectSchema.safeParse(parseJson(readFileSync(p, "utf8")));
     if (parsed.success) disk = parsed.data;
-  } catch {
-    /* first write */
+    else damaged = true;
+  } catch (error) {
+    // a missing file is the first write
+    damaged = !(error instanceof Error && "code" in error && error.code === "ENOENT");
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
   for (const key of ["xai", "gemini", "openaiCompat", "composio", "box", "tts", "imageGen", "anthropic", "vertex", "profile", "rooms", "localVm", "features", "phoneRelay"] as const) {
@@ -493,6 +496,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk.instances = diskInstances;
   }
   mkdirSync(DATA_DIR, { recursive: true });
+  if (damaged) setAsideFile(p);
   writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
 }
 

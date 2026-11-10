@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -78,6 +78,20 @@ describe("configuration boundaries", () => {
     saveConfig(parseConfigPatch({ profile: { avatarUrl: "/api/attachments/new.png" } }));
     expect(file()).toEqual({ name: "Ada", avatarUrl: "/api/attachments/new.png" });
     expect(parseConfigPatch({ profile: { avatarCleared: false, nameCleared: false } })).toEqual({ profile: {} });
+  });
+
+  it("sets a damaged config.json aside before a save writes over it", () => {
+    const path = join(DATA_DIR, "config.json");
+    rmSync(path, { force: true });
+    saveConfig(parseConfigPatch({ profile: { name: "Ada" } }));
+    const damaged = `${readFileSync(path, "utf8")}}`;
+    writeFileSync(path, damaged);
+    saveConfig(parseConfigPatch({ features: { showToolCalls: false } }));
+    const kept = readdirSync(DATA_DIR).filter((name) => /^config\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(DATA_DIR, kept[0]!), "utf8")).toBe(damaged);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ features: { showToolCalls: false } });
+    rmSync(join(DATA_DIR, kept[0]!));
   });
 
   it("marks a cleared name so sign-in does not fill it back, and a new name clears the mark", () => {
