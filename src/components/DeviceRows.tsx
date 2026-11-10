@@ -40,7 +40,7 @@ export function DeviceRow({ name, sub, control, ready }: { name: string; sub?: s
 /** The picker's PCs. */
 export function YourPcs() {
   const { t } = useI18n();
-  const [devices, reload] = useDevices(true);
+  const [devices, reload] = useDevices(true, true);
   const [opening, setOpening] = useState<string | null>(null);
   if (!devices.length) return null;
   const deviceWindow = window.ogb?.deviceWindow;

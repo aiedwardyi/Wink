@@ -68,6 +68,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
   const [phones, setPhones] = useState<Phone[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [asking, setAsking] = useState(false);
+  const [askCode, setAskCode] = useState(false);
   const [invite, setInvite] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,7 +106,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
 
   const enabled = status?.enabled === true;
   useEffect(() => {
-    if (enabled) void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
+    if (!enabled) return;
+    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
+    load();
+    const timer = window.setInterval(load, STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
   }, [enabled, refresh, request]);
 
   // While a retry is scheduled: tick its countdown.
@@ -172,7 +177,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
   };
   const configured = status?.configured === true;
   const confirm = () => {
-    if (!configured) return void setUp(() => setAsking(false));
+    if (askCode) return void setUp(() => setAsking(false));
     setAsking(false);
     void save(true);
   };
@@ -218,7 +223,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
   );
 
   const signedOut = google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
-  const unavailable = refused || status?.available === false || (!configured && status?.available !== true);
+  const unavailable = (refused && !status) || status?.available === false || (!configured && status?.available !== true);
   const toggle = (
     <button
       type="button"
@@ -226,7 +231,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
       aria-checked={enabled}
       aria-label={t("settings.devices.reach")}
       disabled={busy || (!enabled && unavailable)}
-      onClick={() => (enabled ? void save(false) : setAsking(true))}
+      onClick={() => {
+        if (enabled) return void save(false);
+        // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
+        setAskCode(!configured);
+        setAsking(true);
+      }}
       className={cnSwitch(enabled)}
     >
       <span className={cnKnob(enabled)} />
@@ -238,7 +248,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
     </button>
   ) : null;
   // Already on: keep the switch so turning it off never needs a sign-in.
-  const control = enabled || unavailable || !signedOut ? toggle : signInButton;
+  const control = enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
   const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t("settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
@@ -326,14 +336,14 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}
-          confirmDisabled={busy || (!configured && !code.trim())}
+          confirmDisabled={busy || (askCode && !code.trim())}
           onConfirm={confirm}
           onCancel={() => {
             setAsking(false);
             setError(null);
           }}
         >
-          {configured ? null : (
+          {askCode ? (
             <form
               className="mt-4"
               onSubmit={(event) => {
@@ -345,7 +355,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
               <p className="mt-2 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.setup.help")}</p>
               {error ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
             </form>
-          )}
+          ) : null}
         </ConfirmDialog>
       ) : null}
     </>

@@ -84,6 +84,8 @@ export function PhonePairing({ request = api, onPaired, onClose }: { request?: t
 
   const cancel = () => {
     if (pairing) void request("/api/phone/pairing", { method: "DELETE" }).catch(() => {});
+    // The fold keeps this mounted while it closes; a poll already in flight must not report a pair.
+    live.current = false;
     setPairing(null);
     onClose();
   };

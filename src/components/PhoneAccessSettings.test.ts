@@ -375,6 +375,57 @@ describe("This PC", () => {
     await act(async () => root.unmount());
   });
 
+  it("keeps the setup code field when setup fails after the PC saved the base", async () => {
+    vi.useFakeTimers();
+    let relay = status({ available: true, configured: false, enabled: false, state: "off", host: null });
+    const setup = vi.fn(() => {
+      relay = status({ state: "reconnecting", host: null });
+      throw new Error("enrollment failed");
+    });
+    serve({ "GET /api/phone-relay/status": () => relay, "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }), "POST /api/phone-relay/setup": setup });
+    const { host, root } = await renderView();
+    await act(async () => click(host.querySelector('[role="switch"]')!));
+    await act(async () => type(dialog()!.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!, "wks1.code"));
+    await act(async () => click(button(dialog()!, "Turn On")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(dialog()?.querySelector('input[aria-label="Setup Code"]')).not.toBeNull();
+    expect(dialog()?.querySelector('[role="alert"]')).not.toBeNull();
+    await act(async () => click(button(dialog()!, "Turn On")));
+    expect(setup).toHaveBeenCalledTimes(2);
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+  });
+
+  it("keeps the switch when signed out without the desktop sign-in", async () => {
+    serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
+    const { host, root } = await renderView();
+    expect(host.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("a failed poll keeps the last status, and the list follows new sign-ins", async () => {
+    vi.useFakeTimers();
+    let up = true;
+    let phones: { id: string; name: string; createdAt: number; lastSeenAt: number }[] = [];
+    serve({
+      "GET /api/phone-relay/status": () => {
+        if (!up) throw new Error("timeout");
+        return status();
+      },
+      "GET /api/google-account": signedIn,
+      "GET /api/phone/devices": () => ({ phones }),
+    });
+    const { host, root } = await renderView();
+    up = false;
+    phones = [{ id: "p1", name: "iPhone", createdAt: Date.UTC(2026, 10, 8), lastSeenAt: Date.UTC(2026, 10, 10) }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(host.textContent).not.toContain("Not available for this account yet.");
+    expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-signed-in]")?.textContent).toContain("iPhone");
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+  });
+
   it("green check only when on and connected", async () => {
     vi.useFakeTimers();
     let relay = status({ enabled: false, state: "off", host: null });
