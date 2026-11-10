@@ -8071,6 +8071,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       whatsNew.markSeen((await readBody(req))?.release);
       return json(res, 200, { ok: true });
     }
+    if (method === "POST" && path === "/api/whats-new/anchor") {
+      const body = await readBody(req);
+      whatsNew.place(body?.release, body?.id);
+      return json(res, 200, { ok: true });
+    }
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");
       return json(res, update.status, update.body);
