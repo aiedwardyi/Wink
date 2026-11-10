@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
-import { LIGHT_SKIN_IDS } from "@/lib/skins";
+import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot, InstanceInfo } from "@/state/store";
 
 const { mockInstances } = vi.hoisted(() => {
@@ -674,11 +674,12 @@ describe("ModelPicker centre guides", () => {
 });
 
 describe("ModelPicker light skins", () => {
-  it("gives light skins the light picker and dark skins none", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    for (const file of ["ModelPicker.css", "ModelDial.css"]) {
-      const scope = readFileSync(join(here, file), "utf8").match(/@scope \(:is\(([^)]*)\)\) to \(\[data-skin\]\)/)?.[1] ?? "";
-      expect([...scope.matchAll(/data-skin="([^"]+)"/g)].map((m) => m[1]).sort(), file).toEqual([...LIGHT_SKIN_IDS].sort());
+  it.each(SKINS.map((skin) => skin.id))("gives the %s skin the light picker only if it is light", (skin) => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null) });
+    try {
+      expect(/class="model-cross-backdrop[^"]*"[^>]* data-light="true"/.test(markup(bot.modelSelection, true))).toBe(LIGHT_SKIN_IDS.has(skin));
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

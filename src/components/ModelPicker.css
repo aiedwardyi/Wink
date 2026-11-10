@@ -245,8 +245,8 @@ button.model-cross-binding:disabled { opacity: 0.4; }
 }
 
 /* Light skins: the Memory page's light tint, as opaque stops on the surface (alpha stops band). */
-@scope (:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"])) to ([data-skin]) {
-  .model-cross-backdrop {
+@scope (.model-cross-backdrop[data-light]) {
+  :scope {
     --picker-tint: color-mix(in srgb, #fff 90%, var(--color-app)), color-mix(in srgb, rgb(199 230 255) 64%, var(--color-app)) 32%, color-mix(in srgb, rgb(221 214 254) 51.2%, var(--color-app)) 62%, var(--color-app);
     background: var(--color-app);
     backdrop-filter: none;
