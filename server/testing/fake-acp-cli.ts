@@ -55,6 +55,7 @@
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -529,6 +530,28 @@ function handle(msg: any) {
         result(msg.id, { stopReason: "cancelled" });
         return;
       }
+      if (mode === "hook-denied") {
+        result(msg.id, {
+          stopReason: "cancelled",
+          _meta: {
+            promptId: "prompt-1",
+            cancellationCategory: "HookDenied",
+            cancellationContext: {
+              reason: `${homedir()}\\scoop\\apps\\python\\current\\python.exe: can't open file 'G:\\내 드라이브\\대화기록_게이트.py': [Errno 2] No such file or directory\n${"x".repeat(300)}`,
+              hook_name: "global/재판기록_대화기록:user_prompt_submit[0].hooks[0]",
+            },
+          },
+        });
+        return;
+      }
+      if (mode === "cancel-category") {
+        result(msg.id, { stopReason: "cancelled", _meta: { cancellationCategory: "QuotaGuard" } });
+        return;
+      }
+      if (mode === "stop-replies") {
+        runningPromptId = msg.id;
+        return;
+      }
       if (mode === "fail-after-text") {
         // Stream real text, THEN fail the turn — the shape of a crash
         // mid-answer. This is the one case where the routine-failed/done
@@ -764,6 +787,10 @@ function handle(msg: any) {
       break;
     case "session/cancel":
       // the interrupted prompt resolves as cancelled
+      if (mode === "stop-replies" && runningPromptId !== undefined) {
+        result(runningPromptId, { stopReason: "cancelled", _meta: { cancellationCategory: "UserRequested" } });
+        runningPromptId = undefined;
+      }
       break;
     default:
       recordMethod(`${msg.method}.error`);

@@ -42,6 +42,29 @@ describe("chat errors", () => {
     }
   });
 
+  it("names a failed Grok hook in both languages with its reason under Details", () => {
+    const line = "Grok hook failed (재판기록_대화기록): ~/scoop/python.exe: can't open file 'G:/대화기록_게이트.py'";
+    for (const [locale, expected] of [
+      ["en", "Grok blocked this message: a hook on this PC failed (재판기록_대화기록). Fix or remove the hook, then resend."],
+      ["ko", "이 PC의 Grok 훅이 실패해서 메시지가 막혔습니다 (재판기록_대화기록). 훅을 고치거나 지운 뒤 다시 보내세요."],
+    ] as const) {
+      applyLocale(locale);
+      try {
+        const html = renderToStaticMarkup(createElement(ErrorRow, { message: line, botId: "atlas", botName: "Atlas", onRetry: () => {} }));
+        expect(html).toContain(expected);
+        expect(html).toMatch(/<details[^>]*><summary[^>]*>[^<]+<\/summary><div[^>]*>~\/scoop\/python\.exe: can&#x27;t open file &#x27;G:\/대화기록_게이트\.py&#x27;<\/div><\/details>/);
+      } finally {
+        applyLocale("en");
+      }
+    }
+  });
+
+  it("keeps an unknown engine cancel category under Details", () => {
+    const html = renderToStaticMarkup(createElement(ErrorRow, { message: "Grok stopped this reply on its own (QuotaGuard)", botId: "atlas", botName: "Atlas" }));
+    expect(html).toContain("Grok stopped this reply on its own. Send your message again.");
+    expect(html).toMatch(/<details[^>]*>.*QuotaGuard.*<\/details>/);
+  });
+
   it.each(["bot", "channel"])("shows a %s send task switch as a known failure in 1:1 and rooms", async (target) => {
     const { classifyChatError } = await import("../../shared/chat-error");
     const line = `the ${target} switched tasks before it could receive the message`;
