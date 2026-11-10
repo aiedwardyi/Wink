@@ -479,7 +479,7 @@ export function redactSecretsInText(text: string): string {
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
   out = out.replace(KEY_VALUE, (m: string, key: string, sep: string, quote: string, value: string, at: number, all: string) =>
-    isCodeValue(quote, value, all, at + m.length) ? m :`${key}${sep}${quote}${mask(value)}${quote}`);
+    isCodeValue(quote, value, all, at + m.length) ? m : `${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
   return out;
 }
