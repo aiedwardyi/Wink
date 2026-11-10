@@ -41,6 +41,7 @@ import {
 } from "./project-folder.ts";
 import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
 import { applyBrandLeadBot } from "./brand-lead-bot.ts";
+import { startBackups } from "./backup.ts";
 import { cloudSyncRoots, createUploads, uploadTargetDir } from "./uploads.ts";
 import "./avatar-image.ts";
 import "./bot-profile.ts";
@@ -8073,6 +8074,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/update\/(check|download|install)$/);
     if (m && method === "POST") {
+      if (m[1] === "install") await backups.beforeUpdate();
       const update = await updateBridgeResponse(terminalBridgeAccess, m[1] as "check" | "download" | "install");
       return json(res, update.status, update.body);
     }
@@ -8699,6 +8701,7 @@ startupTiming.measure("side chats", () => sweepSide());
 startupTiming.measure("quick asks", () => recoverQuickAsks(store));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
+const backups = startBackups({ dataDir: DATA_DIR, syncFolders: () => [...(profileSyncSettings.folder ? [profileSyncSettings.folder] : []), ...uploadCloudRoots], idle: () => !store.bots.some((bot) => bot.busy), log: (line) => console.warn(line) });
 startTeamSnagOwner({
   enrolledBase: () => phoneAccess.base(),
   baked: googleEnv.teamRelay,
