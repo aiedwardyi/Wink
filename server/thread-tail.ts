@@ -19,6 +19,7 @@ export function readThreadTail(threadId: string, limit: number): ThreadRows | nu
   const state = database
     .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
     .get(threadId) as { active_leaf_id: string | null } | undefined;
+  // `||`, not `??`: Store.thread also treats an empty leaf as unset
   const activeLeafId = state?.active_leaf_id || messages.at(-1)!.id;
   // a leaf on an old branch can sit anywhere in the thread
   return messages.some((message) => message.id === activeLeafId) ? { messages, activeLeafId } : null;
