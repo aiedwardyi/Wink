@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 export const TERMINAL_GRANT_PREFIX = "orbit-terminal-read-v1";
 export const TERMINAL_SEND_GRANT_PREFIX = "orbit-terminal-send-v1";
+export const TERMINAL_INPUT_GRANT_PREFIX = "orbit-terminal-input-v1";
 export const TERMINAL_PANE_COUNTS_GRANT_PREFIX = "orbit-terminal-pane-counts-v1";
 export const UPDATE_GRANT_PREFIX = "orbit-update-v1";
 
@@ -15,6 +16,11 @@ export function terminalReadGrant(token: string, botId: string): string {
 export function terminalSendGrant(token: string, botId: string): string {
   if (!token || !BOT_ID_RE.test(botId)) throw new Error("the shared terminal grant is invalid");
   return createHmac("sha256", token).update(`${TERMINAL_SEND_GRANT_PREFIX}:${botId}`).digest("base64url");
+}
+
+export function terminalInputGrant(token: string, botId: string): string {
+  if (!token || !BOT_ID_RE.test(botId)) throw new Error("the shared terminal grant is invalid");
+  return createHmac("sha256", token).update(`${TERMINAL_INPUT_GRANT_PREFIX}:${botId}`).digest("base64url");
 }
 
 export function updateGrant(token: string): string {
