@@ -205,7 +205,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
   });
   const startGroupCardContinuation = load("startGroupCardContinuation", {
-    groupTaskResumes, groupQueues,
+    store, groupTaskResumes, groupQueues,
     beginGroupTurnOperation: () => { const operation = { cancelled: false }; operations.push(operation); return operation; },
     finishGroupTurnOperation: () => {},
     drainQueuedSends: () => drainQueuedSends(),

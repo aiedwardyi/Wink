@@ -102,6 +102,8 @@ function open(): DatabaseSync {
     );
     CREATE TRIGGER IF NOT EXISTS log_append_only BEFORE UPDATE ON log
     BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log
+    BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
   `);
   return db;
 }

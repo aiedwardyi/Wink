@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { closeRoomsDb } from "./db.ts";
-import { hostedFrame, hostedRelayTarget, hostedRoomView } from "./guards.ts";
+import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./guards.ts";
 
 const SERVER = join(import.meta.dirname, "..");
 const parse = (file: string) => {
@@ -87,6 +87,24 @@ describe("team rooms stay off the iPhone", () => {
     expect((await run(true)).body.groups.map((g: GroupRecord) => g.id)).toEqual([plain.id]);
     expect((await run(false)).body.groups.map((g: GroupRecord) => g.id)).toEqual([hosted.id, plain.id]);
     expect(hostedRelayTarget(store, `/api/groups/${hosted.id}`)).toBe(true);
+  });
+
+  it("keeps hosted threads out of relay search", async () => {
+    const search = vi.fn();
+    const run = (relay: boolean) => routeBlock('path === "/api/search"', { relay, store, threadRoutes: { search }, hostedThreadIds })({}, "res", "/api/search", "GET", "url");
+    await run(true);
+    await run(false);
+    expect(search.mock.calls).toEqual([["res", "url", [hosted.threadId]], ["res", "url", []]]);
+  });
+
+  it("sends no phone push for a hosted room", () => {
+    const broadcast = vi.fn();
+    const phonePing = vi.fn();
+    const notify = load("notify", { broadcast, phonePing, pingForNotification: () => ({}), routineTriggerIsUnattended: () => false, isHostedThread, store });
+    notify({ botId: "bot", threadId: hosted.threadId });
+    notify({ botId: "bot", threadId: plain.threadId });
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(phonePing.mock.calls.map((call) => call[2].threadId)).toEqual([plain.threadId]);
   });
 });
 

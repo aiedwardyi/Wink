@@ -110,6 +110,7 @@ describe("room log writer", () => {
     const raw = new DatabaseSync(join(DATA_DIR, "rooms.db"));
     try {
       expect(() => raw.exec("UPDATE log SET text = 'changed'")).toThrow(/append-only/);
+      expect(() => raw.exec("DELETE FROM log")).toThrow(/append-only/);
     } finally {
       raw.close();
     }

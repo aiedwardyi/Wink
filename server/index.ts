@@ -50,7 +50,7 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { hostedFrame, hostedRelayTarget, hostedRoomView } from "./rooms/guards.ts";
+import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -1942,7 +1942,7 @@ store.onChange((change) => {
       break;
     }
     case "group.deleted":
-      broadcast({ kind: "group.deleted", groupId: change.groupId });
+      broadcast({ kind: "group.deleted", groupId: change.groupId, ...(change.hosted ? { hosted: true } : {}) });
       break;
   }
 });
@@ -2914,7 +2914,7 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
   const routine = routineRun
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
-  phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+  if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -7948,7 +7948,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // index to maintain. Hits resolve to the bot/room that owns the thread;
     // rows belonging to deleted conversations resolve to nothing and drop.
     if (method === "GET" && path === "/api/search") {
-      return await threadRoutes.search(res, url);
+      return await threadRoutes.search(res, url, relay ? hostedThreadIds(store) : []);
     }
 
     // ── transcript export (the visible branch, human-readable) ──────────

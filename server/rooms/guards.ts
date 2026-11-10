@@ -19,9 +19,11 @@ export function roomBotsRefusal(bots: ReadonlyArray<{ name: string; driverKind: 
 
 export const isHostedThread = (store: Pick<Store, "groupByThread">, threadId: string) => Boolean(store.groupByThread(threadId)?.hosted);
 
+export const hostedThreadIds = (store: Pick<Store, "groups">) => store.groups.flatMap((group) => (group.hosted ? [group.threadId] : []));
+
 /** A broadcast frame about a hosted room, which the iPhone never gets. */
 export function hostedFrame(store: Pick<Store, "group" | "groupByThread">, payload: Record<string, any>): boolean {
-  if (payload.group?.hosted || (typeof payload.groupId === "string" && store.group(payload.groupId)?.hosted)) return true;
+  if (payload.hosted === true || payload.group?.hosted || (typeof payload.groupId === "string" && store.group(payload.groupId)?.hosted)) return true;
   const threadId = payload.threadId ?? payload.event?.threadId ?? payload.notification?.threadId;
   return typeof threadId === "string" && isHostedThread(store, threadId);
 }

@@ -480,7 +480,7 @@ export type StoreChange =
   | { type: "bots.order"; botIds: string[] }
   | { type: "groups.order"; groupIds: string[] }
   | { type: "group"; groupId: string }
-  | { type: "group.deleted"; groupId: string };
+  | { type: "group.deleted"; groupId: string; hosted?: true };
 
 /** What a task is called before its first message names it. */
 export const UNTITLED_TASK = "New task";
@@ -1137,7 +1137,7 @@ export class Store {
     for (const threadId of new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)])) {
       this.deleteThreadRecord(threadId);
     }
-    this.emit({ type: "group.deleted", groupId: id });
+    this.emit({ type: "group.deleted", groupId: id, ...(group.hosted ? { hosted: true as const } : {}) });
     return true;
   }
 
