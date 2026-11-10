@@ -25,7 +25,7 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
 
 const DEVICES_CHANGE = "orbit-devices-change";
 
-function useDevices(enabled: boolean, watching = false) {
+export function useDevices(enabled: boolean, watching = false) {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const live = useRef(true);
   const requested = useRef(0);
