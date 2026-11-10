@@ -56,10 +56,12 @@ let panelsUp = 0;
 
 function Field({
   label,
+  hint,
   status,
   children,
 }: {
   label: string;
+  hint?: string;
   status?: ReactNode;
   children: React.ReactNode;
 }) {
@@ -70,6 +72,7 @@ function Field({
       <div className={cn("mb-1.5 text-[14px] font-medium text-ink", status && "sticky top-0 z-10 bg-card")}>
         {label}
         {status}
+        {hint && <div className="mt-0.5 break-keep text-[12px] font-normal leading-relaxed text-ink-secondary">{hint}</div>}
       </div>
       {children}
     </label>
@@ -696,7 +699,7 @@ export function SettingsPanel({
                 onChange={(e) => patch({ title: e.target.value })}
               />
             </Field>
-            <Field label={t("bot.description")} status={<SaveStatus botId={bot.id} />}>
+            <Field label={t("bot.description")} hint={t("bot.descriptionHelp")} status={<SaveStatus botId={bot.id} />}>
               <FitTextarea
                 watchMetrics
                 aria-label={t("bot.description")}

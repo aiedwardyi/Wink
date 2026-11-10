@@ -225,7 +225,7 @@ describe("Description saved status", () => {
     expect(saved()?.querySelector("svg")?.getAttribute("width")).toBe("12");
     expect(saved()?.className).toContain("text-success");
     expect(row().firstElementChild?.className).toContain("sticky top-0");
-    expect(row().querySelector("textarea")?.getAttribute("aria-label")).toBe(locale === "en" ? "Description" : "설명");
+    expect(row().querySelector("textarea")?.getAttribute("aria-label")).toBe(locale === "en" ? "Instructions" : "지침");
     await tick(1999);
     expect(saved()?.hasAttribute("data-closing")).toBe(false);
     await tick(1);
