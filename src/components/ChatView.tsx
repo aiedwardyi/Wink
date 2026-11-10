@@ -214,7 +214,7 @@ export function ErrorRow({
   onRetry?: () => void;
   retryDisabled?: boolean;
   setupInstance?: InstanceInfo;
-  usageLimit?: { resetsAt: number | null };
+  usageLimit?: { resetsAt: number | null; model?: boolean };
   usageWait?: NonNullable<Message["tool"]>["usageWait"];
   signIn?: boolean;
   /** setupInstance is the account the turn failed on, not the bot's engine. */

@@ -90,7 +90,7 @@ export interface Message {
     signIn?: boolean;
     accountId?: string;
     folder?: string;
-    usageLimit?: { resetsAt: number | null };
+    usageLimit?: { resetsAt: number | null; model?: boolean };
     usageWait?: import("../../server/limit-wait-store").UsageWaitView;
   };
   /** user messages sent into a running turn - the model saw it mid-turn */
