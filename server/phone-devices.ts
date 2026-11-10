@@ -77,9 +77,9 @@ interface Replay {
   result: PairResult;
 }
 
-const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+export const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
-function sameText(a: string, b: string): boolean {
+export function sameText(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
   const right = Buffer.from(b, "utf8");
   return left.length === right.length && timingSafeEqual(left, right);
