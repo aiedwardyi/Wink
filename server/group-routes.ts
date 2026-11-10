@@ -13,6 +13,7 @@ import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
+import { createPeopleOnlyRoom, PEOPLE_ONLY_LINE, peopleOnlyRoom, peopleOnlyRoster } from "./rooms/people-only.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -111,13 +112,17 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "channel must be a JSON object" });
       }
-      const roster = checkedMemberIds(body.memberIds);
+      if (body.peopleOnly !== undefined && (body.peopleOnly !== true || body.hosted !== true)) {
+        return json(res, 400, { error: "peopleOnly must be true, on a hosted room" });
+      }
+      const roster = body.peopleOnly ? peopleOnlyRoster(body.memberIds) : checkedMemberIds(body.memberIds);
       if (!roster.ok) return json(res, 400, { error: roster.error });
       const { memberIds } = roster;
       if (body.name !== undefined && typeof body.name !== "string") {
         return json(res, 400, { error: "channel name must be a string" });
       }
-      const name = body.name?.trim() || `${store.bot(memberIds[0])!.name} & co.`;
+      const name = body.name?.trim() || (memberIds.length ? `${store.bot(memberIds[0])!.name} & co.` : "");
+      if (!name) return json(res, 400, { error: "a people-only room needs a name" });
       if (name.length > 100) return json(res, 400, { error: "channel name must be at most 100 characters" });
       let section: string | undefined;
       if (body.section !== undefined && body.section !== null) {
@@ -149,7 +154,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.hosted && !teamRooms()) return json(res, 409, { error: "team rooms are off" });
       const refusal = body.hosted ? roomBots(memberIds) : null;
       if (refusal) return json(res, 400, { error: refusal });
-      const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: createRoom(name).id } : undefined);
+      const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: (body.peopleOnly ? createPeopleOnlyRoom : createRoom)(name).id } : undefined);
       return json(res, 201, { group: { ...publicGroupState(group), messages: [] } });
     },
     setup: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -300,6 +305,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
+        if (existing.hosted && peopleOnlyRoom(existing.hosted.roomId)) return json(res, 409, { error: PEOPLE_ONLY_LINE });
         const roster = checkedMemberIds(body.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
