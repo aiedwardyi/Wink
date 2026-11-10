@@ -163,6 +163,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
             </div>
             <div
               ref={grid}
+              data-no-swipe
               className={cn(WEEK_GRID, "relative touch-pan-y touch-pinch-zoom grid-flow-col grid-rows-7 gap-y-[2px] @[30rem]/activity:gap-y-[3px]")}
               onPointerOver={(event) => {
                 const square = squareAt(event.target);
