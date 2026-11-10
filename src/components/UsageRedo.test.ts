@@ -503,6 +503,10 @@ it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
 });
 
+it("closes the hand on press, before the drag starts", () => {
+  expect(usageCss).toMatch(/\[data-usage-reorder\]:active \{ cursor: grabbing; \}/);
+});
+
 it("keeps a 44 px hold band on the 20 px engine head", () => {
   expect(usageCss).toMatch(/\.usage-engine-head\[data-usage-reorder\]::before \{[^}]*inset: -12px 0;/);
 });
