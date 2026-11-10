@@ -73,12 +73,11 @@ describe("MemoryMap", () => {
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
-  it("gives Muscle Memory its own hue on the icon and the count", () => {
-    const muscle = (part: string) => css.match(new RegExp(`^\\[data-kind="muscle"\\] ${part} \\{([^}]*)\\}`, "m"))?.[1] ?? "";
-    expect(rule(".mm")).toContain("--mm-fuchsia: 232 121 249;");
-    expect(muscle(".mm-icon")).toContain("color: rgb(var(--mm-fuchsia));");
-    expect(muscle(".mm-count b")).toContain("rgb(var(--mm-fuchsia))");
-    expect(rule(".mm-bottom .mm-count b")).not.toContain("color:");
+  it("tints the Muscle Memory icon the Knowledge violet and keeps its count plain", () => {
+    const icon = (kind: string) => css.match(new RegExp(`^\\[data-kind="${kind}"\\] \\.mm-icon \\{([^}]*)\\}`, "m"))?.[1] ?? "";
+    expect(icon("muscle")).toContain("color: rgb(var(--mm-violet));");
+    expect(icon("muscle")).toBe(icon("knowledge"));
+    expect(rule(".mm-bottom .mm-count b")).toContain("background: none; color: var(--color-ink);");
   });
 
   it("keeps Live now at 4.5:1 on its panel in every skin, in the same cyan hue", () => {
