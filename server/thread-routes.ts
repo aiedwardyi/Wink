@@ -146,7 +146,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
         return rows.get(messageId);
       };
       const needle = q.trim().toLowerCase();
-      const found = searchMessages(q, limit + 1, threadId, { before, chips });
+      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set(store.trash.threadIds()) });
       const hits = found.slice(0, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);

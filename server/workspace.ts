@@ -64,9 +64,12 @@ function unlinkLinks(dir: string): void {
   }
 }
 
-/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
 export function removeWorkspace(botId: string): void {
-  const dir = workspaceDir(botId);
+  removeWorkspaceDir(workspaceDir(botId));
+}
+
+/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
+export function removeWorkspaceDir(dir: string): void {
   const stat = lstatSync(dir, { throwIfNoEntry: false });
   if (!stat) return;
   if (stat.isSymbolicLink()) return unlinkSync(dir);
