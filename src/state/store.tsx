@@ -289,6 +289,8 @@ export function reducer(state: AppState, action: Action): AppState {
         config: action.config,
       };
     case "select": {
+      // the slot's panels belong to the chat being left
+      if (action.id !== state.selectedId) state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
       // reselecting the conversation a workspace covers does not reveal it
       const covered = state.workspaceOpen && state.selectedId === action.id;
       if (state.groups.some((g) => g.id === action.id)) {

@@ -25,6 +25,7 @@ const detailsPanel = () => document.querySelector("[data-settings-panel]:not([da
 const inspectorPanel = () => [...document.querySelectorAll("aside[data-side-panel]:not([data-closing])")].find(aside => aside.textContent?.includes("Inspector"));
 const botList = () => document.querySelector<HTMLElement>("aside[data-phone-drawer]")!;
 const button = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
+const pick = (id: string) => act(async () => document.querySelector<HTMLElement>(`[data-sidebar-row-id="${id}"] [role=button]`)!.click());
 
 async function openWatch() {
   await act(async () => (await until(() => button("button[data-verify-watch]")) as HTMLButtonElement).click());
@@ -44,7 +45,10 @@ async function openInspector() {
 beforeEach(() => {
   localStorage.setItem("omb-onboarding-done", "true");
   localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
-    bots: [{ id: "b1", threadId: "t1", name: "Scout", messages: [{ id: "m1", role: "bot", kind: "note", text: "", at: 1, verify: card }], modelSelection: { instanceId: "inst", model: "m" } }],
+    bots: [
+      { id: "b1", threadId: "t1", name: "Scout", messages: [{ id: "m1", role: "bot", kind: "note", text: "", at: 1, verify: card }], modelSelection: { instanceId: "inst", model: "m" } },
+      { id: "b2", threadId: "t2", name: "Juno", messages: [], modelSelection: { instanceId: "inst", model: "m" } },
+    ],
     groups: [],
     selectedId: "b1",
   }));
@@ -79,6 +83,27 @@ describe("right slot", () => {
     expect(watchPanel()).toBeNull();
     await openDetails();
     expect(inspectorPanel()).toBeUndefined();
+  });
+
+  it("picking another bot closes the slot, and the same bot again keeps it", async () => {
+    await act(async () => root.render(createElement(App)));
+    await openDetails();
+    await pick("b1");
+    expect(detailsPanel()).toBeTruthy();
+    await pick("b2");
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(detailsPanel()).toBeNull();
+    await pick("b1");
+    await openInspector();
+    await pick("b2");
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(inspectorPanel()).toBeUndefined();
+    await pick("b1");
+    await openWatch();
+    await pick("b2");
+    await pick("b1");
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(watchPanel()).toBeNull();
   });
 
   it("folds the bot list to faces while open and restores its width on close", async () => {

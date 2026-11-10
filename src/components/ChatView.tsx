@@ -1471,7 +1471,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT,
         )}
       >
-        <div ref={phoneClusterRef} className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-lg px-1.5 py-1 max-md:flex-[0_1000_auto]">
+        <div ref={phoneClusterRef} className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-lg px-1.5 py-1 md:min-w-13 max-md:flex-[0_1000_auto]">
           <button
             data-orbit-chat-focus-fallback=""
             onClick={() => dispatch({ type: "toggleSettings", open: true })}

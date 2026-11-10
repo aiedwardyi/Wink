@@ -245,6 +245,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
   const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
+  useEffect(() => closeVerifyWatch(), [state.selectedId]);
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
