@@ -51,6 +51,8 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
+import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { hostedSend } from "./rooms/send.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -6109,6 +6111,7 @@ function queueBusyRoomMember(
   onDispatchError?: (message: string) => void,
   instructionId?: string,
   rootId?: string | null,
+  askId?: string,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
@@ -6118,6 +6121,7 @@ function queueBusyRoomMember(
     cardContinuation,
     onDispatchError,
     instructionId,
+    askId,
   });
   return true;
 }
@@ -6133,10 +6137,10 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean> },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
-  if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
+  if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
     fail("the room is no longer available");
     return Promise.resolve();
   }
@@ -6169,6 +6173,7 @@ function enqueueDrainedRoomTurn(
       operation.instructionId,
       undefined,
       room.rootId ?? null,
+      room.askId,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6218,6 +6223,19 @@ _loadPending();
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
 
+configureRoomAsks({
+  store,
+  teamRooms: () => cfg.features?.teamRooms === true,
+  hostName: () => cfg.profile?.name?.trim() || "The host",
+  driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
+  instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
+  dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
+  stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
+  endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
+});
+// Room asks queued or running died with the previous process; held ones wait on.
+if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
+
 async function runGroupMemberTurn(
   groupId: string,
   threadId: string,
@@ -6230,6 +6248,7 @@ async function runGroupMemberTurn(
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
+  authority?: string,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6237,9 +6256,9 @@ async function runGroupMemberTurn(
   const ownsThread = group?.dm
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
-  if (!group || !bot || !ownsThread) return false;
+  if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
@@ -6262,6 +6281,7 @@ async function runGroupMemberTurn(
       instructionId,
       excludeIds,
       rootId,
+      authority,
     );
   } finally {
     releaseTurnStart();
@@ -6287,6 +6307,7 @@ async function runClaimedGroupMemberTurn(
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
+  authority?: string,
 ): Promise<boolean> {
   const epoch = currentTurnEpoch(botId);
   if (isCancelled?.()) return false;
@@ -6295,11 +6316,11 @@ async function runClaimedGroupMemberTurn(
   const ownsThread = group?.dm
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
-  if (!group || !bot || !ownsThread) return false;
+  if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6454,7 +6475,7 @@ async function runClaimedGroupMemberTurn(
   // Connected-app discovery is intentionally awaited before a provider owns
   // the bot. An interrupt during that setup window must still stop the queued
   // room operation before it starts a process.
-  if (isCancelled?.()) return false;
+  if (isCancelled?.() || hostedTurnRefused(group, threadId, bot.id, authority)) return false;
   // A 1:1 or another room turn may have claimed this bot while connected-app
   // setup was in flight. Re-check immediately before the synchronous claim so
   // one bot can never own two provider processes.
@@ -6462,7 +6483,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   store.setActivity(bot.id, "working", threadId);
@@ -6553,7 +6574,8 @@ async function runClaimedGroupMemberTurn(
     let unsub = () => {};
     let unregisterStall = () => {};
     const deadline = new RoomTurnDeadline(timeoutMinutes, () => {
-      void instance.adapter.interruptTurn(threadId).catch(() => {});
+      if (authority) void endAsk(authority, "failed");
+      else void instance.adapter.interruptTurn(threadId).catch(() => {});
       store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
@@ -6592,7 +6614,7 @@ async function runClaimedGroupMemberTurn(
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
-      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
+      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
       }
       const live = providerReload.started(threadId, selection.instanceId);
@@ -6667,7 +6689,7 @@ ${text}` : text,
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  if (!isCancelled?.() && !group.hosted && hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -6707,6 +6729,7 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
+  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message;
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }

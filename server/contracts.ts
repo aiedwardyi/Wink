@@ -202,6 +202,8 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
+  /** A team room ask: its native session ends with the turn. */
+  hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
@@ -372,6 +374,8 @@ export interface ProviderAdapter {
   /** True while the thread's live session still runs background work (a
    * backgrounded subagent or command) that would die with it. Absent = false. */
   hasBackgroundWork?(threadId: ThreadId): boolean;
+  /** Ends the thread's native session and resolves once it has exited. Only team room asks call it. */
+  endSession?(threadId: ThreadId): Promise<void>;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
 }

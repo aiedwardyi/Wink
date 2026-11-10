@@ -82,7 +82,7 @@ it("delivers a pending note on a room-member turn", async () => {
     accountNotices: notices, bot: { id: "atlas", autoApprove: false, leanStartup: false }, threadId: "room-1", hop: 0, text: "Room message", roomSystem: "", cwd: undefined, integrations: {},
     roomMail: [], selection: { instanceId: "claude" }, isCancelled: () => false, epoch: 1, currentTurnEpoch: () => epoch,
     turnRegistry: { prepare: vi.fn() }, verifyDoc: { fixTurn: () => undefined }, workerTurns: { capture: vi.fn() }, pendingInterruptThreads: { started: vi.fn() },
-    rootForStart, rootId: null,
+    rootForStart, rootId: null, authority: undefined,
     providerReload: { started: () => ({ adapter: { sendTurn: async (input: { text: string }) => { sent.push(input.text); return { turnId: "room-turn" }; } } }) },
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),

@@ -10,6 +10,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
@@ -72,6 +73,20 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     const bot = store.bot(id)!;
     return { name: bot.name, driverKind: (deps.instanceForBot ? deps.instanceForBot(bot) : registry.get(bot.modelSelection.instanceId))?.driverKind };
   }), people);
+  /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
+  const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
+    const busy = store.bot(botId);
+    const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
+    if (busy) {
+      const epoch = bumpTurnEpoch(busy.id) - 1;
+      markThreadInterrupted(threadId, busy.id, epoch);
+      flushInterruptedTask(threadId, busy.id, "stop");
+    }
+    await instance?.adapter.interruptTurn(threadId).catch(() => {});
+    closeOpenApprovals(threadId);
+    if (ended) await ended().catch(() => {});
+    if (busy) releaseInterruptedBot(busy.id, threadId);
+  };
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
     store.groupTasks(group.id).some((task) =>
@@ -424,18 +439,17 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
+      const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, group.threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
-      if (busy) {
-        const epoch = bumpTurnEpoch(busy.id) - 1;
-        markThreadInterrupted(group.threadId, busy.id, epoch);
-        flushInterruptedTask(group.threadId, busy.id, "stop");
+      const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;
+      if (busy) await stopMember(group.threadId, busy.id, ended);
+      else {
+        closeOpenApprovals(group.threadId);
+        void ended?.();
       }
-      await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
-      closeOpenApprovals(group.threadId);
-      if (busy) releaseInterruptedBot(busy.id, group.threadId);
       return json(res, 200, { ok: true });
     },
+    stopMember,
     patchCard: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such group" });
