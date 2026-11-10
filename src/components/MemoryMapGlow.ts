@@ -4,7 +4,9 @@ import { softwareRender } from "./MemoryMapMotion";
 interface Painted { key: string; glow: HTMLElement[]; rings: HTMLCanvasElement[]; live: HTMLCanvasElement | null }
 interface Reply { renderer?: string; layers: ImageBitmap[] | null }
 
+// busy is shared on purpose: one worker, so one WebGL context, at a time
 let unsupported = false, busy = false;
+// the canvases of the last map to leave, for the next one to open
 let painted: Painted | undefined;
 
 /** False once a paint has failed here, so the map keeps its CSS glow. */
@@ -21,7 +23,7 @@ function paint(source: Source) {
 }
 
 // the layers arrive in the painter's order: dim map, open lift, breath, both, each ring, the Live card
-function hang(layers: ImageBitmap[], source: Source, key: string, into: Painted | undefined): Painted {
+function hang(layers: ImageBitmap[], source: Source, key: string, into: Painted | undefined): Painted | null {
   const out: Painted = into ?? { key, glow: [], rings: [], live: null };
   if (!into) {
     const [base, lift, breath, both] = ["", "mm-smooth-lift", "", "mm-smooth-lift"].map((name) => Object.assign(document.createElement("canvas"), { className: name }));
@@ -32,13 +34,14 @@ function hang(layers: ImageBitmap[], source: Source, key: string, into: Painted 
   out.rings = source.orbits.map((_, i) => out.rings[i] ?? document.createElement("canvas"));
   out.live = source.live ? out.live ?? document.createElement("canvas") : null;
   const [base, lift, breathing] = out.glow as [HTMLCanvasElement, HTMLCanvasElement, HTMLElement];
-  [base, lift, ...([...breathing.children] as HTMLCanvasElement[]), ...out.rings, ...(out.live ? [out.live] : [])].forEach((canvas, i) => {
-    const bitmap = layers[i];
+  for (const [i, canvas] of [base, lift, ...([...breathing.children] as HTMLCanvasElement[]), ...out.rings, ...(out.live ? [out.live] : [])].entries()) {
+    const bitmap = layers[i], context = canvas.getContext("bitmaprenderer");
+    if (!context) return null;
     canvas.width = bitmap.width; canvas.height = bitmap.height;
     if (canvas !== out.live) canvas.style.height = `${bitmap.height / source.dpr}px`;
     if (out.rings.includes(canvas)) canvas.style.width = `${bitmap.width / source.dpr}px`;
-    canvas.getContext("bitmaprenderer")!.transferFromImageBitmap(bitmap);
-  });
+    context.transferFromImageBitmap(bitmap);
+  }
   out.key = key;
   return out;
 }
@@ -49,6 +52,9 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
   const holder = find(".mm-smooth"), card = find(".mm-smooth-live"), glow = find(".mm-glow"), ray = find(".mm-ray"), brain = find(".mm-brain"), live = find(".mm-live"), orbits = [...mm.querySelectorAll<HTMLElement>(".mm-orbit")];
   const sizes = new Map<Element, number[]>();
   let timer = 0, first = true, gone = false;
+  // a map shows canvases of its own: it takes the kept ones here and hands its own back when it leaves
+  let mine = painted;
+  painted = undefined;
   const drop = () => { unsupported = true; fail(); };
 
   // the page colour behind the map
@@ -68,7 +74,7 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
       dpr: devicePixelRatio, size, back: backdrop(),
       aura: [style(glow).backgroundImage, ...within(glow)],
       lift: Number(style(mm).getPropertyValue("--mm-lift")),
-      ray: style(ray).display === "none" ? null : [style(ray).backgroundImage, parseFloat(style(ray).filter.slice(5)), ...within(ray)],
+      ray: style(ray).display === "none" ? null : [style(ray).backgroundImage, Number(/blur\(([\d.]+)px\)/.exec(style(ray).filter)?.[1] ?? 0), ...within(ray)],
       halo: [halo.backgroundImage, -parseFloat(halo.top)],
       badge: within(brain),
       shadow: style(holder).boxShadow,
@@ -89,24 +95,26 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
   }
 
   const show = () => {
-    if (!painted || gone) return;
-    if (holder.firstChild !== painted.glow[0]) holder.replaceChildren(...painted.glow);
-    orbits.forEach((each, i) => { if (each.firstChild !== painted!.rings[i]) each.replaceChildren(painted!.rings[i]); });
-    if (card.firstChild !== painted.live) card.replaceChildren(...(painted.live ? [painted.live] : []));
+    if (!mine || gone) return;
+    if (holder.firstChild !== mine.glow[0]) holder.replaceChildren(...mine.glow);
+    orbits.forEach((each, i) => { if (each.firstChild !== mine!.rings[i]) each.replaceChildren(mine!.rings[i]); });
+    if (card.firstChild !== mine.live) card.replaceChildren(...(mine.live ? [mine.live] : []));
   };
   const later = () => { clearTimeout(timer); timer = window.setTimeout(sync, 150); };
   function sync() {
     const source = read();
     if (gone || !source) return;
     const key = JSON.stringify(source);
-    if (painted?.key === key) return show();
+    if (mine?.key === key) return show();
     if (busy) return later();
     busy = true;
     void paint(source).then((layers) => {
       busy = false;
-      if (!layers) return drop();
-      painted = hang(layers, source, key, painted);
-      show();
+      const next = layers && hang(layers, source, key, mine);
+      if (!next) return drop();
+      mine = next;
+      if (gone) painted = next;
+      else show();
     });
   }
 
@@ -132,5 +140,5 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
   const off = new AbortController();
   const rescale = () => matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener("change", () => { sized.disconnect(); watch(); rescale(); }, { once: true, signal: off.signal });
   rescale();
-  return () => { gone = true; clearTimeout(timer); sized.disconnect(); skin.disconnect(); off.abort(); };
+  return () => { gone = true; clearTimeout(timer); sized.disconnect(); skin.disconnect(); off.abort(); painted = mine ?? painted; };
 }

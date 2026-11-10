@@ -211,7 +211,7 @@ export function render(source: Source): Rendered {
       for (let i = 0; i < data.length; i += 4) { const a = data[i + 3]; if (a > 0 && a < 255) for (let k = 0; k < 3; k++) data[i + k] = Math.round((data[i + k] * 255) / a); }
       return { w, h, data };
     });
-  }
+  } else console.warn("memory glow shader:", gl.getProgramInfoLog(program));
   gl.getExtension("WEBGL_lose_context")?.loseContext();
   return { renderer, layers };
 }

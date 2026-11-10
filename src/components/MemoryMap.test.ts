@@ -124,17 +124,44 @@ describe("smooth glow", () => {
     expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
   });
 
-  it("keeps the CSS glow where the browser cannot paint", async () => {
+  it("holds the painted glow still for reduced motion", () => {
+    const still = css.lastIndexOf("@media (prefers-reduced-motion: reduce)");
+    expect(css.slice(still)).toMatch(/\.mm-smooth-breath \{ animation: none; \}/);
+    expect(still).toBeGreaterThan(css.lastIndexOf("animation: mm-smooth-breath"));
+  });
+
+  // a browser that reports a map `wide` device pixels across and answers the painter with `reply`
+  function browser(reply: unknown, wide: number) {
     const seen: (() => void)[] = [];
-    vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: 980, blockSize: 808 }] }])); } disconnect() {} });
-    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: { layers: null } })); } });
+    vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: wide, blockSize: 808 }] }])); } disconnect() {} });
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: reply })); } });
     vi.stubGlobal("getComputedStyle", () => ({ backgroundImage: aura, maskImage: aura, backgroundColor: "rgb(13, 14, 22)", boxShadow: "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px", display: "none", top: "-18px", opacity: "1", getPropertyValue: () => "0.7" }));
-    const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 980, height: 808 } as DOMRect);
+    const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: wide, height: 808 } as DOMRect);
+    return { box, report: () => act(async () => { seen.splice(0).forEach((each) => each()); await new Promise((done) => setTimeout(done)); }) };
+  }
+
+  it("paints a second map its own canvases", async () => {
+    const { box, report } = browser({ layers: Array.from({ length: 7 }, () => ({ width: 4, height: 4 })) }, 900);
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    await mount();
+    await report();
+    const first = host, held = root, mine = [...first.querySelectorAll(".mm-smooth canvas")];
+    await mount();
+    await report();
+    expect(mine).toHaveLength(4);
+    expect([...first.querySelectorAll(".mm-smooth canvas")]).toEqual(mine);
+    expect(host.querySelectorAll(".mm-smooth canvas")).toHaveLength(4);
+    await act(async () => held.unmount()); first.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("keeps the CSS glow where the browser cannot paint", async () => {
+    const { box, report } = browser({ layers: null }, 980);
     await mount();
     const map = host.querySelector(".mm")!;
     expect(map.hasAttribute("data-smooth")).toBe(true);
     expect(map.querySelector(".mm-smooth")).not.toBeNull();
-    await act(async () => { seen.forEach((each) => each()); await new Promise((done) => setTimeout(done)); });
+    await report();
     expect(map.hasAttribute("data-smooth")).toBe(false);
     expect(map.querySelector(".mm-smooth, canvas")).toBeNull();
     expect(map.querySelector(".mm-glow")).not.toBeNull();

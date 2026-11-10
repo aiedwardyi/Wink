@@ -219,7 +219,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm[data-still] .mm-orbit { animation: none; opacity: 0.5; }
 .mm[data-still] .mm-glow::after { transition: none; }
 @media (prefers-reduced-motion: reduce) {
-  .mm-glow, .mm-glow::before, .mm-brain::after, .mm-live-dot, .mm-steps i[data-now], .mm-smooth-breath { animation: none; }
+  .mm-glow, .mm-glow::before, .mm-brain::after, .mm-live-dot, .mm-steps i[data-now] { animation: none; }
   .mm-orbit { animation: none; opacity: 0.5; }
 }
 
@@ -241,3 +241,6 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-smooth canvas.mm-smooth-lift { opacity: 0; transition: opacity var(--motion-large) var(--ease-standard); }
 .mm[data-open] .mm-smooth canvas.mm-smooth-lift { opacity: 1; }
 @keyframes mm-smooth-breath { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .mm-smooth-breath { animation: none; }
+}
