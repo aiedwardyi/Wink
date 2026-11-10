@@ -9,7 +9,7 @@ import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
-import { refreshUsage, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
@@ -533,6 +533,14 @@ export function UsageDesk() {
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   useEffect(() => { if (!board) waited.current = true; });
+  const refresh = async (board: UsageBoard) => {
+    setRefreshFailed(false);
+    setMuseAuthFailed(false);
+    const outcome = await refreshUsage(store.instances, board, dispatch);
+    setMuseAuthFailed(outcome.museAuthFailed);
+    setRefreshFailed(outcome.failed);
+  };
+  useRefreshKey(board?.engines.some((each) => each.accounts.length) && !pending.size ? () => void refresh(board) : null);
   if (!board) {
     return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   }
@@ -547,13 +555,6 @@ export function UsageDesk() {
     saveFold(base, value);
     setFolds((before) => ({ ...before, [base]: value }));
   };
-  const refresh = async () => {
-    setRefreshFailed(false);
-    setMuseAuthFailed(false);
-    const outcome = await refreshUsage(store.instances, board, dispatch);
-    setMuseAuthFailed(outcome.museAuthFailed);
-    setRefreshFailed(outcome.failed);
-  };
   return (
     <div ref={desk} data-usage-desk="" className={cn("usage-desk min-w-0", waited.current && "animate-fade-in")}>
       <div className="usage-toolbar">
@@ -566,7 +567,7 @@ export function UsageDesk() {
           for (const each of board.engines) fold(each.base, !allFolded);
         }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
         <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
-          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
+          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh(board)}>
           <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
         </button>
       </div>

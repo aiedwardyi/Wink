@@ -314,7 +314,7 @@ it.each(["en", "ko"] as const)("puts Collapse all then the refresh icon at the r
   expect([...toolbar.children].map((el) => el.hasAttribute("data-fold-all") ? "fold" : el.hasAttribute("data-usage-refresh") ? "refresh" : "count")).toEqual(["count", "fold", "refresh"]);
   const refresh = q("[data-usage-refresh]")!;
   expect(refresh.getAttribute("aria-label")).toBe(locale === "en" ? "Refresh" : "새로고침");
-  expect(refresh.getAttribute("title")).toBe(refresh.getAttribute("aria-label"));
+  expect(refresh.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
   expect(refresh.querySelector("svg")).not.toBeNull();
   expect(refresh.textContent).toBe("");
   expect(refresh.getAttribute("aria-busy")).toBe("false");

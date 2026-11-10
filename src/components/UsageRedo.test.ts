@@ -376,6 +376,41 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   expect(document.querySelector("[data-usage-quick]:not([data-closing])")).toBeNull();
 });
 
+it.each(["en", "ko"] as const)("refreshes the open quick view's accounts on Alt+R and nowhere else (%s)", async (locale) => {
+  persistPreference(locale);
+  const fails: ((error: Error) => void)[] = [];
+  h.api.mockImplementation((path: string) => path.startsWith("/api/usage/refresh/") ? new Promise((_, reject) => { fails.push(reject); }) : Promise.resolve({}));
+  const posts = () => h.api.mock.calls.map(([path]) => path as string).filter((path) => path.startsWith("/api/usage/"));
+  const altR = async (init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true, cancelable: true, ...init });
+    await act(async () => { window.dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  expect(await altR(), "view shut").toBe(false);
+  await click("[data-usage-meter]");
+  const button = document.querySelector("[data-usage-quick] [data-usage-refresh]")!;
+  expect(button.getAttribute("aria-keyshortcuts")).toBe("Alt+R");
+  expect(button.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
+  for (const init of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: false }, { code: "AltRight", key: "Alt" }]) {
+    expect(await altR(init), JSON.stringify(init)).toBe(false);
+  }
+  expect(posts()).toEqual([]);
+  expect(await altR()).toBe(true);
+  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}`);
+  expect(posts().sort()).toEqual([...claude].sort());
+  expect(button.hasAttribute("disabled")).toBe(true);
+  expect(await altR(), "ignored while pending").toBe(false);
+  await act(async () => fails.forEach((fail) => fail(new Error("offline"))));
+  expect(document.querySelector("[data-usage-quick] [role=alert]")?.textContent).toBe(locale === "en" ? "Could not refresh usage. Try again." : "사용량을 새로 고치지 못했습니다. 다시 시도하세요.");
+  await click("[data-usage-meter]");
+  expect(await altR(), "closing").toBe(false);
+  await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+  expect(document.querySelector("[data-usage-quick]")).toBeNull();
+  expect(await altR(), "closed").toBe(false);
+  expect(posts()).toHaveLength(claude.length);
+});
+
 it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
   persistPreference(locale);
   h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";

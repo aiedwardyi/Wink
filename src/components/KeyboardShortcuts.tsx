@@ -17,6 +17,7 @@ export function KeyboardShortcuts() {
       ["shortcuts.themes", [alt, "T"]],
       ["shortcuts.themeCycle", [alt, "Shift", "T"]],
       ["shortcuts.usage", [alt, "U"]],
+      ["shortcuts.usageRefresh", [alt, "R"]],
       ["shortcuts.modelsIndex", [alt, "I"]],
       ["shortcuts.modelsIndexCycle", [alt, "Shift", "I"]],
     ] },
