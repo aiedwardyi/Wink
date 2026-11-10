@@ -4,6 +4,9 @@
   --mm-cyan: 103 232 249; --mm-blue: 96 165 250; --mm-indigo: 129 140 248; --mm-violet: 167 139 250; --mm-purple: 139 92 246; --mm-pale: 221 214 254;
   --mm-line: color-mix(in srgb, var(--color-hairline) 70%, rgb(var(--mm-indigo) / calc(0.25 * var(--mem-glow))));
   --mm-card: color-mix(in srgb, var(--color-card) 78%, transparent);
+  --mm-badge-glow: 0 0 22px rgb(var(--mm-indigo) / calc(0.28 * var(--mem-glow))), 0 0 56px rgb(var(--mm-pale) / calc(0.1 * var(--mem-glow)));
+  --mm-live-glow: 0 0 36px rgb(var(--mm-indigo) / calc(0.12 * var(--mem-glow))), 0 0 80px rgb(var(--mm-pale) / calc(0.06 * var(--mem-glow)));
+  --mm-lift: 0.7;
   position: relative; isolation: isolate; display: flex; flex-direction: column; color: var(--color-ink); font-variant-numeric: tabular-nums;
 }
 .mm:not([data-stacked]) { height: clamp(540px, calc(100dvh - 200px), 800px); }
@@ -19,7 +22,7 @@
   animation: mm-drift 48s linear infinite; }
 .mm-ray { position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 70px; bottom: 120px; width: 420px; transform: translateX(-50%); filter: blur(10px);
   background: var(--mm-ray, radial-gradient(closest-side, rgb(var(--mm-pale) / calc(0.09 * var(--mem-glow))), rgb(var(--mm-pale) / calc(0.03 * var(--mem-glow))) 60%, transparent)); }
-.mm[data-open] .mm-glow::after { opacity: 0.7; }
+.mm[data-open] .mm-glow::after { opacity: var(--mm-lift); }
 @keyframes mm-breathe { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
 @keyframes mm-aura { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 @keyframes mm-aura-in { from { opacity: 0; } to { opacity: 0.4; } }
@@ -33,7 +36,7 @@
 .mm-core { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 14px; }
 .mm-brain { position: relative; width: 60px; height: 60px; flex: none; border-radius: 50%; display: grid; place-items: center;
   background: var(--mm-badge, radial-gradient(circle at 50% 35%, #232a52, #10121f 70%));
-  box-shadow: 0 0 0 1px rgb(160 170 255 / calc(0.35 * var(--mem-glow))), var(--mm-badge-glow, 0 0 22px rgb(var(--mm-indigo) / calc(0.28 * var(--mem-glow))), 0 0 56px rgb(var(--mm-pale) / calc(0.1 * var(--mem-glow)))); }
+  box-shadow: 0 0 0 1px rgb(160 170 255 / calc(0.35 * var(--mem-glow))), var(--mm-badge-glow); }
 .mm-brain::after { content: ""; position: absolute; z-index: -1; inset: -18px; border-radius: 50%; pointer-events: none;
   background: radial-gradient(closest-side, var(--mm-halo, rgb(var(--mm-pale) / calc(0.22 * var(--mem-glow)))), transparent);
   animation: mm-aura 7s ease-in-out var(--motion-large) infinite backwards; }
@@ -109,7 +112,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-live { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden auto; padding: 16px 18px; border-radius: 16px; border: 1px solid transparent;
   background: linear-gradient(180deg, color-mix(in srgb, var(--color-card) 92%, rgb(var(--mm-indigo))), var(--color-card)) padding-box,
     linear-gradient(180deg, rgb(var(--mm-cyan) / calc(0.6 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.4 * var(--mem-glow))) 45%, rgb(var(--mm-violet) / calc(0.12 * var(--mem-glow)))) border-box;
-  box-shadow: var(--mm-live-glow, 0 0 36px rgb(var(--mm-indigo) / calc(0.12 * var(--mem-glow))), 0 0 80px rgb(var(--mm-pale) / calc(0.06 * var(--mem-glow))));
+  box-shadow: var(--mm-live-glow);
   transition: opacity var(--motion-large) var(--ease-standard); }
 .mm[data-open] .mm-live { opacity: 0.18; }
 .mm-live-tag { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: rgb(var(--mm-cyan)); font-weight: 600; }
@@ -218,4 +221,26 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 @media (prefers-reduced-motion: reduce) {
   .mm-glow, .mm-glow::before, .mm-brain::after, .mm-live-dot, .mm-steps i[data-now] { animation: none; }
   .mm-orbit { animation: none; opacity: 0.5; }
+}
+
+/* the smooth glow: MemoryMapGlow.ts paints these same shapes dithered per device pixel, and the CSS ones stay hidden as its source */
+.mm[data-smooth] .mm-glow, .mm[data-smooth] .mm-ray, .mm[data-smooth] .mm-brain::after, .mm[data-smooth]::after { visibility: hidden; animation: none; }
+.mm[data-smooth] .mm-brain { --mm-badge-glow: 0 0 transparent; }
+.mm[data-smooth] .mm-orbit { visibility: hidden; }
+.mm-orbit canvas { position: absolute; left: 50%; top: 50%; translate: -50% -50%; visibility: visible; image-rendering: pixelated; }
+.mm[data-smooth]:not([data-stacked]) .mm-live { --mm-live-glow: none; }
+/* each holder keeps the shadow its canvases stand in for, unseen, and reaches 48px above the map for the badge's */
+.mm-smooth { position: absolute; z-index: -1; pointer-events: none; visibility: hidden; left: 0; right: 0; top: -48px; width: min(980px, 100%); height: 808px; max-height: calc(100% + 48px); margin-inline: auto; box-shadow: var(--mm-badge-glow); }
+.mm[data-stacked] .mm-smooth { height: 668px; }
+.mm-smooth-live { position: absolute; pointer-events: none; visibility: hidden; box-shadow: var(--mm-live-glow); transition: opacity var(--motion-large) var(--ease-standard); }
+.mm[data-stacked] .mm-smooth-live { display: none; }
+.mm[data-open] .mm-smooth-live { opacity: 0.18; }
+.mm-smooth canvas, .mm-smooth-live canvas { position: absolute; left: 0; top: 0; width: 100%; visibility: visible; animation: mm-arrive var(--motion-large) var(--ease-entrance) backwards; }
+.mm-smooth-live canvas { height: 100%; }
+.mm-smooth-breath { position: absolute; inset: 0; animation: mm-smooth-breath 7s ease-in-out var(--motion-large) infinite backwards; }
+.mm-smooth canvas.mm-smooth-lift { opacity: 0; transition: opacity var(--motion-large) var(--ease-standard); }
+.mm[data-open] .mm-smooth canvas.mm-smooth-lift { opacity: 1; }
+@keyframes mm-smooth-breath { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .mm-smooth-breath { animation: none; }
 }

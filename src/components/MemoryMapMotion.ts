@@ -52,15 +52,17 @@ const MOTION = MOTIONS.full;
 export const AURA: "a" | "b" = "a";
 
 let software: boolean | undefined;
-/** True without a GPU, where the 2B swing drops frames: there the map opens the 2A way and the glow holds still. */
-export function softwareRender() {
+const SOFTWARE = /swiftshader|llvmpipe|basic render|software/i;
+/** True without a GPU, where the 2B swing drops frames: there the map opens the 2A way and the glow holds still. Given a renderer's name read elsewhere, it makes no context of its own. */
+export function softwareRender(named?: string) {
   if (software !== undefined) return software;
+  if (named !== undefined) return (software = SOFTWARE.test(named));
   try {
     const gl = document.createElement("canvas").getContext("webgl");
     const info = gl?.getExtension("WEBGL_debug_renderer_info");
     const name = gl && info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
     gl?.getExtension("WEBGL_lose_context")?.loseContext();
-    software = !gl || /swiftshader|llvmpipe|basic render|software/i.test(name);
+    software = !gl || SOFTWARE.test(name);
   } catch {
     software = true;
   }
