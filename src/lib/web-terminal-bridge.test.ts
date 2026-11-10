@@ -8,11 +8,14 @@ import { createWebTerminalBridge, useWebTerminalBridge, webTerminalFonts, type L
 type Frame = Partial<{ kind: string; lease: string; sessionId: string; generation: number; output: string; data: string; seq: number; cols: number; rows: number; exitCode: number | null; modes: number[]; resetModes: number[] }>;
 type Live = { url: string; aborted: boolean; push: (frame: Frame) => void; end: () => void };
 type Post = { path: string; body: Frame };
+type Pane = { sessionId: string; label: string | null; generation: number; main: boolean };
 
 const encoder = new TextEncoder();
 let lives: Live[];
 let posts: Post[];
 let liveRefusals: Response[];
+let liveDrops: number;
+let roster: Pane[];
 let held: Array<() => void>;
 let holdPosts: boolean;
 let visibility: DocumentVisibilityState;
@@ -31,13 +34,17 @@ beforeEach(() => {
   lives = [];
   posts = [];
   liveRefusals = [];
+  liveDrops = 0;
+  roster = [];
   held = [];
   holdPosts = false;
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const url = String(input);
+    if (!init?.method && !url.includes("/terminal/live")) return Response.json({ panes: roster });
     if (url.includes("/terminal/live")) {
+      if (liveDrops > 0 && liveDrops--) throw new TypeError("Failed to fetch");
       const refused = liveRefusals.shift();
       if (refused) return refused;
       let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -104,6 +111,18 @@ describe("createWebTerminalBridge", () => {
     opened.catch(() => {});
     await flush();
     expect(posts.map((post) => post.path)).toEqual(["/api/bots/bot-1/terminal/start"]);
+    lives[0].push(snapshot());
+    await expect(opened).resolves.toMatchObject({ id: "s1" });
+  });
+
+  it("starts the main shell before attaching when only worker panes run", async () => {
+    roster = [{ sessionId: "w1", label: "worker", generation: 1, main: false }];
+    const bridge = make();
+    const opened = bridge.open({ botId: "bot-1", cols: 80, rows: 24 });
+    opened.catch(() => {});
+    await flush();
+    expect(posts.map((post) => post.path)).toEqual(["/api/bots/bot-1/terminal/start"]);
+    expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live"]);
     lives[0].push(snapshot());
     await expect(opened).resolves.toMatchObject({ id: "s1" });
   });
@@ -219,6 +238,43 @@ describe("createWebTerminalBridge", () => {
     await expect(bridge.write("s1", "x")).rejects.toThrow();
   });
 
+  it("keeps retrying a dropped stream while the network is down, without an error", async () => {
+    const bridge = make();
+    const errors: string[] = [];
+    const seen: LiveOutput[] = [];
+    bridge.onError?.((event) => errors.push(event.message));
+    bridge.onData((event) => seen.push(event));
+    await attach(bridge);
+    await flush();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    liveDrops = 2;
+    lives[0].end();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(errors).toEqual([]);
+    expect(lives).toHaveLength(2);
+    lives[1].push(snapshot({ seq: 6, output: "back" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen.at(-1)).toMatchObject({ data: "cback", seq: 6 });
+  });
+
+  it("picks up worker panes that open or close while the pane shows", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const bridge = make();
+    const events: string[] = [];
+    bridge.onOpened?.((event) => events.push(`open ${event.id}`));
+    bridge.onClosed?.((event) => events.push(`close ${event.id}`));
+    await bridge.readBot?.("bot-1");
+    await attach(bridge);
+    await flush();
+    roster = [{ sessionId: "w1", label: "worker", generation: 1, main: false }];
+    vi.advanceTimersByTime(2_000);
+    await flush();
+    roster = [];
+    vi.advanceTimersByTime(2_000);
+    await flush();
+    expect(events).toEqual(["open w1", "close w1"]);
+  });
+
   it("renews the lease every 50 s while streaming", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const bridge = make();
@@ -250,8 +306,11 @@ describe("useWebTerminalBridge", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     seen.length = 0;
     pointer = "fine";
-    // SAFETY: the hook reads only matches and the change listener pair.
-    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: pointer === "fine" && query.includes("pointer: fine"), addEventListener() {}, removeEventListener() {} } as MediaQueryList));
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const list: Pick<MediaQueryList, "matches" | "addEventListener" | "removeEventListener"> = { matches: pointer === "fine" && query.includes("pointer: fine"), addEventListener: vi.fn(), removeEventListener: vi.fn() };
+      // SAFETY: the hook reads only matches and the change listener pair.
+      return list as MediaQueryList;
+    });
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   });

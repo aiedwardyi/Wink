@@ -14,6 +14,7 @@ const LEASE_MS = 50_000;
 const PAUSE_BYTES = 100 * 1024;
 const RESUME_BYTES = 10 * 1024;
 const RETRY_MS = 1_000;
+const PANES_MS = 2_000;
 // Under the server's 64 KB input cap even at 3 bytes per char.
 const BATCH_CHARS = 16 * 1024;
 const WEB_FONTS = '"JetBrains Mono", "Symbols Nerd Font Mono"';
@@ -99,6 +100,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
   let stream: AbortController | null = null;
   let lease: ReturnType<typeof setInterval> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let paneTimer: ReturnType<typeof setInterval> | undefined;
   let visible = true;
   let paused = false;
   let unparsed = 0;
@@ -245,7 +247,12 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
       }
       if (missed) emit(`\x1bc${snapshot.output}${restoreModes(snapshot)}`, snapshot.seq, false);
       if (snapshot.exitCode !== null) exit(snapshot.exitCode);
-    }).catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)));
+    }).catch((cause) => {
+      // A network drop or a server hiccup keeps retrying; a refusal is final.
+      if (!(cause instanceof LiveError && cause.status < 500)) {
+        if (!stream && live()) retry = setTimeout(resume, RETRY_MS);
+      } else fail(cause.message);
+    });
   }
 
   const onVisibility = () => {
@@ -300,6 +307,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     epoch++;
     close();
     watchPage(false);
+    clearInterval(paneTimer);
     attached = null;
     paused = false;
     unparsed = 0;
@@ -340,6 +348,9 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     async open(input) {
       detach();
       watchPage(true);
+      paneTimer = setInterval(() => {
+        if (visible && document.visibilityState !== "hidden") void refreshPanes();
+      }, PANES_MS);
       const mine = epoch;
       const adopt = (snapshot: Snapshot) => {
         if (mine !== epoch) return;
@@ -347,6 +358,13 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
         remote = snapshot.cols && snapshot.rows ? { cols: snapshot.cols, rows: snapshot.rows } : null;
         if (!live()) close();
       };
+      if (!input.sessionId) {
+        // The host attaches a bare open to any live pane, so a bot with only workers needs its main shell first.
+        const roster = await request(`${base}?panes=1`).catch(() => null);
+        const list: Array<{ main: boolean }> = Array.isArray(roster?.panes) ? roster.panes : [];
+        if (list.length && !list.some((pane) => pane.main)) await request(`${base}/start`, { method: "POST" });
+        if (mine !== epoch) throw new Error("Terminal open was canceled");
+      }
       let snapshot: Snapshot;
       try {
         snapshot = await connect(input.sessionId, adopt);
