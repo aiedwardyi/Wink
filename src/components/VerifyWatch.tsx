@@ -8,7 +8,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { chooseVerifyTab, closeVerifyWatch, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
-import { BANNER_MS, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
+import { BANNER_MS, CURSOR_ARROW, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import "./VerifyWatch.css";
 
@@ -19,7 +19,7 @@ const copy = {
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const RED = "#f05d5d";
 const PARTS: Part[] = ["loads", "links", "phone"];
-const ARROW = typeof Path2D === "undefined" ? null : new Path2D("M1.5 1.5 L1.5 17 L5.6 13.2 L8.5 19.6 L11.3 18.4 L8.5 12.2 L13.8 12.2 Z");
+const ARROW = typeof Path2D === "undefined" ? null : new Path2D(CURSOR_ARROW);
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
 const tileSize = (show: VerifyWatchShow) => show.head?.tiles[show.tile] ?? (show.tile === "phone" ? [392, 800] : [1280, 720]);
 

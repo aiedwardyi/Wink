@@ -13,8 +13,8 @@ const LIVE_OUTLINE_MS = 700;
 const FADE_MS = 90;
 const RING_MS = 220;
 const LIVE_GLIDE_MS = 250;
-const CURSOR_MS = 900;
-const CURSOR_REST_MS = 180;
+export const CURSOR_MS = 900;
+export const CURSOR_REST_MS = 180;
 const CURSOR_GAP = 110;
 const CURSOR_NEAR = 40;
 const CURSOR_REACH = 1100;
@@ -40,10 +40,12 @@ export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "betwe
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
 export interface Cursor { checker: string; tile: VerifyTile; extra?: number; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
 /** Where a cursor's tag sits (arrow units, 14 tall); none on a spare, and it flips to stay inside the view. */
-export function tagSpot(c: Cursor, p: { x: number; y: number }, width: number, view: readonly [number, number], px: number) {
+export function tagSpot(c: Partial<Cursor>, p: { x: number; y: number }, width: number, view: readonly [number, number], px: number) {
   if (c.extra) return null;
   return { x: p.x + (11 + width) * px > view[0] ? -width : 11, y: p.y + 29 * px > view[1] ? -16 : 15 };
 }
+export const CURSOR_ARROW = "M1.5 1.5 L1.5 17 L5.6 13.2 L8.5 19.6 L11.3 18.4 L8.5 12.2 L13.8 12.2 Z";
+export const glideEase = (k: number) => k * k * k * (10 + k * (-15 + 6 * k));
 const cursorKey = (c: Cursor) => `${c.tile}:${c.extra ? `+${c.extra}` : c.checker}`;
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }
@@ -425,8 +427,7 @@ export class VerifyWatchShow {
 
   cursorAt(cursor: Cursor, reduced = false, clock = this.clock) {
     if (reduced) return this.live || clock >= cursor.at + cursor.duration ? cursor.to : cursor.from;
-    const k = cursor.duration ? Math.min(1, Math.max(0, (clock - cursor.at) / cursor.duration)) : 1;
-    const e = k * k * k * (10 + k * (-15 + 6 * k));
+    const e = glideEase(cursor.duration ? Math.min(1, Math.max(0, (clock - cursor.at) / cursor.duration)) : 1);
     return { x: cursor.from.x + (cursor.to.x - cursor.from.x) * e, y: cursor.from.y + (cursor.to.y - cursor.from.y) * e };
   }
 
