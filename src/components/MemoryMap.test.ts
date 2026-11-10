@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { Bot } from "@/state/store";
 import { MemoryMap } from "./MemoryMap";
+import { disc, ramp, render, stops } from "./MemoryMapGlowPaint";
 
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MemoryMap.css"), "utf8");
@@ -86,5 +87,58 @@ describe("MemoryMap", () => {
     expect(line.textContent).toContain(locale === "en" ? "kept24" : "유지24");
     await act(async () => line.querySelector("button")!.click());
     expect(sleep.onUndo).toHaveBeenCalled();
+  });
+});
+
+describe("smooth glow", () => {
+  const aura = "radial-gradient(closest-side at 50% 22%, rgba(221, 214, 254, 0.11), rgba(96, 165, 250, 0.05) 34%, rgba(221, 214, 254, 0.03) 60%, rgba(0, 0, 0, 0) 85%)";
+
+  it("reads a computed gradient's stops", () => {
+    expect(stops(aura).map((each) => each.at)).toEqual([0, 0.34, 0.6, 0.85]);
+    expect(stops(aura)[0].c).toEqual([221 / 255, 214 / 255, 254 / 255, 0.11]);
+    expect(stops("radial-gradient(rgb(0, 0, 0), rgb(9, 9, 9), rgb(0, 0, 0))").map((each) => each.at)).toEqual([0, 0.5, 1]);
+  });
+
+  it("keeps the fade in float, premultiplied, where 8 bits would step", () => {
+    const lut = ramp(stops(aura));
+    expect(lut[3]).toBeCloseTo(0.11);
+    expect(lut[0]).toBeCloseTo((221 / 255) * 0.11);
+    const alpha = Array.from({ length: 128 }, (_, i) => lut[i * 4 + 3]);
+    expect(new Set(alpha.slice(0, 108).map((each) => Math.round(each * 255))).size).toBeLessThan(30);
+    expect(new Set(alpha.slice(0, 108)).size).toBeGreaterThan(100);
+    expect(alpha[127]).toBe(0);
+  });
+
+  it("fades a blurred disc from nearly full at its centre to nothing at its reach", () => {
+    const { lut, reach } = disc(30, 11, [1, 1, 1, 1]);
+    const cover = Array.from({ length: 128 }, (_, i) => lut[i * 4 + 3]);
+    expect(reach).toBe(63);
+    expect(cover[0]).toBeCloseTo(1 - Math.exp(-(30 * 30) / (2 * 11 * 11)), 2);
+    expect(cover.every((each, i) => i === 0 || each <= cover[i - 1])).toBe(true);
+    expect(cover[127]).toBeLessThan(0.005);
+  });
+
+  it("paints no layer without WebGL2", () => {
+    vi.stubGlobal("OffscreenCanvas", class { getContext() { return null; } });
+    const shadow = "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px";
+    expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
+  });
+
+  it("keeps the CSS glow where the browser cannot paint", async () => {
+    const seen: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: 980, blockSize: 808 }] }])); } disconnect() {} });
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: { layers: null } })); } });
+    vi.stubGlobal("getComputedStyle", () => ({ backgroundImage: aura, maskImage: aura, backgroundColor: "rgb(13, 14, 22)", boxShadow: "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px", display: "none", top: "-18px", opacity: "1", getPropertyValue: () => "0.7" }));
+    const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 980, height: 808 } as DOMRect);
+    await mount();
+    const map = host.querySelector(".mm")!;
+    expect(map.hasAttribute("data-smooth")).toBe(true);
+    expect(map.querySelector(".mm-smooth")).not.toBeNull();
+    await act(async () => { seen.forEach((each) => each()); await new Promise((done) => setTimeout(done)); });
+    expect(map.hasAttribute("data-smooth")).toBe(false);
+    expect(map.querySelector(".mm-smooth, canvas")).toBeNull();
+    expect(map.querySelector(".mm-glow")).not.toBeNull();
+    expect(rule(".mm-glow") + rule(".mm-ray") + rule(".mm-brain::after") + rule(".mm::after")).not.toContain("visibility");
+    box.mockRestore();
   });
 });
