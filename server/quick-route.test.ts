@@ -61,12 +61,83 @@ const HELD_OUT: Array<[string, "quick" | "main"]> = [
   ["", "main"],
 ];
 
+// Korean orders, refusals and reports, then questions; one with no "?" reads as a statement and stays with the bot.
+const KO_LABELED: Array<[string, "quick" | "main"]> = [
+  ["아니", "main"],
+  ["아냐", "main"],
+  ["아니 그거 말고", "main"],
+  ["맞아", "main"],
+  ["됐어", "main"],
+  ["응 그렇게 해줘", "main"],
+  ["좋아 진행해", "main"],
+  ["멈춰", "main"],
+  ["잠깐", "main"],
+  ["하지 마", "main"],
+  ["그거 하지 말고 이렇게 하면 어때?", "main"],
+  ["이거 고쳐줄래?", "main"],
+  ["커밋해줄 수 있어?", "main"],
+  ["테스트 돌려볼까?", "main"],
+  ["푸시해줄래?", "main"],
+  ["멈춰줄래?", "main"],
+  ["이 파일 지워도 돼?", "main"],
+  ["다시 해볼래?", "main"],
+  ["방금 재시작했는데 됐어?", "main"],
+  ["다 했어", "main"],
+  ["파일 저장했어", "main"],
+  ["로그인 했어", "main"],
+  ["문제 없어", "main"],
+  ["여기 있어", "main"],
+  ["버그 있는 것 같은데?", "main"],
+  ["안 돼", "main"],
+  ["지금 뭐 하고 있어?", "quick"],
+  ["지금 뭐 하고 있어", "quick"],
+  ["얼마나 남았어?", "quick"],
+  ["얼마나 남았어", "quick"],
+  ["다 끝났어", "main"],
+  ["테스트 통과했나", "main"],
+  ["그 파일 어디에 있지", "main"],
+  ["왜 이렇게 오래 걸려", "quick"],
+  ["끝났습니까", "main"],
+  ["진행 상황 알려줘", "main"],
+];
+
+const KO_MIXED: Array<[string, "quick" | "main"]> = [
+  ["PR 머지해줘", "main"],
+  ["README도 업데이트해줘", "main"],
+  ["main 브랜치에 push 하지 마", "main"],
+  ["npm install 다시 해볼까?", "main"],
+  ["응 merge 해", "main"],
+  ["아니 그 파일 말고 config.ts", "main"],
+  ["방금 pull 받았는데 conflict 났어?", "main"],
+  ["배포해도 돼?", "main"],
+  ["이거 버그 아니야?", "main"],
+  ["잠깐만, 그 PR 닫지 마", "main"],
+  ["끝나면 Slack으로 알려줘", "main"],
+  ["테스트 통과했어", "main"],
+  ["뭐든 좋아, 네가 골라", "main"],
+  ["테스트 통과했어?", "quick"],
+  ["CI 왜 빨간색이야?", "quick"],
+  ["어느 브랜치에서 작업 중이야", "quick"],
+  ["서버 포트 몇 번이야?", "quick"],
+  ["혹시 지금 어디까지 했어", "quick"],
+  ["API 키 어디에 저장돼 있어?", "quick"],
+  ["커밋 메시지 뭐라고 썼어?", "quick"],
+];
+
 describe("nominate", () => {
   it.each(LABELED)("labeled: %s", (text, want) => {
     expect(nominate(text)).toBe(want);
   });
 
   it.each(HELD_OUT)("held out: %s", (text, want) => {
+    expect(nominate(text)).toBe(want);
+  });
+
+  it.each(KO_LABELED)("korean: %s", (text, want) => {
+    expect(nominate(text)).toBe(want);
+  });
+
+  it.each(KO_MIXED)("korean with code words: %s", (text, want) => {
     expect(nominate(text)).toBe(want);
   });
 

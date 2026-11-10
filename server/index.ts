@@ -308,7 +308,7 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
-import { quickAnswersSinceLastUserTurn, recoverQuickAsks } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
@@ -3357,6 +3357,7 @@ bus.subscribe((event: RuntimeEvent) => {
     return;
   }
   event = stripStrayUserTags(event);
+  quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
@@ -5094,7 +5095,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const routineCards = replaysTranscript
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
-  const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
+  const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
@@ -5631,7 +5632,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId)), ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...closedAsk, ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);

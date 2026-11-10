@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
+import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { quickAnswersSinceLastUserTurn, recoverQuickAsks, routesQuick, type QuickGate } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks, routesQuick, type QuickGate } from "./quick-ask.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
@@ -371,6 +372,24 @@ describe("quick route", () => {
     expect(h.startTurn).not.toHaveBeenCalled();
   });
 
+  it("queues the ask as the next turn when the bot's final reply landed while the helper ran", async () => {
+    const h = harness();
+    const { message } = (await h.send({ text: QUESTION })).data as { message: Message };
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Done, tests pass." });
+    h.store.setActivity(h.bot.id, "idle");
+    await h.settled();
+    expect(h.rows().some((row) => row.quick?.state === "answer")).toBe(false);
+    expect(_queuedCount(h.bot.threadId)).toBe(1);
+    expect(h.rows().find((row) => row.id === message.id)).toMatchObject({ quick: { state: "handoff" }, queueId: expect.any(String) });
+  });
+
+  it("moves a pending ask to handoff on Stop", async () => {
+    const h = harness();
+    const { message } = (await h.send({ text: QUESTION })).data as { message: Message };
+    await h.stop();
+    expect(h.rows().find((row) => row.id === message.id)?.quick).toEqual({ state: "handoff" });
+  });
+
   it("posts no answer for an ask handed to the bot while its helper ran", async () => {
     const h = harness();
     const { message } = (await h.send({ text: QUESTION })).data as { message: Message };
@@ -437,6 +456,14 @@ describe("boot recovery", () => {
     drainSteeredMessages(store, run);
     expect(run.mock.calls.filter(([botId]) => botId === bot.id)).toEqual([[bot.id, bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]]]);
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
+  });
+
+  it("moves an orphaned ask to handoff", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    recoverQuickAsks(store);
+    expect(store.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
   });
 
   it("leaves an ask stopped before a restart", async () => {
@@ -524,6 +551,39 @@ describe("next-turn block", () => {
   it("is empty without answers and stops at the bound row", () => {
     expect(quickAnswersSinceLastUserTurn([row("u1", "user", "go")], new Set())).toEqual([]);
     expect(quickAnswersSinceLastUserTurn([row("u1", "user", "go"), ...pair(1), row("b1", "bot", "ok"), ...pair(2)], new Set(), "b1")[0]).not.toContain("question 1?");
+  });
+
+  const carried = () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "Port 8787.", quick: { state: "answer", askId: ask.id } });
+    const turn = () => quickAnswersSinceLastUserTurn(store.activePath(bot.threadId), new Set(), undefined, bot.threadId);
+    const event = (type: "content.delta" | "turn.completed") => quickAnswersTaken(store, { threadId: bot.threadId, type } as RuntimeEvent);
+    return { turn, event };
+  };
+
+  it("carries an answer into one automated turn only", () => {
+    const { turn, event } = carried();
+    expect(turn()).toHaveLength(1);
+    event("content.delta");
+    event("turn.completed");
+    expect(turn()).toEqual([]);
+  });
+
+  it("carries an answer again after a turn that died before its first model event", () => {
+    const { turn, event } = carried();
+    expect(turn()).toHaveLength(1);
+    event("turn.completed");
+    event("content.delta");
+    expect(turn()).toHaveLength(1);
+  });
+
+  it("holds each turn's block and marks it from the event fold", () => {
+    const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(index.match(/quickAnswersSinceLastUserTurn\([^()]*, threadId\)/g)).toHaveLength(2);
+    expect(index).toMatch(/quickAnswersTaken\(store, event\)/);
   });
 
   it("tags quick answers in a replayed transcript and drops a queued handoff's ask", async () => {
