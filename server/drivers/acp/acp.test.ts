@@ -453,7 +453,9 @@ describe("Grok warm leases (recorded transport)", () => {
     expect(peers.every((peer) => peer.child.killed)).toBe(true);
   });
 
-  it("a sign-in that changes under a starting turn says so instead of ending as a Stop", async () => {
+  it.each([8, 1])("a sign-in that changes under a starting turn says so instead of ending as a Stop (%i cores)", async (cores) => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array<os.CpuInfo>(cores).fill({} as os.CpuInfo));
+    vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 ** 3);
     held.add("0:initialize");
     held.add("1:initialize");
     await start();

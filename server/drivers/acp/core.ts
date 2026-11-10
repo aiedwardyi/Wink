@@ -298,6 +298,7 @@ export async function probeCliVersion(
 }
 
 const INIT_TIMEOUT = 20_000;
+const SIGN_IN_CHANGED = "the sign-in changed while the reply was starting";
 // The billing read on a failed turn sits between the user and the error
 // chip, so it gets a far shorter leash than the one on a clean turn.
 const USAGE_PROBE_TIMEOUT = 5_000;
@@ -728,9 +729,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let canceledBeforePrompt = false;
         const cancelSetup = () => { canceledBeforePrompt = true; controller.abort(); };
         // The sign-in moving under a starting turn says so: a quiet cancel reads as a Stop nobody pressed.
+        const signInMoved = () => !disposed && (epoch !== pool.generation(keyFor(threadId)) || capture().identity !== captured.identity);
         const setupEnded = () => {
-          const moved = !disposed && (epoch !== pool.generation(keyFor(threadId)) || capture().identity !== captured.identity);
-          if (moved) emit({ ...base(threadId, turnId), type: "runtime.error", message: "the sign-in changed while the reply was starting" });
+          const moved = signInMoved();
+          if (moved) emit({ ...base(threadId, turnId), type: "runtime.error", message: SIGN_IN_CHANGED });
           emit({ ...base(threadId, turnId), type: "turn.completed", ok: !moved, stopReason: moved ? "sign_in_changed" : "cancelled", cost: null });
         };
         const cwd = turn.cwd ?? config.workspace ?? homedir();
@@ -1397,7 +1399,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             } else settle(false, reason ?? "failed", true);
           } catch (e) {
             if (!state.settled) {
-              const message = e instanceof Error ? e.message : String(e);
+              const moved = e instanceof Error && e.message === "turn setup cancelled" && signInMoved();
+              const message = moved ? SIGN_IN_CHANGED : e instanceof Error ? e.message : String(e);
               const code = support.classifyError?.(e);
               // Authentication setup is a user action, not a retry. The
               // classifier is preferred; loginNote remains a compatibility
@@ -1424,7 +1427,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               };
               if (usageLimit) failure.usageLimit = usageLimit;
               emit(failure);
-              settle(false, needsAuth ? "auth_required" : "rpc_error");
+              settle(false, needsAuth ? "auth_required" : moved ? "sign_in_changed" : "rpc_error");
             }
           }
         })();
