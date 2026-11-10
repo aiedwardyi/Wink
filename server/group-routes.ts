@@ -10,6 +10,8 @@ import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { createRoom, roomPeople } from "./rooms/db.ts";
+import { roomBotsRefusal } from "./rooms/guards.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -38,6 +40,7 @@ type GroupRouteDeps = {
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
   releaseInterruptedBot: (botId: string, threadId: string) => void;
+  teamRooms: () => boolean;
 };
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
@@ -63,7 +66,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     flushInterruptedTask,
     closeOpenApprovals,
     releaseInterruptedBot,
+    teamRooms,
   } = deps;
+  const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => {
+    const bot = store.bot(id)!;
+    return { name: bot.name, driverKind: (deps.instanceForBot ? deps.instanceForBot(bot) : registry.get(bot.modelSelection.instanceId))?.driverKind };
+  }), people);
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
     store.groupTasks(group.id).some((task) =>
@@ -122,7 +130,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         if (!responder) return json(res, 400, { error: "invalid setup.defaultResponder" });
         setup = { bulletin: requested.bulletin, defaultResponder: responder, completed: true };
       }
-      const group = store.createGroup(name, memberIds, false, section, setup);
+      if (body.hosted !== undefined && body.hosted !== true) return json(res, 400, { error: "hosted must be true" });
+      if (body.hosted && !teamRooms()) return json(res, 409, { error: "team rooms are off" });
+      const refusal = body.hosted ? roomBots(memberIds) : null;
+      if (refusal) return json(res, 400, { error: refusal });
+      const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: createRoom(name).id } : undefined);
       return json(res, 201, { group: { ...publicGroupState(group), messages: [] } });
     },
     setup: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -169,6 +181,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
+      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
@@ -188,6 +201,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
+      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
@@ -204,6 +218,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
+      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
@@ -219,6 +234,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
+      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
@@ -271,6 +287,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
         const roster = checkedMemberIds(body.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
+        const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
+        if (refusal) return json(res, 400, { error: refusal });
         patch.memberIds = roster.memberIds;
       }
       if (body.defaultResponder !== undefined) {

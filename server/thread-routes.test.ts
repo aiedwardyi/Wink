@@ -79,4 +79,20 @@ describe("search", () => {
 
     expect(JSON.parse(body).hits.map((hit: { botId: string }) => hit.botId)).toEqual([live.id, live.id, live.id]);
   });
+
+  it("leaves out the threads it is told to hide", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot({ name: "Live" }, { seedMessages: false });
+    const room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi here", at: 1_000 });
+    store.appendMessage(room.threadId, { role: "user", kind: "text", text: "kiwi in the room", at: 2_000 });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+
+    await route.search(res, new URL("http://localhost/search?q=kiwi"), [room.threadId]);
+
+    expect(JSON.parse(body).hits.map((hit: { threadId: string }) => hit.threadId)).toEqual([bot.threadId]);
+  });
 });

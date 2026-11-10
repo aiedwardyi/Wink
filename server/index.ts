@@ -50,6 +50,7 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -1870,6 +1871,7 @@ function publicGroupState(group: GroupRecord) {
     ...groupClears(group),
     working: groupIsWorking(group),
     taskState: store.taskPacket(group.threadId) ?? undefined,
+    ...(group.hosted ? { room: hostedRoomView(group.hosted) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -1941,7 +1943,7 @@ store.onChange((change) => {
       break;
     }
     case "group.deleted":
-      broadcast({ kind: "group.deleted", groupId: change.groupId });
+      broadcast({ kind: "group.deleted", groupId: change.groupId, ...(change.hosted ? { hosted: true } : {}) });
       break;
   }
 });
@@ -2426,6 +2428,8 @@ interface SseClient {
    * while a bot works. A client that isn't showing the computer panel —
    * a phone on cellular, most of all — should not pay for them. */
   screens: boolean;
+  /** Relay clients never get team room frames. */
+  phone: boolean;
 }
 const sseClients = new Set<SseClient>();
 
@@ -2447,10 +2451,10 @@ const SSE_HEARTBEAT_MS =
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null }> = [];
+const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; hosted: boolean }> = [];
 
 /** Screen frames are the only kind a client can decline. */
-const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
+const wants = (client: SseClient, kind: string, hosted: boolean) => (kind !== "screen" || client.screens) && !(hosted && client.phone);
 
 /** `<streamId>:<seq>` — opaque to clients, and the only thing they need to
  * remember to resume. Returns null when it belongs to another run. */
@@ -2519,10 +2523,11 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame });
+  const hosted = hostedFrame(store, payload);
+  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame, hosted });
   if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
   for (const client of [...sseClients]) {
-    if (!wants(client, kind)) continue;
+    if (!wants(client, kind, hosted)) continue;
     try {
       client.res.write(frame);
     } catch {
@@ -2910,7 +2915,7 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
   const routine = routineRun
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
-  phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+  if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -6678,6 +6683,7 @@ ${text}` : text,
 }
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
+  if (store.group(groupId)?.hosted) return;
   const key = `${botId}\0${threadId}`;
   if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
@@ -7195,6 +7201,7 @@ const groupRoutes = createGroupRoutes({
   flushInterruptedTask,
   closeOpenApprovals,
   releaseInterruptedBot,
+  teamRooms: () => cfg.features?.teamRooms === true,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -7399,6 +7406,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    if (relay && hostedRelayTarget(store, path)) return json(res, 404, { error: "no such room" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
     // Terminal panes hold a per-pane grant, never the comms token. The note
@@ -7632,7 +7640,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
       traceOpenSse(url, sseClients.size);
-      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off" };
+      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off", phone: relay };
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -7671,7 +7679,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       );
       if (resumed) {
         for (const buffered of replayBuffer) {
-          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind)) res.write(buffered.frame);
+          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind, buffered.hosted)) res.write(buffered.frame);
         }
       }
 
@@ -7843,7 +7851,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        groups: store.groups.filter((g) => !(relay && g.hosted)).map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -7896,7 +7904,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
-      if (!bot && !group) return json(res, 404, { error: "no such conversation" });
+      if ((!bot && !group) || group?.hosted) return json(res, 404, { error: "no such conversation" });
       const messages = store.messagesFor(threadId).map((message) => ({
         id: message.id,
         role: message.role,
@@ -7943,7 +7951,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // index to maintain. Hits resolve to the bot/room that owns the thread;
     // rows belonging to deleted conversations resolve to nothing and drop.
     if (method === "GET" && path === "/api/search") {
-      return await threadRoutes.search(res, url);
+      return await threadRoutes.search(res, url, relay ? hostedThreadIds(store) : []);
     }
 
     // ── transcript export (the visible branch, human-readable) ──────────
