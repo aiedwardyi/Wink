@@ -288,10 +288,25 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const text = host.textContent ?? "";
-    const order = ["Title", "Description", "Project Folder", "Approval", "Notifications", "Terminal Access", "Off for chat-only bots."];
+    const order = ["Title", "Instructions", "Your rules. The bot follows them in every reply.", "Project Folder", "Approval", "Notifications", "Terminal Access", "Off for chat-only bots."];
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(text).not.toContain("Description");
+  });
+
+  it("labels Instructions and its help in Korean", async () => {
+    localStorage.setItem("omb-locale", "ko");
+    try {
+      await act(async () => {
+        root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+      });
+      const row = host.querySelector('textarea[aria-label="지침"]')!.closest("label")!;
+      expect(row.firstElementChild?.textContent).toBe("지침내가 정하는 규칙이에요. 봇이 모든 답변에서 따라요.");
+      expect(host.textContent).not.toContain("설명");
+    } finally {
+      localStorage.removeItem("omb-locale");
+    }
   });
 
   it("uses the Settings switch for every switch in both tabs", async () => {
@@ -863,7 +878,7 @@ describe("SettingsPanel memory autosave", () => {
       expect(box().style.height).toBe("900px");
       expect(box().className).toContain("overflow-hidden");
       expect(box().className).toContain("resize-none");
-      const description = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
+      const description = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Instructions"]')!;
       expect(description.style.height).toBe("900px");
     } finally {
       width.mockRestore();
@@ -880,7 +895,7 @@ describe("SettingsPanel memory autosave", () => {
     try {
       const description = "Quarterly Research Synthesis Assistant 분기별 리서치 종합 도우미 " + "X".repeat(80) + " Research 한국어 메모. ".repeat(8);
       await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, description } }))));
-      const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
+      const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Instructions"]')!;
       expect(area.style.height).toBe("185px");
       contentHeight = 206;
       await act(async () => {
