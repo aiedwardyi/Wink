@@ -74,6 +74,7 @@ import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
+import { CallCard } from "./CallCard";
 import { lazyView } from "@/lib/stale-build";
 import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
@@ -108,6 +109,7 @@ import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
+import { callRows } from "@/lib/live-call/call-card";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
@@ -135,12 +137,11 @@ function dayLabel(at: number, t: (key: import("@/lib/i18n").MessageKey) => strin
   return d.toLocaleDateString(localeTag(locale), { weekday: "short", month: "short", day: "numeric" });
 }
 
-function DaySeparator({ at, call }: { at: number; call?: boolean }) {
+function DaySeparator({ at }: { at: number }) {
   const { t, locale } = useI18n();
-  const time = formatTime(at, localeTag(locale));
   return (
     <div className="py-3 text-center text-[13px] text-ink-secondary">
-      {call ? t("chat.callDivider", { time }) : `${dayLabel(at, t, locale)} ${time}`}
+      {dayLabel(at, t, locale)} {formatTime(at, localeTag(locale))}
     </div>
   );
 }
@@ -610,6 +611,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane,
   workers,
   livePanes,
+  onCall,
 }: {
   bot: Bot;
   messages: Message[];
@@ -632,6 +634,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane?: (sessionId: string) => void;
   workers: ShownRun[];
   livePanes: Set<string> | null;
+  onCall: boolean;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -700,6 +703,7 @@ const MessagesList = memo(function MessagesList({
     return answers;
   }, [transcript]);
   const bubble = bubbleBot(bot);
+  const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A search hit inside a folded run has to open it: the fold keeps the
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
@@ -757,7 +761,7 @@ const MessagesList = memo(function MessagesList({
         const m = item.message;
         const callId = m.call?.id;
         const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
-        const row = (() => {
+        const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
               return <ContextCompactionDivider message={m} />;
@@ -855,13 +859,13 @@ const MessagesList = memo(function MessagesList({
               );
           }
         })();
-        if (!row) return null;
+        if (!row && !callStart) return null;
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
           <div key={key} className="contents" data-mid={m.id} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
-            {callStart && <DaySeparator at={m.at} call />}
+            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
@@ -1774,6 +1778,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onOpenTerminalPane={onOpenTerminalPane}
             workers={rowWorkers}
             livePanes={livePanes}
+            onCall={onLiveCall}
           />
           <WhatsNewSlot hidden={hidden} />
           {jump.forwardFailed && (

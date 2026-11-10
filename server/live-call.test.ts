@@ -153,6 +153,38 @@ describe("call lines and end", () => {
   });
 });
 
+describe("call recap", () => {
+  const callId = "c-0123456789ab";
+  const said = [
+    { who: "voice", text: "Good evening. What do you need?", at: 1_000 },
+    { who: "user", text: "Can you fix the login page bug?", at: 9_000 },
+    { who: "voice", text: "Fix the login page bug. Shall I send that?", at: 14_000 },
+  ];
+  const firstRow = (h: ReturnType<typeof harness>) => h.store.activePath(h.bot.threadId).find((row) => row.call?.id === callId)!;
+
+  it("saves the length and summary on the call's first row and never asks twice", async () => {
+    const h = harness({ reply: () => Response.json({ candidates: [{ content: { parts: [{ text: "You asked Juno to fix the login page bug.\n Juno sent the job." }] } }] }) });
+    await h.post("lines", { callId, lines: said });
+    await h.post("end", { callId, stats: { ms: 151_000 } });
+    await vi.waitFor(() => expect(firstRow(h).call).toEqual({ id: callId, voice: true, ms: 151_000, summary: "You asked Juno to fix the login page bug. Juno sent the job." }));
+    const [url, init] = h.fetch.mock.calls[0]!;
+    expect(url).toContain(":generateContent");
+    expect((init.headers as Record<string, string>)["x-goog-api-key"]).toBe(KEY);
+    expect(h.sent().contents[0].parts[0].text).toContain("User: Can you fix the login page bug?");
+    await h.post("end", { callId, stats: { ms: 151_000 } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves only the length when Google fails or there is no key", async () => {
+    for (const h of [harness({ reply: () => Response.json({ error: { message: "quota" } }, { status: 429 }) }), harness({ key: undefined })]) {
+      await h.post("lines", { callId, lines: said });
+      await h.post("end", { callId, stats: {} });
+      await vi.waitFor(() => expect(firstRow(h).call).toEqual({ id: callId, voice: true, ms: 13_000 }));
+    }
+  });
+});
+
 it("parses only well-formed call tags and drops voice", () => {
   expect(parseCallTag({ id: "c-0123456789ab", order: true, voice: true })).toEqual({ id: "c-0123456789ab", order: true });
   expect(parseCallTag({ id: "c-0123456789ab", ask: true })).toEqual({ id: "c-0123456789ab", ask: true });

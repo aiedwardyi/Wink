@@ -1,4 +1,4 @@
-// Live call routes: mint a 1-use Gemini token with the brief locked in, write call lines as rows, log end stats.
+// Live call routes: mint a 1-use Gemini token with the brief locked in, write call lines as rows, log end stats and recap the call.
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, type CallLine, type CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -27,10 +27,16 @@ const BRIEFS_KEPT = 16;
 const LINES_MAX = 50;
 const LINE_MAX_CHARS = 4_000;
 const HANGUL = /[가-힣]/;
+export const SUMMARY_MODEL = "gemini-3.5-flash-lite";
+const SUMMARY_URL = `https://generativelanguage.googleapis.com/v1beta/models/${SUMMARY_MODEL}:generateContent`;
+const SUMMARY_MAX_CHARS = 280;
+const TRANSCRIPT_MAX_CHARS = 12_000;
+const CALL_LINES_TOKENS = 2_000;
+const CALL_LINES_HEAD = "[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
 
 type LiveCallDeps = {
   cfg: AppConfig;
-  store: Pick<Store, "bot" | "activePath" | "appendMessage">;
+  store: Pick<Store, "bot" | "activePath" | "appendMessage" | "patchMessage">;
   dataDir: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -114,6 +120,52 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
     `RECENT CHAT:\n${tail || "(none)"}`,
     `NOW: ${bot.busy ? `busy${order ? `, working on: ${order}` : ""}` : "idle"}. Local time ${new Date(now).toString()}.`,
   ].join("\n\n");
+}
+
+/** Two short sentences from the person's side, or undefined when Google gives nothing usable. */
+export async function summarizeCall(lines: CallLine[], names: { bot: string; user: string }, key: string, fetchFn: typeof fetch): Promise<string | undefined> {
+  const transcript = lines.map((line) => `${line.who === "user" ? names.user : names.bot}: ${line.text}`).join("\n").slice(-TRANSCRIPT_MAX_CHARS);
+  const prompt = [
+    `Summarize this voice call between ${names.user} and ${names.bot} in at most two short sentences, written to ${names.user} as "you".`,
+    `Example: "You asked ${names.bot} to fix the login page bug. ${names.bot} sent the job and told you when the fix was in."`,
+    "Write in the language the call was held in. Plain text only.",
+    "",
+    transcript,
+  ].join("\n");
+  try {
+    const response = await fetchFn(SUMMARY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 200 } }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return undefined;
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
+    const text = (data.candidates?.[0]?.content?.parts ?? []).map((part) => typeof part.text === "string" ? part.text : "").join("").replace(/\s+/g, " ").trim();
+    return text ? text.slice(0, SUMMARY_MAX_CHARS) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A resumed session never saw the call, so its spoken lines since the last user turn ride along, newest kept. */
+export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: ReadonlySet<string>, boundId?: string): string[] {
+  const lines: string[] = [];
+  let tokens = estimateContextTokens([{ text: CALL_LINES_HEAD }]);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.id === boundId) break;
+    if (excludeIds.has(message.id) || message.kind !== "text" || !message.text?.trim()) continue;
+    if (!isVoiceLine(message)) {
+      if (message.role === "user" && !message.quick) break;
+      continue;
+    }
+    const line = `${message.role === "user" ? "Person" : "You"}: ${message.text.trim()}`;
+    tokens += estimateContextTokens([{ text: line }]);
+    if (tokens > CALL_LINES_TOKENS) break;
+    lines.unshift(line);
+  }
+  return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
 export function liveSetup(brief: string) {
@@ -232,7 +284,22 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     }
     kept.push(JSON.stringify({ receivedAt: new Date(now()).toISOString(), callId: parsed.data.callId, botId: bot.id, model: LIVE_MODEL, ...parsed.data.stats }));
     writeFileAtomic(path, `${kept.slice(-LIVE_CALL_KEEP).join("\n")}\n`);
+    void recap(bot, parsed.data.callId, parsed.data.stats.ms);
     return json(res, 200, { ok: true });
+  };
+
+  // Once per call: the first row keeps the length and summary, so no device asks again.
+  const recap = async (bot: BotRecord, callId: string, ms: number | undefined) => {
+    const rows = () => store.activePath(bot.threadId).filter((row) => row.call?.id === callId);
+    const said = rows().filter((row) => isVoiceLine(row) && row.text?.trim());
+    if (!said.length || rows()[0]!.call!.ms !== undefined) return;
+    const length = ms ?? said.at(-1)!.at - said[0]!.at;
+    const key = cfg.gemini?.apiKey?.trim();
+    const summary = key && said.some((row) => row.role === "user")
+      ? await summarizeCall(said.map((row) => ({ who: row.role === "user" ? "user" : "voice", text: row.text! })), { bot: bot.name, user: cfg.profile?.name?.trim() || "User" }, key, fetchFn)
+      : undefined;
+    const first = rows()[0];
+    if (first?.call && first.call.ms === undefined) store.patchMessage(bot.threadId, first.id, { call: { ...first.call, ms: Math.round(length), ...(summary ? { summary } : {}) } });
   };
 
   return async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
