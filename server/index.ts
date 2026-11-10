@@ -50,6 +50,7 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -155,6 +156,7 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
+import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
@@ -257,6 +259,7 @@ import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts"
 import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
+import { createTerminalLive } from "./terminal-live.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -1871,6 +1874,7 @@ function publicGroupState(group: GroupRecord) {
     ...groupClears(group),
     working: groupIsWorking(group),
     taskState: store.taskPacket(group.threadId) ?? undefined,
+    ...(group.hosted ? { room: hostedRoomView(group.hosted) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -1942,7 +1946,7 @@ store.onChange((change) => {
       break;
     }
     case "group.deleted":
-      broadcast({ kind: "group.deleted", groupId: change.groupId });
+      broadcast({ kind: "group.deleted", groupId: change.groupId, ...(change.hosted ? { hosted: true } : {}) });
       break;
   }
 });
@@ -2427,6 +2431,8 @@ interface SseClient {
    * while a bot works. A client that isn't showing the computer panel —
    * a phone on cellular, most of all — should not pay for them. */
   screens: boolean;
+  /** Relay clients never get team room frames. */
+  phone: boolean;
 }
 const sseClients = new Set<SseClient>();
 
@@ -2448,10 +2454,10 @@ const SSE_HEARTBEAT_MS =
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null }> = [];
+const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; hosted: boolean }> = [];
 
 /** Screen frames are the only kind a client can decline. */
-const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
+const wants = (client: SseClient, kind: string, hosted: boolean) => (kind !== "screen" || client.screens) && !(hosted && client.phone);
 
 /** `<streamId>:<seq>` — opaque to clients, and the only thing they need to
  * remember to resume. Returns null when it belongs to another run. */
@@ -2520,10 +2526,11 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame });
+  const hosted = hostedFrame(store, payload);
+  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame, hosted });
   if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
   for (const client of [...sseClients]) {
-    if (!wants(client, kind)) continue;
+    if (!wants(client, kind, hosted)) continue;
     try {
       client.res.write(frame);
     } catch {
@@ -2911,7 +2918,7 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
   const routine = routineRun
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
-  phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+  if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -3341,6 +3348,7 @@ void (async () => {
 // Threads whose driver is waiting out a busy provider; a queued send cancels the wait.
 const busyResumeThreads = new Set<string>();
 const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
+const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
@@ -3364,6 +3372,7 @@ bus.subscribe((event: RuntimeEvent) => {
   }
   if (quietTurnText(event)) return;
   event = stripStrayUserTags(event);
+  quietEnd(event);
   quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
@@ -6682,6 +6691,7 @@ ${text}` : text,
 }
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
+  if (store.group(groupId)?.hosted) return;
   const key = `${botId}\0${threadId}`;
   if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
@@ -7157,6 +7167,7 @@ function configStatus() {
       detailedReplies: detailedRepliesEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
+      terminalLive: true,
       modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
   };
@@ -7198,6 +7209,7 @@ const groupRoutes = createGroupRoutes({
   flushInterruptedTask,
   closeOpenApprovals,
   releaseInterruptedBot,
+  teamRooms: () => cfg.features?.teamRooms === true,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -7374,6 +7386,7 @@ const threadRoutes = createThreadRoutes({
   resolveAndSendRoutine,
   approvalBus,
 });
+const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -7402,6 +7415,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    if (relay && hostedRelayTarget(store, path)) return json(res, 404, { error: "no such room" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
     // Terminal panes hold a per-pane grant, never the comms token. The note
@@ -7635,7 +7649,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
       traceOpenSse(url, sseClients.size);
-      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off" };
+      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off", phone: relay };
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -7674,7 +7688,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       );
       if (resumed) {
         for (const buffered of replayBuffer) {
-          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind)) res.write(buffered.frame);
+          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind, buffered.hosted)) res.write(buffered.frame);
         }
       }
 
@@ -7846,7 +7860,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        groups: store.groups.filter((g) => !(relay && g.hosted)).map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -7899,7 +7913,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
-      if (!bot && !group) return json(res, 404, { error: "no such conversation" });
+      if ((!bot && !group) || group?.hosted) return json(res, 404, { error: "no such conversation" });
       const messages = store.messagesFor(threadId).map((message) => ({
         id: message.id,
         role: message.role,
@@ -7946,7 +7960,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // index to maintain. Hits resolve to the bot/room that owns the thread;
     // rows belonging to deleted conversations resolve to nothing and drop.
     if (method === "GET" && path === "/api/search") {
-      return await threadRoutes.search(res, url);
+      return await threadRoutes.search(res, url, relay ? hostedThreadIds(store) : []);
     }
 
     // ── transcript export (the visible branch, human-readable) ──────────
@@ -8077,6 +8091,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       whatsNew.markSeen((await readBody(req))?.release);
       return json(res, 200, { ok: true });
     }
+    if (method === "POST" && path === "/api/whats-new/anchor") {
+      const body = await readBody(req);
+      whatsNew.place(body?.release, body?.id);
+      return json(res, 200, { ok: true });
+    }
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");
       return json(res, update.status, update.body);
@@ -8122,6 +8141,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "POST") {
       const resumed = await terminalResumeResponse({ store, access: terminalBridgeAccess, credentials, cookie: req.headers.cookie }, m[1], await readBody(req));
       return json(res, resumed.status, resumed.body);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/terminal\/(live|input|resize|lease)$/);
+    if (m) {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's

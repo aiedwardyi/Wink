@@ -578,6 +578,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const conversation = store.conversationForBot(bot.id, m[2]);
       if (!conversation) return json(res, 404, { error: "no such task" });
       if (conversation.group) {
+        if (conversation.group.hosted) return json(res, 409, { error: "team rooms don't continue tasks" });
         if (conversation.group.threadId !== m[2]) {
           return json(res, 409, { error: "switch to this channel task before continuing it" });
         }

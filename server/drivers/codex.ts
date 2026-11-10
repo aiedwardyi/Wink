@@ -255,6 +255,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     interface Turn {
       stop: () => void;
       steer: (text: string) => Promise<boolean>;
+      /** settle as a clean finish; settle's own stop retires the app-server */
+      end?: () => void;
       turnId: string;
       asks: Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>;
     }
@@ -351,6 +353,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       child.once("spawn", () => endSpawn?.("spawned"));
       child.once("error", () => endSpawn?.("error"));
       let abandoned = false;
+      // no_reply_needed ended the turn; frames still in flight belong to nobody
+      let ending = false;
       let initialized = false;
       const spend: TurnSpend = {};
       const state = {
@@ -752,7 +756,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               rpcPending.delete(msg.id);
               msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
             }
-          } else if (abandoned) {
+          } else if (abandoned || ending) {
             // a retired attempt's late turn/completed would settle its replacement
             continue;
           } else if (msg.id !== undefined && msg.method) {
@@ -815,7 +819,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       });
 
-      active.set(threadId, { stop, steer, turnId, asks });
+      // a microtask, so the tool's item.completed reaches every listener first
+      const end = () => {
+        ending = true;
+        queueMicrotask(() => settle(true, null));
+      };
+      active.set(threadId, { stop, steer, end, turnId, asks });
       // Relaunching the app-server is still the same logical turn. Keep the
       // active process current on every attempt, but announce the turn once.
       if (attempt === 0) emit({ ...base(threadId, turnId), type: "turn.started" });
@@ -1024,6 +1033,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       sendTurn,
       steer: async (threadId, text) => active.get(threadId)?.steer(text) ?? false,
       interruptTurn: async (threadId) => active.get(threadId)?.stop(),
+      endTurn: async (threadId, turnId) => {
+        const turn = active.get(threadId);
+        if (turn?.turnId === turnId) turn.end?.();
+      },
       respondToRequest: async (threadId, requestId, decision) => {
         const turn = active.get(threadId);
         const finish = turn?.asks.get(requestId);

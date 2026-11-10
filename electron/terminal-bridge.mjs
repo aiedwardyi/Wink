@@ -7,9 +7,12 @@ import { handleServerErrorReport } from "./error-report-capture.mjs";
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const GRANT_PREFIX = "orbit-terminal-read-v1";
 const SEND_GRANT_PREFIX = "orbit-terminal-send-v1";
+const INPUT_GRANT_PREFIX = "orbit-terminal-input-v1";
 const PANE_COUNTS_GRANT_PREFIX = "orbit-terminal-pane-counts-v1";
 const UPDATE_GRANT_PREFIX = "orbit-update-v1";
 const MAX_SEND_BODY = 16 * 1024;
+// JSON can spell each of a write's 64K chars as a 6-byte escape.
+const MAX_INPUT_BODY = 6 * 64 * 1024 + 1024;
 
 function accountRuns(value) {
   if (!Array.isArray(value)) return null;
@@ -43,6 +46,14 @@ export function terminalSendGrant(token, botId) {
     throw new Error("Invalid terminal send grant");
   }
   return createHmac("sha256", token).update(`${SEND_GRANT_PREFIX}:${botId}`).digest("base64url");
+}
+
+function terminalInputGrant(token, botId) {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Grant inputs cross the Electron/server process boundary.
+  if (typeof token !== "string" || !token || typeof botId !== "string" || !BOT_ID_RE.test(botId)) {
+    throw new Error("Invalid terminal input grant");
+  }
+  return createHmac("sha256", token).update(`${INPUT_GRANT_PREFIX}:${botId}`).digest("base64url");
 }
 
 export function updateGrant(token) {
@@ -98,14 +109,14 @@ function json(res, status, value) {
   res.end(body);
 }
 
-function readJson(req) {
+function readJson(req, limit = MAX_SEND_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on("data", (chunk) => {
-      if (size > MAX_SEND_BODY) return;
+      if (size > limit) return;
       size += chunk.length;
-      if (size > MAX_SEND_BODY) return reject(Object.assign(new Error("Terminal send body too large"), { status: 413 }));
+      if (size > limit) return reject(Object.assign(new Error("Terminal send body too large"), { status: 413 }));
       chunks.push(chunk);
     });
     req.on("end", () => {
@@ -231,11 +242,14 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           return json(res, 500, { error: message });
         }
       }
-      const match = parsed.pathname.match(/^\/v1\/bots\/([a-zA-Z0-9_-]{1,128})\/terminal(?:\/(send|open|main|attention|close))?$/);
+      const match = parsed.pathname.match(/^\/v1\/bots\/([a-zA-Z0-9_-]{1,128})\/terminal(?:\/(send|open|main|attention|close|stream|input|resize))?$/);
       if (!match || !BOT_ID_RE.test(match[1])) return json(res, 404, { error: "Unknown terminal route" });
       const botId = match[1];
       const sendOnly = match[2] === "send" && grantMatches(req.headers.authorization, terminalSendGrant(token, botId));
-      if (!sendOnly && !bearerMatches(req.headers.authorization, token, botId)) return json(res, 401, { error: "Unauthorized" });
+      const live = match[2] === "input" || match[2] === "resize";
+      const typing = live && grantMatches(req.headers.authorization, terminalInputGrant(token, botId));
+      if (!sendOnly && !typing && !bearerMatches(req.headers.authorization, token, botId)) return json(res, 401, { error: "Unauthorized" });
+      if (live && !typing) return json(res, 403, { error: "Forbidden" });
       try {
         const sessionId = parsed.searchParams.get("sessionId");
         if (req.method === "GET" && !match[2]) {
@@ -248,6 +262,25 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           if (waitFor) options.waitFor = waitFor;
           if (waitFor && timeoutParam) options.timeoutMs = Number(timeoutParam);
           return json(res, 200, await host.readBot(botId, options));
+        }
+        if (req.method === "GET" && match[2] === "stream") {
+          const watch = host.watchBot(botId, sessionId, {
+            send: (frame) => { res.write(`${JSON.stringify(frame)}\n`); return res.writableLength; },
+            end: () => res.end(),
+            drop: () => res.destroy(),
+          });
+          res.once("close", watch.stop);
+          res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+          const line = `${JSON.stringify(watch.snapshot)}\n`;
+          return void (watch.snapshot.exitCode === null ? res.write(line) : res.end(line));
+        }
+        if (req.method === "POST" && match[2] === "input") {
+          await host.inputBot(botId, await readJson(req, MAX_INPUT_BODY));
+          return json(res, 200, { sent: true });
+        }
+        if (req.method === "POST" && match[2] === "resize") {
+          await host.resizeBot(botId, await readJson(req));
+          return json(res, 200, { resized: true });
         }
         if (req.method === "DELETE" && !match[2]) {
           await host.closeBotPanes(botId);

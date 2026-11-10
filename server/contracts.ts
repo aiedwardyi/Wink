@@ -335,6 +335,9 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** End this running turn as a clean finish, through the driver's own
+   * interrupt. Absent = the turn runs on to its natural end. */
+  endTurn?(threadId: ThreadId, turnId: TurnId): Promise<void>;
   /** Answer a pending ask. Resolves with what actually happened — never
    * throws for an ask that is no longer there: `unavailable` means nobody
    * could take the answer (the turn ended, the broker died, the driver

@@ -806,6 +806,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         toolStarted?: boolean;
         /** an interrupt is out for a user steer; main-agent output that raced it waits here */
         merging?: { held: unknown[] };
+        /** no_reply_needed ended it; output that raced the interrupt is dropped */
+        quietEnd?: boolean;
         /** one deadline from the interrupt to the steer's next request */
         mergeGuard?: ReturnType<typeof setTimeout>;
         restartSteers?: string[];
@@ -1464,6 +1466,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           merging.held.push(o);
           return;
         }
+        if (session.turn?.quietEnd && !o.parent_tool_use_id && (o.type === "stream_event" || o.type === "assistant" || o.type === "user")) return;
         dispatch(o);
       };
 
@@ -1696,6 +1699,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               // the reply finished before the CLI read the interrupt
               if (o.is_error !== true) for (const line of held) dispatch(line);
               // otherwise the run aborted: its held events stay dropped and the turn settles below
+            }
+            if (session.turn?.quietEnd && o.is_error === true) {
+              const t = session.turn;
+              const usage = claudeUsage(o.usage);
+              t.quietEnd = undefined;
+              if (!t.unsentSteers) {
+                settle(true, "end_turn", o.total_cost_usd ?? null, usage);
+                break;
+              }
+              // a steer raced the interrupt; the CLI answers it next
+              t.requested = false;
+              t.carried = { cost: (t.carried?.cost ?? 0) + (o.total_cost_usd ?? 0), usage: t.carried?.usage ? addUsage(t.carried.usage, usage) : usage };
+              break;
             }
             if (session.turn) session.turn.narrationNotice = undefined;
             // a local host's window is the catalog's; the CLI only guesses it
@@ -2158,6 +2174,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           const s = sessions.get(threadId);
           if (!s?.turn || s.turn.settled || s.closing || s.child.exitCode !== null) return false;
           return switchEffort(s, effort, (request) => writeControl(s, threadId, request), EFFORT_REPLY_MS);
+        },
+        endTurn: async (threadId, turnId) => {
+          const s = sessions.get(threadId);
+          const t = s?.turn;
+          if (!s || !t || t.settled || t.turnId !== turnId || t.merging || t.quietEnd || s.closing || s.child.exitCode !== null) return;
+          t.quietEnd = true;
+          const written = await writeControl(s, threadId, { type: "control_request", request_id: newId(), request: { subtype: "interrupt" } });
+          if (!written) t.quietEnd = undefined;
         },
         interruptTurn: async (threadId) => {
           const turn = active.get(threadId);

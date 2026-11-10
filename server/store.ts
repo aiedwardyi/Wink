@@ -194,6 +194,9 @@ export interface Message {
   /** group threads: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
   origin?: string;
+  /** Team room rows: who said it, and the room log entry it mirrors. */
+  author?: import("./rooms/db.ts").RoomAuthor;
+  roomEntryId?: string;
   quiet?: true;
   snagIds?: string[];
   reportIds?: string[];
@@ -262,6 +265,8 @@ export interface GroupRecord {
   /** true for auto-created bot⇄bot channels (ask_bot exchanges live here;
    * the user can open the channel and chip in) */
   dm?: boolean;
+  /** A team room this PC hosts; its people and log live in rooms.db. */
+  hosted?: { roomId: string };
   /** transient: the member currently running a turn (never persisted) */
   busyBotId?: string | null;
   /** the room's shared desk: where member turns run their shell tools,
@@ -476,7 +481,7 @@ export type StoreChange =
   | { type: "bots.order"; botIds: string[] }
   | { type: "groups.order"; groupIds: string[] }
   | { type: "group"; groupId: string }
-  | { type: "group.deleted"; groupId: string };
+  | { type: "group.deleted"; groupId: string; hosted?: true };
 
 /** What a task is called before its first message names it. */
 export const UNTITLED_TASK = "New task";
@@ -1050,6 +1055,7 @@ export class Store {
       defaultResponder?: GroupDefaultResponder;
       completed?: boolean;
     },
+    hosted?: GroupRecord["hosted"],
   ): GroupRecord {
     const threadId = newId();
     const createdAt = Date.now();
@@ -1067,6 +1073,7 @@ export class Store {
       dm: dm || undefined,
       busyBotId: null,
       section,
+      ...(hosted ? { hosted } : {}),
     };
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
@@ -1131,7 +1138,7 @@ export class Store {
     for (const threadId of new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)])) {
       this.deleteThreadRecord(threadId);
     }
-    this.emit({ type: "group.deleted", groupId: id });
+    this.emit({ type: "group.deleted", groupId: id, ...(group.hosted ? { hosted: true as const } : {}) });
     return true;
   }
 

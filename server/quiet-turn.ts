@@ -4,12 +4,12 @@ import type { RuntimeEvent } from "./contracts.ts";
 import type { Message } from "./store.ts";
 
 // Claude names it mcp__agents__no_reply_needed, Codex bare; a shell command quoting it must not match.
-const QUIET_TOOL = /^(?:(?:mcp[_./:]+)?agents[_./:]+)?no_reply_needed$/;
+export const QUIET_TOOL = /^(?:(?:mcp[_./:]+)?agents[_./:]+)?no_reply_needed$/;
 
 const typed = (m: Message) => m.role === "user" && m.kind === "text" && !m.from?.botId;
 
 /** Started by, or joined by, a message the user typed. Notes can land between a send and its start, so they are skipped. */
-function userInTurn(messages: readonly Message[], startedAt: number): boolean {
+export function userInTurn(messages: readonly Message[], startedAt: number): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
     if (m.at >= startedAt) {
