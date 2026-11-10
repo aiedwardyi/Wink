@@ -1,4 +1,4 @@
-// Small HTTPS client for enroll and CT lookups: normal certificate
+// Small HTTPS client for enroll, CT lookups and joined team rooms: normal certificate
 // verification, a hard deadline, a response size cap and no cross-origin
 // redirects. `ca` and `lookup` exist so tests can point it at a local server.
 
@@ -19,6 +19,7 @@ export interface HttpsRequest {
   url: string;
   body?: string;
   contentType?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
   /** Same-origin redirects to follow; cross-origin ones always fail. */
@@ -55,7 +56,7 @@ export async function httpsRequest(req: HttpsRequest, deps: HttpsDeps = {}): Pro
 
 function once(url: URL, req: HttpsRequest, deps: HttpsDeps): Promise<HttpsResponse & { location?: string }> {
   return new Promise((resolve, reject) => {
-    const headers: OutgoingHttpHeaders = { accept: "application/json" };
+    const headers: OutgoingHttpHeaders = { accept: "application/json", ...req.headers };
     if (req.body !== undefined) {
       headers["content-type"] = req.contentType ?? "application/json";
       headers["content-length"] = String(Buffer.byteLength(req.body));
