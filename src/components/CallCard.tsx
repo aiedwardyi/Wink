@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Phone } from "lucide-react";
 
 import { isVoiceLine } from "../../shared/live-call";
@@ -9,9 +9,12 @@ import { formatTime, type Message } from "@/state/store";
 import { Fold } from "./Fold";
 
 /** One call in the chat: the "Call · time" line while you talk, then a card with its length, summary, voice stripe and transcript. */
-export function CallCard({ rows, live, botName }: { rows: Message[]; live: boolean; botName: string }) {
+export function CallCard({ rows, live, botName, forceOpen = false }: { rows: Message[]; live: boolean; botName: string; forceOpen?: boolean }) {
   const { t, locale } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   const first = rows[0]!;
   const time = formatTime(first.at, localeTag(locale));
   const said = useMemo(() => rows.filter((row) => isVoiceLine(row) && row.text?.trim()), [rows]);
@@ -58,9 +61,13 @@ export function CallCard({ rows, live, botName }: { rows: Message[]; live: boole
             <Fold open={open} soft>
               <ol className="mt-1.5 space-y-1.5 pb-1 text-[13px] leading-snug">
                 {said.map((row) => (
-                  <li key={row.id} className="flex gap-2">
-                    <span className="w-14 shrink-0 truncate text-ink-secondary">{row.role === "user" ? t("chat.you") : botName}</span>
-                    <span className="min-w-0 flex-1 break-words">{row.text}</span>
+                  <li key={row.id}>
+                    <div className="contents" data-mid={row.id}>
+                      <div className="flex gap-2">
+                        <span className="w-14 shrink-0 truncate text-ink-secondary">{row.role === "user" ? t("chat.you") : botName}</span>
+                        <span className="min-w-0 flex-1 break-words">{row.text}</span>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ol>

@@ -863,9 +863,9 @@ const MessagesList = memo(function MessagesList({
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
-          <div key={key} className="contents" data-mid={m.id} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
+          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
-            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} />}
+            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}

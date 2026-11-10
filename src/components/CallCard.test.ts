@@ -23,10 +23,10 @@ describe("CallCard", () => {
     host.remove();
     persistPreference("en");
   });
-  const render = async (props: { rows: Message[]; live: boolean }) => {
+  const render = async (props: { rows: Message[]; live: boolean; forceOpen?: boolean }) => {
     await act(async () => root.render(createElement(CallCard, { ...props, botName: "Atlas" })));
   };
-  const mount = async (props: { rows: Message[]; live: boolean }) => {
+  const mount = async (props: { rows: Message[]; live: boolean; forceOpen?: boolean }) => {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
     await render(props);
@@ -55,6 +55,14 @@ describe("CallCard", () => {
     await act(async () => toggle.click());
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(card.querySelector("ol")!.textContent).toBe("AtlasGood evening. What do you need?YouCan you fix the login page bug?AtlasFix the login page bug. Shall I send that?");
+  });
+
+  it("opens the transcript when search lands on one of its lines", async () => {
+    await mount({ rows: rows({ ms: 151_000 }), live: false });
+    expect(host.querySelector('[data-mid="l3"]')).toBeNull();
+    await render({ rows: rows({ ms: 151_000 }), live: false, forceOpen: true });
+    expect(host.querySelector("[data-call-card] button")!.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('ol [data-mid="l3"]')!.textContent).toBe("AtlasFix the login page bug. Shall I send that?");
   });
 
   it("speaks Korean", async () => {
