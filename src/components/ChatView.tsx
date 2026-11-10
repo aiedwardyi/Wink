@@ -1485,9 +1485,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <button
             data-orbit-chat-focus-fallback=""
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
-            title={t("chat.openProfile", { name: bot.name })}
-            aria-label={t("chat.openProfile", { name: bot.name })}
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50 cursor-pointer"
+            title={t("chat.avatarTip")}
+            aria-label={t("chat.avatarTip")}
           >
             <BotAvatar
               bot={bot}

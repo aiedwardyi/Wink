@@ -13,7 +13,7 @@ Hidden rows are absence checks. Manual rows need a native app or real device.
 - `sidebar`: desktop list; phone taps `[data-phone-menu]` to open `[data-phone-drawer]`.
 - `bot`, `group`, `pending-group`: sidebar, then `[data-sidebar-row-id="{bot/group/pending}"]`. Selection closes the phone drawer.
 - `settings:Tab`: sidebar footer > App settings > labeled tab (desktop) or list row (phone). `settings-list` stops at the phone list; `close-settings` uses Close Settings. Devices has section ID `companion`. Shortcuts stays desktop only.
-- `details`: bot > header avatar `button[aria-label="Open Map Bot's profile"]`. Settings and Memory are separate tabs. `avatar`: details > Customize on either width.
+- `details`: bot > header avatar `button[aria-label="Bot details & memory"]`. Settings and Memory are separate tabs. `avatar`: details > Customize on either width.
 - `message-context`: right-click a `[data-hold-menu]` bot reply on desktop; touch-hold on phone. Sidebar context menus use right-click or ContextMenu/Shift+F10 instead.
 - Desktop shortcuts: Alt+T Themes, Alt+I Model Index, Alt+M model picker, Alt+W workers, Ctrl+backtick terminal, Ctrl+K command palette. Alt+U opens quick Usage first when available, then all Usage. Use Cmd for Ctrl shortcuts on macOS where supported.
 - Base fixture: disposable Map Bot and Map Peer via POST /api/bots; one stub reply; an archived bot via PATCH {hidden:true}; Map Group with memberIds and completed setup; Map Setup without setup or messages. IDs in braces come from fixture responses.
