@@ -677,7 +677,9 @@ describe("ModelPicker light skins", () => {
   it.each(SKINS.map((skin) => skin.id))("gives the %s skin the light picker only if it is light", (skin) => {
     vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null) });
     try {
-      expect(/class="model-cross-backdrop[^"]*"[^>]* data-light="true"/.test(markup(bot.modelSelection, true))).toBe(LIGHT_SKIN_IDS.has(skin));
+      const backdrop = markup(bot.modelSelection, true).match(/<div [^>]*class="model-cross-backdrop[^>]*>/)?.[0] ?? "";
+      expect(backdrop).not.toBe("");
+      expect(backdrop.includes(' data-light="true"')).toBe(LIGHT_SKIN_IDS.has(skin));
     } finally {
       vi.unstubAllGlobals();
     }
