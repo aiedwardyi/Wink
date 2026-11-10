@@ -14,6 +14,7 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, 
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
@@ -441,6 +442,7 @@ export function UsageDesk() {
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();
   const pending = useRefreshPending();
+  const spin = useSpinUntilTurnEnds(pending.size > 0);
   const drag = useUsageDrag(state.board?.engines ?? []);
   const desk = useRef<HTMLDivElement>(null);
   const heads = useRef(new Map<HTMLElement, number>());
@@ -568,7 +570,7 @@ export function UsageDesk() {
         }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
         <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
           aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh(board)}>
-          <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
+          <RefreshCw size={14} aria-hidden="true" className={cn(spin.spinning && "motion-safe:animate-spin")} onAnimationIteration={spin.onAnimationIteration} />
         </button>
       </div>
       {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
