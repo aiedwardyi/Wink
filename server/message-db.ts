@@ -74,6 +74,19 @@ function db(): DatabaseSync {
 
 export { db as messageDatabase };
 
+/** Its own read-only handle, for the backup worker: no import, no schema change, no write. */
+export function openThreadExport(file: string) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  const rows = database.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid");
+  const leaf = database.prepare("SELECT active_leaf_id AS id FROM thread_state WHERE thread_id = ?");
+  return {
+    threadIds: () => (database.prepare("SELECT DISTINCT thread_id AS id FROM messages").all() as Array<{ id: string }>).map((row) => row.id),
+    rows: (threadId: string) => rows.iterate(threadId) as Iterable<{ json: string }>,
+    activeLeafId: (threadId: string) => (leaf.get(threadId) as { id: string | null } | undefined)?.id ?? null,
+    close: () => database.close(),
+  };
+}
+
 // SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
 const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
 

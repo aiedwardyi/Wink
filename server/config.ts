@@ -4,7 +4,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
@@ -302,6 +302,20 @@ export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit");
 export const DOWNLOADS_DIR = process.env.OMB_DOWNLOADS_DIR ?? join(homedir(), "Downloads");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
+
+export const BACKUP_MAX_BYTES = 2 * 1024 ** 3;
+const backupFileSchema = z.object({ dir: z.string().trim().min(1).optional(), maxBytes: z.number().int().positive().optional() });
+
+/** Backup place and cap, from a file of their own so sync and config patches never carry them. */
+export function backupSettings(dataDir = DATA_DIR): { dir: string; maxBytes: number } {
+  let saved: z.output<typeof backupFileSchema> = {};
+  try {
+    saved = backupFileSchema.parse(parseJson(readFileSync(join(dataDir, "backup.json"), "utf8")));
+  } catch {
+    /* no file: the defaults */
+  }
+  return { dir: resolve(saved.dir ?? join(homedir(), "Wink Backups")), maxBytes: saved.maxBytes ?? BACKUP_MAX_BYTES };
+}
 
 export function ensureDirs() {
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
