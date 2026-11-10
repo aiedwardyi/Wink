@@ -3632,7 +3632,8 @@ describe("harness HTTP API", () => {
       const finished = await internal("GET", `${delegationPath}&wait_ms=10000`);
       expect(finished.status).toBe(200);
       expect(finished.body.status).toBe("done");
-      expect(finished.body.result).toContain("hello from fake claude");
+      // the room turn can fold the reply in first, then the poll gets the read receipt
+      expect(finished.body.result).toMatch(/hello from fake claude|^already in your context$/);
     } finally {
       const state = (await api("GET", "/api/bots?messages=0")).body;
       const ownedGroups = state.groups.filter((group: { memberIds: string[] }) =>
