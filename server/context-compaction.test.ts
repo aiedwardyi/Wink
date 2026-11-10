@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalog } from "./contracts.ts";
 import {
   MODEL_CONTEXT_FALLBACK,
+  buildCompaction,
   contextWindowFor,
   estimateContextTokens,
   isFallbackSummary,
@@ -24,6 +25,7 @@ import { PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import type { Message } from "./store.ts";
 import { lastUserInstruction } from "./task-recovery-flush.ts";
 import { REPLY_MARKER, buildResumeFallback, buildTurnContext } from "./turn-context.ts";
+import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 
@@ -56,6 +58,11 @@ const longHistory = (count: number, start = 0): Message[] =>
       role: index % 2 === 0 ? "user" : "bot",
     });
   });
+
+const day = (at: number) => {
+  const date = new Date(at);
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
 
 describe("provider-neutral context compaction", () => {
   it("keeps the task record and recent work after more than 200 messages", async () => {
@@ -2422,6 +2429,7 @@ describe("summary grace context", () => {
     const summarize = vi.fn(async () => "SUMMARY\nordinary summary");
     await prepareModelContext({ ...input, summaryGrace, summarize });
     expect(summarize).not.toHaveBeenCalled();
+    const block = [TYPED_VALUES_HEADER, ...Array.from({ length: 36 }, (_, index) => `- ${day(index + 10)} request ${index + 10}`)].join("\n");
     for (const patch of [
       { knownWindow: null }, { knownWindow: 32_768 }, { local: true }, { fresh: true }, { rewound: true }, { recycle: true },
       { native: { ...summaryGrace.native, prompt: undefined } },
@@ -2434,8 +2442,17 @@ describe("summary grace context", () => {
       summarize.mockClear();
       const result = await prepareModelContext({ ...input, summaryGrace: { ...summaryGrace, ...patch }, summarize });
       expect(summarize).toHaveBeenCalledOnce();
-      expect(result.status === "ready" && result.compaction?.summary).toBe("ordinary summary");
+      expect(result.status === "ready" && result.compaction?.summary).toBe(`ordinary summary\n\n${block}`);
     }
+  });
+
+  it("leaves the summary equal to the model text when the chat has no typed values", async () => {
+    const messages = history().map((item) => ({ ...item, text: item.role === "bot" ? "an outcome" : "a request" }));
+    const result = await prepareModelContext({
+      messages, contextWindow: 200_000, taskRecordText: "Goal: preserve context",
+      summaryGrace: { ...summaryGrace, fresh: true }, summarize: async () => "SUMMARY\nordinary summary",
+    });
+    expect(result.status === "ready" && result.compaction?.summary).toBe("ordinary summary");
   });
 
   it("counts the current request, task record and reserved pane notes before granting headroom", async () => {
@@ -2453,5 +2470,285 @@ describe("summary grace context", () => {
       await prepareModelContext({ ...input, ...patch, summarize });
       expect(summarize).toHaveBeenCalled();
     }
+  });
+});
+
+describe("typed values block", () => {
+  const NOTICE = "Model summary unavailable; full transcript retained by Wink.";
+  const PLANT = "Our launch city is Busan, and the budget is 40,000.";
+  const BLOCK = `${TYPED_VALUES_HEADER}\n- ${day(1)} ${PLANT}`;
+  const planted = (count = 130, plant = PLANT): Message[] => [
+    message("p1", plant),
+    message("p2", "noted", { role: "bot" }),
+    ...longHistory(count, 10),
+  ];
+  const standInLines = (info: { mock: { calls: unknown[][] } }) =>
+    info.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[summary-stand-in] "));
+  const row = (patch: Partial<ContextCompactionV1>): ContextCompactionV1 => ({
+    v: 1,
+    summary: "model text one",
+    coveredThroughId: "m14",
+    firstKeptId: "m15",
+    contextWindow: 200_000,
+    estimatedTokensBefore: 900,
+    sourceMessageCount: 12,
+    ...patch,
+  });
+  const afterRow = (summary: string, later = 130): Message[] => [
+    ...planted(10),
+    compactionMessage("c1", "m19", row({ summary })),
+    ...longHistory(later, 20),
+  ];
+
+  it("appends what the user typed after the summary text, with no new row field", async () => {
+    const result = await prepareModelContext({
+      messages: [...planted(), message("m900", "the venue holds 250 people"), message("m901", "noted", { role: "bot" })],
+      contextWindow: 200_000,
+      taskRecordText: "Goal: launch",
+      summarize: async () => "SUMMARY\nmodel text",
+    });
+
+    if (result.status !== "ready" || !result.compaction) throw new Error("expected a summary");
+    expect(result.compaction.summary).toBe(`model text\n\n${BLOCK}`);
+    expect(Object.keys(result.compaction).sort()).toEqual(["contextWindow", "coveredThroughId", "estimatedTokensBefore", "firstKeptId", "sourceMessageCount", "summary", "v"]);
+    expect(readContextCompaction({ value: result.compaction })).toEqual({ status: "valid", value: result.compaction });
+    expect(result.transcript[0]!.text.endsWith(`model text\n\n${BLOCK}`)).toBe(true);
+    expect(result.transcript.at(-2)?.text).toBe("the venue holds 250 people");
+    expect(result.estimatedTokens).toBe(estimateContextTokens(result.transcript));
+  });
+
+  it("lands the same block from a build off the send path", async () => {
+    const messages = planted();
+    const plan = planCompaction({ messages, contextWindow: 200_000 });
+    if (!plan.needed) throw new Error("expected a plan");
+    const built = await buildCompaction({ plan, messages, taskRecordText: "Goal: launch", summarize: async () => "SUMMARY\nbuilt text" });
+    expect(built.status === "ready" && built.compaction.summary).toBe(`built text\n\n${BLOCK}`);
+  });
+
+  it("gives the summarizer the last summary without its block and rebuilds one block", async () => {
+    const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nmodel text two");
+    const result = await prepareModelContext({
+      messages: afterRow(`model text one\n\n${BLOCK}`),
+      contextWindow: 200_000,
+      taskRecordText: "Goal: launch",
+      summarize,
+    });
+
+    const prompt = summarize.mock.calls.map(([text]) => text).join("\n");
+    expect(prompt).toContain("<previous_summary>\nmodel text one\n</previous_summary>");
+    expect(prompt).not.toContain(TYPED_VALUES_HEADER);
+    expect(prompt).not.toContain("Busan");
+    expect(result.status === "ready" && result.compaction?.summary).toBe(`model text two\n\n${BLOCK}`);
+  });
+
+  it("replays a stored block as is, the same bytes on every turn until the next summary", async () => {
+    const stored = `model text one\n\n${BLOCK}`;
+    const turn = (later: number) => prepareModelContext({ messages: afterRow(stored, later), contextWindow: 200_000, taskRecordText: "Goal: launch" });
+    const first = await turn(4);
+    const second = await turn(6);
+
+    if (first.status !== "ready" || second.status !== "ready") throw new Error("expected a transcript");
+    expect(first.compactionId).toBe("c1");
+    expect(first.transcript[0]!.text.endsWith(stored)).toBe(true);
+    expect(second.transcript[0]).toEqual(first.transcript[0]);
+  });
+
+  it("does not resummarize or raise the floor for a stored block", async () => {
+    const lines = Array.from({ length: 400 }, (_, index) => `- 01-01 plant number ${10_000 + index} sits in the long list`).join("\n");
+    const full = "full text line that fills the summary budget\n".repeat(540).trim();
+    const records: SummaryCallRecord[] = [];
+    await prepareModelContext({
+      messages: afterRow(`${full}\n\n${TYPED_VALUES_HEADER}\n${lines}`),
+      contextWindow: 200_000,
+      taskRecordText: "Goal: launch",
+      summarize: async () => `SUMMARY\n${full}`,
+      onSummaryCall: (record) => records.push(record),
+    });
+    expect(records).toMatchObject([{ batch: 1, batches: 1, result: "ok" }]);
+
+    const text = "known good summary with evidence. ".repeat(60).trim();
+    const reply = "new summary. ".repeat(80).trim();
+    const summarize = vi.fn(async (_prompt: string) => `SUMMARY\n${reply}`);
+    const result = await prepareModelContext({
+      messages: afterRow(`${text}\n\n${TYPED_VALUES_HEADER}\n${lines.slice(0, 3_000)}`),
+      contextWindow: 200_000,
+      taskRecordText: "Goal: launch",
+      summarize,
+    });
+    expect(summarize).toHaveBeenCalledOnce();
+    expect(result.status === "ready" && result.compaction?.summary).toBe(`${reply}\n\n${BLOCK}`);
+  });
+
+  it("logs one stand-in line with no message text when no summarizer is set", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const result = await prepareModelContext({ messages: planted(), contextWindow: 200_000, taskRecordText: "Goal: launch" });
+
+      if (result.status !== "ready" || !result.compaction) throw new Error("expected a summary");
+      expect(standInLines(info)).toEqual([
+        `[summary-stand-in] ${JSON.stringify({ reason: "no-summarizer", contextWindow: 200_000, coveredThroughId: result.compaction.coveredThroughId })}`,
+      ]);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("keeps the plant on a stand-in row when the summarizer returns junk, with one log line", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await prepareModelContext({
+        messages: planted(),
+        contextWindow: 200_000,
+        taskRecordText: "Goal: launch",
+        summarize: async () => "Sure, Busan it is!",
+      });
+
+      if (result.status !== "ready" || !result.compaction) throw new Error("expected a summary");
+      const summary = result.compaction.summary;
+      expect(summary.startsWith(NOTICE)).toBe(true);
+      expect(isFallbackSummary(summary)).toBe(true);
+      expect(summary.endsWith(`\n\n${BLOCK}`)).toBe(true);
+      expect(summary).not.toContain("Sure, Busan it is!");
+      const lines = standInLines(info);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!.slice("[summary-stand-in] ".length))).toEqual({ reason: "invalid", contextWindow: 200_000, coveredThroughId: result.compaction.coveredThroughId });
+      expect(result.estimatedTokens).toBeLessThanOrEqual(result.budgetTokens);
+    } finally {
+      info.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it("starts a stand-in after a block row with the notice and holds one fresh block", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await prepareModelContext({
+        messages: afterRow(`model text one\n\n${BLOCK}`),
+        contextWindow: 200_000,
+        taskRecordText: "Goal: launch",
+        summarize: async () => {
+          throw new Error("Claude review timed out");
+        },
+      });
+
+      if (result.status !== "ready" || !result.compaction) throw new Error("expected a summary");
+      const summary = result.compaction.summary;
+      expect(summary.startsWith(NOTICE)).toBe(true);
+      expect(summary).toContain("[Previous durable summary]\nmodel text one\n[");
+      expect(summary.split(TYPED_VALUES_HEADER)).toHaveLength(2);
+      expect(summary.endsWith(`\n\n${BLOCK}`)).toBe(true);
+      expect(standInLines(info).map((line) => JSON.parse(line.slice("[summary-stand-in] ".length)).reason)).toEqual(["timeout"]);
+    } finally {
+      info.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it("gives the block its share of a small stand-in before the digest", async () => {
+    const plants = Array.from({ length: 140 }, (_, index) => [
+      message(`m${index * 2}`, `plant number ${10_000 + index} sits in the long list we keep`),
+      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(40)}`, { role: "bot" }),
+    ]).flat();
+    const result = await prepareModelContext({ messages: plants, contextWindow: 16_384, taskRecordText: "Goal: launch" });
+
+    if (result.status !== "ready" || !result.compaction) throw new Error("expected a summary");
+    const summary = result.compaction.summary;
+    expect(summary.startsWith(NOTICE)).toBe(true);
+    const block = summary.slice(summary.indexOf(TYPED_VALUES_HEADER));
+    expect(block).toMatch(/^\[Values the user typed[^\n]*\n\[\d+ older lines left out\]\n- /);
+    expect(estimateContextTokens([{ text: block }])).toBeGreaterThan(1_000);
+    expect(result.estimatedTokens).toBeLessThanOrEqual(result.budgetTokens);
+  });
+
+  it("keeps secret-looking lines out of the row", async () => {
+    const key = `sk-${"k".repeat(32)}`;
+    const result = await prepareModelContext({
+      messages: [
+        message("s1", "my password is hunter2024"),
+        message("s2", `use ${key} for 30 days`),
+        message("s3", "my PIN is 4821"),
+        ...planted(),
+      ],
+      contextWindow: 200_000,
+      taskRecordText: "Goal: launch",
+      summarize: async () => "SUMMARY\nmodel text",
+    });
+    expect(result.status === "ready" && result.compaction?.summary).toBe(`model text\n\n${BLOCK}`);
+  });
+
+  it("never trims the summary text for the block and stays under the row limit at the worst case", async () => {
+    const chat = (word: string) => Array.from({ length: 150 }, (_, index) => [
+      message(`m${index * 2}`, `plant ${word} ${10_000 + index} sits in row ${20_000 + index} of the long list we keep`),
+      message(`m${index * 2 + 1}`, "noted", { role: "bot" }),
+    ]).flat();
+    const summarize = async () => `SUMMARY\n${Array.from({ length: 2_500 }, (_, index) => `built line ${index}`).join("\n")}`;
+    const input = { contextWindow: 200_000, taskRecordText: "Goal: launch", summarize };
+    const valued = await prepareModelContext({ ...input, messages: chat("number") });
+    const plain = await prepareModelContext({ ...input, messages: chat("number").map((item) => ({ ...item, text: item.text!.replace(/\d/g, "x") })) });
+
+    if (valued.status !== "ready" || !valued.compaction || plain.status !== "ready" || !plain.compaction) throw new Error("expected summaries");
+    const summary = valued.compaction.summary;
+    expect(plain.compaction.summary).toMatch(/\n\[summary trimmed to fit\]$/);
+    expect(summary.startsWith(`${plain.compaction.summary}\n\n${TYPED_VALUES_HEADER}\n[`)).toBe(true);
+    expect(summary).toMatch(/\n\[\d+ older lines left out\]\n- /);
+    expect(summary.length).toBeGreaterThan(31_000);
+    expect(summary.length).toBeLessThanOrEqual(32_000);
+    expect(readContextCompaction({ value: valued.compaction }).status).toBe("valid");
+    expect(valued.estimatedTokens).toBeLessThanOrEqual(valued.budgetTokens);
+  });
+
+  it("fits a full summary, a full block and a token-bound tail in a small window", async () => {
+    const messages = Array.from({ length: 60 }, (_, index) => [
+      message(`m${index * 2}`, `plant number ${10_000 + index} sits in the long list we keep`),
+      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(250)}`, { role: "bot" }),
+    ]).flat();
+    const result = await prepareModelContext({
+      messages,
+      contextWindow: 16_384,
+      taskRecordText: "Goal: launch",
+      summarize: async () => `SUMMARY\n${Array.from({ length: 2_500 }, (_, index) => `built line ${index}`).join("\n")}`,
+    });
+
+    if (result.status !== "ready" || !result.compaction) throw new Error(result.status === "failed" ? result.error : "expected a summary");
+    expect(result.compaction.summary).toMatch(/\n\[summary trimmed to fit\]\n\n\[Values the user typed[^\n]*\n\[\d+ older lines left out\]\n- /);
+    expect(result.transcript.length).toBeGreaterThan(1);
+    expect(result.transcript.length).toBeLessThan(1 + 48);
+    expect(result.estimatedTokens).toBeLessThanOrEqual(result.budgetTokens);
+  });
+
+  it("takes the block's room from the tail only when the chat has typed values", () => {
+    const chat = (text: string) => Array.from({ length: 40 }, (_, index) => [
+      message(`m${index * 2}`, `${text}\n\n${"detail ".repeat(1_200)}`),
+      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(1_200)}`, { role: "bot" }),
+    ]).flat();
+    const valued = planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 200_000 });
+    const plain = planCompaction({ messages: chat("the budget is unset"), contextWindow: 200_000 });
+
+    if (!valued.needed || !plain.needed) throw new Error("expected plans");
+    expect(plain).toMatchObject({ valuesRoom: 0, typedLines: [] });
+    expect(valued.valuesRoom).toBe(2_400);
+    expect(valued.typedLines.length).toBeGreaterThan(0);
+    expect(estimateContextTokens(plain.tail)).toBeGreaterThan(plain.budgetTokens - plain.summaryBudget - 2_400);
+    expect(estimateContextTokens(valued.tail)).toBeLessThanOrEqual(valued.budgetTokens - valued.summaryBudget - 2_400);
+    expect(plain.tail.length - valued.tail.length).toBe(2);
+    expect(planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 16_384 })).toMatchObject({ needed: true, valuesRoom: 327 });
+  });
+
+  it("repairs a stand-in from the last summary's own text and appends the block", async () => {
+    const path = [
+      ...planted(10),
+      compactionMessage("cg", "m19", row({ summary: `good summary G\n\n${BLOCK}`, contextWindow: 8_192 })),
+      ...longHistory(10, 20),
+      compactionMessage("cf", "m29", row({ summary: `${NOTICE}\nfallback digest\n\n${BLOCK}`, coveredThroughId: "m24", firstKeptId: "m25", contextWindow: 8_192, previousCompactionId: "cg" })),
+      ...longHistory(4, 30),
+    ];
+    const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nrepaired text");
+    const result = await repairModelContext({ messages: path, target: repairTarget(path)!, taskRecordText: "Goal: repair", summarize });
+
+    expect(summarize.mock.calls[0]![0]).toContain("<previous_summary>\ngood summary G\n</previous_summary>");
+    expect(summarize.mock.calls[0]![0]).not.toContain(TYPED_VALUES_HEADER);
+    expect(result.status === "ready" && result.compaction.summary).toBe(`repaired text\n\n${BLOCK}`);
   });
 });
