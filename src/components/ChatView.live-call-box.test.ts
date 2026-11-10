@@ -92,6 +92,7 @@ afterEach(() => {
   localStorage.clear();
   posts.length = 0;
   fakes.level = 0;
+  fakes.engines.length = 0;
 });
 
 describe("live call in the message box", () => {
