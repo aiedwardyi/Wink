@@ -449,7 +449,9 @@ function DesktopFileLink({ filePath, base, threadId, children }: { filePath: str
       await openFile(filePath, base);
     } catch (error) {
       const message = error instanceof Error ? error.message : "That file could not be opened";
-      if (message === "That file no longer exists" && threadId && (await fromOtherPc(threadId))) return;
+      // A plain drive path is invalid only on a Mac or Linux desktop, where another PC wrote it.
+      const foreign = message === "That file path is invalid" && WINDOWS_PATH.test(filePath) && !filePath.slice(2).includes(":");
+      if ((foreign || message === "That file no longer exists") && threadId && (await fromOtherPc(threadId))) return;
       setReason(message);
     }
   };

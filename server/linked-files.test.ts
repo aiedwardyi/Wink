@@ -885,4 +885,34 @@ describe("linked files", () => {
       await server.close();
     }
   });
+
+  it.each([
+    ["darwin", "C:/Users/홍길동/문서/주간 보고서.docx"],
+    ["linux", "C:/Users/홍길동/문서/주간 보고서.docx"],
+    ["win32", "/Users/gildong/문서/주간 보고서.docx"],
+  ] as const)("names the PC that wrote a path a %s PC cannot hold", async (platform, filePath) => {
+    const own = process.platform;
+    const server = await listen((req, res) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        serveLinkedFile(req, res, {
+          bearerOk: true,
+          remoteKey: undefined,
+          threadId: "t1",
+          messages: [{ id: "m1", text: `[주간 보고서](${filePath.replaceAll(" ", "%20")})` }],
+          deviceId: "this-pc",
+          writerDeviceId: () => "other-pc",
+          rootsFor: () => [],
+        });
+      } finally {
+        Object.defineProperty(process, "platform", { value: own });
+      }
+    });
+    try {
+      const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(filePath)}`, { headers: { Range: "bytes=0-0" } });
+      expect([res.status, await res.json()]).toEqual([404, { error: "not found", deviceId: "other-pc" }]);
+    } finally {
+      await server.close();
+    }
+  });
 });
