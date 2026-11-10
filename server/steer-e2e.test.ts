@@ -120,7 +120,7 @@ posixOnly("mid-turn steering e2e", () => {
         "user:first",
         "bot:hello from fake claude",
         "user:and also this",
-        "bot:reply to: first + steered: and also this",
+        expect.stringMatching(/^bot:reply to: first \+ steered: \[Wink note: [^\]]+\]\n\nand also this$/),
       ]);
       const steered = bot.messages.find((m: any) => m.text === "and also this");
       expect(steered.steered).toBe(true);
@@ -174,12 +174,9 @@ posixOnly("mid-turn steering e2e", () => {
     expect(queued.status).toBe(202);
     expect(queued.body.queued).toBe(true);
     expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
-    await api("POST", `/api/bots/${created.id}/interrupt`);
-    await waitFor(
-      async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
-      "the queued message to begin its turn",
-    );
-    await api("POST", `/api/bots/${created.id}/interrupt`);
-    await waitFor(async () => (await getBot(created.id)).busy === false, "the queued turn to settle");
+    const stopped = await api("POST", `/api/bots/${created.id}/interrupt`);
+    expect(stopped.body.returned).toEqual([{ threadId: queued.body.threadId, queueId: queued.body.queueId, text: "second" }]);
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the stopped turn to settle");
+    expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
   }, 30_000);
 });
