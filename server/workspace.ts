@@ -57,7 +57,8 @@ export function workspaceDir(botId: string): string {
 function unlinkLinks(dir: string): void {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
-    const stat = lstatSync(path);
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat) continue;
     if (stat.isSymbolicLink()) unlinkSync(path);
     else if (stat.isDirectory()) unlinkLinks(path);
   }

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelSelection } from "./contracts.ts";
 
-const fsPlan = vi.hoisted(() => ({ linksHandedToRm: [] as string[], lockedRenames: [] as string[] }));
+const fsPlan = vi.hoisted(() => ({ linksHandedToRm: [] as string[], lockedRenames: [] as string[], vanished: [] as string[] }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -21,6 +21,11 @@ vi.mock("node:fs", async (importOriginal) => {
     rmSync: (...args: Parameters<typeof actual.rmSync>) => {
       if (args[1]?.recursive) fsPlan.linksHandedToRm.push(...links(String(args[0])));
       return actual.rmSync(...args);
+    },
+    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
+      if (!fsPlan.vanished.includes(String(args[0]))) return actual.lstatSync(...args);
+      if (args[1]?.throwIfNoEntry === false) return undefined;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => {
       if (fsPlan.lockedRenames.includes(String(args[0]))) throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
@@ -47,6 +52,7 @@ describe("Store file guards", () => {
     writeFileSync(join(project, "src", "main.ts"), "export const answer = 42;");
     fsPlan.linksHandedToRm = [];
     fsPlan.lockedRenames = [];
+    fsPlan.vanished = [];
   });
   afterEach(() => {
     closeMessageDb();
@@ -66,6 +72,21 @@ describe("Store file guards", () => {
     expect(fsPlan.linksHandedToRm).toEqual([]);
     expect(existsSync(workspace)).toBe(false);
     expect(readFileSync(join(project, "src", "main.ts"), "utf8")).toBe("export const answer = 42;");
+  });
+
+  it("deleting a bot still clears its folder when a file vanishes mid-walk", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Coder" }, { seedMessages: false });
+    const workspace = ensureWorkspace(bot.id);
+    writeFileSync(join(workspace, "a-temp.txt"), "x");
+    symlinkSync(project, join(workspace, "project"), "junction");
+    fsPlan.vanished = [join(workspace, "a-temp.txt")];
+
+    expect(store.deleteBot(bot.id)).toBe(true);
+
+    expect(fsPlan.linksHandedToRm).toEqual([]);
+    expect(existsSync(workspace)).toBe(false);
+    expect(readdirSync(project)).toEqual(["src"]);
   });
 
   it("deleting a bot whose folder is itself a link removes only the link", () => {
