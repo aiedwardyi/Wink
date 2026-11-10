@@ -112,4 +112,23 @@ describe("whats new", () => {
     expect(open.pending()).toBeNull();
     expect(() => seenFile()).toThrow();
   });
+
+  it("keeps where the card showed until it is seen", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
+    const open = openWhatsNew(root, "1.0.247");
+    for (const [shown, id] of [["1.0.248", "m1"], ["1.0.245", "m1"], ["1.0.246", ""], ["1.0.246", 7]]) open.place(shown, id);
+    expect(seenFile()).toEqual({ seen: "1.0.245" });
+    open.place("1.0.246", "m1");
+    expect(seenFile()).toEqual({ seen: "1.0.245", anchor: { release: "1.0.246", id: "m1" } });
+    expect(openWhatsNew(root, "1.0.247").pending()).toEqual({ release: "1.0.247", seen: "1.0.245", anchor: { release: "1.0.246", id: "m1" } });
+    open.markSeen("1.0.246");
+    expect(seenFile()).toEqual({ seen: "1.0.246" });
+  });
+
+  it("reads a record whose anchor it cannot parse", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245", anchor: "m1" }));
+    expect(openWhatsNew(root, "1.0.247").pending()).toEqual({ release: "1.0.247", seen: "1.0.245" });
+  });
 });

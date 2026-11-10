@@ -109,7 +109,7 @@ import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
-import { WhatsNewSlot } from "./WhatsNew";
+import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -604,6 +604,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane,
   workers,
   livePanes,
+  hidden,
 }: {
   bot: Bot;
   messages: Message[];
@@ -626,6 +627,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane?: (sessionId: string) => void;
   workers: ShownRun[];
   livePanes: Set<string> | null;
+  hidden: boolean;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -651,6 +653,13 @@ const MessagesList = memo(function MessagesList({
     () => chatTranscriptRows(items, { showToolCalls, showActivities, transcript }),
     [items, showToolCalls, showActivities, transcript],
   );
+  // by message order, so an anchor folded into a run or linked as a notice still places the card
+  const whatsNewAnchor = useWhatsNewAnchor();
+  const whatsNewAfter = useMemo(() => {
+    const at = whatsNewAnchor ? messages.findIndex((m) => m.id === whatsNewAnchor) : -1;
+    const order = new Map(messages.map((m, index) => [m.id, index]));
+    return at < 0 ? -1 : items.findLastIndex((item) => (order.get(item.kind === "message" ? item.message.id : item.messages[0].id) ?? Infinity) <= at);
+  }, [whatsNewAnchor, messages, items]);
   // answers whose ask is not the text row right above them quote it; asks still waiting have no answer yet
   const { quickAsks, answeredAsks } = useMemo(() => {
     const quickAsks = new Map<string, Message>();
@@ -859,7 +868,7 @@ const MessagesList = memo(function MessagesList({
             {m.role === "user" && m.quick?.state === "asked" && !answeredAsks.has(m.id) && <QuickTyping />}
           </div>
         );
-      })}
+      }).toSpliced(whatsNewAfter + 1, 0, whatsNewAfter < 0 ? null : <WhatsNewSlot key="whats-new" hidden={hidden} />)}
     </>
   );
 });
@@ -1183,6 +1192,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
   // Stream buffers belong to the canonical tail, never an optimistic send.
   const lastMessage = canonicalMessages.at(-1);
+  const whatsNewAnchor = useWhatsNewAnchor();
   const live = buffersForTurn(stream, bot.threadId, lastMessage?.id);
   const streaming = live.streaming;
   const reasoning = live.reasoning;
@@ -1742,8 +1752,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onOpenTerminalPane={onOpenTerminalPane}
             workers={rowWorkers}
             livePanes={livePanes}
+            hidden={hidden}
           />
-          <WhatsNewSlot hidden={hidden} />
+          {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} />}
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button
