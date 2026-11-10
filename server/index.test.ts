@@ -3492,7 +3492,7 @@ describe("harness HTTP API", () => {
         };
         process.env.FAKE_CLAUDE_MODE = "happy";
         await import(pathToFileURL(${JSON.stringify(FAKE_CLAUDE_CLI)}).href);
-      `);
+      `, { mode: 0o755 });
       const config = JSON.parse(originalConfig);
       config.instances.roomCaller = { driver: "claudeAgent", config: { cli: callerCli } };
       writeFileSync(configPath, JSON.stringify(config));

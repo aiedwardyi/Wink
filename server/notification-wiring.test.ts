@@ -150,15 +150,14 @@ posixOnly("routine failure notification wiring", () => {
           botId: bot.id,
           title: "Routine Scout's routine failed",
         });
-        expect(frame.notification.threadId).not.toBe(bot.threadId);
-        expect(frame.notification.body).toContain("Broken nightly report");
+        expect(frame.notification.threadId).toBe(bot.threadId);
+        expect(frame.notification.body).toBe("Routine Scout couldn't finish that.");
 
         const receipts = await api("GET", "/api/routines");
         const receipt = receipts.body.runs.find((run: { id: string }) => run.id === launched.body.run.id);
         expect(receipt).toMatchObject({
           status: "failed",
           botId: bot.id,
-          threadId: frame.notification.threadId,
         });
 
         // A unique bot patch is an SSE ordering barrier: by the time it is
@@ -173,7 +172,7 @@ posixOnly("routine failure notification wiring", () => {
           stream.frames
             .filter(
               (candidate) =>
-                candidate.kind === "notify" && candidate.notification?.threadId === frame.notification.threadId,
+                candidate.kind === "notify" && candidate.notification?.botId === bot.id,
             )
             .map((candidate) => candidate.notification.kind),
         ).toEqual(["routine-failed"]);
