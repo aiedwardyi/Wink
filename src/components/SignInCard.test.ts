@@ -70,7 +70,7 @@ it("stacks the computer-only instruction under the text instead of squeezing it 
   const host = document.createElement("div");
   host.innerHTML = html;
   const card = host.querySelector("[data-sign-in-card]")!;
-  expect(card.textContent).toContain("Sign in on a computer");
+  expect(card.textContent).toContain("Sign in on computer");
   expect(card.className).toContain("flex-wrap");
   expect(card.lastElementChild!.className).toContain("basis-full");
 });
