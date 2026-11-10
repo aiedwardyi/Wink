@@ -755,8 +755,8 @@ const MessagesList = memo(function MessagesList({
           );
         }
         const m = item.message;
-        const prev = items[i - 1];
-        const callStart = m.call && !(prev?.kind === "message" && prev.message.call?.id === m.call.id);
+        const callId = m.call?.id;
+        const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
         const row = (() => {
           switch (m.kind) {
             case "compaction":
