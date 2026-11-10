@@ -605,6 +605,8 @@ export function Sidebar({
   onOverlayChange,
   onTerminalAttention,
   rigidView = false,
+  folded = false,
+  onUnfold,
 }: {
   open: boolean;
   onClose: () => void;
@@ -612,6 +614,9 @@ export function Sidebar({
   onTerminalAttention?: (attention: TerminalAttention) => void;
   /** The view beside the sidebar must not resize mid-animation (terminal PTYs, native views). */
   rigidView?: boolean;
+  /** A right slot panel is open: show faces only, leaving the saved layout as it is. */
+  folded?: boolean;
+  onUnfold?: () => void;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -654,7 +659,8 @@ export function Sidebar({
   const roomSectionPickerPresence = usePresence(roomSectionPicker);
   const wizardPresence = usePresence(wizard);
   const [query, setQuery] = useState("");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [savedCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const sidebarCollapsed = savedCollapsed || folded;
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
@@ -707,7 +713,7 @@ export function Sidebar({
   }, [open]);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const sidebarWidthRef = useRef(sidebarWidth);
-  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  const sidebarCollapsedRef = useRef(savedCollapsed);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const focusSearchAfterExpand = useRef(false);
   const resizeFrom = useRef<{ x: number; width: number; collapsed: boolean; query: string } | null>(null);
@@ -902,6 +908,7 @@ export function Sidebar({
   }, [sidebarCollapsed]);
 
   const toggleCollapsed = () => {
+    if (folded) return onUnfold?.();
     if (sidebarCollapsed) focusSearchAfterExpand.current = true;
     const next = { width: sidebarWidthRef.current, collapsed: !sidebarCollapsed };
     applySidebarLayout(next);
@@ -1526,7 +1533,8 @@ export function Sidebar({
         onPointerCancel={onSidebarResizeCancel}
         onKeyDown={onSidebarResizeKeyDown}
         className={cn(
-          "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60 md:block",
+          "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60",
+          !folded && "md:block",
           sidebarOnRight ? "left-0" : "right-0",
         )}
       />
