@@ -1,6 +1,6 @@
 // Golden baseline: what 1:1 and ordinary room turns send to the engine. Team
 // rooms must leave every line of it unchanged. GOLDEN_UPDATE=1 rewrites it.
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,14 +14,13 @@ const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const HOOK = join(SERVER_DIR, "testing", "golden-hook.ts");
 const GOLDEN = join(SERVER_DIR, "testing", "golden", "turns-no-rooms.json");
-const PORT = 18800 + Math.floor(Math.random() * 10_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+const FIRST_PORT = 18800 + Math.floor(Math.random() * 10_000);
 // Argv and socket paths differ per OS; Wink ships on Windows and CI runs there.
 const windowsOnly = describe.skipIf(process.platform !== "win32");
 
 const SECRET_ENV = /TOKEN|KEY|SECRET|PASSWORD/i;
 
-function normalize(lines: Array<Record<string, any>>, home: string): unknown[] {
+function normalize(lines: Array<Record<string, any>>, home: string, port: number): unknown[] {
   const ids = new Map<string, string>();
   const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const paths = [
@@ -38,7 +37,7 @@ function normalize(lines: Array<Record<string, any>>, home: string): unknown[] {
       }
     }
     return out
-      .replaceAll(String(PORT), "<port>")
+      .replaceAll(String(port), "<port>")
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (id) => {
         if (!ids.has(id)) ids.set(id, `<id${ids.size + 1}>`);
         return ids.get(id)!;
@@ -57,7 +56,14 @@ function normalize(lines: Array<Record<string, any>>, home: string): unknown[] {
   });
 }
 
-windowsOnly("golden turns, no team rooms", () => {
+const WORLDS = ["no team room", "a plain room", "an active team room"] as const;
+const captured = new Map<string, string>();
+
+// A team room with people and a log must not change one byte next to the same plain room.
+windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
+  const PORT = FIRST_PORT + WORLDS.indexOf(world);
+  const hosted = world === "an active team room";
+  const BASE = `http://127.0.0.1:${PORT}`;
   let child: ChildProcess;
   let home: string;
   let log: string;
@@ -91,6 +97,27 @@ windowsOnly("golden turns, no team rooms", () => {
     expect((await api("POST", `/api/bots/${id}/messages`, { text })).status).toBe(202);
     await waitFor(async () => (await botTexts(id)) >= replies && !(await bots()).bots.find((bot: any) => bot.id === id).busy, `reply to ${text}`);
   };
+  const seedRoom = async () => {
+    const created = await api("POST", "/api/groups", { name: "Team room", memberIds: [await newBot("claude", "Roomie")], ...(hosted ? { hosted } : {}) });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    if (!hosted) return;
+    const db = JSON.stringify(pathToFileURL(join(SERVER_DIR, "rooms", "db.ts")).href);
+    const seed = [
+      `import { addPerson, appendRoomEntry } from ${db};`,
+      "const room = process.env.ROOM_ID;",
+      'const mina = addPerson(room, "Mina", "ask", ["Roomie"]);',
+      'addPerson(room, "Jun", "trusted", ["Roomie"]);',
+      'const ask = appendRoomEntry(room, { author: { kind: "person", id: mina.id, name: mina.name }, text: "@Roomie hello" });',
+      'appendRoomEntry(room, { author: { kind: "bot", id: "roomie", name: "Roomie" }, text: "Hi Mina.", replyToId: ask.id, askId: "a1", grant: "words", clean: false });',
+    ].join("\n");
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", seed], {
+      cwd: ROOT,
+      env: { ...process.env, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: created.body.group.hosted.roomId },
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    expect(result.status, result.stderr).toBe(0);
+  };
   const mark = (name: string) => writeFileSync(log, `${JSON.stringify({ kind: "fixture", name })}\n`, { flag: "a" });
 
   beforeAll(async () => {
@@ -104,6 +131,7 @@ windowsOnly("golden turns, no team rooms", () => {
       config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" },
     });
     writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
+      ...(hosted ? { features: { teamRooms: true } } : {}),
       instances: {
         claude: instance({}),
         claudeTask: instance({ FAKE_CLAUDE_MODE: "background-task", FAKE_CLAUDE_TASK_GATE: gate }),
@@ -147,6 +175,7 @@ windowsOnly("golden turns, no team rooms", () => {
   });
 
   it("matches the recorded engine inputs", async () => {
+    if (world !== "no team room") await seedRoom();
     mark("1:1 cold");
     const solo = await newBot("claude", "Solo");
     await say(solo, "first message", 1);
@@ -179,7 +208,10 @@ windowsOnly("golden turns, no team rooms", () => {
     mark("end");
 
     const lines = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    const actual = `${JSON.stringify(normalize(lines, home), null, 2)}\n`;
+    const actual = `${JSON.stringify(normalize(lines, home, PORT), null, 2)}\n`;
+    captured.set(world, actual);
+    if (world === "a plain room") return;
+    if (hosted) return expect(actual).toBe(captured.get("a plain room"));
     if (process.env.GOLDEN_UPDATE === "1" || !existsSync(GOLDEN)) {
       mkdirSync(dirname(GOLDEN), { recursive: true });
       writeFileSync(GOLDEN, actual);
