@@ -53,6 +53,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
+import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -313,7 +314,7 @@ import {
 import { PhoneAccess } from "./phone-access.ts";
 import { createDevicePresence } from "./device-presence.ts";
 import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awake.ts";
-import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
+import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
@@ -552,6 +553,7 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
     saveConfig({ phoneRelay: { base, enabled: true } });
     Object.assign(cfg, loadConfig());
   },
+  room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
     const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
@@ -6238,6 +6240,7 @@ configureRoomAsks({
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
 });
+configureRoomDoor({ store, teamRooms: () => cfg.features?.teamRooms === true, hostName: () => cfg.profile?.name?.trim() || "The host" });
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
 
@@ -7440,6 +7443,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
     if (relay && hostedRelayTarget(store, path)) return json(res, 404, { error: "no such room" });
+    if (!relay && roomDoorPath(path)) return json(res, 404, { error: "not found" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
     // Terminal panes hold a per-pane grant, never the comms token. The note

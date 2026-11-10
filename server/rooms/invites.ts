@@ -5,12 +5,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Duplex } from "node:stream";
 
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
 import { RateLimiter } from "../phone-auth.ts";
 import { MAX_PAIRING_ATTEMPTS, sameText, sha256 } from "../phone-devices.ts";
 import { RoomError, roomById, type RoomLevel, type RoomPerson } from "./db.ts";
+import { endDoorPerson } from "./door-streams.ts";
 import { checkedRoomName } from "./names.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -174,6 +176,24 @@ export function guestByKey(key: string): { roomId: string; person: RoomPerson } 
   return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at } } : null;
 }
 
+/** The room a live invite is for, without spending a try. */
+export function inviteRoomId(inviteId: string): string | null {
+  const row = db().prepare("SELECT room_id FROM invites WHERE id = ? AND expires_at > ?").get(inviteId, Date.now()) as { room_id: string } | undefined;
+  return row?.room_id ?? null;
+}
+
 export function revokeGuestKeys(roomId: string, personId: string): boolean {
-  return db().prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, personId).changes > 0;
+  const revoked = db().prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, personId).changes > 0;
+  endDoorPerson(roomId, personId);
+  return revoked;
+}
+
+/** Remove or Leave: the person and their keys go in one transaction, then their streams and sockets. */
+export function removeGuest(roomId: string, personId: string, keep?: Duplex): boolean {
+  const removed = transaction((database) => {
+    database.prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, personId);
+    return database.prepare("DELETE FROM people WHERE room_id = ? AND id = ?").run(roomId, personId).changes > 0;
+  });
+  endDoorPerson(roomId, personId, keep);
+  return removed;
 }
