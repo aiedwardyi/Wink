@@ -38,7 +38,7 @@ export interface TurnContextInput {
   taskRecord?: TaskRecordContext;
   /** Pre-sized durable state for the selected model window. */
   taskRecordText?: string;
-  /** the active transcript exceeded the replay tail */
+  /** the session has not held the latest summary: built this turn, or landed since its seed */
   contextCapped?: boolean;
   /** the prior process or user stop ended the running turn */
   recovering?: boolean;
@@ -575,6 +575,11 @@ export function buildResumeFallback(input: {
     "",
     input.text,
   ].filter((line) => line !== null).join("\n");
+}
+
+/** A summary that lands after the turn text was built still owes a resumed session the record. */
+export function withTaskRecord(text: string, record: string): string {
+  return text.includes(record) ? text : `${record}\n\n${text}`;
 }
 
 export function buildTurnContext(input: TurnContextInput): {

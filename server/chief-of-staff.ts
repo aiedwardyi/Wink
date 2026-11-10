@@ -93,8 +93,7 @@ export function chiefOfStaffSystemPrompt(
           const name = clip(bot.name, ROSTER_NAME_MAX);
           const role = clip(bot.title?.trim() || "General assistant", ROSTER_ROLE_MAX);
           const about = bot.description?.trim();
-          const availability = bot.busy ? "working right now" : "available";
-          return `- ${name} — ${role}${about ? `: ${clip(about, ROSTER_ABOUT_MAX)}` : ""} (${availability})`;
+          return `- ${name} — ${role}${about ? `: ${clip(about, ROSTER_ABOUT_MAX)}` : ""}`;
         })
         .join("\n") + (overflow > 0 ? `\n- …and ${overflow} more (use list_bots for the full roster).` : "")
     : "";

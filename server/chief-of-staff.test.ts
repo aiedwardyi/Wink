@@ -89,17 +89,22 @@ describe("chiefOfStaffSystemPrompt", () => {
     { id: "personal", name: "Scout", title: "Travel planner", section: "Personal" },
   ];
 
-  it("describes visible teammates, roles, and availability", () => {
+  it("describes visible teammates and roles", () => {
     const prompt = chiefOfStaffSystemPrompt("chief", bots, true);
 
     expect(prompt).toContain("Chief of Staff for the Work section");
-    expect(prompt).toContain("Quill — Writer: Drafts concise copy (available)");
-    expect(prompt).toContain("Patch — Engineer (working right now)");
+    expect(prompt).toContain("- Quill — Writer: Drafts concise copy\n");
+    expect(prompt).toContain("- Patch — Engineer");
     expect(prompt).not.toContain("Secret");
     expect(prompt).not.toContain("Scout");
     expect(prompt).not.toContain("Atlas —");
     expect(prompt).toMatch(/Never scan the environment, ports, or processes/);
     expect(prompt).toMatch(/never invent localhost APIs/i);
+  });
+
+  it("keeps the roster the same whether a teammate is busy or free", () => {
+    const withBusy = (busy: boolean) => chiefOfStaffSystemPrompt("chief", bots.map((bot) => ({ ...bot, busy })), true);
+    expect(withBusy(true)).toBe(withBusy(false));
   });
 
   it("names the coordination tools once the user asked for coordination", () => {

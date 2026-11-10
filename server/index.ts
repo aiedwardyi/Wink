@@ -242,6 +242,7 @@ import {
   turnSeedCompactionId,
   turnSeedsSession,
   withSystemChanges,
+  withTaskRecord,
 } from "./turn-context.ts";
 import { stallErrorActivity } from "./room-error-attribution.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
@@ -4960,7 +4961,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   trace?.identify({ messageId: userMessage.id });
   markChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id }, "prepare.completed");
   let transcript = prepared.transcript;
-  let contextCompacted = prepared.compacted;
   // `compacted` stays true for every turn after the first summary; only a new
   // summary should drop the session, or no later turn can ever resume.
   const compactedThisTurn = Boolean(prepared.compaction);
@@ -4998,15 +4998,15 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? knownCatalogContextWindow(instance.models, model)
     : null;
   const supersededIds = supersededCompactionIds(activeMessages, latestCompactionId);
-  const unseeded = !rewound && !fresh && resumeSessionUnseeded({
+  const seedInputs = {
     instanceId,
     cursor: task.resumeCursors[instanceId],
     seed: task.resumeSeed,
     latestCompactionId,
     expanded: prepared.expanded,
     supersededIds,
-    native: Boolean(nativeAt),
-  });
+  };
+  const unseeded = !rewound && !fresh && resumeSessionUnseeded({ ...seedInputs, native: Boolean(nativeAt) });
   // What this turn's session ends up holding: the summary, or the original
   // history a grown window restored in its place.
   const sessionCompactionId = prepared.expanded ? null : latestCompactionId;
@@ -5117,7 +5117,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: contextCompacted,
+    contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   });
@@ -5137,7 +5137,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: contextCompacted,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;
@@ -5628,7 +5627,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (compacted.status !== "ready") throw new Error(compacted.status === "failed" ? compacted.error : "Unsupported context summary version");
             latestCompactionId = compacted.compaction ? store.appendCompaction(threadId, compacted.compaction).id : compacted.compactionId ?? null;
             transcript = compacted.transcript;
-            contextCompacted = compacted.compacted;
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
@@ -5648,7 +5646,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             seed.cursor = undefined;
             resumeCursor = undefined;
             text = withLate(systemRecycleText(!systemRecycle));
-          } else text = [text, ...late.slice(lateCount)].join("\n\n");
+          } else text = [latestCompactionId === sessionCompactionId ? text : withTaskRecord(text, durableTaskRecordText), ...late.slice(lateCount)].join("\n\n");
           console.info(`[session] ${JSON.stringify({ threadId, reason: recycleDeferred ? "recycle-deferred-background" : systemRecycle ? "system" : "compaction", lastTurnToolRounds, sessionToolRounds })}`);
         }
         if (live.adapter.capabilities.pinnedSystem === true) {
