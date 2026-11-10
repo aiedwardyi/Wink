@@ -7,8 +7,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot } from "@/state/store";
 import { MemoryMap } from "./MemoryMap";
+import { smoothGlow } from "./MemoryMapGlow";
+import { disc, ramp, render, stops } from "./MemoryMapGlowPaint";
 
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MemoryMap.css"), "utf8");
@@ -72,6 +75,34 @@ describe("MemoryMap", () => {
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
+  it("tints the Muscle Memory icon the Knowledge violet and keeps its count plain", () => {
+    const icon = (kind: string) => css.match(new RegExp(`^\\[data-kind="${kind}"\\] \\.mm-icon \\{([^}]*)\\}`, "m"))?.[1] ?? "";
+    expect(icon("muscle")).toContain("color: rgb(var(--mm-violet));");
+    expect(icon("muscle")).toBe(icon("knowledge"));
+    expect(rule(".mm-bottom .mm-count b")).toContain("background: none; color: var(--color-ink);");
+  });
+
+  it("keeps Live now at 4.5:1 on its panel in every skin, in the same cyan hue", () => {
+    const skins = ["../styles.css", "../skins/fresh-dark.css"].map((file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rootCard = skins.match(/(?:@theme|:root)\s*\{[^}]*--color-card:\s*(#[0-9a-f]{6})/i)![1];
+    const card = (id: string) => [...skins.matchAll(/([^{}]*)\{[^{}]*--color-card:\s*(#[0-9a-f]{6})[^{}]*\}/gi)].filter(([, selector]) => selector.includes(`[data-skin="${id}"]`)).at(-1)?.[2] ?? rootCard;
+    const hex = (value: string) => [1, 3, 5].map((at) => parseInt(value.slice(at, at + 2), 16));
+    const lum = (rgb: number[]) => rgb.map((c) => c / 255).map((c) => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const hue = ([r, g, b]: number[]) => { const max = Math.max(r, g, b), d = max - Math.min(r, g, b); return 60 * (max === r ? (g - b) / d : max === g ? 2 + (b - r) / d : 4 + (r - g) / d); };
+    const triplet = (name: string, body: string) => body.match(new RegExp(`--mm-${name}: (\\d+ \\d+ \\d+);`))![1].split(" ").map(Number);
+    const light = css.slice(css.indexOf(":is([data-skin="));
+    const [cyan, indigo, lightInk] = [triplet("cyan", rule(".mm")), triplet("indigo", rule(".mm")), triplet("live-ink", light)];
+    expect(rule(".mm")).toContain("--mm-live-ink: var(--mm-cyan);");
+    expect(rule(".mm-live-tag")).toContain("color: rgb(var(--mm-live-ink));");
+    expect(Math.abs(hue(lightInk) - hue(cyan))).toBeLessThan(1);
+    for (const { id } of SKINS) {
+      expect(light.slice(0, light.indexOf(" .mm {")).includes(`[data-skin="${id}"]`), id).toBe(LIGHT_SKIN_IDS.has(id));
+      const panel = hex(card(id)).map((c, i) => c * 0.92 + indigo[i] * 0.08);
+      const [hi, lo] = [lum(LIGHT_SKIN_IDS.has(id) ? lightInk : cyan), lum(panel)].sort((a, b) => b - a);
+      expect((hi + 0.05) / (lo + 0.05), id).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("hides the Sleep line until Sleep has run", async () => {
     await mount();
     expect(host.querySelector(".mm-sleep")).toBeNull();
@@ -86,5 +117,155 @@ describe("MemoryMap", () => {
     expect(line.textContent).toContain(locale === "en" ? "kept24" : "유지24");
     await act(async () => line.querySelector("button")!.click());
     expect(sleep.onUndo).toHaveBeenCalled();
+  });
+});
+
+describe("smooth glow", () => {
+  const aura = "radial-gradient(closest-side at 50% 22%, rgba(221, 214, 254, 0.11), rgba(96, 165, 250, 0.05) 34%, rgba(221, 214, 254, 0.03) 60%, rgba(0, 0, 0, 0) 85%)";
+
+  it("reads a computed gradient's stops", () => {
+    expect(stops(aura).map((each) => each.at)).toEqual([0, 0.34, 0.6, 0.85]);
+    expect(stops(aura)[0].c).toEqual([221 / 255, 214 / 255, 254 / 255, 0.11]);
+    expect(stops("radial-gradient(rgb(0, 0, 0), rgb(9, 9, 9), rgb(0, 0, 0))").map((each) => each.at)).toEqual([0, 0.5, 1]);
+  });
+
+  it("keeps the fade in float, premultiplied, where 8 bits would step", () => {
+    const lut = ramp(stops(aura));
+    expect(lut[3]).toBeCloseTo(0.11);
+    expect(lut[0]).toBeCloseTo((221 / 255) * 0.11);
+    const alpha = Array.from({ length: 128 }, (_, i) => lut[i * 4 + 3]);
+    expect(new Set(alpha.slice(0, 108).map((each) => Math.round(each * 255))).size).toBeLessThan(30);
+    expect(new Set(alpha.slice(0, 108)).size).toBeGreaterThan(100);
+    expect(alpha[127]).toBe(0);
+  });
+
+  it("fades a blurred disc from nearly full at its centre to nothing at its reach", () => {
+    const { lut, reach } = disc(30, 11, [1, 1, 1, 1]);
+    const cover = Array.from({ length: 128 }, (_, i) => lut[i * 4 + 3]);
+    expect(reach).toBe(63);
+    expect(cover[0]).toBeCloseTo(1 - Math.exp(-(30 * 30) / (2 * 11 * 11)), 2);
+    expect(cover.every((each, i) => i === 0 || each <= cover[i - 1])).toBe(true);
+    expect(cover[127]).toBeLessThan(0.005);
+  });
+
+  it("paints no layer without WebGL2", () => {
+    vi.stubGlobal("OffscreenCanvas", class { getContext() { return null; } });
+    const shadow = "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px";
+    expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
+  });
+
+  it("answers with no layers when the painter throws", async () => {
+    const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("self", { postMessage: sent, close() {} });
+    await import("./MemoryMapGlow.worker");
+    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: null });
+    expect(sent).toHaveBeenCalledWith({ layers: null }, []);
+    expect(warned).toHaveBeenCalledTimes(1);
+    warned.mockRestore(); vi.stubGlobal("self", page);
+  });
+
+  it("holds the painted glow still for reduced motion", () => {
+    const still = css.lastIndexOf("@media (prefers-reduced-motion: reduce)");
+    expect(css.slice(still)).toMatch(/\.mm-smooth-breath \{ animation: none; \}/);
+    expect(still).toBeGreaterThan(css.lastIndexOf("animation: mm-smooth-breath"));
+  });
+
+  // a browser that reports a map `wide` device pixels across and answers the painter with `reply`
+  function browser(reply: unknown, wide: number) {
+    const seen: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(private report: (entries: unknown[]) => void) {} observe(target: Element) { seen.push(() => this.report([{ target, devicePixelContentBoxSize: [{ inlineSize: wide, blockSize: 808 }] }])); } disconnect() {} });
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { queueMicrotask(() => this.onmessage?.({ data: reply })); } });
+    vi.stubGlobal("getComputedStyle", () => ({ backgroundImage: aura, maskImage: aura, backgroundColor: "rgb(13, 14, 22)", boxShadow: "rgba(129, 140, 248, 0.28) 0px 0px 22px 0px", display: "none", top: "-18px", opacity: "1", getPropertyValue: () => "0.7" }));
+    const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: wide, height: 808 } as DOMRect);
+    return { box, report: () => act(async () => { seen.splice(0).forEach((each) => each()); await new Promise((done) => setTimeout(done)); }) };
+  }
+
+  it("paints a second map its own canvases", async () => {
+    const { box, report } = browser({ layers: Array.from({ length: 7 }, () => ({ width: 4, height: 4 })) }, 900);
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    await mount();
+    await report();
+    const first = host, held = root, mine = [...first.querySelectorAll(".mm-smooth canvas")];
+    await mount();
+    await report();
+    expect(mine).toHaveLength(4);
+    expect([...first.querySelectorAll(".mm-smooth canvas")]).toEqual(mine);
+    expect(host.querySelectorAll(".mm-smooth canvas")).toHaveLength(4);
+    await act(async () => held.unmount()); first.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("keeps the CSS glow where the browser cannot paint", async () => {
+    const { box, report } = browser({ layers: null }, 980);
+    await mount();
+    const map = host.querySelector(".mm")!;
+    expect(map.hasAttribute("data-smooth")).toBe(true);
+    expect(map.querySelector(".mm-smooth")).not.toBeNull();
+    await report();
+    expect(map.hasAttribute("data-smooth")).toBe(false);
+    expect(map.querySelector(".mm-smooth, canvas")).toBeNull();
+    expect(map.querySelector(".mm-glow")).not.toBeNull();
+    expect(rule(".mm-glow") + rule(".mm-ray") + rule(".mm-brain::after") + rule(".mm::after")).not.toContain("visibility");
+    box.mockRestore();
+  });
+
+  // a map's bare markup, for smoothGlow on its own
+  function bare() {
+    const mm = document.createElement("div");
+    mm.innerHTML = '<div class="mm-smooth"></div><div class="mm-glow"></div><div class="mm-ray"></div><div class="mm-brain"></div><span class="mm-orbit"></span><span class="mm-orbit"></span><div><div class="mm-smooth-live"></div><section class="mm-live"></section></div>';
+    return document.body.appendChild(mm);
+  }
+  const layers = (count: number, width = 4) => Array.from({ length: count }, () => ({ width, height: 4, close: vi.fn() }));
+  const repaint = () => act(() => new Promise((done) => setTimeout(done, 200)));
+
+  it("hands the CSS glow back and frees the painter when a worker cannot start", async () => {
+    const { box, report } = browser({ layers: layers(6) }, 940), Painter = Worker, fail = vi.fn();
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { constructor() { throw new DOMException("blocked", "SecurityError"); } });
+    const blocked = bare(), stop = smoothGlow(blocked, fail);
+    await report();
+    expect(fail).toHaveBeenCalledTimes(1);
+    vi.stubGlobal("Worker", Painter);
+    const next = bare(), again = smoothGlow(next, vi.fn());
+    await report();
+    expect(next.querySelectorAll(".mm-smooth canvas")).toHaveLength(4);
+    stop(); again(); blocked.remove(); next.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("closes a late paint instead of drawing into canvases handed to the next map", async () => {
+    const { box, report } = browser(null, 960), late = layers(7, 9), queue = [layers(6), late], answers: (() => void)[] = [];
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { const data = { layers: queue.shift() }; answers.push(() => this.onmessage?.({ data })); } });
+    const left = bare(), stop = smoothGlow(left, vi.fn());
+    await report();
+    await act(async () => answers.shift()!());
+    const handed = [...left.querySelectorAll("canvas")];
+    await repaint();
+    stop();
+    const next = bare(), keep = smoothGlow(next, vi.fn());
+    await act(async () => answers.shift()!());
+    expect(handed).toHaveLength(6);
+    expect(handed.every((each) => each.width === 4)).toBe(true);
+    expect(late.every((each) => each.close.mock.calls.length === 1)).toBe(true);
+    keep(); left.remove(); next.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("takes its canvases out of the rings and the Live card when a repaint falls back", async () => {
+    const { box, report } = browser(null, 1000), queue = [layers(6), layers(7), null], fail = vi.fn(), dpr = devicePixelRatio;
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { const data = { layers: queue.shift() }; queueMicrotask(() => this.onmessage?.({ data })); } });
+    const mm = bare(), stop = smoothGlow(mm, fail);
+    await report();
+    await repaint();
+    expect(mm.querySelectorAll(".mm-orbit canvas, .mm-smooth-live canvas")).toHaveLength(3);
+    vi.stubGlobal("devicePixelRatio", dpr + 1);
+    document.documentElement.setAttribute("data-skin", "repaint");
+    await repaint();
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(mm.querySelectorAll(".mm-orbit canvas, .mm-smooth-live canvas")).toHaveLength(0);
+    stop(); mm.remove(); document.documentElement.removeAttribute("data-skin"); vi.stubGlobal("devicePixelRatio", dpr);
+    draws.mockRestore(); box.mockRestore();
   });
 });

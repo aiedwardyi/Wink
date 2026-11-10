@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReplyActivity } from "../../server/reply-activity.ts";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { ripple } from "@/lib/activity-glitter";
 import { cn } from "@/lib/cn";
 import { EASE_ENTRANCE, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
@@ -69,6 +70,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
   const [failed, setFailed] = useState(false);
   const [tip, setTip] = useState<{ day: number; anchor: DOMRect } | null>(null);
   const grid = useRef<HTMLDivElement>(null);
+  const glints = useRef<HTMLCanvasElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const pointer = useRef("");
   useEffect(() => {
@@ -161,13 +163,19 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
             </div>
             <div
               ref={grid}
-              className={cn(WEEK_GRID, "grid-flow-col grid-rows-7 gap-y-[2px] @[30rem]/activity:gap-y-[3px]")}
+              data-no-swipe
+              className={cn(WEEK_GRID, "relative touch-pan-y touch-pinch-zoom grid-flow-col grid-rows-7 gap-y-[2px] @[30rem]/activity:gap-y-[3px]")}
               onPointerOver={(event) => {
                 const square = squareAt(event.target);
+                if (square && glints.current) ripple(glints.current, Number(square.dataset.day), activity.counts.length, (day) => shade(activity.counts[day]!) < 3);
                 if (event.pointerType === "mouse" && square && fetched) setTip(tipFor(square));
               }}
               onPointerLeave={(event) => { if (event.pointerType === "mouse") setTip(null); }}
-              onPointerDown={(event) => { pointer.current = event.pointerType; }}
+              onPointerDown={(event) => {
+                pointer.current = event.pointerType;
+                // A touch holds the square it landed on, so a drag would never reach the next one.
+                if (event.target instanceof Element && event.target.hasPointerCapture?.(event.pointerId)) event.target.releasePointerCapture(event.pointerId);
+              }}
               onClick={(event) => {
                 const square = squareAt(event.target);
                 if (!square || !fetched || pointer.current === "mouse") return;
@@ -185,6 +193,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
                   )}
                 />
               ))}
+              <canvas ref={glints} className="pointer-events-none absolute left-0 top-0 size-full" />
             </div>
           </div>
           {activity.total || !fetched ? (

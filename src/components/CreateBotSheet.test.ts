@@ -1,10 +1,11 @@
-// CreateBotSheet: name is required, the folder is always visible, a rejected
+// CreateBotSheet: a blank name uses the placeholder, the folder is always visible, a rejected
 // native pick is a silent no-op, and the dialog scrolls in short views.
 import "./ProfileFields.test-dom.ts";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { applyLocale } from "@/lib/i18n";
 import type { Bot, InstanceInfo } from "@/state/store";
 
 interface MockSheetState {
@@ -180,7 +181,7 @@ describe("CreateBotSheet submit", () => {
     }
   });
 
-  it("needs a non-blank name before Create is enabled or Enter submits", async () => {
+  it("sends the placeholder name when Enter submits a blank name", async () => {
     const calls = stubPostBot();
     const { host, root } = await renderSheet();
     try {
@@ -188,11 +189,9 @@ describe("CreateBotSheet submit", () => {
       if (!field) throw new Error("name field did not render");
       expect(field.maxLength).toBe(100);
       await fillName(host, "   ");
-      expect(submitButton(host).disabled).toBe(true);
-      await pressEnter(field);
-      expect(calls).toHaveLength(0);
-      await fillName(host, "Mira");
       expect(submitButton(host).disabled).toBe(false);
+      await pressEnter(field);
+      expect(calls[0]?.body).toMatchObject({ name: "Mira" });
     } finally {
       await act(async () => {
         root.unmount();
@@ -200,16 +199,20 @@ describe("CreateBotSheet submit", () => {
     }
   });
 
-  it("prefills an editable name so Start chatting works right away", async () => {
+  it.each([["en", "Mira"], ["ko", "미라"]] as const)("starts empty with the placeholder so Start chatting works right away in %s", async (locale, placeholder) => {
+    applyLocale(locale);
     const calls = stubPostBot();
     const { host, root } = await renderSheet();
     try {
       const field = host.querySelector<HTMLInputElement>("#create-bot-name")!;
-      expect(field.value).toBe("Mira");
+      expect(field.value).toBe("");
+      expect(field.placeholder).toBe(placeholder);
       expect(submitButton(host).disabled).toBe(false);
-      await pressEnter(field);
-      expect(calls[0]?.body).toMatchObject({ name: "Mira" });
+      await act(async () => submitButton(host).click());
+      await flush();
+      expect(calls[0]?.body).toMatchObject({ name: placeholder });
     } finally {
+      applyLocale("en");
       await act(async () => {
         root.unmount();
       });

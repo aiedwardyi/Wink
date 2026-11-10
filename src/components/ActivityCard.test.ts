@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { RIPPLE_GAP_MS } from "@/lib/activity-glitter";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { ActivityCard, resetActivity } from "./ActivityCard";
 
@@ -220,6 +221,176 @@ it("keeps the glint gentle on a light skin so pale squares stay visible", async 
     await card.unmount();
   } finally {
     Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  }
+});
+
+const over = (square: HTMLElement, pointerType = "mouse") => act(async () => square.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType })));
+const shadeOf = (square: HTMLElement) => square.className.match(/bg-(control|accent(\/\d+)?)/)![0];
+const ACCENT = "#336699";
+const SHEEN = "rgb(184,201,219)";
+
+async function glitterCard({ reduce = false, skin = "" } = {}) {
+  const fills: { day: number; light: number; color: string; at: number }[] = [];
+  const paint = { box: [0, 0], lit: 0 };
+  const ctx = {
+    fillStyle: "",
+    globalAlpha: 1,
+    clearRect() { paint.lit = 0; },
+    beginPath() {},
+    roundRect(x: number, y: number) { paint.box = [x, y]; },
+    fill() {
+      paint.lit++;
+      fills.push({ day: (paint.box[0]! / 10) * 7 + paint.box[1]! / 10, light: ctx.globalAlpha, color: ctx.fillStyle, at: performance.now() });
+    },
+  };
+  const getContext = vi.fn(() => ctx);
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { value: getContext, configurable: true, writable: true });
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 260, 70));
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: reduce && query.includes("reduce"), addEventListener() {}, removeEventListener() {} })));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(activityOf(weeks((day) => (day === 80 ? 923 : day % 5)))))));
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  vi.stubGlobal("getComputedStyle", () => ({ columnGap: "0px", rowGap: "0px", getPropertyValue: () => ACCENT }));
+  if (skin) localStorage.setItem("omb-skin", skin);
+  const card = mount({ current: true });
+  await act(async () => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame", "performance"] });
+  let mounted = true;
+  const unmount = async () => {
+    if (mounted) await card.unmount();
+    mounted = false;
+  };
+  const restore = async () => {
+    await unmount();
+    vi.useRealTimers();
+    Reflect.deleteProperty(HTMLCanvasElement.prototype, "getContext");
+  };
+  const frames = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
+  return { host: card.host, fills, paint, getContext, frames, unmount, restore };
+}
+
+it("ripples out from a hovered square and leaves every square as it was", async () => {
+  const { host, fills, paint, frames, restore } = await glitterCard();
+  try {
+    const squares = squaresOf(host);
+    const shades = squares.map(shadeOf);
+    expect(new Set(shades).size).toBe(5);
+    await over(squares[80]!);
+    expect(document.querySelector("[data-activity-tip]")?.textContent).toBe("Jul 29 · 923 replies");
+    await frames(1000);
+    const first = (day: number) => fills.find((fill) => fill.day === day)!.at;
+    expect(first(80 - 7)).toBeGreaterThan(first(80));
+    expect(first(80 - 21)).toBeGreaterThan(first(80 - 7));
+    expect(fills.some((fill) => fill.day === 80 - 49)).toBe(true);
+    expect(fills.some((fill) => fill.day === 80 - 56)).toBe(false);
+    expect(fills.every((fill) => fill.light > 0 && fill.light <= 1 && fill.color === SHEEN)).toBe(true);
+    expect(paint.lit).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(squares.map(shadeOf)).toEqual(shades);
+    expect(host.querySelector("[data-day][style], [data-day] > *")).toBeNull();
+  } finally {
+    await restore();
+  }
+});
+
+it("ripples once per gap and never restarts a glint in flight", async () => {
+  const { host, fills, frames, restore } = await glitterCard();
+  try {
+    const squares = squaresOf(host);
+    const lit = (day: number) => fills.filter((fill) => fill.day === day);
+    await over(squares[80]!);
+    await frames(RIPPLE_GAP_MS - 1);
+    await over(squares[94]!);
+    await frames(1);
+    await over(squares[73]!);
+    await frames(2000);
+    expect(lit(94 + 49)).toEqual([]);
+    expect(lit(73 - 49).length).toBeGreaterThan(0);
+    expect(lit(80).at(-1)!.at - lit(80)[0]!.at).toBeLessThan(420);
+    const drawn = fills.length;
+    await over(squares[80]!);
+    await frames(2000);
+    expect(fills.length).toBeGreaterThan(drawn);
+  } finally {
+    await restore();
+  }
+});
+
+it("does nothing between touches", async () => {
+  const { host, fills, getContext, frames, restore } = await glitterCard();
+  try {
+    await frames(10_000);
+    expect(getContext).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    await over(squaresOf(host)[80]!);
+    expect(vi.getTimerCount()).toBe(1);
+    await frames(2000);
+    const drawn = fills.length;
+    expect(drawn).toBeGreaterThan(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await frames(10_000);
+    expect(fills.length).toBe(drawn);
+  } finally {
+    await restore();
+  }
+});
+
+it("stops drawing once the card is gone", async () => {
+  const { host, fills, frames, unmount, restore } = await glitterCard();
+  try {
+    await over(squaresOf(host)[80]!);
+    await frames(48);
+    const drawn = fills.length;
+    expect(drawn).toBeGreaterThan(0);
+    await unmount();
+    await frames(2000);
+    expect(fills.length).toBe(drawn);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await restore();
+  }
+});
+
+it("keeps the squares still under reduced motion and still tips the day", async () => {
+  const { host, fills, getContext, frames, restore } = await glitterCard({ reduce: true });
+  try {
+    await over(squaresOf(host)[80]!);
+    await frames(1000);
+    expect(getContext).not.toHaveBeenCalled();
+    expect(fills).toEqual([]);
+    expect(document.querySelector("[data-activity-tip]")?.textContent).toBe("Jul 29 · 923 replies");
+  } finally {
+    await restore();
+  }
+});
+
+it("ripples under a finger and lets a drag reach the next square", async () => {
+  const { host, fills, frames, restore } = await glitterCard();
+  try {
+    const square = squaresOf(host)[80]!;
+    const release = vi.fn();
+    Object.assign(square, { hasPointerCapture: () => true, releasePointerCapture: release });
+    await over(square, "touch");
+    await frames(32);
+    expect(fills.some((fill) => fill.day === 80)).toBe(true);
+    expect(document.querySelector("[data-activity-tip]")).toBeNull();
+    await act(async () => square.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch", pointerId: 7 })));
+    expect(release).toHaveBeenCalledWith(7);
+  } finally {
+    await restore();
+  }
+});
+
+it("deepens pale squares on a light skin instead of washing them out", async () => {
+  const { host, fills, frames, restore } = await glitterCard({ skin: "wink-day" });
+  try {
+    const squares = squaresOf(host);
+    await over(squares[80]!);
+    await frames(1000);
+    const colors = (full: boolean) => new Set(fills.filter((fill) => /bg-accent(\/75)?$/.test(shadeOf(squares[fill.day]!)) === full).map((fill) => fill.color));
+    expect([...colors(false)]).toEqual([ACCENT]);
+    expect([...colors(true)]).toEqual([SHEEN]);
+  } finally {
+    await restore();
   }
 });
 

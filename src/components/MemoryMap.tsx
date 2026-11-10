@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, NotedLines, type MemoryTopic } from "./MemoryGroups";
+import { paintsGlow, smoothGlow } from "./MemoryMapGlow";
 import { AURA, fadePanel, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { TopicRows } from "./MemoryTopics";
 import { Fold } from "./Fold";
@@ -114,6 +115,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const [leaving, setLeaving] = useState<Kind[]>([]);
   const [mistOn, setMistOn] = useState(false);
   const [still, setStill] = useState(false);
+  const [smooth, setSmooth] = useState(paintsGlow);
   // labels and counts, then icons and glow, then Live; an open editor shows at once
   const stage = useStage(2, editing);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
@@ -128,11 +130,19 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const now = done < total && task?.plan.some((step) => step.status === "active") ? lit : -1;
   const biggest = Math.max(1, ...topics.map((each) => each.bytes));
 
-  // the GPU probe makes a WebGL context, so it waits until the wide open has played
+  // the GPU probe makes a WebGL context, so it waits until the wide open has played; the glow's painter answers it instead while it paints
   useEffect(() => {
+    if (smooth) return;
     const probe = setTimeout(() => setStill(softwareRender()), 600);
     return () => clearTimeout(probe);
-  }, []);
+  }, [smooth]);
+
+  // the painter reads the CSS glow, which the first stage adds
+  const painted = smooth && stage > 0;
+  useLayoutEffect(() => {
+    if (!painted || !root.current) return;
+    return smoothGlow(root.current, () => setSmooth(false));
+  }, [painted]);
 
   useLayoutEffect(() => {
     const el = root.current;
@@ -307,7 +317,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} onClick={outside}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} data-smooth={smooth || undefined} onClick={outside}>
       {stage > 0 && (
         <>
           <svg width="0" height="0" className="absolute" aria-hidden="true">
@@ -341,11 +351,13 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
         )}
         {sleep && !failed && <SleepLine sleep={sleep} />}
       </header>
+      {painted && <div className="mm-smooth" aria-hidden="true" />}
       <div className="mm-grid">
         {panel("long", <Archive size={16} aria-hidden="true" />, t("bot.memoryLongTerm"), t("bot.memoryLongTermHint"), count(map.longTerm.length), newest(map.longTerm[0]?.fact),
           <span className="mm-dots" aria-hidden="true">
             {map.longTerm.slice(0, DOTS).map((each, index) => <i key={each.line} data-glow={index < 3 ? 3 : index < 10 ? 2 : each.at ? 1 : 0} />)}
           </span>, longList)}
+        {painted && <div className="mm-smooth-live" aria-hidden="true" />}
         <section className="mm-live" style={stage < 2 && stacked ? { minHeight: liveHeight(bot, Math.min(map.learned.length, LEARNED_SHOWN)) } : undefined}>
           {stage > 1 && (
             <>

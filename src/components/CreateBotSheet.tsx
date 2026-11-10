@@ -24,7 +24,7 @@ export function CreateBotSheet({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
-  const [name, setName] = useState(() => t("createBot.namePlaceholder"));
+  const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,8 +81,8 @@ export function CreateBotSheet({
   };
 
   const submit = async () => {
-    const normalized = name.trim();
-    if (saving || !normalized) return;
+    const normalized = name.trim() || t("createBot.namePlaceholder");
+    if (saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -223,7 +223,7 @@ export function CreateBotSheet({
               )}
               <button
                 type="submit"
-                disabled={saving || !name.trim()}
+                disabled={saving}
                 className="flex min-w-[140px] items-center justify-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 max-sm:min-w-0 max-sm:flex-1"
               >
                 {saving && <Loader2 size={15} className="animate-spin" />}

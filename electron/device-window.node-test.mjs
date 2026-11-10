@@ -11,7 +11,7 @@ import { contextMenuTemplate } from "./context-menu.mjs";
 import { saveImageCopy } from "./open-file.mjs";
 
 const require = createRequire(import.meta.url);
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 
 function openDeviceWindowSource(main) {
   const start = main.indexOf("function openDeviceWindow");
@@ -400,6 +400,86 @@ test("fails closed without this PC's tailnet", () => {
     assert.equal(deviceTailnet(local), "");
   }
   assert.throws(() => deviceWindowUrl("home.tail1234.ts.net", ""), /invalid/);
+});
+
+const LABEL = "abcdefghijklmnop";
+const RELAY_PC = `${LABEL}.wink.test`;
+
+// Runs main's real openDeviceWindow with no window, browser or tailscale call.
+function openDevice({ teamRelay = "wink.test", tailnet = "" } = {}) {
+  const source = openDeviceWindowSource(readFileSync(new URL("./main.mjs", import.meta.url), "utf8"));
+  const external = [], windows = [];
+  const open = vm.runInNewContext(`(async ${source})`, {
+    GOOGLE_CLIENT: teamRelay ? { id: "id", secret: "secret", teamRelay } : null,
+    shell: { openExternal: async (url) => void external.push(url) },
+    localTailnet: async () => tailnet,
+    relayDeviceUrl,
+    deviceWindowUrl,
+    openOrFocus: (_windows, key) => void windows.push(key),
+    deviceWindows: new Map(),
+    deviceLoads: new Map(),
+  });
+  return { open, external, windows };
+}
+
+async function assertRefused(hosts) {
+  for (const host of hosts) {
+    assert.equal(relayDeviceUrl(host, "wink.test"), "", JSON.stringify(host));
+    const device = openDevice();
+    assert.equal(await device.open(host, "Home"), false, JSON.stringify(host));
+    assert.deepEqual(device.external, []);
+  }
+}
+
+test("openDeviceWindow opens a team relay host in the default browser with no tailnet", async () => {
+  const device = openDevice();
+  assert.equal(await device.open(RELAY_PC, "Home"), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/`]);
+  assert.deepEqual(device.windows, []);
+});
+
+test("reads the team base from a baked base or relay origin", () => {
+  for (const baked of ["wink.test", "relay.wink.test", "https://relay.wink.test", "https://relay.wink.test/"]) {
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/`, baked);
+  }
+  for (const baked of [undefined, "", "http://relay.wink.test", "relay.", "wink test", 42]) {
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), "", String(baked));
+  }
+});
+
+test("refuses <label>.<other base>", async () => {
+  await assertRefused([`${LABEL}.other.test`, `${LABEL}.test`, `${LABEL}.evilwink.test`, `${LABEL}.relay.wink.test`]);
+});
+
+test("refuses a 15-char label", async () => {
+  await assertRefused([`${LABEL.slice(1)}.wink.test`, `${LABEL}a.wink.test`, `abcdefghijklmno1.wink.test`, `x.${RELAY_PC}`]);
+});
+
+test("refuses uppercase, port, path, userinfo and trailing-dot hosts", async () => {
+  await assertRefused([RELAY_PC.toUpperCase(), `${LABEL}.WINK.test`, `${RELAY_PC}:444`, `${RELAY_PC}/x`, `a@${RELAY_PC}`, `${RELAY_PC}.evil.com`, `${RELAY_PC}.`]);
+});
+
+test("refuses a lookalike base where a dot is any other character", async () => {
+  await assertRefused([`${LABEL}.winkxtest`, `${LABEL}.wink-test`, `${LABEL}xwink.test`]);
+});
+
+test("refuses a trailing newline or space", async () => {
+  await assertRefused([`${RELAY_PC}\n`, `${RELAY_PC} `, ` ${RELAY_PC}`, `${RELAY_PC}\t`, 42, null]);
+});
+
+test("a PC with an answering tailnet host still opens the Wink window", async () => {
+  const device = openDevice({ tailnet: "tail1234.ts.net" });
+  assert.equal(await device.open("home.tail1234.ts.net", "Home"), true);
+  assert.deepEqual(device.windows, ["https://home.tail1234.ts.net"]);
+  assert.deepEqual(device.external, []);
+});
+
+test("no baked team relay opens no relay PC", async () => {
+  for (const teamRelay of [null, ""]) {
+    const device = openDevice({ teamRelay });
+    assert.equal(await device.open(RELAY_PC, "Home"), false);
+    assert.deepEqual(device.external, []);
+  }
 });
 
 test("reads the tailnet from tailscale status", () => {
