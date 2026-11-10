@@ -120,6 +120,15 @@ describe("right slot", () => {
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBeNull();
   });
 
+  it("search on the folded list closes the slot and opens search", async () => {
+    await act(async () => root.render(createElement(App)));
+    await openDetails();
+    await act(async () => button('button[aria-label="Search bots and messages"]').click());
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(detailsPanel()).toBeNull();
+    expect(document.querySelector('input[aria-label="Search bots and messages"]')).toBeTruthy();
+  });
+
   it("keeps a bot list the user collapsed collapsed after the slot closes", async () => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
     await act(async () => root.render(createElement(App)));

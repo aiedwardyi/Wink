@@ -1681,6 +1681,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={() => {
+              if (folded) onUnfold?.();
               const next = { width: sidebarWidthRef.current, collapsed: false };
               applySidebarLayout(next);
               persistSidebarLayout(next);
