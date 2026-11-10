@@ -43,13 +43,19 @@ interface Mark {
   at: number;
 }
 
-/** PC-local: restores not sent yet, and the newest mark seen per bot. */
+/** PC-local: taps not sent yet, and the newest mark seen per bot. */
 interface TrashSyncFile {
   pending: Mark[];
   seen: Record<string, number>;
 }
 
 const fileOf = (host: TrashSyncHost) => join(host.dataDir, "bot-trash-sync.json");
+
+const validMark = (mark: Partial<Mark> | null) =>
+  typeof mark?.botId === "string" && typeof mark.syncId === "string" && typeof mark.trashed === "boolean" && Number.isFinite(mark.at);
+
+const sameMark = (file: TrashSyncFile, syncId: string, at: number) =>
+  file.pending.some((mark) => mark.syncId === syncId && mark.trashed && mark.at === at);
 
 function load(host: TrashSyncHost): TrashSyncFile {
   let raw: string;
@@ -59,9 +65,13 @@ function load(host: TrashSyncHost): TrashSyncFile {
     return { pending: [], seen: {} };
   }
   try {
-    // SAFETY: both fields are checked before use; only this module writes the file.
+    // SAFETY: both fields are checked before use, each mark by validMark.
     const disk = JSON.parse(raw) as Partial<TrashSyncFile>;
-    if (Array.isArray(disk.pending) && disk.seen && typeof disk.seen === "object") return { pending: disk.pending, seen: disk.seen };
+    if (Array.isArray(disk.pending) && disk.seen && typeof disk.seen === "object") {
+      const bad = disk.pending.filter((mark) => !validMark(mark));
+      if (bad.length) console.warn(`bot trash sync: skipped bad marks in ${fileOf(host)}: ${JSON.stringify(bad)}`);
+      return { pending: disk.pending.filter(validMark), seen: disk.seen };
+    }
   } catch {}
   setAsideFile(fileOf(host));
   return { pending: [], seen: {} };
@@ -84,7 +94,12 @@ function markTime(host: TrashSyncHost, file: TrashSyncFile, syncId: string): num
 export function trashBot(host: TrashSyncHost, botId: string): TrashEntry {
   const syncId = host.settings().botMap[botId];
   if (!syncId) return host.trash.trash(botId);
-  return host.trash.trash(botId, { syncId, deletedAt: markTime(host, load(host), syncId) });
+  const file = load(host);
+  const entry = host.trash.trash(botId, { syncId, deletedAt: markTime(host, file, syncId) });
+  // the 30-day timer may empty the entry before the mark is sent
+  file.pending.push({ botId, syncId, trashed: true, at: entry.deletedAt });
+  save(host, file);
+  return entry;
 }
 
 export function restoreBot(host: TrashSyncHost, botId: string): BotRecord {
@@ -94,7 +109,7 @@ export function restoreBot(host: TrashSyncHost, botId: string): BotRecord {
   const bot = host.trash.restore(botId);
   if (!entry?.syncId) return bot;
   // a Delete not sent yet still goes out, so other PCs see both taps in order
-  if (!entry.told) file.pending.push({ botId, syncId: entry.syncId, trashed: true, at: entry.deletedAt });
+  if (!entry.told && !sameMark(file, entry.syncId, entry.deletedAt)) file.pending.push({ botId, syncId: entry.syncId, trashed: true, at: entry.deletedAt });
   file.pending.push({ botId, syncId: entry.syncId, trashed: false, at });
   save(host, file);
   return bot;
@@ -106,9 +121,9 @@ export function publishTrashMarks(host: TrashSyncHost, folder: string): number {
   const untold = host.store.trash.entries.filter((entry) => !entry.told && entry.step === "trashed");
   const marks = [
     ...file.pending,
-    ...untold.flatMap((entry) => entry.syncId ? [{ botId: entry.record.id, syncId: entry.syncId, trashed: true, at: entry.deletedAt }] : []),
+    ...untold.flatMap((entry) => entry.syncId && !sameMark(file, entry.syncId, entry.deletedAt) ? [{ botId: entry.record.id, syncId: entry.syncId, trashed: true, at: entry.deletedAt }] : []),
   ].sort((left, right) => left.at - right.at);
-  if (!marks.length && !untold.length) return 0;
+  if (!marks.length) return 0;
   const settings = host.settings();
   let written = 0;
   for (const mark of marks) {

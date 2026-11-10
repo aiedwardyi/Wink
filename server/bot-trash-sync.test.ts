@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BotTrash } from "./bot-trash.ts";
 import { importTrashMarks, publishTrashMarks, restoreBot, trashBot, trashSyncAction, type TrashSyncHost } from "./bot-trash-sync.ts";
@@ -129,6 +129,28 @@ describe("trash marks", () => {
     restoreBot(host, bot.id);
     expect(publishTrashMarks(host, folder)).toBe(0);
     expect(readSyncOperations(folder).operations).toEqual([]);
+  });
+
+  it("still sends a Delete the 30-day timer emptied before it went out", () => {
+    const { host, bot } = open();
+    const restored = op({ recordedAt: clock - 1, changes: { trashed: false } });
+    trashBot(host, bot.id);
+    host.trash.empty([bot.id], { tellOthers: false });
+    expect(importTrashMarks(host, state(restored)).revive).toEqual([]);
+    expect(publishTrashMarks(host, folder)).toBe(1);
+    expect(readSyncOperations(folder).operations).toMatchObject([{ changes: { trashed: true }, recordedAt: clock }]);
+  });
+
+  it("skips a bad mark in its file and sends the rest", () => {
+    const { host, bot } = open();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const good = { botId: bot.id, syncId: "sync-atlas", trashed: false, at: clock };
+    writeFileSync(join(DATA_DIR, "bot-trash-sync.json"), JSON.stringify({ version: 1, pending: [null, { botId: bot.id, syncId: "sync-atlas" }, good], seen: {} }));
+    expect(importTrashMarks(host, state(op({ recordedAt: clock - 1, changes: { trashed: true } }))).trashed).toEqual([]);
+    expect(publishTrashMarks(host, folder)).toBe(1);
+    expect(readSyncOperations(folder).operations).toMatchObject([{ changes: { trashed: false }, recordedAt: clock }]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("bot-trash-sync.json"));
+    warn.mockRestore();
   });
 });
 
