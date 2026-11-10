@@ -323,6 +323,8 @@ it.each(["en", "ko"] as const)("puts Collapse all then the refresh icon at the r
   expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(true);
   await act(async () => finish({}));
   expect(refresh.getAttribute("aria-busy")).toBe("false");
+  expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(true);
+  await act(async () => { refresh.querySelector("svg")!.dispatchEvent(new Event("animationiteration", { bubbles: true })); });
   expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(false);
 });
 

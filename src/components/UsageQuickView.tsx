@@ -11,6 +11,7 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usag
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
@@ -97,6 +98,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const accountOrder = drag.orders[engine.base];
   const shown = new Set(usageAccounts(engine).map((each) => each.id));
   const refreshing = [...useRefreshPending()].some((id) => shown.has(id));
+  const spin = useSpinUntilTurnEnds(refreshing);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [museAuthFailed, setMuseAuthFailed] = useState(false);
 
@@ -184,7 +186,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const buttons = <>
     <button type="button" data-usage-refresh="" disabled={refreshing} aria-busy={refreshing} aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh()}
       className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
-      <RefreshCw size={14} aria-hidden="true" className={cn(refreshing && "motion-safe:animate-spin")} />
+      <RefreshCw size={14} aria-hidden="true" className={cn(spin.spinning && "motion-safe:animate-spin")} onAnimationIteration={spin.onAnimationIteration} />
     </button>
     {closeButton}
   </>;
