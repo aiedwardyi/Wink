@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.248] - 2026-11-10
+
+### Added
+- Wink keeps a daily backup of your chats, bots and memory in a Wink Backups folder.
+- Document checks in Live Verify replay with one cursor per checker, and short files play long enough to follow.
+- Alt+R refreshes usage again, in the usage popover and in Settings > Usage.
+
+### Changed
+- Live Verify checks only documents the reply or your message names, never a bot's own notes or memory.
+- The bot's Description box is now called Instructions.
+- After a skipped update, What's New shows the newest notes you haven't seen.
+- Bots resend less context on each message, which saves tokens.
+- Hitting one model's limit (like Fable) shows the limit card instead of an error.
+
+### Fixed
+- Quick answers send Korean requests and refusals to the bot, and a quick answer no longer lands after the bot's final reply.
+- Deleting a bot never empties a folder linked inside it, and a damaged bot list, settings or routines file is set aside instead of overwritten. The delete warning says what goes.
+- A link to a file on another PC opens from that PC, or says which PC has it.
+- A failed account switch or a stopped Grok reply now says why.
+
 ## [1.0.247] - 2026-11-10
 
 ### Added
@@ -823,6 +843,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
 [1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
 [1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
 [1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
