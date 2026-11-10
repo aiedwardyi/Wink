@@ -229,10 +229,23 @@ it.each(["reply", "humanText"] as const)("checks only the written document the %
   expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [root], paths: [join(root, "report.md")], humanId: "human" });
 });
 
-it("does not check a named document inside the data folder", async () => {
+it.each(["report.docx", "report.md"])("checks only the named %s in a bot's workspace", async name => {
   const workspace = join(DATA_DIR, "workspaces", "bot");
-  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, "memory", "today.md"), "memory/plan.md"] }));
-  await auto.settled({ ...turn, roots: [workspace], reply: "Noted in memory/today.md and memory/plan.md." });
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, name), join(workspace, "worker-card.md")] }));
+  await auto.settled({ ...turn, roots: [workspace], reply: `Saved ${name}.` });
+  expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [workspace], paths: [join(workspace, name)], humanId: "human" });
+});
+
+it("never checks a workspace's memory, even named", async () => {
+  const workspace = join(DATA_DIR, "workspaces", "bot");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, "MEMORY.md"), join(workspace, "memory", "today.md"), "memory/plans/next.md"] }));
+  await auto.settled({ ...turn, roots: [workspace], reply: "Noted in MEMORY.md, memory/today.md and memory/plans/next.md." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("never checks a named document elsewhere in the data folder", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(DATA_DIR, "team-report-inbox", "report.md"), join(DATA_DIR, "workspaces", "notes.md")] }));
+  await auto.settled({ ...turn, roots: [DATA_DIR], reply: "Saved team-report-inbox/report.md and workspaces/notes.md." });
   expect(docs).not.toHaveBeenCalled();
 });
 

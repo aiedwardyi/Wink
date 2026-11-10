@@ -8,6 +8,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { appEntry, type AppOptions } from "./verify-app.ts";
 import { DOC_EXTS } from "./verify-doc-text.ts";
 import { resolveVerifySite } from "./verify-site.ts";
+import { WORKSPACES_DIR } from "./workspace.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
 const SKIP = new Set(["node_modules", "coverage"]);
@@ -60,10 +61,12 @@ const named = (reply: string, path: string, docs: string[]) => {
     return hits.length === 1 && hits[0] === slashed(path) && hits[0].endsWith(ref);
   });
 };
-// Memory and the other files a bot keeps under the data folder are never documents for the person.
+// Under the data folder only a bot's workspace holds documents for the person, and never its memory.
 const internal = (path: string) => {
   const rel = relative(DATA_DIR, path);
-  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+  if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
+  const [id, ...rest] = relative(WORKSPACES_DIR, path).toLowerCase().split(sep);
+  return id === ".." || !rest.length || rest[0] === "memory" || rest.length === 1 && rest[0] === "memory.md";
 };
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {
