@@ -2,6 +2,31 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.249] - 2026-11-11
+
+### Added
+- Voice calls with your bot: tap the phone icon at the top right of a chat. The chat stays quiet during the call, and one call card with a summary and the transcript stays after.
+- Open Wink on your other PCs from Chrome with Google sign-in, no Tailscale needed.
+- Bot Details and Workers share one panel on the right, and the bot list folds while it's open.
+- The bot's avatar in the chat header says it opens Bot Details and memory.
+- Activity squares ripple when you tap them.
+
+### Changed
+- A shorter welcome line on first run: "Give a bot a job. Check in from anywhere."
+- New bots start with an empty name.
+- Softer hover on chat header icons, a violet Muscle Memory icon, a darker Live now and a smoother memory glow.
+
+### Fixed
+- Wink's background checks no longer flash a terminal window on Windows.
+- Bots with nothing to say stay quiet: no stray lines and no status flicker.
+- The What's New card stays put until you close it.
+- Dragging on the Usage page no longer grows the list, and the hand closes when you press.
+- Browser connections to another PC stay alive between requests, and browser setup is clearer.
+- The refresh icon finishes its turn before stopping.
+- Quick answers work again after an ask card you typed past.
+- A message blocked by a Grok hook names the hook.
+- Code that reads a secret is no longer masked as one.
+
 ## [1.0.248] - 2026-11-10
 
 ### Added
@@ -843,6 +868,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
 [1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
 [1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
 [1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
