@@ -243,3 +243,70 @@ button.model-cross-binding:disabled { opacity: 0.4; }
   .model-cross-cell,
   .model-cross-effort-chrome { transition: none; }
 }
+
+/* Light skins: the Memory page's light tint, as opaque stops on the surface (alpha stops band). */
+@scope (:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"])) to ([data-skin]) {
+  .model-cross-backdrop {
+    --picker-tint: color-mix(in srgb, #fff 90%, var(--color-app)), color-mix(in srgb, rgb(199 230 255) 64%, var(--color-app)) 32%, color-mix(in srgb, rgb(221 214 254) 51.2%, var(--color-app)) 62%, var(--color-app);
+    background: var(--color-app);
+    backdrop-filter: none;
+  }
+
+  .model-cross-dialog { color: var(--color-ink); }
+  .model-cross-header { color: var(--color-ink-secondary); }
+  /* ends inside the mask's solid band, so the fade can't band it */
+  .model-cross-stage { background: radial-gradient(closest-side, var(--picker-tint)) center / 100% 84% no-repeat; }
+
+  .model-cross-cell {
+    border-color: var(--color-hairline);
+    background: var(--color-card);
+    color: var(--color-ink);
+    opacity: .8;
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink) 6%, transparent);
+  }
+
+  .model-cross-cell:has(.model-cross-note) { opacity: .86; }
+  .model-cross-cell:hover { opacity: .92; }
+
+  .model-cross-cell[aria-pressed="true"] {
+    opacity: 1;
+    background: var(--color-card);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--color-ink) 10%, transparent);
+  }
+
+  .model-cross-cell > svg { color: var(--color-ink-secondary); }
+  .model-cross-engine, .model-cross-note { color: color-mix(in srgb, var(--color-ink) 50%, var(--color-ink-secondary)); }
+
+  .model-cross-badge {
+    border-color: var(--color-hairline);
+    background: var(--color-inset);
+    color: color-mix(in srgb, var(--color-ink) 50%, var(--color-ink-secondary));
+  }
+
+  .model-cross-cell:focus-visible, .model-cross-dialog button:focus-visible { outline-color: var(--color-ink); }
+  .model-cross-chevron, .model-cross-edge { color: var(--color-ink-secondary); }
+  .model-cross-edge { color: oklch(from var(--picker-accent) min(l, .45) c h); }
+  .model-cross-left, .model-cross-right { background: none; box-shadow: none; }
+
+  .model-cross-options {
+    --color-ink: inherit;
+    --color-ink-secondary: inherit;
+    --color-control: inherit;
+    --color-raised-hover: inherit;
+    --color-inset: inherit;
+    --color-hairline: inherit;
+    --color-success: inherit;
+    --color-warning: inherit;
+  }
+
+  .model-cross-custom input { background: var(--color-inset); }
+  .model-cross-footer { color: var(--color-ink-secondary); }
+
+  .model-cross-binding kbd {
+    border-color: var(--color-hairline);
+    background: var(--color-card);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--color-ink) 8%, transparent);
+  }
+
+  button.model-cross-binding:hover { color: var(--color-ink); }
+}

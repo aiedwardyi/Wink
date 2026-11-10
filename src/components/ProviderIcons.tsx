@@ -43,6 +43,8 @@ const CLAUDE_BOT = [
 
 // anti-slop/no-shape-in-symbol-names flags the JSX attribute name, so spread it.
 const CRISP = { "shapeRendering": "crispEdges" } as const;
+// Inline, so it beats a parent's `* { fill }`; transparent wherever --claude-eye is unset.
+const EYE = { fill: "var(--claude-eye, transparent)" };
 
 export function ClaudeMark({ size = 16, className }: IconProps) {
   // 17 columns need 1 css px each or the eyes and legs merge, so the bot overflows a box under 17 px.
@@ -61,6 +63,8 @@ export function ClaudeMark({ size = 16, className }: IconProps) {
       {CLAUDE_BOT.map(([x, row, w]) => (
         <rect key={`${x},${row}`} x={x} y={row * 2} width={w} height={2} />
       ))}
+      <rect style={EYE} x={5} y={2} width={1} height={2} />
+      <rect style={EYE} x={13} y={2} width={1} height={2} />
     </svg>
   );
 }

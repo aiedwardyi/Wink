@@ -349,3 +349,38 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
   .dial-stage *, .dial-stage *::before, .dial-stage *::after { transition: none !important; animation: none !important; }
   .dial-stage :is([data-pick], [data-dial-pick]):enabled:active { transform: none; }
 }
+
+/* Light skins: a pearl dial on the picker's tint. */
+@scope (:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"])) to ([data-skin]) {
+  .model-cross-backdrop:has(.model-dial) { background: var(--color-app); }
+  .model-dial { --ink: var(--color-ink); --ink-2: color-mix(in srgb, var(--color-ink) 40%, var(--color-ink-secondary)); --ink-3: var(--color-ink-secondary); --ink-4: var(--color-ink-secondary); background: var(--color-app); }
+  .model-dial button:focus-visible { outline-color: var(--color-ink); }
+  .dial-stage { --glow: .35; --accent-ink: oklch(from var(--accent) min(l, .45) c h); }
+  .dial-scene { opacity: 1; }
+  .dial-scene-base { background: radial-gradient(closest-side at var(--cx) var(--cy), var(--picker-tint)); }
+  .dial-scene-lab, .dial-stage[data-phone] .dial-scene-lab { display: none; }
+  .dial-orbits g { stroke: var(--color-ink); }
+  .dial-ticks .dial-chamber > path:first-child, .dial-gauge .dial-notch > path:first-child { fill: var(--color-ink); }
+  .dial-ticks > g:not(.dial-chamber), .dial-ticks > circle { stroke: var(--color-ink); }
+  .dial-labring path { stroke: var(--color-ink); }
+  #dial-seg-fill stop:first-child { stop-color: #ffffff; }
+  #dial-seg-fill stop:last-child { stop-color: #eef0fc; }
+  .dial-seg .dial-mark { color: var(--color-ink-secondary); }
+  .dial-socket { background: radial-gradient(circle, #ffffff 60%, #eef0fc); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 6%, transparent), inset 0 10px 30px color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .dial-logo { --claude-eye: var(--color-ink); }
+  .dial-tile { background: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%); box-shadow: inset 0 1px 0 #ffffff, inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 6%, transparent), 0 0 22px rgb(129 140 248 / .18), 0 0 60px rgb(221 214 254 / .5), 0 16px 34px color-mix(in srgb, var(--color-ink) 12%, transparent); }
+  .dial-card { border-color: color-mix(in srgb, var(--color-hairline) 70%, transparent); background: var(--color-card); box-shadow: 0 10px 24px color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .dial-card .dial-mark { color: var(--color-ink-secondary); }
+  .dial-card-name { color: var(--color-ink); }
+  .dial-card-name em { border-color: color-mix(in srgb, var(--color-ink) 12%, transparent); }
+  .dial-card-badge { border-color: color-mix(in srgb, var(--color-ink) 10%, transparent); }
+  .dial-bar { border-color: color-mix(in srgb, var(--color-hairline) 70%, transparent); background: var(--color-card); box-shadow: 0 10px 24px color-mix(in srgb, var(--color-ink) 10%, transparent); }
+  .dial-rail { border-color: color-mix(in srgb, var(--color-hairline) 70%, transparent); background: rgb(255 255 255 / .85); box-shadow: 0 12px 30px color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .dial-rail button:hover { background: color-mix(in srgb, var(--color-ink) 5%, transparent); }
+  .dial-cta { background: color-mix(in srgb, var(--accent) 9%, var(--color-card)); }
+  .dial-stage kbd { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); background: color-mix(in srgb, var(--color-ink) 3%, transparent); }
+  .dial-ring .track { border-color: color-mix(in srgb, var(--color-ink) 7%, transparent); }
+  .dial-footer { border-top-color: color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .model-cross-header .model-dial-view { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
+  .model-cross-header .model-dial-view:hover { color: var(--color-ink); }
+}
