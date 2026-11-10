@@ -2,6 +2,7 @@ import { mkdir, opendir, realpath, stat, symlink, utimes, writeFile } from "node
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
@@ -339,6 +340,7 @@ it.each([
   ["absolute, quotes", (path: string) => `Saved to "${path}".`],
   ["relative, backticks", () => "Saved to `My Reports/report.docx`."],
   ["relative backslash, quotes", () => "Saved to 'My Reports\\report.docx'."],
+  ["file URL, link", (path: string) => `[Open the report](${pathToFileURL(path).href})`],
 ])("names a scanned document by a path with spaces: %s", async (_, reply) => {
   const old = new Date(Date.now() - 3_600_000);
   await utimes(join(root, "index.html"), old, old);

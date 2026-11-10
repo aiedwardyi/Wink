@@ -47,11 +47,15 @@ interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequen
 
 const slashed = (path: string) => `/${path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").toLowerCase()}`;
 const REF = /`([^`\n]+)`|(?<!\w)(?:"([^"\n]+)"|'([^\n]+?)'|“([^”\n]+)”|‘([^\n]+?)’)(?!\w)|([^\s"'`“”‘’<>()[\]|*?]+)/g;
+const unlinked = (ref: string) => {
+  if (!/^file:\/\//i.test(ref)) return ref;
+  try { return decodeURIComponent(ref.replace(/^file:\/\/\/?/i, "")); } catch { return ref; }
+};
 // A whole reference in the reply must fit this file and no other document; any document containing its text (Final report.docx) makes it ambiguous.
 const named = (reply: string, path: string, docs: string[]) => {
   const keys = [...new Set(docs)].map(slashed);
   return [...reply.matchAll(REF)].some(([, ...refs]) => {
-    const ref = slashed(refs.find(ref => ref !== undefined)!.trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1"));
+    const ref = slashed(unlinked(refs.find(ref => ref !== undefined)!.trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1")));
     const hits = keys.filter(key => key.includes(ref.slice(1)));
     return hits.length === 1 && hits[0] === slashed(path) && hits[0].endsWith(ref);
   });
