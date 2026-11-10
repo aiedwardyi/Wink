@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
 import type { AcceptedSends } from "@/lib/send-accept";
 import { currentTurnId } from "@/lib/turn-stage";
+import { en, ko } from "@/lib/i18n-catalog";
 
 const acceptedSends: AcceptedSends = {};
 
@@ -38,6 +39,15 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(chatHeader).toContain('title={t("chat.openProfile"');
     expect(chatHeader).toContain('onActivate={() => dispatch({ type: "toggleSettings", open: true })}');
     expect(chatHeader).not.toContain("avatar: !isPhone()");
+  });
+
+  it("tips the avatar as Bot details & memory with a pointer cursor", () => {
+    const avatar = headerBlock(chatHeader, "data-orbit-chat-focus-fallback", "<BotAvatar");
+    expect(avatar).toContain('title={t("chat.avatarTip")}');
+    expect(avatar).toContain('aria-label={t("chat.avatarTip")}');
+    expect(avatar).toContain("cursor-pointer");
+    expect(en["chat.avatarTip"]).toBe("Bot details & memory");
+    expect(ko["chat.avatarTip"]).toBe("봇 정보 · 메모리");
   });
 
   it("shows the bot name below md and opens Bot details with no pencil", () => {
