@@ -75,6 +75,26 @@ const PEM_END = /-----END [A-Z ]*PRIVATE KEY-----/;
 const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
 
+const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
+
+/** Long digit runs, letter-digit churn, or scattered single-letter case runs. */
+function looksRandom(value: string): boolean {
+  if (/\d/.test(value) && (/\d{4}/.test(value) || (value.match(/(?=[A-Za-z]\d|\d[A-Za-z])/g)?.length ?? 0) >= 3)) return true;
+  let singles = 0;
+  for (const word of value.match(/[A-Z]{2,}(?![a-z])|[A-Z]?[a-z]+|[A-Z]|\d+/g) ?? []) if (word.length === 1 && ++singles >= 2) return true;
+  return false;
+}
+
+/** A KEY_VALUE value that reads a credential instead of holding one:
+ * `localStorage.getItem(`, `process.env.API_KEY`, `$API_KEY`, `Hasher::new`. */
+function isCodeValue(quote: string, value: string, text: string, end: number): boolean {
+  if (ENV_REF.test(value)) return !looksRandom(value);
+  if (quote) return false;
+  if (!value.includes(".") && text[end] !== "(" && text[end] !== "[" && !text.startsWith("::", end)) return false;
+  return CODE_NAME.test(value) && !looksRandom(value);
+}
+
 /** A config dump's own `key` field, both sides quoted. Bare `key` stays out of
  * KEY_VALUE: unquoted it is prose ("the primary key: customer_id"). No
  * secret-shaped name shares the burden here, hence the higher floor. */
@@ -265,7 +285,8 @@ function couldBeKeyValue(s: string): boolean {
   if (s[i] === '"' || s[i] === "'") i += 1;
   if (i >= s.length) return true;
   while (i < s.length && KV_VALUE_CHAR.test(s[i]!)) i += 1;
-  return i >= s.length;
+  // A lone trailing ":" may still become "::", which isCodeValue lets through.
+  return i >= s.length || (i === s.length - 1 && s[i] === ":");
 }
 
 /** Leftmost index of a suffix that could still complete into a secret match. */
@@ -454,7 +475,8 @@ export function redactSecretsInText(text: string): string {
   });
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
-  out = out.replace(KEY_VALUE, (_m, key: string, sep: string, quote: string, value: string) => `${key}${sep}${quote}${mask(value)}${quote}`);
+  out = out.replace(KEY_VALUE, (m: string, key: string, sep: string, quote: string, value: string, at: number, all: string) =>
+    isCodeValue(quote, value, all, at + m.length) ? m :`${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
   return out;
 }
