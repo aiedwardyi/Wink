@@ -88,7 +88,9 @@ export function chatUsageLimit(
   if (/invalid.?api.?key|not logged in|authentication|unauthorized|billing|insufficient.?quota|out of credits|credits exhausted|overloaded|capacity unavailable|codex with your chatgpt plan|spend cap/i.test(message)
     || (typeof kind === "string" && /auth|billing|quota|overload|capacity|cancel/i.test(kind))) return null;
   const spent = windows.filter((w) => w.usedPercent >= 100 && (w.resetsAt === null || w.resetsAt > now));
-  if (!typed && (provider !== "claude" || !/(?:usage limit (?:reached|exceeded)|(?:you(?:['’]ve| have)? (?:hit|reached)|you(?:['’]re| are) (?:at|out of)) your (?:(?:usage|session|weekly|opus|sonnet) )?limit)/i.test(message)
+  // A per-model cap (Fable, Opus...) leaves the account windows with room, so they cannot corroborate it.
+  const modelCap = provider === "claude" && /(?:you(?:['’]ve| have)? (?:hit|reached)|you(?:['’]re| are) (?:at|out of)) your (?!(?:usage|session|weekly) )[a-z][\w.-]* limit\b/i.test(message);
+  if (!typed && !modelCap && (provider !== "claude" || !/(?:usage limit (?:reached|exceeded)|(?:you(?:['’]ve| have)? (?:hit|reached)|you(?:['’]re| are) (?:at|out of)) your (?:(?:usage|session|weekly) )?limit)/i.test(message)
     || (windows.length > 0 && spent.length === 0))) return null;
   const resets = [body, error, ...(isRecord(kind) ? [kind] : [])].flatMap((detail) =>
     ["resetsAt", "resets_at", "resetAt", "reset_at"].map((key) => epochMs(detail[key])));

@@ -14,6 +14,7 @@ const REAL = [
   "API Error: You've hit your session limit · resets 9:20pm (Asia/Seoul) (error type rate_limit, HTTP 429)",
   "You've hit your weekly limit · resets Nov 2, 9am (Asia/Seoul)",
 ];
+const FABLE = "You've reached your Fable limit. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
 
 describe("HIGH 1 Claude limit wording", () => {
   let instance: Awaited<ReturnType<typeof ClaudeDriver.create>> | undefined;
@@ -27,7 +28,7 @@ describe("HIGH 1 Claude limit wording", () => {
     instance = undefined;
   });
 
-  it.each([CONTROL, ...REAL])("the driver marks a usage limit for: %s", async (text) => {
+  it.each([CONTROL, ...REAL, FABLE])("the driver marks a usage limit for: %s", async (text) => {
     process.env.FAKE_CLAUDE_MODE = "usage-limit";
     const reset = Math.floor(Date.now() / 1000) + 3600;
     instance = await ClaudeDriver.create({
@@ -46,6 +47,22 @@ describe("HIGH 1 Claude limit wording", () => {
     const now = Date.parse("2026-10-28T00:00:00Z");
     const spent = [{ id: "five_hour", usedPercent: 100, resetsAt: now + 3_600_000, windowMinutes: 300 }];
     expect(chatUsageLimit("claude", "You\u2019ve hit your limit · resets 3am (Asia/Seoul)", spent, true, now)).not.toBeNull();
+  });
+
+  describe("a per-model cap", () => {
+    const now = Date.parse("2026-10-28T00:00:00Z");
+    const room = [{ id: "five_hour", usedPercent: 12, resetsAt: now + 3_600_000 }, { id: "seven_day", usedPercent: 52, resetsAt: now + 86_400_000 }];
+    it.each([FABLE, ...["Opus", "Sonnet", "Haiku", "Mythos"].map((model) => FABLE.replace("Fable", model)), FABLE.replace("'", "\u2019")])(
+      "is a usage limit while the account windows have room: %s", (text) => {
+        expect(chatUsageLimit("claude", { error: "rate_limit", result: text }, room, true, now)?.usageLimit).toEqual({ resetsAt: null });
+      });
+    it("keeps the reset the event carries", () => {
+      const reset = now + 7_200_000;
+      expect(chatUsageLimit("claude", { error: "rate_limit", result: FABLE, resetsAt: reset / 1000 }, room, true, now)?.usageLimit).toEqual({ resetsAt: reset });
+    });
+    it("still rejects a plain limit line while the account windows have room", () => {
+      expect(chatUsageLimit("claude", "You've hit your limit · resets 3am (Asia/Seoul)", room, true, now)).toBeNull();
+    });
   });
 });
 
