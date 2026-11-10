@@ -398,6 +398,20 @@ describe("terminal proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer grant");
   });
 
+  it("returns the last 30 screen lines from terminal_send and the full snapshot from terminal_read", async () => {
+    const rows = Array.from({ length: 50 }, (_, index) => `row ${index + 1}`);
+    const snapshot = { sessionId: "s1", generation: 2, screenText: `${rows.join("\n")}\n\n\n`, recentText: "old scrollback", panes: [{ sessionId: "s1", generation: 2, label: "worker" }] };
+    const sent = (await send(scripted(snapshot), { text: "x", sessionId: "s1", generation: 2 })).content[0].text;
+    expect(sent).toContain("Terminal session: s1 (generation 2)\n");
+    expect(sent).toContain("State: running\n");
+    expect(sent.endsWith(`\n\nCurrent screen (last 30 lines):\n${rows.slice(-30).join("\n")}\n\nPanes:\n- worker: sessionId s1 (generation 2)`)).toBe(true);
+    const short = { ...snapshot, screenText: "PS> echo ok\n\n" };
+    expect((await send(scripted(short), { text: "x", sessionId: "s1", generation: 2 })).content[0].text).toContain("\n\nCurrent screen:\nPS> echo ok\n\nPanes:");
+    const read = (await callTool("terminal_read", scripted(snapshot), CONFIG)).content[0].text;
+    expect(read).toBe(terminalSnapshotText(snapshot));
+    expect(read).toContain(`Current screen:\n${snapshot.screenText}\n\nRecent scrollback:\nold scrollback`);
+  });
+
   it("posts a resumed launch note for a submitted line, not a key or the main terminal", async () => {
     const harness = { ...CONFIG, harness: "http://127.0.0.1:2", commsToken: "comms" };
     const snap = (sessionId: string, main: boolean) => ({

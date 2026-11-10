@@ -4959,7 +4959,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   trace?.identify({ messageId: userMessage.id });
   markChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id }, "prepare.completed");
   let transcript = prepared.transcript;
-  let contextCompacted = prepared.compacted;
   // `compacted` stays true for every turn after the first summary; only a new
   // summary should drop the session, or no later turn can ever resume.
   const compactedThisTurn = Boolean(prepared.compaction);
@@ -5116,7 +5115,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: contextCompacted,
+    contextCapped: compactedThisTurn,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   });
@@ -5136,7 +5135,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: contextCompacted,
+    contextCapped: compactedThisTurn,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;
@@ -5627,7 +5626,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (compacted.status !== "ready") throw new Error(compacted.status === "failed" ? compacted.error : "Unsupported context summary version");
             latestCompactionId = compacted.compaction ? store.appendCompaction(threadId, compacted.compaction).id : compacted.compactionId ?? null;
             transcript = compacted.transcript;
-            contextCompacted = compacted.compacted;
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;

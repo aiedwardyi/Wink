@@ -506,8 +506,14 @@ const TOOLS = [
   {
     name: "list_routines",
     description:
-      "List routines owned by this bot, including their ids, schedules, status, and next run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+      "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's full instructions and latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        routine_id: { type: "string", minLength: 1, description: "Return this routine's full record instead of the list." },
+      },
+    },
   },
   {
     name: "propose_routine",
@@ -624,6 +630,14 @@ async function api(path: string, init?: RequestInit): Promise<Json> {
 
 function jsonRecord(value: unknown): value is Json {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function routineRow(routine: Json): string {
+  const schedule = jsonRecord(routine.schedule) ? routine.schedule : {};
+  const when = schedule.type === "once"
+    ? `once ${String(schedule.at ?? "")}`
+    : `weekly ${String(schedule.time ?? "")} ${Array.isArray(schedule.weekdays) ? schedule.weekdays.join(",") : ""}`.trimEnd();
+  return `- ${String(routine.id)} | ${String(routine.name)} | ${when} | ${routine.enabled ? "enabled" : "paused"} | ${String(routine.nextRunAt ?? "none")}`;
 }
 
 function routineAction(value: unknown): RoutineAction | null {
@@ -947,14 +961,21 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
     const r = await api(`/api/internal/routines?${query.toString()}`);
-    const routines = Array.isArray(r.routines) ? r.routines : [];
+    const routines: unknown[] = Array.isArray(r.routines) ? r.routines : [];
     const now = typeof r.now === "string" ? r.now : new Date().toISOString();
     const timeZone = typeof r.timeZone === "string" && r.timeZone ? r.timeZone : "local computer timezone";
     if (!routines.length) {
       return { text: `This bot has no routines. Current time: ${now}. Timezone: ${timeZone}.` };
     }
+    const clock = `current time: ${now}; timezone: ${timeZone}`;
+    if (typeof args.routine_id === "string") {
+      const routine = routines.find((row) => jsonRecord(row) && row.id === args.routine_id);
+      return routine
+        ? { text: `Routine ${args.routine_id} (${clock}):\n${JSON.stringify(routine, null, 2)}` }
+        : { text: `This bot has no routine ${args.routine_id}. Call list_routines without routine_id for the ids.`, isError: true };
+    }
     return {
-      text: `This bot's routines (current time: ${now}; timezone: ${timeZone}):\n${JSON.stringify(routines, null, 2)}`,
+      text: `This bot's routines (${clock}), as id | name | schedule | status | next run:\n${routines.filter(jsonRecord).map(routineRow).join("\n")}`,
     };
   }
   if (name === "propose_routine") {

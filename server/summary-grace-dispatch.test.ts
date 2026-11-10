@@ -195,7 +195,7 @@ describe("summary grace dispatch", () => {
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
         reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
         recycleDeferred: false,
-        transcript: prepared.transcript, contextCompacted: prepared.compacted, taskRecord: undefined, durableTaskRecordText: taskRecordText,
+        transcript: prepared.transcript, compactedThisTurn: Boolean(prepared.compaction), taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, seed,
         summarySkipped: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
         inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },

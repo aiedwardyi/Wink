@@ -306,7 +306,7 @@ describe("workspace", () => {
     expect(memorySystemPrompt(BOT)).toContain("for anything longer. One rule per line, about 300 bytes at most. A side file is read only when a line here says when to read it. A newer correction replaces the old line; never keep two lines that disagree. When you learn");
   });
 
-  it("puts the file's real size above the notes from 80% of either budget", () => {
+  it("puts the file's rounded size above the notes from 80% of either budget", () => {
     const dir = ensureWorkspace(BOT);
     const nearBytes = `# Memory\n${"- long note ".repeat(1700)}`;
     const nearLines = Array.from({ length: 170 }, (_, i) => `- fact ${i}`).join("\n");
@@ -318,10 +318,43 @@ describe("workspace", () => {
     ] as const) {
       writeFileSync(join(dir, "MEMORY.md"), text);
       const prompt = memorySystemPrompt(BOT);
-      const size = `${Buffer.byteLength(text, "utf8")} bytes`;
+      const size = `about ${Math.ceil(Buffer.byteLength(text, "utf8") / 1_000) * 1_000} bytes`;
       expect(prompt, size).toContain(size);
       expect(prompt.indexOf(size)).toBeLessThan(prompt.indexOf("Your memory (MEMORY.md):"));
       expect(prompt.includes("its end was not loaded"), size).toBe(cut);
+    }
+  });
+
+  it("keeps the size notice the same across a small edit", () => {
+    const dir = ensureWorkspace(BOT);
+    const notes = `# Memory\n${"- long note ".repeat(1700)}`;
+    const notice = (text: string) => {
+      writeFileSync(join(dir, "MEMORY.md"), text);
+      const prompt = memorySystemPrompt(BOT);
+      return prompt.slice(prompt.indexOf("\n\n[MEMORY.md is"), prompt.indexOf("\n\nYour memory (MEMORY.md):"));
+    };
+    expect(notice(notes)).toContain("[MEMORY.md is about 21000 bytes in about 10 lines, near ");
+    expect(notice(`${notes}\n- one more fact`)).toBe(notice(notes));
+  });
+
+  it("starts the size notice at 80% of either budget and the cut notice past it", () => {
+    const dir = ensureWorkspace(BOT);
+    const bytes = (count: number) => "x".repeat(count);
+    const lines = (count: number) => Array.from({ length: count }, () => "- fact").join("\n");
+    for (const [text, notice] of [
+      [bytes(MEMORY_MAX_BYTES * 0.8 - 1), null],
+      [bytes(MEMORY_MAX_BYTES * 0.8), "[MEMORY.md is about 20000 bytes in about 10 lines, near "],
+      [bytes(MEMORY_MAX_BYTES), "[MEMORY.md is about 24000 bytes in about 10 lines, near "],
+      [bytes(MEMORY_MAX_BYTES + 1), "[MEMORY.md is about 25000 bytes in about 10 lines, over "],
+      [lines(MEMORY_MAX_LINES * 0.8 - 1), null],
+      [lines(MEMORY_MAX_LINES * 0.8), "[MEMORY.md is about 2000 bytes in about 160 lines, near "],
+      [lines(MEMORY_MAX_LINES), "[MEMORY.md is about 2000 bytes in about 200 lines, near "],
+      [lines(MEMORY_MAX_LINES + 1), "[MEMORY.md is about 2000 bytes in about 210 lines, over "],
+    ] as const) {
+      writeFileSync(join(dir, "MEMORY.md"), text);
+      const prompt = memorySystemPrompt(BOT);
+      if (notice) expect(prompt).toContain(notice);
+      else expect(prompt).not.toContain("[MEMORY.md is");
     }
   });
 
