@@ -20,7 +20,7 @@ export const PEEK_TIMEOUT_MS = 10_000;
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 /** Matches the relay's idle timeout; SSE heartbeats every 15 s keep streams alive. */
 export const IDLE_TIMEOUT_MS = 10 * 60_000;
-export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const KEEP_ALIVE_TIMEOUT_MS = 310_000;
 /** Connections per relay-reported peer that have not yet sent a complete request head. */
 export const MAX_PENDING_PER_PEER = 8;
 const MAX_PEER_LENGTH = 64;
@@ -277,34 +277,40 @@ export class RelayIngress {
     const cleaned = cleanPeer(peer);
     if (cleaned) relayPeers.set(tlsSocket, cleaned);
     markRelaySocket(tlsSocket);
-    this.armRequestDeadlines(tlsSocket, release);
     this.http.emit("connection", tlsSocket);
+    this.armRequestDeadlines(tlsSocket, release);
   }
 
-  /**
-   * While a connection waits for a request, the head must arrive within the
-   * server's headersTimeout and the whole request within requestTimeout. The
-   * wait starts when the connection opens and again when a response finishes,
-   * so a stream in progress is never cut. Once a request head arrived the
-   * connection stops counting as pending for its peer.
-   */
+  /** Idle reuse waits separately from the next request's headers and body. */
   private armRequestDeadlines(socket: TLSSocket, release: () => void): void {
     const server = this.http;
     let stopHeaders: Cancel | null = null;
     let stopRequest: Cancel | null = null;
+    let stopKeepAlive: Cancel | null = null;
     const clear = () => {
       stopHeaders?.();
       stopRequest?.();
-      stopHeaders = stopRequest = null;
+      stopKeepAlive?.();
+      stopHeaders = stopRequest = stopKeepAlive = null;
     };
     const deadline = (ms: number) => (ms > 0 ? this.clock.schedule(ms, () => socket.destroy()) : null);
-    function waiting(): void {
+    function requesting(): void {
       clear();
       if (socket.destroyed) return;
       stopHeaders = deadline(server.headersTimeout);
       stopRequest = deadline(server.requestTimeout);
     }
+    function waiting(): void {
+      clear();
+      if (socket.destroyed) return;
+      stopKeepAlive = deadline(KEEP_ALIVE_TIMEOUT_MS);
+    }
+    // Register after HTTP takes ownership so Node exposes data before parsing it.
+    socket.prependListener("data", () => {
+      if (stopKeepAlive) requesting();
+    });
     this.onRequest.set(socket, (req, res) => {
+      if (stopKeepAlive) requesting();
       release();
       stopHeaders?.();
       stopHeaders = null;
@@ -329,6 +335,6 @@ export class RelayIngress {
       else res.once("finish", waiting);
     });
     socket.once("close", clear);
-    waiting();
+    requesting();
   }
 }
