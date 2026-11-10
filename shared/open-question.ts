@@ -5,6 +5,7 @@ interface Row {
   role: string;
   kind: string;
   from?: unknown;
+  author?: { kind: string };
   card?: { askUser?: true; requestId?: string; answered?: string; dismissed?: boolean };
 }
 
@@ -13,9 +14,9 @@ export function isAskUserCard(message: Row): boolean {
   return message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
 }
 
-/** Only what the person sent closes a question: not pane notes, peers or bots. */
+/** Only what the person sent closes a question: not pane notes, peers, bots or team room people. */
 export function isSentByPerson(message: Row): boolean {
-  return message.role === "user" && message.kind === "text" && !message.from;
+  return message.role === "user" && message.kind === "text" && !message.from && (!message.author || message.author.kind === "host");
 }
 
 /** A live approval or engine-native question still waiting on the person. */
