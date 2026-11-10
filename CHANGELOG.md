@@ -2,6 +2,18 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.250] - 2026-11-11
+
+### Added
+- Devices: one "Connect from my devices" switch per PC, a QR code for your phone right on the page, and a green check on each PC you can reach.
+- Opening Wink in Chrome on a computer now gives you a real terminal: typing, arrow keys, copy and Korean all work.
+
+### Changed
+- Connections uses the same account cards as Usage.
+
+### Fixed
+- The Claude mascot's eyes and feet stay even at 125%, 150% and 175% screen scaling.
+
 ## [1.0.249] - 2026-11-11
 
 ### Added
@@ -868,6 +880,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.250]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.250
 [1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
 [1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
 [1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
