@@ -441,11 +441,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       cancelQueuedRoomParticipations(group.id, group.threadId);
       const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const ended = () => Promise.all(stopping.map(finishEnd));
+      const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;
       if (busy) await stopMember(group.threadId, busy.id, ended);
       else {
         closeOpenApprovals(group.threadId);
-        void ended();
+        void ended?.();
       }
       return json(res, 200, { ok: true });
     },
