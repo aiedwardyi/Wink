@@ -1526,20 +1526,20 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
               onClick={() => dispatch({ type: "toggleSettings", open: true, keepGoing: true })}
               aria-label={keepGoingLabel}
               title={keepGoingLabel}
-              className="shrink-0 rounded-md p-2 hover:bg-raised"
+              className="shrink-0 rounded-md p-2 hover:bg-control"
             >
               <KeepGoingMark state={keepGoing} size={14} />
             </button>
           )}
           <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
-          <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
+          <WorkerChip name={bot.name} className="rounded-md hover:bg-control" runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}
             aria-label={t("chat.findInConversation")}
             aria-pressed={findOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised max-md:hidden",
+              "rounded-md p-1.5 hover:bg-control max-md:hidden",
               findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.findInConversation")}
