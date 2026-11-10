@@ -93,6 +93,8 @@ describe("relay routes", () => {
       "/api/joined/rooms",
       "/api/joined/join",
       "/api/joined/rooms/r1/send",
+      "/api/rooms/r1/files",
+      "/api/rooms/r1/send",
     ];
     for (const path of hidden) {
       for (const method of ["GET", "POST", "PUT", "DELETE"]) {

@@ -56,6 +56,9 @@ import { hostedSend } from "./rooms/send.ts";
 import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
+import { hostFileRoute } from "./rooms/file-routes.ts";
+import { sweepRoomFiles } from "./rooms/files.ts";
+import { joinedFileRoute } from "./rooms/joined-files.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -6243,6 +6246,7 @@ configureRoomAsks({
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
 });
 configureRoomDoor({ store, teamRooms: () => cfg.features?.teamRooms === true, hostName: () => cfg.profile?.name?.trim() || "The host" });
+sweepRoomFiles();
 const guestClient = new GuestClient({ bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)], onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }) });
 if (cfg.features?.teamRooms === true) guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
@@ -8446,6 +8450,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
+    if (await joinedFileRoute(req, res, method, url, guestClient, cfg.features?.teamRooms === true)) return;
+    if (await hostFileRoute(req, res, method, url, { store, teamRooms: cfg.features?.teamRooms === true })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, cfg.features?.teamRooms === true, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {

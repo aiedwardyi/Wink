@@ -4,6 +4,7 @@
 import { roomResponder } from "../../shared/room-routing.ts";
 import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
+import { ownRoomFiles } from "./files.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, beginEnd, createAsk, engineLine, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
@@ -14,7 +15,7 @@ const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "h
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
-export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string) {
+export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
   const { store, teamRooms, hostName, driverKind } = roomAskDeps();
   if (!teamRooms()) throw new RoomError(409, "team rooms are off");
   const roomId = group.hosted.roomId;
@@ -24,6 +25,7 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   const author: RoomAuthor = person ? { kind: "person", id: person.id, name: person.name } : { kind: "host", id: "host", name: hostName() };
   const quote = replyToId === undefined ? null : roomEntry(roomId, replyToId);
   if (replyToId !== undefined && !quote) throw new RoomError(404, "no such message in this room");
+  const files = fileIds.length ? ownRoomFiles(roomId, person?.id ?? "host", fileIds) : [];
   const bots = group.memberIds.flatMap((id) => {
     const bot = store.bot(id);
     return bot && !bot.hidden ? [bot] : [];
@@ -34,7 +36,7 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const refusal = sendRefusal(roomId, person.id, bot ? grant : null);
     if (refusal) throw statusError(429, refusal);
   }
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) }, sendId);
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
   if (person) {
     spend(roomId, person.id, "message");
     store.patchGroup(group.id, { unread: true });

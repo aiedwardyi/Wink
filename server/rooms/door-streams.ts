@@ -3,7 +3,7 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
-import type { RoomAuthor, RoomEntry } from "./db.ts";
+import type { RoomAuthor, RoomEntry, RoomFile } from "./db.ts";
 
 /** The relay cuts a socket idle for 10 minutes. */
 export const HEARTBEAT_MS = 15_000;
@@ -18,6 +18,7 @@ export interface DoorEntry {
   author: RoomAuthor;
   text: string;
   replyToId?: string;
+  files?: RoomFile[];
 }
 
 export interface DoorState {
@@ -52,6 +53,7 @@ export const doorEntry = (entry: RoomEntry): DoorEntry => ({
   author: entry.author,
   text: entry.text,
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
+  ...(entry.files ? { files: entry.files } : {}),
 });
 
 /** Remembers which sockets a person used, so Remove can cut keep-alive ones too. */

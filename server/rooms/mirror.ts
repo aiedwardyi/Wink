@@ -20,6 +20,7 @@ function mirrorRoomEntry(store: MirrorStore, threadId: string, entry: RoomEntry,
     ...(entry.author.kind === "bot" ? { from: { botId: entry.author.id, name: entry.author.name, color: bot?.color ?? "" } } : {}),
     ...(replyTo ? { replyToId: replyTo.id } : {}),
     ...(sendId ? { sendId } : {}),
+    ...(entry.files ? { roomFiles: entry.files } : {}),
   });
 }
 

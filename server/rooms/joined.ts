@@ -14,6 +14,15 @@ export interface JoinedEntry {
   author: { kind: "host" | "person"; id: string; name: string };
   text: string;
   replyToId?: string;
+  files?: JoinedFile[];
+}
+
+export interface JoinedFile {
+  id: string;
+  name: string;
+  type: string;
+  bytes: number;
+  sha256: string;
 }
 
 export interface JoinedState {
@@ -173,6 +182,15 @@ export function resetJoined(roomId: string): void {
 export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
   const rows = db().prepare("SELECT body FROM entries WHERE room_id = ? ORDER BY seq DESC LIMIT ?").all(roomId, limit) as Array<{ body: string }>;
   return rows.reverse().map((row) => JSON.parse(row.body) as JoinedEntry);
+}
+
+/** A file some held entry of this room carries; nothing else can be fetched. */
+export function joinedFile(roomId: string, fileId: string): JoinedFile | null {
+  const row = db().prepare(`
+    SELECT file.value AS file FROM entries, json_each(entries.body, '$.files') AS file
+    WHERE entries.room_id = ? AND json_extract(file.value, '$.id') = ? LIMIT 1
+  `).get(roomId, fileId) as { file: string } | undefined;
+  return row ? (JSON.parse(row.file) as JoinedFile) : null;
 }
 
 /** The seq the stream resumes after. */
