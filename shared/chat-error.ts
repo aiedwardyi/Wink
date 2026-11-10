@@ -22,7 +22,7 @@ export function classifyChatError(line: string): ChatError {
   if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
   const selfStopped = /^(.+?) stopped this reply on its own(?: \((.+)\))?$/.exec(reason);
-  if (selfStopped) return { kind: "known", key: "errors.engineStopped", vars: { engine: selfStopped[1] }, raw: selfStopped[2] && reason };
+  if (selfStopped) return { kind: "known", key: "errors.engineStopped", vars: { engine: selfStopped[1] }, raw: selfStopped[2] ? reason : undefined };
   const hook = /^(.+?) hook failed \(([^()]+)\)(?:: (.+))?$/.exec(reason);
   if (hook) return { kind: "known", key: "errors.hookDenied", vars: { engine: hook[1], hook: hook[2] }, raw: hook[3] };
   if (reason === "the sign-in changed while the reply was starting") return { kind: "known", key: "errors.signInChanged" };
