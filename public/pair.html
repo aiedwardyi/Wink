@@ -91,6 +91,10 @@
         color: var(--accent-ink);
         font: inherit;
         font-weight: 600;
+        transition: filter 150ms, transform 150ms;
+      }
+      button:active:not(:disabled) {
+        transform: scale(0.99);
       }
       button:disabled {
         opacity: 0.5;
