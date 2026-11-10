@@ -90,6 +90,9 @@ describe("relay routes", () => {
       "/api/phone-relay",
       "/api/phone-relay/status",
       "/api/phone-relay/enroll",
+      "/api/joined/rooms",
+      "/api/joined/join",
+      "/api/joined/rooms/r1/send",
     ];
     for (const path of hidden) {
       for (const method of ["GET", "POST", "PUT", "DELETE"]) {
