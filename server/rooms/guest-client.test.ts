@@ -177,6 +177,21 @@ describe("sync", () => {
     expect(c.rooms()[0]).toMatchObject({ link: "live" });
   });
 
+  it("keeps a character split across stream chunks whole", async () => {
+    const frame = Buffer.from(`data: ${JSON.stringify({ kind: "entry", entry: { seq: 1, id: "e1", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "안녕 👋" } })}\n\n`);
+    const cut = frame.indexOf(Buffer.from("안")) + 1;
+    route = (req, res) => {
+      if (!req.url?.includes("/stream")) return quietDoor(req, res);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(frame.subarray(0, cut));
+      setTimeout(() => res.write(frame.subarray(cut)), 100);
+    };
+    const c = guest();
+    await c.join(CODE);
+    await until(() => (c.room("r1")?.entries.length ?? 0) > 0);
+    expect(c.room("r1")?.entries[0]?.text).toBe("안녕 👋");
+  });
+
   it("marks the room removed when the key is refused", async () => {
     route = (req, res) => (req.url === "/room/v1/join" ? quietDoor(req, res) : reply(res, 401, { error: "unauthorized" }));
     const changed = vi.fn();

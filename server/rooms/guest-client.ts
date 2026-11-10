@@ -11,6 +11,7 @@ import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.t
 import {
   addJoinedEntries,
   endJoined,
+  joinedCursor,
   joinedEntries,
   joinedKey,
   joinedRoom,
@@ -275,7 +276,7 @@ export class GuestClient {
     if (!reply.ok && reply.status === 401) this.end(roomId, "removed");
     const snapshot = reply.ok ? snapshotSchema.safeParse(reply.value) : null;
     if (!snapshot?.success) return false;
-    addJoinedEntries(roomId, snapshot.data.entries);
+    addJoinedEntries(roomId, snapshot.data.entries, snapshot.data.head);
     setJoinedState(roomId, snapshot.data.state);
     this.changed(roomId);
     return true;
@@ -287,7 +288,7 @@ export class GuestClient {
     if (!joinedRoom(roomId)?.state && !(await this.snapshot(roomId, sync))) return this.retry(roomId, sync);
     const creds = joinedKey(roomId);
     if (!creds || sync.stopped) return;
-    const head = joinedEntries(roomId, 1)[0]?.seq ?? 0;
+    const head = joinedCursor(roomId);
     const { silenceMs = 45_000 } = this.deps.timing ?? {};
     const https = this.deps.https ?? {};
     const req = request({
@@ -320,9 +321,10 @@ export class GuestClient {
       sync.tries = 0;
       this.setLink(roomId, sync, "live");
       let text = "";
-      res.on("data", (chunk: Buffer) => {
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => {
         quiet();
-        text += chunk.toString("utf8");
+        text += chunk;
         let cut: number;
         while ((cut = text.indexOf("\n\n")) >= 0) {
           const block = text.slice(0, cut);
@@ -352,7 +354,7 @@ export class GuestClient {
       return;
     }
     if (parsed.kind === "entry") {
-      if (addJoinedEntries(roomId, [parsed.entry])) this.changed(roomId);
+      if (addJoinedEntries(roomId, [parsed.entry], parsed.entry.seq)) this.changed(roomId);
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
     } else if (parsed.kind === "ended") {

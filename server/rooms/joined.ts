@@ -65,6 +65,7 @@ function open(): DatabaseSync {
       status TEXT NOT NULL,
       state TEXT,
       version INTEGER NOT NULL DEFAULT 0,
+      cursor INTEGER NOT NULL DEFAULT 0,
       joined_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS entries (
@@ -125,8 +126,8 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
     database.prepare(`
-      INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, joined_at)
-      VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, ?)
+      INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
+      VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
     `).run(roomId, relayHost, me.id, me.name, key, joinedAt);
   });
   return { roomId, relayHost, me, status: "joined", state: null, joinedAt };
@@ -149,12 +150,13 @@ export function joinedKey(roomId: string): { relayHost: string; key: string } | 
   return row ? { relayHost: row.relay_host, key: row.key } : null;
 }
 
-/** Entries already held (same seq) are kept as they are. */
-export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]): number {
+/** Same-seq entries are kept as held. Only snapshot and stream move `cursor`: a send reply can be ahead of unseen entries. */
+export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[], cursor?: number): number {
   return transaction((database) => {
     const insert = database.prepare("INSERT OR IGNORE INTO entries (room_id, seq, body) VALUES (?, ?, ?)");
     let added = 0;
     for (const entry of entries) added += Number(insert.run(roomId, entry.seq, JSON.stringify(entry)).changes);
+    if (cursor !== undefined) database.prepare("UPDATE joined SET cursor = MAX(cursor, ?) WHERE room_id = ?").run(cursor, roomId);
     return added;
   });
 }
@@ -163,7 +165,7 @@ export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]
 export function resetJoined(roomId: string): void {
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
-    database.prepare("UPDATE joined SET state = NULL, version = 0 WHERE room_id = ?").run(roomId);
+    database.prepare("UPDATE joined SET state = NULL, version = 0, cursor = 0 WHERE room_id = ?").run(roomId);
   });
 }
 
@@ -173,8 +175,9 @@ export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
   return rows.reverse().map((row) => JSON.parse(row.body) as JoinedEntry);
 }
 
-export function joinedHead(roomId: string): number {
-  return (db().prepare("SELECT COALESCE(MAX(seq), 0) AS head FROM entries WHERE room_id = ?").get(roomId) as { head: number }).head;
+/** The seq the stream resumes after. */
+export function joinedCursor(roomId: string): number {
+  return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
 /** Keeps the highest version; an older state is ignored. */

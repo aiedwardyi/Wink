@@ -232,6 +232,16 @@ describe("teammate and the real door", () => {
     expect(seqs(roomId)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("a send while the stream is down never moves the replay point past unseen entries", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    c.stop();
+    hostSays(group, "unseen");
+    expect(await c.send(roomId, "mine")).toMatchObject({ ok: true, value: { seq: 3 } });
+    c.start();
+    await until(() => texts(roomId).includes("unseen"));
+    expect(texts(roomId)).toEqual(["welcome", "unseen", "mine"]);
+  });
+
   it("fails a send while the host is offline and never sends it later", async () => {
     const { c, roomId } = await joinedTeam();
     hop.up = false;
@@ -247,7 +257,7 @@ describe("teammate and the real door", () => {
   it("reloads a snapshot on reset", async () => {
     const { c, group, roomId } = await joinedTeam();
     c.stop();
-    addJoinedEntries(roomId, [{ seq: 99, id: "ghost", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "ghost" }]);
+    addJoinedEntries(roomId, [{ seq: 99, id: "ghost", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "ghost" }], 99);
     hostSays(group, "real");
     c.start();
     await until(() => texts(roomId).includes("real") && !texts(roomId).includes("ghost"));
@@ -291,7 +301,7 @@ describe("teammate and the real door", () => {
     const { c, group, roomId } = await joinedTeam();
     const key = joinedKey(roomId)!.key;
     hostSays(group, "hi");
-    const sent = await c.send(roomId, "hello");
+    await c.send(roomId, "hello");
     const bodies: unknown[] = [];
     const route = async (method: string, path: string, body: unknown = {}) => {
       const reply = await joinedRoute(method, path, c, true, async () => body);
@@ -300,10 +310,10 @@ describe("teammate and the real door", () => {
     };
     await route("GET", "/api/joined/rooms");
     await route("GET", `/api/joined/rooms/${roomId}`);
-    await route("POST", `/api/joined/rooms/${roomId}/send`, { text: "via route", sendId: sent.sendId?.replace(/./, "x") });
+    await route("POST", `/api/joined/rooms/${roomId}/send`, { text: "via route", sendId: "route-send-0000001" });
     await route("POST", `/api/joined/rooms/${roomId}/leave`);
     await route("GET", `/api/joined/rooms/${roomId}`);
-    expect(bodies.every((reply) => (reply as { status: number }).status === 200)).toBe(true);
+    expect(bodies.map((reply) => (reply as { status: number }).status)).toEqual([200, 200, 200, 200, 200]);
     for (const spy of Object.values(engine)) expect(spy).not.toHaveBeenCalled();
     expect(roomAskHooks.words).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();

@@ -8,7 +8,7 @@ import {
   closeJoinedDb,
   endJoined,
   joinedEntries,
-  joinedHead,
+  joinedCursor,
   joinedKey,
   joinedRoom,
   joinedRooms,
@@ -41,7 +41,10 @@ describe("joined.db", () => {
     expect(addJoinedEntries("r1", [entry(2, "again"), entry(3)])).toBe(1);
     expect(joinedEntries("r1", 10).map((row) => [row.seq, row.text])).toEqual([[1, "line 1"], [2, "line 2"], [3, "line 3"]]);
     expect(joinedEntries("r1", 2).map((row) => row.seq)).toEqual([2, 3]);
-    expect(joinedHead("r1")).toBe(3);
+    expect(joinedCursor("r1")).toBe(0);
+    addJoinedEntries("r1", [entry(5)], 5);
+    addJoinedEntries("r1", [entry(4)], 4);
+    expect(joinedCursor("r1")).toBe(5);
   });
 
   it("keeps the highest state version", () => {
