@@ -306,6 +306,19 @@ const SESSION_CONFIG_TIMEOUT = 20_000; // configureSession's per-request default
 const NEW_SESSION_TIMEOUT = 30_000;
 const LOAD_SESSION_TIMEOUT = 120_000; // history replay on a long thread is slow
 
+function agentCancel(meta: any, engine: string) {
+  const category = meta?.cancellationCategory;
+  if (category !== "HookDenied") {
+    return { message: `${engine} stopped this reply on its own${category ? ` (${category})` : ""}`, stopReason: "agent_cancelled" };
+  }
+  const context = meta.cancellationContext ?? {};
+  const hook = String(context.hook_name ?? "").split(":")[0].split("/").pop() || "?";
+  const home = new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const reason = String(context.reason ?? "").replace(home, "~").replace(/\s+/g, " ").trim();
+  const short = reason.length > 200 ? `${reason.slice(0, 199)}…` : reason;
+  return { message: `${engine} hook failed (${hook})${short ? `: ${short}` : ""}`, stopReason: "hook_denied" };
+}
+
 function decodeAcpConfig(defaultCli: string) {
   return (raw: unknown): AcpConfig => {
     const o = (raw ?? {}) as Record<string, unknown>;
@@ -1394,8 +1407,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             else if (reason === "cancelled" && (interruptTimer || canceledBeforePrompt || askCancelled)) settle(true, "cancelled", true);
             else if (reason === "cancelled") {
               // Nobody pressed Stop: a quiet cancel would leave a Resume card and no reply.
-              emit({ ...base(threadId, turnId), type: "runtime.error", message: `${support.displayName} stopped this reply on its own` });
-              settle(false, "agent_cancelled", true);
+              const { message, stopReason } = agentCancel(result?._meta, support.displayName);
+              emit({ ...base(threadId, turnId), type: "runtime.error", message });
+              settle(false, stopReason, true);
             } else settle(false, reason ?? "failed", true);
           } catch (e) {
             if (!state.settled) {

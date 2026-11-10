@@ -5,7 +5,7 @@ export function chatErrorText(line: string, bot: string, translate: Translate) {
   const error = classifyChatError(line);
   if (error.kind === "quiet") return null;
   if (error.kind === "keep") return { text: error.raw };
-  if (error.kind === "known") return { text: translate(error.key, error.vars) };
+  if (error.kind === "known") return { text: translate(error.key, error.vars), raw: error.raw };
   return { text: translate("errors.unfinished", { bot }), raw: error.raw };
 }
 

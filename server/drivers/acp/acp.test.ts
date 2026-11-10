@@ -2119,6 +2119,36 @@ describe("ACP turns (fake CLI)", () => {
     expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own" });
   });
 
+  it("a prompt a Grok hook denied fails naming the hook and its reason, on every resend", async () => {
+    await create(GrokAgentDriver, "hook-denied");
+    for (const text of ["hi", "hi again"]) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-hook", text });
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(done).toMatchObject({ ok: false, stopReason: "hook_denied" });
+      expect(recorder.events.find((e) => e.type === "runtime.error" && e.turnId === turnId)).toMatchObject({
+        message: expect.stringMatching(/^Grok hook failed \(재판기록_대화기록\): (?=.{200}$)~\\scoop\\apps\\python\\current\\python\.exe: can't open file 'G:\\내 드라이브\\대화기록_게이트\.py': \[Errno 2\] No such file or directory x+…$/),
+      });
+    }
+  });
+
+  it("an unknown cancel category stays a plain error and names the category", async () => {
+    await create(GrokAgentDriver, "cancel-category");
+    await instance.adapter.sendTurn({ threadId: "t-category", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own (QuotaGuard)" });
+  });
+
+  it("a Stop stays a quiet Stop whatever category the cancel carries", async () => {
+    await create(GrokAgentDriver, "stop-replies");
+    await instance.adapter.sendTurn({ threadId: "t-stop-category", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+    await instance.adapter.interruptTurn("t-stop-category");
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
   it("an exit before result becomes runtime.error + failed turn", async () => {
     await create(GrokAgentDriver, "exit-early");
     await instance.adapter.sendTurn({ threadId: "t-crash", text: "go" });
