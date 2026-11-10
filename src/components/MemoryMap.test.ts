@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { Bot } from "@/state/store";
 import { MemoryMap } from "./MemoryMap";
+import { smoothGlow } from "./MemoryMapGlow";
 import { disc, ramp, render, stops } from "./MemoryMapGlowPaint";
 
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -177,5 +178,65 @@ describe("smooth glow", () => {
     expect(map.querySelector(".mm-glow")).not.toBeNull();
     expect(rule(".mm-glow") + rule(".mm-ray") + rule(".mm-brain::after") + rule(".mm::after")).not.toContain("visibility");
     box.mockRestore();
+  });
+
+  // a map's bare markup, for smoothGlow on its own
+  function bare() {
+    const mm = document.createElement("div");
+    mm.innerHTML = '<div class="mm-smooth"></div><div class="mm-glow"></div><div class="mm-ray"></div><div class="mm-brain"></div><span class="mm-orbit"></span><span class="mm-orbit"></span><div><div class="mm-smooth-live"></div><section class="mm-live"></section></div>';
+    return document.body.appendChild(mm);
+  }
+  const layers = (count: number, width = 4) => Array.from({ length: count }, () => ({ width, height: 4, close: vi.fn() }));
+  const repaint = () => act(() => new Promise((done) => setTimeout(done, 200)));
+
+  it("hands the CSS glow back and frees the painter when a worker cannot start", async () => {
+    const { box, report } = browser({ layers: layers(6) }, 940), Painter = Worker, fail = vi.fn();
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { constructor() { throw new DOMException("blocked", "SecurityError"); } });
+    const blocked = bare(), stop = smoothGlow(blocked, fail);
+    await report();
+    expect(fail).toHaveBeenCalledTimes(1);
+    vi.stubGlobal("Worker", Painter);
+    const next = bare(), again = smoothGlow(next, vi.fn());
+    await report();
+    expect(next.querySelectorAll(".mm-smooth canvas")).toHaveLength(4);
+    stop(); again(); blocked.remove(); next.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("closes a late paint instead of drawing into canvases handed to the next map", async () => {
+    const { box, report } = browser(null, 960), late = layers(7, 9), queue = [layers(6), late], answers: (() => void)[] = [];
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { const data = { layers: queue.shift() }; answers.push(() => this.onmessage?.({ data })); } });
+    const left = bare(), stop = smoothGlow(left, vi.fn());
+    await report();
+    await act(async () => answers.shift()!());
+    const handed = [...left.querySelectorAll("canvas")];
+    await repaint();
+    stop();
+    const next = bare(), keep = smoothGlow(next, vi.fn());
+    await act(async () => answers.shift()!());
+    expect(handed).toHaveLength(6);
+    expect(handed.every((each) => each.width === 4)).toBe(true);
+    expect(late.every((each) => each.close.mock.calls.length === 1)).toBe(true);
+    keep(); left.remove(); next.remove();
+    draws.mockRestore(); box.mockRestore();
+  });
+
+  it("takes its canvases out of the rings and the Live card when a repaint falls back", async () => {
+    const { box, report } = browser(null, 1000), queue = [layers(6), layers(7), null], fail = vi.fn(), dpr = devicePixelRatio;
+    const draws = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ transferFromImageBitmap() {} } as never);
+    vi.stubGlobal("Worker", class { onmessage?: (reply: { data: unknown }) => void; postMessage() { const data = { layers: queue.shift() }; queueMicrotask(() => this.onmessage?.({ data })); } });
+    const mm = bare(), stop = smoothGlow(mm, fail);
+    await report();
+    await repaint();
+    expect(mm.querySelectorAll(".mm-orbit canvas, .mm-smooth-live canvas")).toHaveLength(3);
+    vi.stubGlobal("devicePixelRatio", dpr + 1);
+    document.documentElement.setAttribute("data-skin", "repaint");
+    await repaint();
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(mm.querySelectorAll(".mm-orbit canvas, .mm-smooth-live canvas")).toHaveLength(0);
+    stop(); mm.remove(); document.documentElement.removeAttribute("data-skin"); vi.stubGlobal("devicePixelRatio", dpr);
+    draws.mockRestore(); box.mockRestore();
   });
 });

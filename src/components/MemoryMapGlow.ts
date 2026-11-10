@@ -55,7 +55,8 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
   // a map shows canvases of its own: it takes the kept ones here and hands its own back when it leaves
   let mine = painted;
   painted = undefined;
-  const drop = () => { unsupported = true; fail(); };
+  // React removes the holders but not the canvases put into its rings and Live card
+  const drop = () => { unsupported = true; [...orbits, card].forEach((each) => each.replaceChildren()); fail(); };
 
   // the page colour behind the map
   function backdrop() {
@@ -108,13 +109,15 @@ export function smoothGlow(mm: HTMLElement, fail: () => void) {
     if (mine?.key === key) return show();
     if (busy) return later();
     busy = true;
-    void paint(source).then((layers) => {
+    // a worker the page may not start (a SecurityError) rejects
+    void paint(source).catch(() => null).then((layers) => {
       busy = false;
+      // a map that left mid-paint has handed its canvases on
+      if (gone && layers) return layers.forEach((each) => each.close());
       const next = layers && hang(layers, source, key, mine);
       if (!next) return drop();
       mine = next;
-      if (gone) painted = next;
-      else show();
+      show();
     });
   }
 
