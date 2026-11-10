@@ -2,7 +2,7 @@
 // a person's through the door. Plain lines cost nothing; one bot, at most,
 // gets an ask.
 import { roomResponder } from "../../shared/room-routing.ts";
-import { roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
+import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { askById, beginEnd, createAsk, engineLine, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
@@ -13,7 +13,7 @@ const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "h
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
-export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string) {
+export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string) {
   const { store, teamRooms, hostName, driverKind } = roomAskDeps();
   if (!teamRooms()) throw new RoomError(409, "team rooms are off");
   const roomId = group.hosted.roomId;
@@ -27,13 +27,13 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const bot = store.bot(id);
     return bot && !bot.hidden ? [bot] : [];
   });
-  const bot = roomResponder(text, bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
+  const bot = roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
   const grant = person ? GRANTS[person.level] : "work";
   if (person) {
     const refusal = sendRefusal(roomId, person.id, bot ? grant : null);
     if (refusal) throw statusError(429, refusal);
   }
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) });
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) }, sendId);
   if (person) {
     spend(roomId, person.id, "message");
     store.patchGroup(group.id, { unread: true });

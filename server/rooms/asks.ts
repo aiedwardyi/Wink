@@ -49,8 +49,8 @@ export interface RoomAskDeps {
   instance(botId: string, threadId: string): ProviderInstance | null;
   /** Queue a work ask on the room's turn queue, carrying its askId. */
   dispatch(ask: RoomAsk): void;
-  /** The per-bot stop: epoch bump, interrupt, close approvals, release. */
-  stopTurn(ask: RoomAsk): Promise<void>;
+  /** The per-bot stop: epoch bump, interrupt, close approvals, `ended`, then release. */
+  stopTurn(ask: RoomAsk, ended: () => Promise<unknown>): Promise<void>;
   endSession(ask: RoomAsk): Promise<void>;
 }
 
@@ -313,8 +313,9 @@ export async function finishEnd(id: string): Promise<boolean> {
 export async function endAsk(id: string, end: AskEnd, line?: string): Promise<boolean> {
   const first = beginEnd(id, end, line);
   if (first !== "stopping") return first === "ended";
-  await need().stopTurn(askById(id)!).catch(() => {});
-  return finishEnd(id);
+  let ended: Promise<boolean> | undefined;
+  await need().stopTurn(askById(id)!, () => (ended = finishEnd(id))).catch(() => {});
+  return ended ?? finishEnd(id);
 }
 
 /** Room Stop: queued asks end now; running ones take stopping before the interrupt. */
@@ -366,9 +367,12 @@ export function sendRefusal(roomId: string, personId: string, ask: RoomGrant | "
   if (spent(roomId, "message", now - DAY) >= ROOM_LIMITS.messagesPerRoomDay) return "this room has reached today's message limit";
   if (!ask) return null;
   const mine = roomAsks(roomId, ["held", "queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === personId);
-  if (ask === "held" && mine.filter((row) => row.state === "held").length >= ROOM_LIMITS.heldPerPerson) return "you already have 3 requests waiting";
+  if (ask === "held") return mine.filter((row) => row.state === "held").length >= ROOM_LIMITS.heldPerPerson ? "you already have 3 requests waiting" : null;
+  return askRefusal(roomId, personId, ask, mine);
+}
+function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: RoomAsk[]): string | null {
+  const now = Date.now();
   if (ask === "work" && mine.filter((row) => row.grant === "work" && row.state !== "held").length >= ROOM_LIMITS.openWorkPerPerson) return "wait for your last request to finish";
-  if (ask === "held") return null;
   if (spent(roomId, "ask", now - HOUR, personId) >= ROOM_LIMITS.asksPerPersonHour) return "you've asked the bot the most it takes in an hour";
   if (spent(roomId, "ask", now - HOUR) >= ROOM_LIMITS.asksPerRoomHour) return "this room has asked the bot the most it takes in an hour";
   return null;
@@ -387,6 +391,11 @@ export function runAsk(ask: RoomAsk): void {
 export function admitAsk(id: string, grant: RoomGrant): RoomAsk | null {
   const ask = askById(id);
   if (ask?.state !== "held") return null;
+  if (ask.asker.kind === "person") {
+    const mine = roomAsks(ask.roomId, ["queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === ask.asker.id);
+    const refusal = askRefusal(ask.roomId, ask.asker.id, grant, mine);
+    if (refusal) throw Object.assign(new Error(refusal), { status: 429 });
+  }
   const moved = db().prepare("UPDATE asks SET state = 'queued', grant_kind = ?, allowed = 1, updated_at = ? WHERE id = ? AND state = 'held'")
     .run(grant, Date.now(), id).changes === 1;
   if (!moved) return null;

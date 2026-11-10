@@ -83,10 +83,10 @@ it("lists every startTurn caller with its RootStart kind", () => {
 });
 
 it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
-  const starts: Array<{ call: string; kind: RootStart["kind"]; root: string }> = [
+  const starts: Array<{ call: string; kind: RootStart["kind"]; root: string; authority?: string }> = [
     { call: "group.id, threadId, botId", kind: "automatic", root: 'rootForStart(threadId, { kind: "automatic" })' },
     { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'rootForStart(source.threadId, { kind: "automatic" })' },
-    { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null" },
+    { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", authority: "room.askId" },
     { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId" },
     { call: "groupId, threadId, responder.id", kind: "human", root: "rootId" },
     { call: "current.group.id, entry.threadId, entry.botId", kind: "automatic", root: 'rootForStart(entry.threadId, { kind: "automatic" })' },
@@ -95,7 +95,8 @@ it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
   const calls = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "runGroupMemberTurn");
   expect(calls.map((node) => node.arguments.slice(0, 3).map((arg) => compact(arg.getText(source))).join(", "))).toEqual(starts.map((row) => row.call));
   for (const [index, row] of starts.entries()) {
-    expect(calls[index].arguments, row.kind).toHaveLength(11);
+    expect(calls[index].arguments, row.kind).toHaveLength(row.authority ? 12 : 11);
+    if (row.authority) expect(calls[index].arguments[11].getText(source)).toBe(row.authority);
     expect(compact(calls[index].arguments[10].getText(source)), row.kind).toBe(row.root);
   }
   const post = nodes(ts.isFunctionDeclaration).find((node) => node.name?.text === "startGroupTurn")!.getText(source);
@@ -151,7 +152,7 @@ it("keeps depth and room-hop caps and wires captured roots into every busy room 
   expect(source.text).toContain("const MAX_GROUP_HOPS = 1;");
   const busy = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "queueBusyRoomMember");
   expect(busy).toHaveLength(3);
-  for (const call of busy) expect(call.arguments.at(-1)?.getText(source)).toBe("rootId");
+  for (const call of busy) expect(call.arguments.slice(-2).map((arg) => arg.getText(source))).toEqual(["rootId", "authority"]);
   const prepares = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "turnRegistry.prepare");
   expect(prepares).toHaveLength(2);
   for (const call of prepares) expect(call.arguments[0].getText(source)).toContain("rootId");

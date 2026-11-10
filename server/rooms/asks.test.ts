@@ -50,7 +50,11 @@ beforeEach(() => {
     driverKind: () => "claudeAgent",
     instance: () => null,
     dispatch: vi.fn(),
-    stopTurn: vi.fn(async (stopped: RoomAsk) => { order.push(`interrupt while ${askById(stopped.id)!.state}`); }),
+    stopTurn: vi.fn(async (stopped: RoomAsk, ended?: () => Promise<unknown>) => {
+      order.push(`interrupt while ${askById(stopped.id)!.state}`);
+      await ended?.();
+      order.push("release");
+    }),
     endSession: vi.fn(() => new Promise<void>((resolve) => { endSession = () => { order.push("endSession"); resolve(); }; })),
   };
   configureRoomAsks(deps);
@@ -93,7 +97,7 @@ describe("ask states", () => {
     expect(terminal()).toEqual([]);
     endSession();
     expect(await ended).toBe(true);
-    expect(order).toEqual(["interrupt while stopping", "endSession"]);
+    expect(order).toEqual(["interrupt while stopping", "endSession", "release"]);
     expect(askById(running.id)!.state).toBe("cancelled");
     expect(terminal()).toEqual(["Cancelled."]);
   });
@@ -222,5 +226,16 @@ describe("quotas and open-ask limits", () => {
     expect(roomAsks(group.hosted.roomId, ["queued"])).toHaveLength(1);
     for (let i = 1; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, mina.id, "ask");
     expect(sendRefusal(group.hosted.roomId, mina.id, "words")).toMatch(/in an hour/);
+  });
+
+  it("admits no held ask past its asker's limits", () => {
+    const [first, second] = [ask(mina, "held"), ask(mina, "held")];
+    expect(admitAsk(first.id, "work")).toMatchObject({ state: "queued" });
+    expect(() => admitAsk(second.id, "work")).toThrow(expect.objectContaining({ status: 429, message: expect.stringMatching(/last request/) }));
+    for (let i = 0; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, jun.id, "ask");
+    const late = ask(jun, "held");
+    expect(() => admitAsk(late.id, "words")).toThrow(expect.objectContaining({ status: 429, message: expect.stringMatching(/in an hour/) }));
+    expect([askById(second.id)!.state, askById(late.id)!.state]).toEqual(["held", "held"]);
+    expect(deps.dispatch).toHaveBeenCalledTimes(1);
   });
 });

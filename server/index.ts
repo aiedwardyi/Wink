@@ -6227,7 +6227,7 @@ configureRoomAsks({
   driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
   instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
-  stopTurn: (ask) => groupRoutes.stopMember(ask.threadId, ask.botId),
+  stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
 });
 // Room asks queued or running died with the previous process; held ones wait on.
@@ -6726,7 +6726,7 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
-  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined).message;
+  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message;
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }

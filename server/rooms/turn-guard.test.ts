@@ -169,9 +169,9 @@ describe("every room runner caller on a hosted thread", () => {
     const appendMessage = vi.spyOn(store, "appendMessage");
     const start = load("startGroupTurn", { store, hostedSend, roomSetupPending: () => false });
     let sent: unknown;
-    expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }); }).not.toThrow();
+    expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"); }).not.toThrow();
     expect(sent).toEqual({ id: "m1" });
-    expect(hostedSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), { kind: "host" }, "@Wink hi", "e1"]);
+    expect(hostedSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), { kind: "host" }, "@Wink hi", "e1", "send-0000000001"]);
     expect(appendMessage).not.toHaveBeenCalled();
   });
 });
@@ -191,7 +191,9 @@ describe("askId through the room queue", () => {
 });
 
 describe("room Stop on a hosted room", () => {
-  it("cancels queued asks, takes stopping before the interrupt, and ends running ones after endSession", async () => {
+  it("cancels queued asks, takes stopping before the interrupt, and frees the bot only after endSession", async () => {
+    finishSession = undefined as unknown as () => void;
+    const releaseInterruptedBot = vi.fn();
     const running = ask("running");
     const queued = ask();
     store.patchGroup(group.id, { busyBotId: botId });
@@ -206,16 +208,20 @@ describe("room Stop on a hosted room", () => {
       markThreadInterrupted: vi.fn(),
       flushInterruptedTask: vi.fn(),
       closeOpenApprovals: vi.fn(),
-      releaseInterruptedBot: vi.fn(),
+      releaseInterruptedBot,
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };
-    await routes.interrupt(Readable.from([]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
-    expect(res.writeHead.mock.calls[0][0]).toBe(200);
+    const stopped = routes.interrupt(Readable.from([]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
+    await vi.waitFor(() => expect(finishSession).toBeTypeOf("function"));
     expect(states).toEqual(["stopping"]);
     expect(askById(queued.id)!.state).toBe("cancelled");
     expect(askById(running.id)!.state).toBe("stopping");
+    expect(releaseInterruptedBot).not.toHaveBeenCalled();
     finishSession();
-    await vi.waitFor(() => expect(askById(running.id)!.state).toBe("cancelled"));
+    await stopped;
+    expect(res.writeHead.mock.calls[0][0]).toBe(200);
+    expect(releaseInterruptedBot).toHaveBeenCalledTimes(1);
+    expect(askById(running.id)!.state).toBe("cancelled");
     expect(recentRoomEntries(group.hosted.roomId, 10).filter((entry) => entry.author.kind === "bot").map((entry) => entry.text)).toEqual(["Cancelled.", "Cancelled."]);
     expect(hostedTurnRefused(group as GroupRecord, group.threadId, botId, running.id)).toBe(true);
   });

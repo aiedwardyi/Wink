@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, ROOM_LIMITS, spend, type HostedGroup, type RoomAskDeps } from "./asks.ts";
-import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedSend } from "./send.ts";
 
 let store: Store;
@@ -125,6 +125,19 @@ describe("hostedSend", () => {
     expect(recentRoomEntries(group.hosted.roomId, 100)).toHaveLength(before);
     expect(hostedSend(group, person("trusted"), "plain words still post").ask).toBeNull();
     expect(hostedSend(group, { kind: "host" }, "@Wink the host has no quota").ask).not.toBeNull();
+  });
+
+  it("keeps the host's sendId on the mirrored message", () => {
+    const { message } = hostedSend(group, { kind: "host" }, "@Wink hi", undefined, "send-0000000001");
+    expect(message.sendId).toBe("send-0000000001");
+    expect(store.messagesFor(group.threadId).find((row) => row.id === message.id)?.sendId).toBe("send-0000000001");
+  });
+
+  it("routes only on the committed text", () => {
+    const sent = hostedSend(group, { kind: "host" }, `${"a".repeat(PERSON_TEXT_MAX)} @Wink do the work`);
+    expect(sent.entry.text).toBe("a".repeat(PERSON_TEXT_MAX));
+    expect(sent.ask).toBeNull();
+    expect(deps.dispatch).not.toHaveBeenCalled();
   });
 
   it("refuses someone who isn't in the room", () => {
