@@ -112,7 +112,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
-const { handleDeviceLinkedFile } = require("./linked-file-window.cjs");
+const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
@@ -1737,6 +1737,14 @@ ipcMain.handle("desktop:export-diagnostics", async (event) => {
 // open-file.mjs resolves and checks it first.
 ipcMain.handle("desktop:open-file", async (_event, rawPath, rawBase) => {
   await openLocalFile(rawPath, { base: rawBase, shell });
+});
+
+// A chat link whose file is on another of the user's PCs, read with that PC's sign-in.
+ipcMain.handle("desktop:open-peer-file", async (event, host, threadId, filePath) => {
+  if (!trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())) throw new Error("Untrusted file caller");
+  const devices = session.fromPartition(DEVICE_WINDOW_PARTITION);
+  setDevicePermissions(devices);
+  await openPeerLinkedFile(host, threadId, filePath, { tailnet: await localTailnet(), session: devices, createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
 });
 
 // Right-click on a file link. open-file.mjs resolves the path before any menu exists.

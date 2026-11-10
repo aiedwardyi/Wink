@@ -105,7 +105,7 @@ function localFilePath(href: string): string | null {
       return null;
     }
   }
-  return absolutePath(decodeHref(href));
+  return absolutePath(decodeHref(href.replace(/[#?].*$/, "")));
 }
 
 function resolveRelativePath(href: string, base: string): string | null {
@@ -176,6 +176,11 @@ function linkTargets(text: string, roots: readonly string[]): string[] {
 function nameForms(filePath: string): string[] {
   const name = filePath.split(/[\\/]/).pop() ?? "";
   return name ? [...new Set([name, encodeURI(name), encodeURIComponent(name)])] : [];
+}
+
+// A bot may escape only the spaces of a Korean name, which is none of nameForms.
+function decodedRuns(text: string): string {
+  return text.includes("%") ? text.replace(/(?:%[0-9a-f]{2})+/gi, decodeHref) : text;
 }
 
 function contentDisposition(name: string, attachment: boolean): string {
@@ -336,7 +341,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     if (message.role !== undefined && message.role !== "bot") continue;
     const text = message.text ?? "";
     // Parsing every message of a long chat took seconds; only a message naming the file can link it.
-    if (!forms.some((form) => text.includes(form))) continue;
+    if (!forms.some((form) => text.includes(form)) && !(forms[0] && decodedRuns(text).includes(forms[0]))) continue;
     const roots = options.rootsFor(message);
     if (!linkTargets(text, roots).some((target) => samePath(target, requested))) continue;
     hits.push({ id: message.id, roots });

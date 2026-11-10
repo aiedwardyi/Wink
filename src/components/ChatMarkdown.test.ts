@@ -990,4 +990,62 @@ describe("relative file links", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  describe("a desktop link whose file is on another PC", () => {
+    const file = "C:/Users/홍길동/문서/주간 보고서.docx";
+    const missing = () => vi.fn().mockRejectedValue(new Error("That file no longer exists"));
+    const click = async (ogb: object | undefined, pc: { offline?: boolean; writer?: boolean; locale?: "en" | "ko"; pending?: boolean } = {}) => {
+      applyLocale(pc.locale ?? "en");
+      if (ogb) Object.defineProperty(window, "ogb", { configurable: true, value: ogb });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        if (pc.pending) return new Promise<Response>(() => {});
+        if (String(input).includes("/api/devices")) {
+          return new Response(JSON.stringify({ devices: [{ deviceId: "home-pc", name: "Home", host: "home.example", current: false, offline: pc.offline === true }] }));
+        }
+        return new Response(JSON.stringify(pc.writer === false ? { error: "not found" } : { error: "not found", deviceId: "home-pc" }), { status: 404 });
+      }));
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      try {
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "[주간 보고서.docx](C:/Users/홍길동/문서/주간%20보고서.docx)", threadId: "t1" })));
+        await act(async () => host.querySelector("button")!.click());
+        return host.querySelector("button")!.nextElementSibling?.textContent;
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+        applyLocale("en");
+        Reflect.deleteProperty(window, "ogb");
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it("fetches it from the PC that wrote the link when that PC is on", async () => {
+      const openPeerFile = vi.fn().mockResolvedValue(undefined);
+      expect(await click({ openFile: missing(), openPeerFile }, { writer: false })).toBe("That file no longer exists");
+      expect(openPeerFile).not.toHaveBeenCalled();
+      expect(await click({ openFile: missing(), openPeerFile })).toBeUndefined();
+      expect(openPeerFile).toHaveBeenCalledWith("home.example", "t1", file);
+    });
+
+    it.each([["en", "This file is on Home."], ["ko", "이 파일은 Home에 있어요."]] as const)("says which PC has it in %s when that PC is off", async (locale, line) => {
+      const openPeerFile = vi.fn();
+      expect(await click({ openFile: missing(), openPeerFile }, { offline: true, locale })).toBe(line);
+      expect(openPeerFile).not.toHaveBeenCalled();
+    });
+
+    it("says which PC has it when the fetch fails or the desktop app is older", async () => {
+      expect(await click({ openFile: missing(), openPeerFile: vi.fn().mockRejectedValue(new Error("That file could not be opened")) })).toBe("This file is on Home.");
+      expect(await click({ openFile: missing() })).toBe("This file is on Home.");
+    });
+
+    it("keeps the reason that PC refused with", async () => {
+      const openPeerFile = vi.fn().mockRejectedValue(new Error("That file is outside the bot's folder"));
+      expect(await click({ openFile: missing(), openPeerFile })).toBe("That file is outside the bot's folder");
+    });
+
+    it.each([["en", "Checking this file..."], ["ko", "파일을 확인하는 중이에요..."]] as const)("answers a click in %s before the file check lands", async (locale, line) => {
+      expect(await click(undefined, { pending: true, locale })).toBe(line);
+    });
+  });
 });

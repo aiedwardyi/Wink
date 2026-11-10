@@ -53,6 +53,7 @@ for (const [name, channel, args] of [
   ["permOpenSettings", "perm:open-settings", ["mic"]],
   ["openEngineInstall", "engine:install", ["engine", true]],
   ["deviceWindow.open", "device-window:open", ["host", "device"]],
+  ["openPeerFile", "desktop:open-peer-file", ["host", "thread", "C:/a.docx"]],
   ["errorReportConsent", "error-reports:get", []],
   ["setErrorReportConsent", "error-reports:set", [true]],
   ["setCredential", "credential:set", ["provider", "value"]],
