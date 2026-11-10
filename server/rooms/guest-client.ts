@@ -8,6 +8,7 @@ import type { Readable } from "node:stream";
 import { z } from "zod";
 
 import { labelFromHost } from "../../shared/relay-protocol.ts";
+import { DOCUMENT_MAX_BYTES } from "../attachments.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import {
   addJoinedEntries,
@@ -45,8 +46,8 @@ const personSchema = z.object({ id, name });
 const fileSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
   name: z.string().max(200),
-  type: z.string().max(100),
-  bytes: z.number().int().positive(),
+  type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+  bytes: z.number().int().positive().max(DOCUMENT_MAX_BYTES),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
 });
 const entrySchema = z.object({

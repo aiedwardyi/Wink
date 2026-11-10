@@ -17,12 +17,14 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, type HostedGroup } from "./asks.ts";
-import { closeRoomsDb, recentRoomEntries, roomPeople } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, recentRoomEntries, roomPeople } from "./db.ts";
+import { broadcastDoorEntry } from "./door-streams.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import { hostFileRoute } from "./file-routes.ts";
 import { GuestClient } from "./guest-client.ts";
 import { closeInvitesDb, createInvite } from "./invites.ts";
 import { joinedFileRoute } from "./joined-files.ts";
+import { joinedRoute } from "./joined-routes.ts";
 import { closeJoinedDb, joinedEntries, joinedKey, joinedRoom, resetJoined } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
@@ -311,5 +313,22 @@ describe("pictures and files in a team room, through the real door", () => {
     );
     expect(direct.status).toBe(401);
     expect((await guestUpload(roomId, png(100), "late.png")).status).toBe(409);
+  });
+
+  it("the local send route carries the uploaded files", async () => {
+    const { c, roomId } = await joinedTeam();
+    const file = (await guestUpload(roomId, png(2048), "photo.png")).json.file;
+    const reply = await joinedRoute("POST", `/api/joined/rooms/${roomId}/send`, c, true, async () => ({ text: "", fileIds: [file.id] }));
+    expect(reply).toMatchObject({ status: 200, body: { entry: { files: [file] } } });
+  });
+
+  it("never takes in a host file whose type or size no upload could have", async () => {
+    const { roomId } = await joinedTeam();
+    const odd = { id: "C".repeat(24), name: "x", sha256: "0".repeat(64) };
+    broadcastDoorEntry(roomId, appendRoomEntry(roomId, { author: { kind: "host", id: "host", name: "Edward" }, text: "bad type", files: [{ ...odd, type: "image/svg+xml", bytes: 10 }] }));
+    broadcastDoorEntry(roomId, appendRoomEntry(roomId, { author: { kind: "host", id: "host", name: "Edward" }, text: "too big", files: [{ ...odd, type: "image/png", bytes: 30 * 1024 * 1024 }] }));
+    hostedSend(store.groups[0] as HostedGroup, { kind: "host" }, "after");
+    await until(() => joinedEntries(roomId, 10).some((entry) => entry.text === "after"));
+    expect(joinedEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", "after"]);
   });
 });

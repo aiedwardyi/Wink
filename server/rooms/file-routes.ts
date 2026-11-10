@@ -41,7 +41,7 @@ export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, re
   }
 }
 
-const sameFiles = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((id, at) => id === b[at]);
+export const sameFiles = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((id, at) => id === b[at]);
 
 export const fileIdsOf = (value: unknown): string[] | null =>
   value === undefined ? [] : Array.isArray(value) && value.length <= MAX_MESSAGE_FILES && value.every((id) => typeof id === "string") ? value : null;

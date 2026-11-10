@@ -21,7 +21,7 @@ import {
   writeFrame,
   type DoorState,
 } from "./door-streams.ts";
-import { FILE_PATH, fileAction, fileIdsOf, fileRoute } from "./file-routes.ts";
+import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, type JoinResult } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
@@ -249,8 +249,7 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: strin
     const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === person.id) : undefined;
     if (earlier) {
       const entry = earlier.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : null;
-      const files = (entry?.files ?? []).map((file) => file.id);
-      if (!entry || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId || files.join() !== fileIds.join()) {
+      if (!entry || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId || !sameFiles((entry.files ?? []).map((file) => file.id), fileIds)) {
         return send(res, 409, { error: "sendId was used for another message" });
       }
       return send(res, 200, { entry: doorEntry(entry) });

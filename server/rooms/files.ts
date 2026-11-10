@@ -6,6 +6,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { pipeline } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, sniffImageMime } from "../attachments.ts";
@@ -99,7 +100,7 @@ const BINARY_TEXT = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/;
 /** Display name only: no folders, no control or reserved characters. */
 function cleanName(raw: string | null): string {
   // eslint-disable-next-line no-control-regex -- names are display metadata only.
-  const name = (raw ?? "").split(/[\\/]/).pop()!.replace(/[\x00-\x1f\x7f<>:"|?*]/g, "").trim().slice(0, 200);
+  const name = (raw ?? "").split(/[\\/]/).pop()!.replace(/[\x00-\x1f\x7f<>:"|?*]/g, "").trim().slice(0, 200).replace(/[\uD800-\uDBFF]$/, "");
   return name || "file";
 }
 
@@ -118,7 +119,7 @@ export interface Upload {
 type Received = { ok: true; bytes: number; sha256: string; type: string } | { ok: false; status: number; error: string };
 
 /** Streams the body into `file`, cut at the first byte past a limit. Never buffered whole. */
-function receive(req: IncomingMessage, file: string, roomId: string, free: number, counted: { bytes: number }): Promise<Received> {
+function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }): Promise<Received> {
   return new Promise((resolve) => {
     const hash = createHash("sha256");
     const text = new TextDecoder("utf-8", { fatal: true });
@@ -126,19 +127,22 @@ function receive(req: IncomingMessage, file: string, roomId: string, free: numbe
     let kind: { type: string; max: number } | null = null;
     let size = 0;
     let done = false;
-    let writes = open(file, "wx", 0o600);
+    const opened = open(file, "wx", 0o600);
+    let writes: Promise<unknown> = opened;
     writes.catch(() => {});
     const finish = (result: Received) => {
       if (done) return;
       done = true;
       req.resume();
-      void writes.then(async (handle) => {
+      void (async () => {
+        const handle = await opened.catch(() => null);
         try {
-          if (result.ok) await handle.sync();
+          await writes;
+          if (result.ok) await handle!.sync();
         } finally {
-          await handle.close();
+          await handle?.close();
         }
-      }).then(() => resolve(result), () => resolve({ ok: false, status: 500, error: "couldn't save the file" }));
+      })().then(() => resolve(result), () => resolve({ ok: false, status: 500, error: "couldn't save the file" }));
     };
     const fail = (status: number, error: string) => finish({ ok: false, status, error });
     const write = (chunk: Buffer) => {
@@ -152,9 +156,8 @@ function receive(req: IncomingMessage, file: string, roomId: string, free: numbe
         }
       }
       req.pause();
-      writes = writes.then(async (handle) => {
-        await handle.write(chunk);
-        return handle;
+      writes = writes.then(async () => {
+        await (await opened).write(chunk);
       });
       writes.then(() => req.resume(), () => fail(500, "couldn't save the file"));
     };
@@ -169,7 +172,7 @@ function receive(req: IncomingMessage, file: string, roomId: string, free: numbe
       size += chunk.length;
       counted.bytes += chunk.length;
       inflight.set(roomId, (inflight.get(roomId) ?? 0) + chunk.length);
-      if (size > free) return fail(507, "this room is out of space for files");
+      if (base + inflight.get(roomId)! > ROOM_DISK_BYTES) return fail(507, "this room is out of space for files");
       if (size > DOCUMENT_MAX_BYTES || (kind && size > kind.max)) return fail(413, tooLarge(kind?.max ?? DOCUMENT_MAX_BYTES));
       if (head) {
         head.push(chunk);
@@ -209,7 +212,8 @@ export async function saveRoomFile(req: IncomingMessage, roomId: string, upload:
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
   const length = Number(req.headers["content-length"] ?? 0);
   if (length > DOCUMENT_MAX_BYTES) throw statusError(413, tooLarge(DOCUMENT_MAX_BYTES));
-  const free = ROOM_DISK_BYTES - used(roomId) - (inflight.get(roomId) ?? 0);
+  const base = used(roomId);
+  const free = ROOM_DISK_BYTES - base - (inflight.get(roomId) ?? 0);
   if (free <= 0 || length > free) throw statusError(507, "this room is out of space for files");
   const id = randomBytes(18).toString("base64url");
   const dir = roomDir(roomId);
@@ -218,7 +222,7 @@ export async function saveRoomFile(req: IncomingMessage, roomId: string, upload:
   let received: Received;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    received = await receive(req, temp, roomId, free, counted);
+    received = await receive(req, temp, roomId, base, counted);
   } catch {
     received = { ok: false, status: 500, error: "couldn't save the file" };
   } finally {
@@ -237,12 +241,20 @@ export async function saveRoomFile(req: IncomingMessage, roomId: string, upload:
     await syncDir(dir);
     const file: FileRow = { id, owner: upload.owner, name: cleanName(upload.name), type: received.type, bytes: received.bytes, sha256: received.sha256 };
     const kept = withDb((db) => {
+      const room = db.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM room_files WHERE room_id = ?").get(roomId) as { bytes: number };
+      if (room.bytes + file.bytes > ROOM_DISK_BYTES && !db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?").get(roomId, file.owner, upload.uploadId)) {
+        return null;
+      }
       const inserted = db.prepare(`
         INSERT INTO room_files (room_id, id, owner, upload_id, name, type, bytes, sha256, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (room_id, owner, upload_id) DO NOTHING
       `).run(roomId, id, file.owner, upload.uploadId, file.name, file.type, file.bytes, file.sha256, Date.now()).changes;
       return inserted ? file : db.prepare(`SELECT ${FILE_COLUMNS} FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?`).get(roomId, upload.owner, upload.uploadId) as unknown as FileRow;
     });
+    if (!kept) {
+      await rm(blob, { force: true });
+      throw statusError(507, "this room is out of space for files");
+    }
     if (kept.id === id) return publicFile(kept);
     await rm(blob, { force: true });
     if (kept.sha256 !== file.sha256) throw statusError(409, "uploadId was used for another file");
@@ -293,9 +305,7 @@ export async function sendBlob(res: ServerResponse, path: string, file: RoomFile
     return false;
   }
   res.writeHead(200, fileHeaders(file, preview));
-  const stream = handle.createReadStream();
-  stream.on("error", () => res.destroy());
-  stream.pipe(res);
+  pipeline(handle.createReadStream(), res, () => {});
   return true;
 }
 

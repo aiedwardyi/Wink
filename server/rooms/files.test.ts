@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, ReadStream, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { attachmentExists, ATTACHMENTS_DIR, readAttachment } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
@@ -250,5 +250,47 @@ describe("room file isolation", () => {
     expect(replies[0]!.json.file.name).toBe("cat.png");
     const all = JSON.stringify(replies.map((reply) => [reply.headers, reply.body.toString("utf8")]));
     for (const path of [DATA_DIR, homedir(), DATA_DIR.replaceAll("\\", "\\\\"), "room-files", ".tmp"]) expect(all).not.toContain(path);
+  });
+});
+
+describe("room file edges", () => {
+  it("hold a room's cap when uploads race for the last space", async () => {
+    const room = createRoom("Team").id;
+    expect((await upload(room, Buffer.from("first"))).status).toBe(200);
+    exec("INSERT INTO room_files (room_id, id, owner, name, type, bytes, sha256, at) VALUES (?, ?, 'host', 'big', 'text/plain', ?, '', ?)", room, "B".repeat(24), ROOM_DISK_BYTES - 1_005, Date.now());
+    const results = await Promise.all([1, 2, 3].map(() => upload(room, [Buffer.alloc(300, "a"), Buffer.alloc(300, "b")])));
+    expect(results.filter((result) => result.status === 200).length).toBeLessThanOrEqual(1);
+    const total = new DatabaseSync(join(DATA_DIR, "rooms.db"));
+    try {
+      expect((total.prepare("SELECT SUM(bytes) AS bytes FROM room_files WHERE room_id = ?").get(room) as { bytes: number }).bytes).toBeLessThanOrEqual(ROOM_DISK_BYTES);
+    } finally {
+      total.close();
+    }
+  });
+
+  it("cut a long name on a whole character, so the file still downloads", async () => {
+    const room = createRoom("Team").id;
+    const file = (await upload(room, png(100), { name: `${"a".repeat(199)}😀.png` })).json.file;
+    expect(file.name).toBe("a".repeat(199));
+    expect((await call("GET", `/rooms/${room}/files/${file.id}`)).status).toBe(200);
+  });
+
+  it("close the blob when a download is cut short", async () => {
+    const room = createRoom("Team").id;
+    const file = (await upload(room, Array.from({ length: 8 }, () => Buffer.alloc(1024 * 1024, "a")))).json.file;
+    const destroy = vi.spyOn(ReadStream.prototype, "destroy");
+    await new Promise<void>((resolve) => {
+      const req = request({ host: "127.0.0.1", port, path: `/rooms/${room}/files/${file.id}`, agent: false }, (res) => {
+        res.once("data", () => {
+          req.destroy();
+          resolve();
+        });
+      });
+      req.end();
+    });
+    const deadline = Date.now() + 2_000;
+    while (!destroy.mock.calls.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(destroy).toHaveBeenCalled();
+    destroy.mockRestore();
   });
 });
