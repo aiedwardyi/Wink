@@ -39,6 +39,8 @@ vi.resetModules();
 const { DATA_DIR } = await import("./config.ts");
 const { closeMessageDb } = await import("./message-db.ts");
 const { Store } = await import("./store.ts");
+const { BotTrash, trashedWorkspaceDir } = await import("./bot-trash.ts");
+const { RoutineManager } = await import("./routines.ts");
 const { ensureWorkspace, workspaceDir, WORKSPACES_DIR } = await import("./workspace.ts");
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -100,6 +102,24 @@ describe("Store file guards", () => {
     expect(fsPlan.linksHandedToRm).toEqual([]);
     expect(lstatSync(workspaceDir(bot.id), { throwIfNoEntry: false })).toBeUndefined();
     expect(readdirSync(project)).toEqual(["src"]);
+  });
+
+  it("emptying the trash unlinks every link in a trashed folder and leaves the targets", () => {
+    const store = new Store(selection);
+    const routines = new RoutineManager({ file: join(DATA_DIR, "routines.json"), botState: () => "ready", createTask: () => null, startTurn: async () => {}, startChatTurn: async () => {} });
+    const trash = new BotTrash(store, routines);
+    const bot = store.createBot({ name: "Coder" }, { seedMessages: false });
+    const workspace = ensureWorkspace(bot.id);
+    mkdirSync(join(workspace, "apps", "web"), { recursive: true });
+    symlinkSync(project, join(workspace, "project"), "junction");
+    symlinkSync(project, join(workspace, "apps", "web", "node_modules"), "junction");
+    trash.trash(bot.id);
+
+    trash.empty([bot.id], { tellOthers: true });
+
+    expect(fsPlan.linksHandedToRm).toEqual([]);
+    expect(existsSync(trashedWorkspaceDir(bot.id))).toBe(false);
+    expect(readFileSync(join(project, "src", "main.ts"), "utf8")).toBe("export const answer = 42;");
   });
 
   it("refuses to save over an unreadable bots.json it could not set aside", () => {

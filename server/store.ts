@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { BotHooks } from "./bot-hooks.ts";
+import { TrashList } from "./bot-trash.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
@@ -728,6 +729,7 @@ export class Store {
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
+  readonly trash = new TrashList();
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
   private threads = new Map<string, ThreadState>();
@@ -932,7 +934,7 @@ export class Store {
     writeFileAtomic(file, json, { mode: 0o600 });
   }
 
-  private saveBots() {
+  saveBots() {
     this.saveList(BOTS_FILE, JSON.stringify(this.bots, null, 2));
     this.pruneSessionSystems();
   }
@@ -945,8 +947,10 @@ export class Store {
     } catch {
       return;
     }
+    // a trash list that did not load may still name sessions a restore needs
+    if (this.trash.unreadable) return;
     const live = new Set<string>();
-    for (const bot of this.bots) {
+    for (const bot of [...this.bots, ...this.trash.entries.map((entry) => entry.record)]) {
       for (const cursors of [bot.resumeCursors, ...(bot.tasks ?? []).map((task) => task.resumeCursors)]) {
         for (const [instanceId, cursor] of Object.entries(cursors ?? {})) live.add(sessionSystemFile(instanceId, cursor));
       }
@@ -1015,7 +1019,7 @@ export class Store {
     }
   }
 
-  private emit(change: StoreChange) {
+  emit(change: StoreChange) {
     for (const listener of [...this.listeners]) {
       try {
         listener(change);
@@ -1101,14 +1105,15 @@ export class Store {
     return group;
   }
 
-  /** A thread's durable record: DB rows plus any legacy JSON leftovers. */
-  private deleteThreadRecord(threadId: string) {
+  /** A thread's durable record: DB rows plus any legacy JSON leftovers. `tell` false writes no delete for other PCs. */
+  deleteThreadRecord(threadId: string, tell = true) {
     this.threads.delete(threadId);
     this.taskPackets.delete(threadId);
     try {
       deleteTaskResumePacket(threadId);
     } catch {}
-    this.persistThread(threadId, [{ kind: "delete", value: { deletedAt: Date.now() } }], () => mdb.deleteThread(threadId));
+    if (tell) this.persistThread(threadId, [{ kind: "delete", value: { deletedAt: Date.now() } }], () => mdb.deleteThread(threadId));
+    else mdb.deleteThread(threadId);
     for (const file of [messagesFile(threadId), `${messagesFile(threadId)}.imported`]) {
       try {
         unlinkSync(file);
@@ -1479,10 +1484,8 @@ export class Store {
     return bot;
   }
 
-  deleteBot(id: string): boolean {
-    const bot = this.bot(id);
-    if (!bot) return false;
-    this.bots = this.bots.filter((b) => b.id !== id);
+  /** Takes `id` out of every room it can leave. */
+  leaveRooms(id: string): void {
     for (const group of this.groups) {
       const patch: Partial<Pick<GroupRecord, "memberIds" | "busyBotId">> = {};
       if (group.busyBotId === id) patch.busyBotId = null;
@@ -1493,6 +1496,13 @@ export class Store {
       }
       if (Object.keys(patch).length) this.patchGroup(group.id, patch);
     }
+  }
+
+  deleteBot(id: string): boolean {
+    const bot = this.bot(id);
+    if (!bot) return false;
+    this.bots = this.bots.filter((b) => b.id !== id);
+    this.leaveRooms(id);
     // every task's transcript goes with the bot, not just the open one
     for (const threadId of new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)])) {
       this.deleteThreadRecord(threadId);
@@ -1985,9 +1995,9 @@ export class Store {
 
   taskPacket(threadId: string): TaskResumePacket | null {
     if (!this.taskPackets.has(threadId)) {
-      const knownThread = Boolean(this.botByThread(threadId) || this.groupByThread(threadId));
-      const packet = knownThread ? readTaskResumePacket(threadId) : null;
-      this.taskPackets.set(threadId, packet);
+      // an unknown thread may be a trashed bot's, so its null is not cached past a restore
+      if (!this.botByThread(threadId) && !this.groupByThread(threadId)) return null;
+      this.taskPackets.set(threadId, readTaskResumePacket(threadId));
     }
     const packet = this.taskPackets.get(threadId);
     if (!packet) return null;
