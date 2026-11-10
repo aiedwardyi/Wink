@@ -14,6 +14,7 @@ const LEASE_MS = 50_000;
 const PAUSE_BYTES = 100 * 1024;
 const RESUME_BYTES = 10 * 1024;
 const RETRY_MS = 1_000;
+const RETRY_MAX_MS = 10_000;
 const PANES_MS = 2_000;
 // Under the server's 64 KB input cap even at 3 bytes per char.
 const BATCH_CHARS = 16 * 1024;
@@ -63,6 +64,18 @@ export function loadWebTerminalFonts(): Promise<void> {
   return fontsReady;
 }
 
+// Each piece stays under BATCH_CHARS and never ends between a surrogate pair.
+function pieces(data: string): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < data.length;) {
+    let end = Math.min(at + BATCH_CHARS, data.length);
+    if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end--;
+    out.push(data.slice(at, end));
+    at = end;
+  }
+  return out.length ? out : [data];
+}
+
 function restoreModes(snapshot: Snapshot): string {
   return [
     ...(snapshot.resetModes ?? []).map((mode) => `\x1b[?${mode}l`),
@@ -101,6 +114,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
   let lease: ReturnType<typeof setInterval> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let paneTimer: ReturnType<typeof setInterval> | undefined;
+  let retries = 0;
   let visible = true;
   let paused = false;
   let unparsed = 0;
@@ -108,6 +122,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
   let remote: Size | null = null;
   let wanted: Size | null = null;
   let owner = false;
+  let echoes: Size[] = [];
   let sending = false;
   let writes: Waiter[] = [];
   let panes: Set<string> | null = null;
@@ -169,7 +184,12 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
       attached.seq = frame.seq;
       emit(frame.data, frame.seq, true);
     } else if (frame.kind === "resize") {
-      // Our own resize echoes back; any other size means the app or another viewer took it.
+      // Our own resizes echo back, late during a drag; any other size means the app or another viewer took it.
+      const echo = echoes.findIndex((size) => sameSize(size, frame));
+      if (echo >= 0) {
+        echoes = echoes.slice(echo + 1);
+        return;
+      }
       if (!sameSize(frame, remote)) owner = false;
       remote = { cols: frame.cols, rows: frame.rows };
     } else if (frame.kind === "exit") exit(frame.exitCode);
@@ -215,6 +235,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
               if (stream === abort) renew(abort);
             } else if (!first) onFrame(frame);
           }
+          if (first) throw new Error("Terminal stream ended before its snapshot");
         } catch (cause) {
           if (first) reject(cause);
         } finally {
@@ -222,12 +243,16 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
             stream = null;
             clearInterval(lease);
             // A dropped or slow-reader stream reattaches; an exit or a hide does not.
-            if (!first && live()) retry = setTimeout(resume, RETRY_MS);
+            if (!first && live()) retryLater();
           }
         }
       })();
     });
   };
+
+  function retryLater() {
+    retry = setTimeout(resume, Math.min(RETRY_MS * 2 ** retries++, RETRY_MAX_MS));
+  }
 
   // Reattach after a pause, a hidden tab or a drop: a fresh snapshot replaces the screen only if output was missed.
   function resume() {
@@ -236,6 +261,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     if (!target) return;
     void connect(target.sessionId, (snapshot) => {
       if (attached !== target) return;
+      retries = 0;
       const missed = snapshot.seq > target.seq || snapshot.generation !== target.generation;
       target.generation = snapshot.generation;
       target.seq = snapshot.seq;
@@ -250,7 +276,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     }).catch((cause) => {
       // A network drop or a server hiccup keeps retrying; a refusal is final.
       if (!(cause instanceof LiveError && cause.status < 500)) {
-        if (!stream && live()) retry = setTimeout(resume, RETRY_MS);
+        if (!stream && live()) retryLater();
       } else fail(cause.message);
     });
   }
@@ -275,12 +301,20 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
   const pump = async () => {
     if (sending) return;
     sending = true;
+    // A refused size waits for the next pump, so keys still go out.
+    let refused = false;
     try {
       while (attached) {
-        if (owner && wanted && !sameSize(wanted, remote)) {
+        if (!refused && owner && wanted && !sameSize(wanted, remote)) {
           const size = wanted;
+          const before = remote;
           remote = size;
-          await post("resize", size).catch(() => {});
+          echoes = [...echoes, size];
+          await post("resize", size).catch(() => {
+            refused = true;
+            echoes = echoes.filter((each) => each !== size);
+            if (remote === size) remote = before;
+          });
           continue;
         }
         if (!writes.length) break;
@@ -312,6 +346,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     paused = false;
     unparsed = 0;
     owner = false;
+    echoes = [];
+    retries = 0;
     const dropped = writes;
     writes = [];
     for (const item of dropped) item.reject(new Error("Terminal is not attached"));
@@ -321,8 +357,9 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     if (!panes) return;
     const known = panes;
     const snapshot = await request(`${base}?panes=1`).catch(() => null);
-    const list: Array<{ sessionId: string; label: string | null; generation: number; main: boolean }> = snapshot?.panes ?? [];
-    if (panes !== known) return;
+    // A failed check says nothing about which panes closed.
+    if (panes !== known || !Array.isArray(snapshot?.panes)) return;
+    const list: Array<{ sessionId: string; label: string | null; generation: number; main: boolean }> = snapshot.panes;
     const now = new Set(list.filter((pane) => !pane.main).map((pane) => pane.sessionId));
     for (const pane of list) {
       if (pane.main || known.has(pane.sessionId)) continue;
@@ -384,10 +421,9 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     write(id, data) {
       if (!attached || attached.sessionId !== id) return Promise.reject(new Error("Terminal is not attached"));
       owner = true;
-      return new Promise<void>((resolve, reject) => {
-        writes.push({ data, resolve, reject });
-        void pump();
-      });
+      const sent = Promise.all(pieces(data).map((piece) => new Promise<void>((resolve, reject) => writes.push({ data: piece, resolve, reject }))));
+      void pump();
+      return sent.then(() => {});
     },
     async resize(id, cols, rows) {
       if (!attached || attached.sessionId !== id) return;

@@ -16,6 +16,8 @@ let posts: Post[];
 let liveRefusals: Response[];
 let liveDrops: number;
 let roster: Pane[];
+let rosterDown: boolean;
+let failResizes: number;
 let held: Array<() => void>;
 let holdPosts: boolean;
 let visibility: DocumentVisibilityState;
@@ -36,13 +38,15 @@ beforeEach(() => {
   liveRefusals = [];
   liveDrops = 0;
   roster = [];
+  rosterDown = false;
+  failResizes = 0;
   held = [];
   holdPosts = false;
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const url = String(input);
-    if (!init?.method && !url.includes("/terminal/live")) return Response.json({ panes: roster });
+    if (!init?.method && !url.includes("/terminal/live")) return rosterDown ? Response.json({ error: "Bridge offline" }, { status: 502 }) : Response.json({ panes: roster });
     if (url.includes("/terminal/live")) {
       if (liveDrops > 0 && liveDrops--) throw new TypeError("Failed to fetch");
       const refused = liveRefusals.shift();
@@ -63,6 +67,7 @@ beforeEach(() => {
       return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
     }
     posts.push({ path: url, body: init?.body ? JSON.parse(String(init.body)) : {} });
+    if (url.endsWith("/resize") && failResizes > 0 && failResizes--) return Response.json({ error: "Bridge offline" }, { status: 502 });
     if (holdPosts && url.endsWith("/input")) await new Promise<void>((done) => held.push(done));
     return Response.json(url.endsWith("/start") ? { sessionId: "s1", generation: 1 } : { ok: true });
   }));
@@ -154,6 +159,44 @@ describe("createWebTerminalBridge", () => {
     held.shift()!();
     await Promise.all(rest);
     expect(posts.at(-1)!.body).toEqual({ sessionId: "s1", generation: 1, data: "\r\x1b\x03" });
+  });
+
+  it("splits a large paste under the server cap without breaking a character, in order", async () => {
+    const bridge = make();
+    await attach(bridge);
+    const korean = "\uAC00".repeat(30_000);
+    const emoji = `a${"\u{1F600}".repeat(9_000)}`;
+    await Promise.all([bridge.write("s1", korean), bridge.write("s1", emoji)]);
+    const sent = inputs().map((data) => data ?? "");
+    expect(sent.join("")).toBe(korean + emoji);
+    expect(sent.every((data) => new TextEncoder().encode(data).length <= 64 * 1024)).toBe(true);
+    expect(sent.some((data) => /[\uD800-\uDBFF]$/.test(data))).toBe(false);
+  });
+
+  it("retries a size the shell did not take", async () => {
+    const bridge = make();
+    await attach(bridge);
+    await bridge.resize("s1", 120, 40);
+    failResizes = 1;
+    await bridge.write("s1", "x");
+    await bridge.write("s1", "y");
+    await flush();
+    expect(posts.map((post) => post.path.split("/").at(-1))).toEqual(["resize", "input", "resize", "input"]);
+    expect(inputs()).toEqual(["x", "y"]);
+  });
+
+  it("keeps the size while its own late echoes arrive during a drag", async () => {
+    const bridge = make();
+    await attach(bridge);
+    await bridge.resize("s1", 110, 30);
+    await bridge.write("s1", "x");
+    await bridge.resize("s1", 111, 30);
+    await flush();
+    lives[0].push({ kind: "resize", cols: 110, rows: 30 });
+    await flush();
+    await bridge.resize("s1", 112, 30);
+    await flush();
+    expect(posts.filter((post) => post.path.endsWith("/resize")).map((post) => post.body.cols)).toEqual([110, 111, 112]);
   });
 
   it("resizes the shell only once the browser types, size first", async () => {
@@ -249,12 +292,46 @@ describe("createWebTerminalBridge", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     liveDrops = 2;
     lives[0].end();
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(errors).toEqual([]);
     expect(lives).toHaveLength(2);
     lives[1].push(snapshot({ seq: 6, output: "back" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(seen.at(-1)).toMatchObject({ data: "cback", seq: 6 });
+  });
+
+  it("retries with backoff when a reattached stream ends before its snapshot", async () => {
+    const bridge = make();
+    const errors: string[] = [];
+    bridge.onError?.((event) => errors.push(event.message));
+    await attach(bridge);
+    await flush();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    lives[0].end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lives).toHaveLength(2);
+    lives[1].end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lives).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lives).toHaveLength(3);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps worker panes when a roster check fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    roster = [{ sessionId: "w1", label: "worker", generation: 1, main: false }];
+    const bridge = make();
+    const closed: string[] = [];
+    bridge.onClosed?.((event) => closed.push(event.id));
+    await bridge.readBot?.("bot-1");
+    roster = [{ sessionId: "w1", label: "worker", generation: 1, main: false }, { sessionId: "m1", label: null, generation: 1, main: true }];
+    await attach(bridge);
+    await flush();
+    rosterDown = true;
+    vi.advanceTimersByTime(2_000);
+    await flush();
+    expect(closed).toEqual([]);
   });
 
   it("picks up worker panes that open or close while the pane shows", async () => {
