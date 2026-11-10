@@ -107,10 +107,19 @@ export function listDevices(folder: string, currentId: string, now: number, limi
   return items.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** What the picker may navigate to: relay hosts under this PC's base for a relay phone, tailnet hosts otherwise. */
-export function pickerDevices(items: DeviceListItem[], relayBase: string | null): Omit<DeviceListItem, "relayHost">[] {
+/**
+ * What the picker may navigate to: relay hosts under this PC's base for a relay phone, tailnet hosts otherwise.
+ * A desktop gets a PC's relay host under the baked team base while its tailnet host does not answer.
+ */
+export function pickerDevices(items: DeviceListItem[], relayBase: string | null, teamBase: string | null = null, now = Date.now()): Omit<DeviceListItem, "relayHost">[] {
   return items.flatMap(({ relayHost, ...item }) => {
-    if (relayBase === null) return item.host === relayHost ? [] : [item];
+    if (relayBase === null) {
+      const team = teamBase !== null && relayHost !== undefined && labelFromHost(relayHost, teamBase) !== null;
+      if (item.host === relayHost) return team ? [item] : [];
+      // A failed tailnet probe says nothing about the relay, so the record's own freshness decides.
+      if (team && item.offline) return [{ ...item, host: relayHost, offline: !item.current && now - item.lastSeen > DEVICE_STALE_MS }];
+      return [item];
+    }
     return relayHost && labelFromHost(relayHost, relayBase) ? [{ ...item, host: relayHost }] : [];
   });
 }

@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { createDevicePresence } from "./device-presence.ts";
 import {
   DEVICE_DIR,
   DEVICE_STALE_MS,
@@ -207,5 +208,56 @@ describe("relay presence", () => {
       { deviceId: "home", name: "home", host: "home.tail1234.ts.net", lastSeen: NOW, current: true, offline: false, checking: false },
       { deviceId: "work", name: "work", host: "work.tail1234.ts.net", lastSeen: NOW, current: false, offline: false, checking: false },
     ]);
+  });
+
+  it("pickerDevices keeps a relay-only PC on desktop with its relay host", () => {
+    const folder = freshDir();
+    const other = `${"l".padEnd(16, "a")}.other.test`;
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, { ...rec("cafe", relay("cafe")), relayHost: relay("cafe") }, NOW);
+    writeDeviceRecord(folder, { ...rec("lab", other), relayHost: other }, NOW);
+    const picked = pickerDevices(listDevices(folder, "home", NOW), null, BASE, NOW);
+    expect(picked.map((d) => [d.deviceId, d.host, d.offline])).toEqual([
+      ["cafe", relay("cafe"), false],
+      ["home", "home.tail1234.ts.net", false],
+    ]);
+    expect(JSON.stringify(picked)).not.toContain("relayHost");
+  });
+
+  it("gives a PC whose tailnet host does not answer its team relay host", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    const probed = listDevices(folder, "home", NOW).map((item) => ({ ...item, offline: true, checking: false }));
+    expect(pickerDevices(probed, null, BASE, NOW)).toEqual([
+      { deviceId: "work", name: "work", host: relay("work"), lastSeen: NOW, current: false, offline: false, checking: false },
+    ]);
+  });
+
+  it("keeps a PC whose tailnet host answers exactly as today", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("home"), relayHost: relay("home") }, NOW);
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    const listed = listDevices(folder, "home", NOW).map((item) => (item.current ? item : { ...item, checking: true }));
+    expect(pickerDevices(listed, null, BASE, NOW)).toEqual(pickerDevices(listed, null));
+    expect(pickerDevices(listed, null, BASE, NOW).map((d) => d.host)).toEqual(["home.tail1234.ts.net", "work.tail1234.ts.net"]);
+  });
+
+  it("no baked team relay keeps today's picker", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("cafe", relay("cafe")), relayHost: relay("cafe") }, NOW);
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    const listed = listDevices(folder, "home", NOW).map((item) => ({ ...item, offline: true }));
+    expect(pickerDevices(listed, null, null, NOW).map((d) => [d.deviceId, d.host])).toEqual([["work", "work.tail1234.ts.net"]]);
+  });
+
+  it("takes a relay PC's presence on desktop from its record", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, { ...rec("cafe", relay("cafe")), relayHost: relay("cafe") }, NOW);
+    writeDeviceRecord(folder, { ...rec("dorm", relay("dorm")), relayHost: relay("dorm") }, NOW - DEVICE_STALE_MS - 1);
+    const request = vi.fn();
+    const listed = createDevicePresence(request)(listDevices(folder, "home", NOW), "home.tail1234.ts.net");
+    expect(pickerDevices(listed, null, BASE, NOW).map((d) => [d.deviceId, d.offline])).toEqual([["cafe", false], ["dorm", true], ["home", false]]);
+    expect(request).not.toHaveBeenCalled();
   });
 });
