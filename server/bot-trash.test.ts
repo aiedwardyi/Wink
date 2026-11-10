@@ -412,6 +412,63 @@ describe("bot trash", () => {
     expect(readFileSync(BOTS_FILE, "utf8")).toBe('[{"id": "bot-1"');
   });
 
+  it("leaves a restore for later while bots.json is unreadable", () => {
+    const first = open();
+    const kept = first.store.createBot({ name: "Kept" }, { seedMessages: false });
+    first.trash.trash(kept.id);
+    editTrashFile((file) => (file.bots[0]!.step = "restoring"));
+    writeFileSync(BOTS_FILE, '[{"id": "bot-1"');
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { store, trash } = open();
+    trash.start();
+
+    expect(readFileSync(BOTS_FILE, "utf8")).toBe('[{"id": "bot-1"');
+    expect(store.bots).toEqual([]);
+    expect(onDisk(TRASH_FILE).bots).toMatchObject([{ record: { id: kept.id }, step: "restoring" }]);
+  });
+
+  it("keeps a bot restorable when a restore cannot save the trash list", () => {
+    const { store, trash } = open();
+    const bot = store.createBot({ name: "Atlas" }, { seedMessages: false });
+    trash.trash(bot.id);
+    vi.spyOn(store.trash, "save").mockImplementationOnce(() => {
+      throw new Error("locked");
+    });
+
+    expect(() => trash.restore(bot.id)).toThrow("locked");
+    expect(store.trash.entries[0]!.step).toBe("trashed");
+    trash.trash(store.createBot({ name: "Nova" }, { seedMessages: false }).id);
+    expect(onDisk(TRASH_FILE).bots.map((entry: { step: string }) => entry.step)).toEqual(["trashed", "trashed"]);
+    expect(trash.restore(bot.id).id).toBe(bot.id);
+  });
+
+  it("keeps a bot restorable when an empty cannot save the trash list", () => {
+    const { store, trash } = open();
+    const bot = stockedBot(store);
+    const rows = chatRows(bot);
+    trash.trash(bot.id);
+    vi.spyOn(store.trash, "save").mockImplementationOnce(() => {
+      throw new Error("locked");
+    });
+
+    expect(() => trash.empty([bot.id], { tellOthers: false })).toThrow("locked");
+    expect(store.trash.entries[0]).toMatchObject({ step: "trashed" });
+    expect(store.trash.entries[0]!.tellOthers).toBeUndefined();
+    trash.trash(store.createBot({ name: "Nova" }, { seedMessages: false }).id);
+    expect(onDisk(TRASH_FILE).bots.map((entry: { step: string }) => entry.step)).toEqual(["trashed", "trashed"]);
+    expect(chatRows(bot)).toBe(rows);
+    expect(trash.restore(bot.id).id).toBe(bot.id);
+  });
+
+  it("sets aside a trash list with a bad deletion time", () => {
+    const first = open();
+    first.trash.trash(first.store.createBot({ name: "Atlas" }, { seedMessages: false }).id);
+    editTrashFile((file) => delete file.bots[0]!.deletedAt);
+
+    expect(open().store.trash.unreadable).toBe(true);
+  });
+
   it("resets an arrival time in the future to now", () => {
     const now = 1_800_000_000_000;
     const first = open(() => now);

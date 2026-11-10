@@ -33,6 +33,7 @@ export interface TrashEntry {
   step: "trashed" | "restoring" | "emptying";
   /** Emptying only: whether the other PCs get the chat deletes. */
   tellOthers?: boolean;
+  /** False until sync sends this PC's mark; an unsent tap is never overruled by older news from the folder. */
   told: boolean;
 }
 
@@ -49,6 +50,7 @@ const STEPS = new Set<TrashEntry["step"]>(["trashed", "restoring", "emptying"]);
 const validEntry = (entry: Partial<TrashEntry> | null) =>
   typeof entry?.record?.id === "string" &&
   STEPS.has(entry.step!) &&
+  Number.isFinite(entry.deletedAt) &&
   Number.isFinite(entry.arrivedAt) &&
   Array.isArray(entry.rooms) &&
   Array.isArray(entry.routines);
@@ -144,7 +146,10 @@ export class BotTrash {
     if (changed) list.save();
     // a finish that drops an entry replaces list.entries, so this walks the list as it was
     for (const entry of list.entries) {
-      if (entry.step === "restoring") this.finishRestore(entry, false);
+      // an empty bot list after a failed load is not the real one, so the restore waits
+      if (entry.step === "restoring") {
+        if (this.store.botsFile !== "unreadable") this.finishRestore(entry, false);
+      }
       else if (entry.step === "emptying") this.finishEmpty(entry);
       else this.finishTrash(entry);
     }
@@ -191,7 +196,12 @@ export class BotTrash {
     const entry = this.list.entry(botId);
     if (!entry || entry.step !== "trashed") throw new Error("no such bot in the trash");
     entry.step = "restoring";
-    this.list.save();
+    try {
+      this.list.save();
+    } catch (error) {
+      entry.step = "trashed";
+      throw error;
+    }
     return this.finishRestore(entry, true)!;
   }
 
@@ -204,7 +214,15 @@ export class BotTrash {
     });
     if (!targets.length) return;
     for (const entry of targets) Object.assign(entry, { step: "emptying", tellOthers });
-    this.list.save();
+    try {
+      this.list.save();
+    } catch (error) {
+      for (const entry of targets) {
+        entry.step = "trashed";
+        delete entry.tellOthers;
+      }
+      throw error;
+    }
     for (const entry of targets) this.finishEmpty(entry);
   }
 
