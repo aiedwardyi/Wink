@@ -77,6 +77,9 @@ const KEY_VALUE =
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
+/** Dotted words with nothing called after them pass only off one of these. */
+const CODE_RECEIVER =
+  /^(?:process|os|env|import|window|globalThis|self|this|localStorage|sessionStorage|config|settings|options|opts|props|ctx|req|request|res|args|params|secrets|vault|credentials|creds)\??\./;
 
 /** Long digit runs, letter-digit churn, or scattered single-letter case runs. */
 function looksRandom(value: string): boolean {
@@ -91,7 +94,7 @@ function looksRandom(value: string): boolean {
 function isCodeValue(quote: string, value: string, text: string, end: number): boolean {
   if (ENV_REF.test(value)) return !looksRandom(value);
   if (quote) return false;
-  if (!value.includes(".") && text[end] !== "(" && text[end] !== "[" && !text.startsWith("::", end)) return false;
+  if (text[end] !== "(" && text[end] !== "[" && !text.startsWith("::", end) && !CODE_RECEIVER.test(value)) return false;
   return CODE_NAME.test(value) && !looksRandom(value);
 }
 

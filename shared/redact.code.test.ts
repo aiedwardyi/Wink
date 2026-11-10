@@ -16,12 +16,10 @@ const CODE_LINES = [
   'const secret = process.env["JWT_SECRET"];',
   "const token = req.cookies.session_token;",
   "headers.authorization = config.headers.Authorization;",
-  "this.password = form.password.value;",
   'const secret = Buffer.from(raw, "base64");',
   'let token = localStorage?.getItem("token");',
   "  apiKey: process.env.STRIPE_SECRET_KEY,",
   "const token = jwt.sign(payload, secretKey);",
-  "const access_token = response.data.access_token;",
   'private readonly secret = configService.getOrThrow("JWT_SECRET");',
   "const token = getAuthToken();",
   "const password = hashPassword(input);",
@@ -34,7 +32,6 @@ const CODE_LINES = [
   'secret = keyring.get_password("svc", user)',
   '\tAPIKey: os.Getenv("API_KEY"),',
   '\tPassword: viper.GetString("db.password"),',
-  "\tToken: cfg.Auth.Token,",
   '\tAccessKey: aws.String(os.Getenv("AWS_ACCESS_KEY_ID")),',
   "let password = PasswordHash::new(&hash)?;",
   "let secret = SecretString::from(raw);",
@@ -111,6 +108,16 @@ const SECRETS: Array<[string, string]> = [
   [`secret=Rt5.Yu8.Io3.Pq7`, "secret=«redacted 15 chars»"],
 ];
 
+// Dotted words off a receiver that is not a known code object stay masked.
+const DOTTED: Array<[string, string]> = [
+  ["password=hunter2.example", "password=«redacted 15 chars»"],
+  ["password: Summer.Vacation", "password: «redacted 15 chars»"],
+  ["secret=correct.horse.battery", "secret=«redacted 21 chars»"],
+  ["this.password = form.password.value;", "this.password = «redacted 19 chars»;"],
+  ["const access_token = response.data.access_token;", "const access_token = «redacted 26 chars»;"],
+  ["\tToken: cfg.Auth.Token,", "\tToken: «redacted 14 chars»,"],
+];
+
 function streamed(chunks: string[]) {
   const masker = new StreamSecretMasker();
   const pieces = chunks.map((chunk) => masker.push(chunk));
@@ -141,5 +148,12 @@ describe("credential values", () => {
       expect(out, JSON.stringify(chunks)).toBe(expected);
       for (const piece of pieces) expect(piece).not.toContain(secret.slice(0, Math.min(6, secret.length)));
     }
+  });
+});
+
+describe("dotted values", () => {
+  it.each(DOTTED)("masks %s", (text, expected) => {
+    expect(redactSecretsInText(text)).toBe(expected);
+    for (const chunks of everySplit(text)) expect(streamed(chunks).out, JSON.stringify(chunks)).toBe(expected);
   });
 });
