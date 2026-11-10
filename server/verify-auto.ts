@@ -3,10 +3,12 @@ import { freemem } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
+import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { appEntry, type AppOptions } from "./verify-app.ts";
 import { DOC_EXTS } from "./verify-doc-text.ts";
 import { resolveVerifySite } from "./verify-site.ts";
+import { WORKSPACES_DIR } from "./workspace.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
 const SKIP = new Set(["node_modules", "coverage"]);
@@ -46,14 +48,25 @@ interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequen
 
 const slashed = (path: string) => `/${path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").toLowerCase()}`;
 const REF = /`([^`\n]+)`|(?<!\w)(?:"([^"\n]+)"|'([^\n]+?)'|“([^”\n]+)”|‘([^\n]+?)’)(?!\w)|([^\s"'`“”‘’<>()[\]|*?]+)/g;
+const unlinked = (ref: string) => {
+  if (!/^file:\/\//i.test(ref)) return ref;
+  try { return decodeURIComponent(ref.replace(/^file:\/\/\/?/i, "")); } catch { return ref; }
+};
 // A whole reference in the reply must fit this file and no other document; any document containing its text (Final report.docx) makes it ambiguous.
 const named = (reply: string, path: string, docs: string[]) => {
   const keys = [...new Set(docs)].map(slashed);
   return [...reply.matchAll(REF)].some(([, ...refs]) => {
-    const ref = slashed(refs.find(ref => ref !== undefined)!.trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1"));
+    const ref = slashed(unlinked(refs.find(ref => ref !== undefined)!.trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1")));
     const hits = keys.filter(key => key.includes(ref.slice(1)));
     return hits.length === 1 && hits[0] === slashed(path) && hits[0].endsWith(ref);
   });
+};
+// Under the data folder only a bot's workspace holds documents for the person, and never its memory.
+const internal = (path: string) => {
+  const rel = relative(DATA_DIR, path);
+  if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
+  const [id, ...rest] = relative(WORKSPACES_DIR, path).toLowerCase().split(sep);
+  return id === ".." || !rest.length || rest[0] === "memory" || rest.length === 1 && rest[0] === "memory.md";
 };
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {
@@ -153,9 +166,11 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       paths.push(...scanned);
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
-      const docs = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()));
+      const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
+      // A document the bot wrote is for the person only when the reply or their message names it; the rest are its own notes.
+      const docs = found.filter(path => scanned.includes(path) || named(input.reply, path, found) || named(input.humanText, path, found));
       // A file only the mtime scan found may be the user's own: checked, never fixed, unless the reply names it.
-      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, docs));
+      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, found));
       if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, ...(unnamed.length ? { scanned: unnamed } : {}), humanId: input.humanId }); return; }
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);

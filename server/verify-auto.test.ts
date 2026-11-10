@@ -2,8 +2,10 @@ import { mkdir, opendir, realpath, stat, symlink, utimes, writeFile } from "node
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { createVerifyAuto, scanVerifyWrites, type VerifyAutoTurn } from "./verify-auto.ts";
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
@@ -208,10 +210,50 @@ it("ignores a dead named URL and non-web writes", async () => {
 it("hands one turn's document writes to the document check once", async () => {
   for (let i = 0; i < 20; i++) auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["brief.docx", "notes.txt", "app.py"] }));
-  await auto.settled(turn);
+  await auto.settled({ ...turn, reply: "Wrote script.md, brief.docx and notes.txt." });
   expect(start).not.toHaveBeenCalled();
   expect(docs).toHaveBeenCalledOnce();
   expect(docs).toHaveBeenCalledWith({ botId: "bot", threadId: "thread", roots: [root], paths: ["script.md", "brief.docx", "notes.txt"], humanId: "human" });
+});
+
+it("does not check a document the turn wrote that nobody names", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "cards", "ROLL-P3-resume-7.md")] }));
+  await auto.settled({ ...turn, reply: "Done, the worker is running." });
+  expect(docs).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+
+it.each(["reply", "humanText"] as const)("checks only the written document the %s names", async source => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "report.md"), join(root, "worker-card.md")] }));
+  await auto.settled({ ...turn, [source]: "The summary goes in report.md." });
+  expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [root], paths: [join(root, "report.md")], humanId: "human" });
+});
+
+it.each(["report.docx", "report.md"])("checks only the named %s in a bot's workspace", async name => {
+  const workspace = join(DATA_DIR, "workspaces", "bot");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, name), join(workspace, "worker-card.md")] }));
+  await auto.settled({ ...turn, roots: [workspace], reply: `Saved ${name}.` });
+  expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [workspace], paths: [join(workspace, name)], humanId: "human" });
+});
+
+it("never checks a workspace's memory, even named", async () => {
+  const workspace = join(DATA_DIR, "workspaces", "bot");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, "MEMORY.md"), join(workspace, "memory", "today.md"), "memory/plans/next.md"] }));
+  await auto.settled({ ...turn, roots: [workspace], reply: "Noted in MEMORY.md, memory/today.md and memory/plans/next.md." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("never checks a named document elsewhere in the data folder", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(DATA_DIR, "team-report-inbox", "report.md"), join(DATA_DIR, "workspaces", "notes.md")] }));
+  await auto.settled({ ...turn, roots: [DATA_DIR], reply: "Saved team-report-inbox/report.md and workspaces/notes.md." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("leaves a turn that wrote a page and an unnamed document to the page check", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html", "notes.md"] }));
+  await auto.settled({ ...turn, reply: "The page is ready." });
+  expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ entry: join(root, "index.html") }));
+  expect(docs).not.toHaveBeenCalled();
 });
 
 it("tells the document check about every ended turn, chat-only and failed ones too", async () => {
@@ -311,6 +353,7 @@ it.each([
   ["absolute, quotes", (path: string) => `Saved to "${path}".`],
   ["relative, backticks", () => "Saved to `My Reports/report.docx`."],
   ["relative backslash, quotes", () => "Saved to 'My Reports\\report.docx'."],
+  ["file URL, link", (path: string) => `[Open the report](${pathToFileURL(path).href})`],
 ])("names a scanned document by a path with spaces: %s", async (_, reply) => {
   const old = new Date(Date.now() - 3_600_000);
   await utimes(join(root, "index.html"), old, old);
@@ -324,9 +367,9 @@ it.each([
 
 it("does not hand documents over for an opted-out or failed turn", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
-  await auto.settled({ ...turn, humanText: "Write the script but don't check it" });
+  await auto.settled({ ...turn, reply: "Saved script.md.", humanText: "Write the script but don't check it" });
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
-  await auto.settled({ ...turn, ok: false });
+  await auto.settled({ ...turn, reply: "Saved script.md.", ok: false });
   expect(docs).not.toHaveBeenCalled();
 });
 
