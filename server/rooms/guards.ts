@@ -7,7 +7,7 @@ import { nameClash } from "./names.ts";
 /** Team rooms run only on engines whose relaunches and lifetime they bound. */
 const ROOM_ENGINES: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
 
-const roomEngineAllowed = (driverKind: string | undefined) => driverKind !== undefined && ROOM_ENGINES.has(driverKind);
+export const roomEngineAllowed = (driverKind: string | undefined) => driverKind !== undefined && ROOM_ENGINES.has(driverKind);
 
 /** Why these bots can't be a team room's bots, if they can't. */
 export function roomBotsRefusal(bots: ReadonlyArray<{ name: string; driverKind: string | undefined }>, people: readonly string[] = []): string | null {

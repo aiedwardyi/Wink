@@ -42,6 +42,7 @@ interface RoomItem {
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
+  askId?: string;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -189,6 +190,7 @@ export interface RoomDrain {
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
+  askId?: string;
 }
 
 export type DrainRun = (
@@ -251,7 +253,7 @@ export function queueSteeredMessage(
 
 /** Hold a room member's turn until the bot is idle. Same member + thread
  * coalesces to one participation so two room lines while busy cannot
- * double-fire after settle. */
+ * double-fire after settle. Team room asks never coalesce: each is its own turn. */
 export function queueRoomParticipation(
   botId: string,
   threadId: string,
@@ -262,10 +264,11 @@ export function queueRoomParticipation(
     cardContinuation?: string;
     onDispatchError?: (message: string) => void;
     instructionId?: string;
+    askId?: string;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = entry.items.find((item): item is RoomItem => item.kind === "room");
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId);
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
@@ -287,6 +290,7 @@ export function queueRoomParticipation(
     cardContinuation: options.cardContinuation,
     onDispatchError: options.onDispatchError,
     instructionId: options.instructionId,
+    ...(options.askId ? { askId: options.askId } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
   return { id };
@@ -373,13 +377,15 @@ export function drainSteeredMessages(
     }
 
     saveQueuedSends();
-    const room = roomItems[0];
+    const [room, ...waiting] = roomItems;
     if (!room) continue;
+    if (waiting.length) queues.set(key, { botId: entry.botId, threadId: entry.threadId, items: waiting });
     const roomDrain: RoomDrain = { groupId: room.groupId, hop: room.hop };
     if (room.rootId) roomDrain.rootId = room.rootId;
     if (room.cardContinuation) roomDrain.cardContinuation = room.cardContinuation;
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
+    if (room.askId) roomDrain.askId = room.askId;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }
@@ -599,6 +605,15 @@ export function cancelQueuedRoomParticipations(groupId: string, threadId: string
     else queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
   }
   return cancelled;
+}
+
+export function cancelQueuedAsk(askId: string): void {
+  for (const [key, entry] of queues) {
+    const items = entry.items.filter((item) => !(isRoomItem(item) && item.askId === askId));
+    if (items.length === entry.items.length) continue;
+    if (items.length) queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
+    else queues.delete(key);
+  }
 }
 
 /** Test helper: drop in-memory queues and cancel/running bookkeeping. */
