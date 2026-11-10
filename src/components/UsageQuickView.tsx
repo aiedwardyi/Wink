@@ -14,7 +14,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
-import { refreshUsage, useAutoRefresh, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
@@ -107,6 +107,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
     setMuseAuthFailed(outcome.museAuthFailed);
     setRefreshFailed(outcome.failed);
   };
+  useRefreshKey(refreshing || closing ? null : () => void refresh());
 
   const close = (focus = true) => {
     onClose();
@@ -181,7 +182,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
     </button>
   );
   const buttons = <>
-    <button type="button" data-usage-refresh="" disabled={refreshing} aria-busy={refreshing} aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}
+    <button type="button" data-usage-refresh="" disabled={refreshing} aria-busy={refreshing} aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh()}
       className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
       <RefreshCw size={14} aria-hidden="true" className={cn(refreshing && "motion-safe:animate-spin")} />
     </button>

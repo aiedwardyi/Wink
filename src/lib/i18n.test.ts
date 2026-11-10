@@ -127,9 +127,9 @@ describe("catalogs", () => {
     }
   });
 
-  it("drops the retired Alt+R refresh from the shortcuts help in both languages", () => {
-    expect(en["shortcuts.help"]).not.toContain("Alt+R");
-    expect(ko["shortcuts.help"]).not.toContain("Alt+R");
+  it("names the Alt+R refresh in the shortcuts help in both languages", () => {
+    expect(en["shortcuts.help"]).toContain("Alt+R refreshes Usage while it is open");
+    expect(ko["shortcuts.help"]).toContain("Alt+R로 새로고침");
     expect(en["shortcuts.help"]).toMatch(/shell/);
   });
 
