@@ -13,15 +13,15 @@ export function releaseOf(version: string): string | null {
 }
 
 // anchor: the message an unclosed card sits after, so a restart keeps its spot.
-const Record = z.object({
+const savedSchema = z.object({
   seen: z.string().optional(),
   anchor: z.object({ release: z.string(), id: z.string() }).optional().catch(undefined),
 });
-type Saved = z.infer<typeof Record>;
+type Saved = z.infer<typeof savedSchema>;
 
 function readSaved(dataDir: string): Saved {
   try {
-    const parsed = Record.safeParse(JSON.parse(readFileSync(join(dataDir, FILE), "utf8")));
+    const parsed = savedSchema.safeParse(JSON.parse(readFileSync(join(dataDir, FILE), "utf8")));
     return parsed.success ? parsed.data : {};
   } catch {
     return {};
