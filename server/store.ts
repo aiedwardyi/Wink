@@ -17,6 +17,7 @@ import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
+import { readThreadTail } from "./thread-tail.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -1245,6 +1246,11 @@ export class Store {
 
   messagesFor(threadId: string): Message[] {
     return this.thread(threadId).messages;
+  }
+
+  /** The newest `limit` rows: a loaded thread whole, else a tail read that is never cached. */
+  threadTail(threadId: string, limit?: number): ThreadState {
+    return this.threads.get(threadId) ?? (limit === undefined ? null : readThreadTail(threadId, limit)) ?? this.thread(threadId);
   }
 
   activeLeaf(threadId: string): string | null {

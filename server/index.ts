@@ -1321,9 +1321,9 @@ const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
 const storedAvatarExists = (avatarUrl: string): boolean =>
   attachmentExists(avatarUrl.slice("/api/attachments/".length));
 
-const publicBotRecord = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
+const publicBotRecord = (bot: NonNullable<ReturnType<typeof store.bot>>, activeLeafId = store.activeLeaf(bot.threadId)) => ({
   ...wireBot(bot),
-  activeLeafId: store.activeLeaf(bot.threadId),
+  activeLeafId,
   tasks: store.tasks(bot.id).map(wireTask),
 });
 
@@ -2396,8 +2396,7 @@ function slimMessage(message: Message): Message | Record<string, unknown> {
 }
 
 /** `limit === undefined` is the original, unpaginated shape. */
-function messagePage(threadId: string, limit: number | undefined, before?: string | null) {
-  const all = store.messagesFor(threadId);
+function messagePage(threadId: string, limit: number | undefined, before?: string | null, all: readonly Message[] = store.messagesFor(threadId)) {
   if (limit === undefined) return { messages: all.map(clientMessage) };
   const end = before ? all.findIndex((msg) => msg.id === before) : -1;
   const stop = end === -1 ? all.length : end;
@@ -7830,11 +7829,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) =>
-        limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
+      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const thread = store.threadTail(chat.threadId, limit);
+        const size = limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(thread.messages, limit, chat, thread.activeLeafId);
+        return { activeLeafId: thread.activeLeafId, rows: messagePage(chat.threadId, size, null, thread.messages) };
+      };
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        bots: store.bots.map((bot) => {
+          const { activeLeafId, rows } = page(bot);
+          return { ...publicBotRecord(bot, activeLeafId), ...rows };
+        }),
+        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g).rows })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);

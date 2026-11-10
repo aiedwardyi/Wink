@@ -91,7 +91,7 @@ export function openThreadExport(file: string) {
 }
 
 // SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
-const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
+export const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
 
 export interface ThreadRows {
   messages: Message[];
