@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { closeVerifyWatch } from "@/lib/verify-watch";
+import { SIDEBAR_COLLAPSED_KEY } from "@/lib/sidebar-preferences";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 vi.mock("../shared/live-verify", async importOriginal => ({ ...await importOriginal<typeof import("../shared/live-verify")>(), LIVE_VERIFY_V0: true }));
@@ -15,6 +16,8 @@ const cards = ["first", "second"].map(owner => ({ v: 1, runId: owner, owner, sit
 
 beforeEach(() => {
   localStorage.setItem("omb-onboarding-done", "true");
+  // a collapsed list has no fold to animate, and happy-dom reports a canceled one as unhandled
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
   localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
     bots: cards.map(card => ({ id: card.owner, threadId: `${card.owner}-thread`, name: card.owner, messages: [], modelSelection: { instanceId: "inst", model: "m" } })),
     groups: [{ id: "g1", threadId: "gt1", name: "Crew", memberIds: ["first", "second"], defaultResponder: "all", bulletin: "", unread: false, createdAt: 1, messages: cards.map(card => ({ id: card.owner, role: "bot", kind: "note", text: "", at: 1, verify: card })) }],

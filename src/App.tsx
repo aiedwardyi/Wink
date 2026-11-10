@@ -30,7 +30,8 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
-import { useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -241,6 +242,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     : undefined;
   const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
+  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  useRightSlot(slotPanels, closeSlot);
+  useEffect(() => closeVerifyWatch(), [state.selectedId]);
+  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
       <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
@@ -676,6 +682,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onOverlayChange={setSidebarOverlay}
         onClose={closeDrawer}
         onTerminalAttention={openTerminalAttention}
+        folded={slotShown}
+        onUnfold={() => slotPanels.forEach(closeSlot)}
         rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
       {noEngines ? (
