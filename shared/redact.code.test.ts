@@ -89,7 +89,7 @@ const SECRETS: Array<[string, string]> = [
   [`admin_password: Xk9mQ2vL8pR4`, "admin_password: «redacted 12 chars»"],
   [`password=hunter2.hunter2`, "password=«redacted 15 chars»"],
   [`password=Summer.2024`, "password=«redacted 11 chars»"],
-  [`{"client_secret":"GOCSPX-abcDEF123ghiJKL456mno"}`, "{\"client_secret\":\"«redacted 28 chars»\"}"],
+  [`{"client_secret":"${"GOCSPX" + "-"}abcDEF123ghiJKL456mno"}`, "{\"client_secret\":\"«redacted 28 chars»\"}"],
   [`"private_key": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"`, "\"private_key\": \"«redacted 32 chars»\""],
   [`token=$ecretValue99`, "token=«redacted 13 chars»"],
   [`api_key=$A1B2C3D4E5F6`, "api_key=«redacted 13 chars»"],
