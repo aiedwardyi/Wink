@@ -86,6 +86,7 @@ export class LiveCall {
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
   private turnHadAudio = false;
+  private held = "";
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
@@ -103,7 +104,10 @@ export class LiveCall {
       this.turnHadAudio = true;
       this.refresh();
     };
-    deps.audio.onIdle = () => this.refresh();
+    deps.audio.onIdle = () => {
+      this.release();
+      this.refresh();
+    };
   }
 
   subscribe = (fn: () => void) => {
@@ -203,6 +207,7 @@ export class LiveCall {
         this.flushSaid(1);
         this.turnHadAudio = false;
         this.guarded = false;
+        this.release();
       },
       interrupted: () => {
         if (!mine()) return;
@@ -359,7 +364,16 @@ export class LiveCall {
     } catch {
       // the raw text still reads
     }
-    if (!this.ended) this.engine?.sendText(`[Wink] ${this.deps.botName} replied: ${speakable}`);
+    if (this.ended) return;
+    this.held = `[Wink] ${this.deps.botName} replied: ${speakable}`;
+    this.release();
+  }
+
+  // Text sent while the voice talks cuts it off mid-word, so the report waits for the turn to end.
+  private release() {
+    if (!this.held || this.turnHadAudio || this.deps.audio.playing) return;
+    this.engine?.sendText(this.held);
+    this.held = "";
   }
 
   mute(muted: boolean) {

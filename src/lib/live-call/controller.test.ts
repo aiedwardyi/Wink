@@ -34,7 +34,7 @@ function fakeAudio(): CallAudioPort & { flushed: number } {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(responses: Record<string, Posted> = {}) {
+function setup(responses: Record<string, Posted> = {}, audio: CallAudioPort = fakeAudio()) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -42,7 +42,7 @@ function setup(responses: Record<string, Posted> = {}) {
     botName: "Nova",
     device: "phone",
     engine: () => { const engine = new FakeEngine(); engines.push(engine); return engine; },
-    audio: fakeAudio(),
+    audio,
     now: () => 1_000,
     post: async (path, body) => {
       posts.push({ path, body });
@@ -55,8 +55,8 @@ function setup(responses: Record<string, Posted> = {}) {
   return { call, engines, posts, engine: () => engines.at(-1)! };
 }
 
-async function started(responses?: Record<string, Posted>) {
-  const s = setup(responses);
+async function started(responses?: Record<string, Posted>, audio?: CallAudioPort) {
+  const s = setup(responses, audio);
   await s.call.start();
   s.engine().events.ready();
   return s;
@@ -179,6 +179,21 @@ describe("LiveCall", () => {
     call.observe({ busy: false, messages: rows });
     await flush();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed the bug. Tests pass."]);
+  });
+
+  it("holds the report until the voice finishes its turn", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed."] } } }, audio);
+    audio.onStart();
+    audio.playing = true;
+    call.observe({ busy: false, messages: [botRow("r", "Fixed.")] });
+    await flush();
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    engine().events.turnDone();
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    audio.playing = false;
+    audio.onIdle();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed."]);
   });
 
   it("tells the voice once when a card waits on the user", async () => {
