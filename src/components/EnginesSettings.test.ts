@@ -411,8 +411,7 @@ describe("EnginesSettings friends Connections list", () => {
       for (const [id, email] of [["grok", "grok.user@example.com"], ["muse", "muse.user@example.com"]]) {
         const line = row(id).querySelector("[data-account-email]")!;
         expect(line.textContent).toBe(email);
-        expect(line.className).toContain("text-[11px]");
-        expect(line.className).toContain("truncate");
+        expect(line.classList.contains("usage-email")).toBe(true);
         expect(row(id).textContent).toContain(email);
       }
       expect(row("antigravity").querySelector("[data-account-email]")).toBeNull();
@@ -426,16 +425,15 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
-  it.each([false, true])("gives a single-account email the Claude and Codex name row and offset on a phone (phone=%s)", async (phone) => {
+  it.each([false, true])("gives a single-account email the Claude and Codex card row (phone=%s)", async (phone) => {
     vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
     const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
     const { root, row } = await renderList();
     try {
       const email = row("grok").querySelector("[data-account-email]")!;
-      const nameRow = email.previousElementSibling!;
-      expect(nameRow.className).toBe(phone ? "flex h-9 min-w-0 items-center [@media(pointer:coarse)]:h-11" : "contents");
-      expect(email.classList.contains("-mt-1.5")).toBe(phone);
-      expect(email.parentElement!.classList.contains("py-1")).toBe(!phone);
+      expect(email.previousElementSibling!.className).toBe("flex min-w-0 items-center gap-2");
+      expect(email.closest("[data-account-head]")!.className).toBe("usage-account-head");
+      expect(email.closest('[role="group"]')!.classList.contains("usage-group")).toBe(true);
     } finally {
       await act(async () => root.unmount());
       restore();
@@ -493,7 +491,7 @@ describe("EnginesSettings friends Connections list", () => {
     const { host, root, row } = await renderList();
     try {
       const more = [...host.querySelectorAll("button")].find((button) => button.textContent === "More Engines")!;
-      expect(more.className).toBe(cn(ROW_BUTTON, "mt-3 self-start"));
+      expect(more.className).toBe(cn(ROW_BUTTON, "self-start"));
       expect(row("muse").querySelector("button")!.className).toBe(ROW_BUTTON);
       await act(async () => more.click());
       expect(row("grok").querySelector("button")!.className).toBe(cn(ROW_BUTTON, "text-ink"));

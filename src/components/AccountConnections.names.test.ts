@@ -185,7 +185,7 @@ it.each(["en", "ko"] as const)("keeps the original number tile beside phone acco
   await mount({ phone: true, locale });
   const tile = row()?.querySelector("[data-account-number]");
   expect(tile?.textContent).toBe("1");
-  expect(tile?.parentElement?.className).toBe("flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11");
+  expect(tile?.parentElement?.className).toBe("flex min-w-0 items-center gap-2");
   expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
 });
 
@@ -314,17 +314,16 @@ it.each([false, true])("shows no second copy when the email is tapped (phone=%s)
 
 it.each([false, true])("gives the address its own line under the name on a phone (phone=%s)", async (phone) => {
   await mount({ phone });
-  const line = row()!.querySelector(":scope > div")!;
-  const email = line.querySelector<HTMLElement>("[data-account-email]")!;
+  const email = row()!.querySelector<HTMLElement>("[data-account-head] [data-account-email]")!;
   expect(email.textContent).toBe(canary.address);
-  expect(email.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
-  expect(email.parentElement?.className).toContain("flex-col");
+  expect(email.previousElementSibling?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+  expect(email.classList.contains("usage-email"), "Usage's full-width address line").toBe(true);
   if (!phone) {
     expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
     return;
   }
   const more = row()!.querySelector<HTMLElement>("[data-connection-menu]")!;
-  expect(line.contains(more), "the address runs under the more button").toBe(false);
+  expect(more.closest(".usage-control")?.contains(email), "the address runs under the more button").toBe(false);
   expect(more.querySelector("svg"), "an icon, not a text glyph").not.toBeNull();
   expect(more.textContent).toBe("");
 });

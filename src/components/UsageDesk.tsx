@@ -211,6 +211,7 @@ const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
+export const ACCOUNT_ROW = "min-w-0 border-hairline/70 [&+&]:border-t";
 
 export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name, settings = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
@@ -240,7 +241,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   );
   return (
     <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: account.name })))}
-      className={cn("min-w-0 border-hairline/70 [&+&]:border-t", !reorder && "outline-none")}>
+      className={cn(ACCOUNT_ROW, !reorder && "outline-none")}>
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
           {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
