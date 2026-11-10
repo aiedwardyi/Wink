@@ -611,10 +611,16 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const fanOut = (session, frame) => {
     for (const viewer of session.viewers) {
-      if (viewer.send(frame) <= VIEWER_BACKLOG_LIMIT) continue;
+      let backlog = Infinity;
+      try { backlog = viewer.send(frame); } catch {}
+      if (backlog <= VIEWER_BACKLOG_LIMIT) continue;
       session.viewers.delete(viewer);
-      viewer.drop();
+      try { viewer.drop(); } catch {}
     }
+  };
+  const endViewers = (session) => {
+    for (const viewer of session.viewers) viewer.end();
+    session.viewers.clear();
   };
   const clearActivityTimer = (session) => {
     if (!session.activityTimer) return;
@@ -886,8 +892,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     clearTimeout(session.claudeTrustTimer);
     if (active.get(session.key) === session.id) active.delete(session.key);
     if (!wasRetired) emit(session, "terminal:closed", { id: session.id, botId: session.botId });
-    for (const viewer of session.viewers) viewer.end();
-    session.viewers.clear();
+    endViewers(session);
     const exited = session.pty.exited;
     if (exited) {
       exiting.add(exited);
@@ -996,6 +1001,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (!session.exitReported) {
       session.exitReported = true;
       emit(session, "terminal:exit", { id: session.id, exitCode: session.exitCode });
+      if (session.viewers.size) fanOut(session, { exitCode: session.exitCode });
+      endViewers(session);
     }
     if (session.retired && sessions.get(session.id) === session) sessions.delete(session.id);
   };
@@ -1456,6 +1463,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const result = session.pty.resize(cols, rows);
       session.screen.resize(cols, rows);
       session.cols = cols;
+      if (session.viewers.size) fanOut(session, { cols, rows });
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
       return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
     } catch (cause) {
@@ -1672,9 +1680,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const live = botSessions(botId);
       const session = sessionId ? resolveBotSession(live, sessionId).session : live.find((candidate) => !candidate.botPane) ?? live[0];
       if (!session) throw new Error(sessionId ? "Unknown terminal" : "No active terminal for this bot");
-      const { generation, output, seq, cols, rows } = snapshot(session);
-      session.viewers.add(viewer);
-      return { snapshot: { sessionId: session.id, generation, output, seq, cols, rows }, stop: () => session.viewers.delete(viewer) };
+      const { generation, output, seq, cols, rows, modes, resetModes, exitCode } = snapshot(session);
+      if (exitCode === null) session.viewers.add(viewer);
+      return { snapshot: { sessionId: session.id, generation, output, seq, cols, rows, modes, resetModes, exitCode }, stop: () => session.viewers.delete(viewer) };
     },
     inputBot(botId, input) {
       return writeInput(inputSession(botId, input), input.data);

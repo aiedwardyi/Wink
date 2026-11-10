@@ -271,7 +271,8 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           });
           res.once("close", watch.stop);
           res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
-          return void res.write(`${JSON.stringify(watch.snapshot)}\n`);
+          const line = `${JSON.stringify(watch.snapshot)}\n`;
+          return void (watch.snapshot.exitCode === null ? res.write(line) : res.end(line));
         }
         if (req.method === "POST" && match[2] === "input") {
           await host.inputBot(botId, await readJson(req, MAX_INPUT_BODY));

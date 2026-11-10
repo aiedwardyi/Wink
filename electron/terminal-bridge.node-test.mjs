@@ -825,20 +825,40 @@ const streamRequest = (access, grant, query = "", init = {}) => fetch(`${access.
 test("streams the snapshot first, then chunks in seq order", async (t) => {
   const f = liveFixture(t);
   const { access, pane, child } = await openLive(f);
-  child.data("before\r\n");
-  const controller = new AbortController();
-  const response = await streamRequest(access, terminalReadGrant(access.token, "bot-1"), `?sessionId=${pane.sessionId}`, { signal: controller.signal });
+  child.data("\x1b[?2004hbefore\r\n");
+  const read = terminalReadGrant(access.token, "bot-1");
+  const response = await streamRequest(access, read, `?sessionId=${pane.sessionId}`);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /ndjson/);
   const next = readLines(response.body);
-  assert.deepEqual(await next(), { sessionId: pane.sessionId, generation: pane.generation, output: "before\r\n", seq: 1, cols: 80, rows: 24 });
+  assert.deepEqual(await next(), { sessionId: pane.sessionId, generation: pane.generation, output: "\x1b[?2004hbefore\r\n", seq: 1, cols: 80, rows: 24, modes: [2004], resetModes: [], exitCode: null });
   child.data("one");
   child.data("two");
   assert.deepEqual(await next(), { seq: 2, data: "one" });
   assert.deepEqual(await next(), { seq: 3, data: "two" });
-  controller.abort();
+  await f.host.resize({ sender: f.owner }, pane.sessionId, 100, 30);
+  assert.deepEqual(await next(), { cols: 100, rows: 30 });
+  child.exit({ exitCode: 0 });
+  assert.deepEqual(await next(), { exitCode: 0 });
+  assert.equal(await next(), null);
   await f.watches[0].stopped;
+  const exited = readLines((await streamRequest(access, read)).body);
+  assert.equal((await exited()).exitCode, 0);
+  assert.equal(await exited(), null);
   assert.equal((await streamRequest(access, terminalReadGrant(access.token, "bot-2"))).status, 401);
+  assert.equal((await fetch(`${access.url}/v1/bots/bot-2/terminal/stream`, { headers: { authorization: `Bearer ${terminalReadGrant(access.token, "bot-2")}` } })).status, 409);
+});
+
+test("a viewer that throws is dropped without starving the others", async (t) => {
+  const f = liveFixture(t);
+  const { pane, child } = await openLive(f);
+  const frames = [];
+  let dropped = 0;
+  f.host.watchBot("bot-1", pane.sessionId, { send() { throw new Error("gone"); }, end() {}, drop() { dropped++; } });
+  f.host.watchBot("bot-1", pane.sessionId, { send: (frame) => { frames.push(frame); return 0; }, end() {}, drop() {} });
+  assert.doesNotThrow(() => child.data("a"));
+  child.data("b");
+  assert.deepEqual([dropped, frames], [1, [{ seq: 1, data: "a" }, { seq: 2, data: "b" }]]);
 });
 
 test("does no stream work for a pane nobody watches and forgets a closed viewer", async (t) => {
