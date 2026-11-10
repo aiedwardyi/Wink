@@ -428,6 +428,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         stop: () => void;
         steer: (text: string) => Promise<SteerResult>;
         interrupt: () => void;
+        end?: () => void;
         turnId: string;
         asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>;
       }
@@ -939,6 +940,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let selectedModel: string | null = entry.model;
         let interruptTimer: ReturnType<typeof setTimeout> | null = null;
         let askCancelled = false;
+        // no_reply_needed asked for this cancel: it settles as a clean finish
+        let quietEnd = false;
         // the system text this turn's prompt carried, and whether the agent
         // compacted its context while the prompt ran
         let systemSent: string | null = null;
@@ -993,6 +996,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const settle = (ok: boolean, stopReason: string | null, readBilling = false) => {
           if (state.settled) return;
           state.settled = true;
+          if (quietEnd && ok) stopReason = null;
           if (sessionId && compacted) systemHeld.forget(sessionId);
           else if (sessionId && systemSent && state.promptAccepted) systemHeld.record(sessionId, systemSent);
           if (interruptTimer) clearTimeout(interruptTimer);
@@ -1310,7 +1314,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           interruptTimer = setTimeout(() => settle(true, "cancelled"), 5_000);
           interruptTimer.unref?.();
         };
-        active.set(threadId, { stop, steer, interrupt, turnId, asks });
+        const end = () => { quietEnd = true; interrupt(); };
+        active.set(threadId, { stop, steer, interrupt, end, turnId, asks });
         if (canceledBeforePrompt || disposed) {
           stop();
           settle(true, "cancelled");
@@ -1507,6 +1512,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             : undefined,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
+          endTurn: async (threadId, turnId) => {
+            const turn = active.get(threadId);
+            if (turn?.turnId === turnId) turn.end?.();
+          },
           respondToRequest: async (threadId, requestId, decision) => {
             const turn = active.get(threadId);
             const finish = turn?.asks.get(requestId);

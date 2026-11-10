@@ -156,6 +156,7 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
+import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
@@ -3345,6 +3346,7 @@ void (async () => {
 // Threads whose driver is waiting out a busy provider; a queued send cancels the wait.
 const busyResumeThreads = new Set<string>();
 const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
+const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
@@ -3368,6 +3370,7 @@ bus.subscribe((event: RuntimeEvent) => {
   }
   if (quietTurnText(event)) return;
   event = stripStrayUserTags(event);
+  quietEnd(event);
   quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
