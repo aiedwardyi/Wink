@@ -36,7 +36,10 @@ export function WhatsNewSlot({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     if (!state.hydrated) return;
     const timer = setTimeout(() => {
-      const ask = (asked ??= api("/api/whats-new").then((body: { release?: string | null }) => body.release ?? null, () => null));
+      // The notes stay out of the startup bundle: they load only when an update may have some to show.
+      const ask = (asked ??= api("/api/whats-new")
+        .then(async (body: { release?: string | null; seen?: string | null }) => (body.release ? (await import("@/lib/whats-new")).unseenRelease(body.release, body.seen ?? null) : null))
+        .catch(() => null));
       void ask.then((next) => {
         if (asked !== ask || release === next) return;
         release = next;

@@ -1,6 +1,7 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
 import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
 import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
+import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 
 type Copy = Record<LocaleId, string>;
@@ -16,7 +17,7 @@ export type WhatsNewTile = {
 
 export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile, WhatsNewTile]; more: Copy };
 
-// One entry per release that has notes; a release with no entry shows nothing.
+// One entry per release that has notes; a release with no entry shows the newest earlier one still unseen.
 export const WHATS_NEW: Record<string, WhatsNewEntry> = {
   "1.0.246": {
     title: { en: "New in Wink 1.0.246", ko: "Wink 1.0.246 새 기능" },
@@ -41,5 +42,15 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
 };
+
+/** The newest notes after `seen` that the running release has. */
+export function unseenRelease(release: string, seen: string | null, releases = Object.keys(WHATS_NEW)): string | null {
+  let newest: string | null = null;
+  for (const entry of releases) {
+    if (newerRelease(entry, release) || (seen && !newerRelease(entry, seen))) continue;
+    if (!newest || newerRelease(entry, newest)) newest = entry;
+  }
+  return newest;
+}
 
 export const releaseNotesUrl = (release: string) => `https://github.com/aiedwardyi/orbit-releases/releases/tag/v${release}`;

@@ -3,10 +3,13 @@ import { act, createElement, Fragment } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const api = vi.fn((..._args: unknown[]) => Promise.resolve({ release: "1.0.246" }));
+const api = vi.fn((..._args: unknown[]) => Promise.resolve({ release: "1.0.248", seen: "1.0.245" }));
 vi.mock("@/state/store", () => ({ api: (...args: unknown[]) => api(...args), useStore: () => ({ state: { hydrated: true } }) }));
+vi.mock("@/lib/whats-new", () => ({
+  unseenRelease: (release: string, seen: string | null) => (release === "1.0.248" && seen === "1.0.245" ? "1.0.246" : null),
+}));
 vi.mock("./WhatsNewCard", () => ({
-  default: ({ onClose }: { onClose: () => void }) => createElement("button", { className: "card", onClick: onClose }),
+  default: ({ release, onClose }: { release: string; onClose: () => void }) => createElement("button", { className: "card", "data-release": release, onClick: onClose }),
 }));
 
 const { WhatsNewSlot } = await import("./WhatsNew");
@@ -36,6 +39,7 @@ describe("whats new slot", () => {
     });
     expect(host.querySelectorAll("#b .card")).toHaveLength(1);
     expect(cards()).toHaveLength(1);
+    expect(cards()[0].dataset.release).toBe("1.0.246");
     act(() => root.render(chats(false)));
     await act(async () => {
       await vi.dynamicImportSettled();

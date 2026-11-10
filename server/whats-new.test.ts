@@ -18,37 +18,76 @@ afterEach(() => {
 const seenFile = () => JSON.parse(readFileSync(join(root, "whats-new.json"), "utf8"));
 
 describe("whats new", () => {
-  it("never shows on a fresh install, then shows after the next update", () => {
+  it("never shows on a fresh install, then offers the next update", () => {
     expect(openWhatsNew(root, "1.0.246").pending()).toBeNull();
     expect(seenFile()).toEqual({ seen: "1.0.246" });
     writeFileSync(join(root, "bots.json"), "[]");
     expect(openWhatsNew(root, "1.0.246").pending()).toBeNull();
-    expect(openWhatsNew(root, "1.0.247").pending()).toBe("1.0.247");
+    expect(openWhatsNew(root, "1.0.247").pending()).toEqual({ release: "1.0.247", seen: "1.0.246" });
   });
 
   it("shows once on an install that ran a build from before the record", () => {
     writeFileSync(join(root, "bots.json"), "[]");
     const first = openWhatsNew(root, "1.0.246");
-    expect(first.pending()).toBe("1.0.246");
+    expect(first.pending()).toEqual({ release: "1.0.246", seen: null });
     first.markSeen("1.0.246");
     expect(first.pending()).toBeNull();
     expect(openWhatsNew(root, "1.0.246").pending()).toBeNull();
   });
 
+  it("records the notes shown after a skipped release, not the running one", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
+    const open = openWhatsNew(root, "1.0.247");
+    expect(open.pending()).toEqual({ release: "1.0.247", seen: "1.0.245" });
+    open.markSeen("1.0.246");
+    expect(seenFile()).toEqual({ seen: "1.0.246" });
+    expect(open.pending()).toEqual({ release: "1.0.247", seen: "1.0.246" });
+    expect(openWhatsNew(root, "1.0.248").pending()).toEqual({ release: "1.0.248", seen: "1.0.246" });
+  });
+
+  it("shows notes skipped by an install from before the record", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    const open = openWhatsNew(root, "1.0.248");
+    expect(open.pending()).toEqual({ release: "1.0.248", seen: null });
+    open.markSeen("1.0.246");
+    expect(seenFile()).toEqual({ seen: "1.0.246" });
+  });
+
   it("keeps a newer release pending when a stale card marks an older one seen", () => {
     writeFileSync(join(root, "bots.json"), "[]");
-    const open = openWhatsNew(root, "1.0.247");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
+    const open = openWhatsNew(root, "1.0.248");
     open.markSeen("1.0.246");
-    open.markSeen(undefined);
-    expect(open.pending()).toBe("1.0.247");
-    expect(openWhatsNew(root, "1.0.247").pending()).toBe("1.0.247");
+    expect(open.pending()).toEqual({ release: "1.0.248", seen: "1.0.246" });
+    open.markSeen("1.0.248");
+    open.markSeen("1.0.246");
+    expect(seenFile()).toEqual({ seen: "1.0.248" });
+    expect(open.pending()).toBeNull();
+  });
+
+  it("ignores a seen mark that is not a release up to the running one", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
+    const open = openWhatsNew(root, "1.0.247");
+    for (const shown of [undefined, 1, "", "latest", "1.0.246-dev.1", "1.0.248", "1.0.245", "1.0.244"]) open.markSeen(shown);
+    expect(seenFile()).toEqual({ seen: "1.0.245" });
+    expect(open.pending()).toEqual({ release: "1.0.247", seen: "1.0.245" });
+  });
+
+  it("leaves the record alone on a release nobody marks seen", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.246" }));
+    expect(openWhatsNew(root, "1.0.247").pending()).toEqual({ release: "1.0.247", seen: "1.0.246" });
+    expect(seenFile()).toEqual({ seen: "1.0.246" });
+    expect(openWhatsNew(root, "1.0.248").pending()).toEqual({ release: "1.0.248", seen: "1.0.246" });
   });
 
   it("keeps it pending across restarts until seen", () => {
     writeFileSync(join(root, "bots.json"), "[]");
     writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
-    expect(openWhatsNew(root, "1.0.246").pending()).toBe("1.0.246");
-    expect(openWhatsNew(root, "1.0.246").pending()).toBe("1.0.246");
+    expect(openWhatsNew(root, "1.0.246").pending()).toEqual({ release: "1.0.246", seen: "1.0.245" });
+    expect(openWhatsNew(root, "1.0.246").pending()).toEqual({ release: "1.0.246", seen: "1.0.245" });
   });
 
   it("never shows on a downgrade or the same release", () => {
@@ -68,6 +107,9 @@ describe("whats new", () => {
   it("does nothing without a version", () => {
     expect(openWhatsNew(root, "").pending()).toBeNull();
     writeFileSync(join(root, "bots.json"), "[]");
-    expect(openWhatsNew(root, "").pending()).toBeNull();
+    const open = openWhatsNew(root, "");
+    open.markSeen("1.0.246");
+    expect(open.pending()).toBeNull();
+    expect(() => seenFile()).toThrow();
   });
 });

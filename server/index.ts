@@ -8062,7 +8062,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
 
-    if (method === "GET" && path === "/api/whats-new") return json(res, 200, { release: whatsNew.pending() });
+    if (method === "GET" && path === "/api/whats-new") return json(res, 200, whatsNew.pending() ?? { release: null });
     if (method === "POST" && path === "/api/whats-new/seen") {
       whatsNew.markSeen((await readBody(req))?.release);
       return json(res, 200, { ok: true });
