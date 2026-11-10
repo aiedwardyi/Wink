@@ -506,7 +506,7 @@ const TOOLS = [
   {
     name: "list_routines",
     description:
-      "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's full instructions and latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
+      "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's record, with up to 2,000 characters of its instructions and its latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

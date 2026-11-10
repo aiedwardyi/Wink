@@ -37,9 +37,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("sends the task record only when the session restarts or a summary lands", async () => {
-  const instanceId = "claude";
-  const model = "claude-opus-5-5";
+const instanceId = "claude";
+const model = "claude-opus-5-5";
+
+function summarizedChat() {
   const store = new Store(() => ({ instanceId, model }));
   const bot = store.createBot({}, { seedMessages: false });
   const threadId = bot.threadId;
@@ -54,7 +55,7 @@ it("sends the task record only when the session restarts or a summary lands", as
   store.markResumeSeeded(bot.id, threadId, { instanceId, cursor: "session-1", compactionId: summary.id });
   const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" } } };
 
-  const send = async (text: string, landed = false) => {
+  const send = async (text: string, landed = false, nativeAt: number | null = landed ? 1 : null) => {
     const userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
     const activeMessages = store.activePath(threadId);
     const skipTranscript = new Set([userMessage.id]);
@@ -67,7 +68,7 @@ it("sends the task record only when the session restarts or a summary lands", as
       ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys,
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
-      latestCompactionId: summary.id, sessionPrompt: undefined, nativeAt: landed ? 1 : null,
+      latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
@@ -76,7 +77,11 @@ it("sends the task record only when the session restarts or a summary lands", as
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "ok" });
     return turn;
   };
+  return { store, bot, threadId, send };
+}
 
+it("sends the task record only when the session restarts or a summary lands", async () => {
+  const { store, bot, threadId, send } = summarizedChat();
   for (const text of ["and the cat?", "and the fish?", "and the bird?"]) {
     expect(await send(text)).toEqual({ turnText: text, resume: true });
   }
@@ -85,4 +90,20 @@ it("sends the task record only when the session restarts or a summary lands", as
   const restarted = await send("and the goat?");
   expect(restarted.resume).toBe(false);
   expect(restarted.turnText.startsWith(`${RECORD}\n\n`)).toBe(true);
+});
+
+it("sends the task record once after a background summary lands on a live session", async () => {
+  const { store, bot, threadId, send } = summarizedChat();
+  expect(await send("and the cat?", false, 1)).toEqual({ turnText: "and the cat?", resume: true });
+  const built = store.appendCompaction(threadId, {
+    v: 1, summary: "The dog is Biscuit. The cat is unnamed.", coveredThroughId: store.activePath(threadId).at(-1)!.id, firstKeptId: null,
+    contextWindow: 200_000, estimatedTokensBefore: 1_000, sourceMessageCount: 4,
+  });
+  expect(await send("and the fish?", false, 1)).toEqual({ turnText: `${RECORD}\n\nand the fish?`, resume: true });
+  const seed = store.taskByThread(bot.id, threadId)!.resumeSeed;
+  store.markResumeSeeded(bot.id, threadId, {
+    instanceId, cursor: "session-1",
+    compactionId: turns.turnSeedCompactionId({ replayed: false, instanceId, cursor: "session-1", seed, sessionCompactionId: built.id, supersededIds: context.supersededCompactionIds(store.activePath(threadId), built.id) }),
+  });
+  expect(await send("and the bird?", false, 1)).toEqual({ turnText: "and the bird?", resume: true });
 });

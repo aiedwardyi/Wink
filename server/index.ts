@@ -242,6 +242,7 @@ import {
   turnSeedCompactionId,
   turnSeedsSession,
   withSystemChanges,
+  withTaskRecord,
 } from "./turn-context.ts";
 import { stallErrorActivity } from "./room-error-attribution.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
@@ -4996,15 +4997,15 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? knownCatalogContextWindow(instance.models, model)
     : null;
   const supersededIds = supersededCompactionIds(activeMessages, latestCompactionId);
-  const unseeded = !rewound && !fresh && resumeSessionUnseeded({
+  const seedInputs = {
     instanceId,
     cursor: task.resumeCursors[instanceId],
     seed: task.resumeSeed,
     latestCompactionId,
     expanded: prepared.expanded,
     supersededIds,
-    native: Boolean(nativeAt),
-  });
+  };
+  const unseeded = !rewound && !fresh && resumeSessionUnseeded({ ...seedInputs, native: Boolean(nativeAt) });
   // What this turn's session ends up holding: the summary, or the original
   // history a grown window restored in its place.
   const sessionCompactionId = prepared.expanded ? null : latestCompactionId;
@@ -5115,7 +5116,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: compactedThisTurn,
+    contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   });
@@ -5135,7 +5136,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     replaysNatively,
     taskRecord: taskRecord ?? undefined,
     taskRecordText: durableTaskRecordText || undefined,
-    contextCapped: compactedThisTurn,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
   }).turnText;
@@ -5645,7 +5645,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             seed.cursor = undefined;
             resumeCursor = undefined;
             text = withLate(systemRecycleText(!systemRecycle));
-          } else text = [text, ...late.slice(lateCount)].join("\n\n");
+          } else text = [latestCompactionId === sessionCompactionId ? text : withTaskRecord(text, durableTaskRecordText), ...late.slice(lateCount)].join("\n\n");
           console.info(`[session] ${JSON.stringify({ threadId, reason: recycleDeferred ? "recycle-deferred-background" : systemRecycle ? "system" : "compaction", lastTurnToolRounds, sessionToolRounds })}`);
         }
         if (live.adapter.capabilities.pinnedSystem === true) {

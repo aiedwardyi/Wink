@@ -21,6 +21,7 @@ import {
   turnSeedCompactionId,
   turnSeedsSession,
   withSystemChanges,
+  withTaskRecord,
 } from "./turn-context.ts";
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
@@ -1102,5 +1103,13 @@ describe("withSystemChanges", () => {
     const big = (word: string) => withMemory(...Array.from({ length: 200 }, (_, i) => `- ${word} note ${i} ${"x".repeat(40)}`));
     expect(withSystemChanges("hi", big("old"), big("new"))).toBeNull();
     expect(withSystemChanges("hi", big("old"), big("new"), Infinity)).toContain("- new note 199");
+  });
+});
+
+describe("withTaskRecord", () => {
+  it("puts the record on a turn that lacks it, once", () => {
+    expect(withTaskRecord("hi", "Goal: ship")).toBe("Goal: ship\n\nhi");
+    expect(withTaskRecord("Goal: ship\n\nhi", "Goal: ship")).toBe("Goal: ship\n\nhi");
+    expect(withTaskRecord("hi", "")).toBe("hi");
   });
 });

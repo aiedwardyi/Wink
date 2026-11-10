@@ -1025,7 +1025,7 @@ describe("agents-proxy MCP surface", () => {
     expect(missing.result.isError).toBe(true);
     const tools = await rpc("tools/list");
     const tool = tools.result.tools.find((entry: { name: string }) => entry.name === "list_routines");
-    expect(tool.description).toContain("Pass routine_id for one routine's full instructions");
+    expect(tool.description).toContain("up to 2,000 characters of its instructions");
     expect(tool.inputSchema.properties.routine_id.type).toBe("string");
   });
 
