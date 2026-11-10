@@ -374,6 +374,14 @@ describe("Usage desk", () => {
     expect(mainPosts()[1]).toBe(`POST /api/accounts/${encodeURIComponent(CODEX_2)}/default`);
   });
 
+  it.each([["main-model", "usage.desk.mainModel"], ["main-effort", "usage.desk.mainEffort"], ["main-unavailable", "usage.desk.mainUnavailable"]])("says why the save was refused (%s)", async (code, key) => {
+    server.post = async () => { throw Object.assign(new Error("raw server text"), { code, bot: "Atlas" }); };
+    await mount();
+    await click(useButton(CLAUDE_3));
+    expect(text(q('[role="alert"]'))).toBe(i18n.translate("en", key as never, { bot: "Atlas" }));
+    expect(checkRow()).toBe("claude");
+  });
+
   it.each(["500 Internal Server Error", "409 Conflict"])("keeps Main and shows a safe error when the save fails (%s)", async (status) => {
     server.post = async () => { throw new Error(`${status}: ${canary.address} raw provider text`); };
     await mount();

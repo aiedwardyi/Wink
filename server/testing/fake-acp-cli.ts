@@ -525,6 +525,10 @@ function handle(msg: any) {
         });
         return;
       }
+      if (mode === "self-cancel") {
+        result(msg.id, { stopReason: "cancelled" });
+        return;
+      }
       if (mode === "fail-after-text") {
         // Stream real text, THEN fail the turn — the shape of a crash
         // mid-answer. This is the one case where the routine-failed/done

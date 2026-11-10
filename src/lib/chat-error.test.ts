@@ -29,6 +29,19 @@ describe("chat errors", () => {
     }
   });
 
+  it("says in both languages when the engine or the sign-in ended a reply nobody stopped", async () => {
+    const { chatBannerError } = await import("./error-text");
+    try {
+      expect(chatBannerError(new Error("Grok stopped this reply on its own"))).toBe("Grok stopped this reply on its own. Send your message again.");
+      expect(chatBannerError(new Error("the sign-in changed while the reply was starting"))).toBe("The sign-in changed while the reply was starting. Send your message again.");
+      applyLocale("ko");
+      expect(chatBannerError(new Error("Grok stopped this reply on its own"))).toBe("Grok에서 답변을 스스로 멈췄어요. 메시지를 다시 보내 주세요.");
+      expect(chatBannerError(new Error("the sign-in changed while the reply was starting"))).toBe("답변을 시작하는 동안 로그인이 바뀌었어요. 메시지를 다시 보내 주세요.");
+    } finally {
+      applyLocale("en");
+    }
+  });
+
   it.each(["bot", "channel"])("shows a %s send task switch as a known failure in 1:1 and rooms", async (target) => {
     const { classifyChatError } = await import("../../shared/chat-error");
     const line = `the ${target} switched tasks before it could receive the message`;

@@ -16,7 +16,7 @@ import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { refreshUsage, useAutoRefresh, useRefreshPending } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
-import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
+import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
 
@@ -206,7 +206,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
             {ordered(usageAccounts(engine), accountOrder, (each) => each.id).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
-          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{mainFailedText(state, engine.base, t)}</div>}
           {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">

@@ -453,6 +453,24 @@ describe("Grok warm leases (recorded transport)", () => {
     expect(peers.every((peer) => peer.child.killed)).toBe(true);
   });
 
+  it("a sign-in that changes under a starting turn says so instead of ending as a Stop", async () => {
+    held.add("0:initialize");
+    held.add("1:initialize");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    const sending = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    pool.barrier({ instanceId: instance.instanceId }, "sign out")();
+    peers[1].pending.get("initialize")!();
+    await drain();
+    await Promise.all([preparing, sending]);
+    expect(recorder.events.slice(-2)).toMatchObject([
+      { type: "runtime.error", message: "the sign-in changed while the reply was starting" },
+      { type: "turn.completed", ok: false, stopReason: "sign_in_changed" },
+    ]);
+  });
+
   it.each(["auth hash", "generation"])("a returned old-account turn is closed, not offered (%s)", async (change) => {
     held.add("prompt-result");
     await start();
@@ -2089,6 +2107,14 @@ describe("ACP turns (fake CLI)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
     expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
+  it("a cancel nobody asked for becomes a plain error, not a quiet Stop", async () => {
+    await create(GrokAgentDriver, "self-cancel");
+    await instance.adapter.sendTurn({ threadId: "t-self-cancel", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own" });
   });
 
   it("an exit before result becomes runtime.error + failed turn", async () => {
