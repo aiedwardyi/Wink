@@ -96,11 +96,11 @@ describe("ChatView quick answers", () => {
     expect(actions.querySelector("[aria-label='Regenerate response']")).not.toBeNull();
   });
 
-  it("shows a typing row under a pending ask, only while the bot works", async () => {
+  it("shows a typing row under a pending ask, also after the turn ended", async () => {
     const { host, render } = await mount(bot([ask("q", 1)], true));
     expect(row(host, "q")!.querySelector("[data-quick-typing]")?.textContent).toBe("");
     await render(bot([ask("q", 1)], false));
-    expect(host.querySelector("[data-quick-typing]")).toBeNull();
+    expect(row(host, "q")!.querySelector("[data-quick-typing]")).not.toBeNull();
   });
 
   it("drops the typing row when the answer lands", async () => {

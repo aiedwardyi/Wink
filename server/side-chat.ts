@@ -203,5 +203,8 @@ export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; n
   } catch {
     return Promise.resolve(handoff(started));
   }
-  return handle ? viaFork(handle, threadId, started, live.attached) : viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached);
+  if (handle) return viaFork(handle, threadId, started, live.attached);
+  // the chat-only path cannot do the lookups the prompt promises, so an engine with a fork never falls back to it
+  if (bot.instance.fork) return Promise.resolve(handoff(started));
+  return viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached);
 }

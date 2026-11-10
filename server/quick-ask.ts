@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
-import type { ProviderInstance } from "./contracts.ts";
+import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
 import { nominate } from "./quick-route.ts";
@@ -53,9 +53,14 @@ export function routesQuick(gate: QuickGate): boolean {
   return nominate(gate.text) === "quick";
 }
 
-/** Answered quick asks since the last real user turn the bot has not taken in, newest kept. */
-export function quickAnswersSinceLastUserTurn(messages: Message[], excludeIds: ReadonlySet<string>, boundId?: string): string[] {
+// The answers a thread's starting turn carries in its block, until that turn's first model event.
+const carried = new Map<string, string[]>();
+const MODEL_EVENTS: ReadonlySet<string> = new Set(["content.delta", "item.started", "item.completed"]);
+
+/** Answered quick asks since the last real user turn the bot has not taken in, newest kept. A turn names its thread to carry them. */
+export function quickAnswersSinceLastUserTurn(messages: Message[], excludeIds: ReadonlySet<string>, boundId?: string, turnThreadId?: string): string[] {
   const pairs: string[] = [];
+  const ids: string[] = [];
   let tokens = estimateContextTokens([{ text: BLOCK_HEAD }]);
   for (let index = messages.length - 1; index >= 0 && pairs.length < BLOCK_PAIRS; index--) {
     const message = messages[index]!;
@@ -70,8 +75,20 @@ export function quickAnswersSinceLastUserTurn(messages: Message[], excludeIds: R
     tokens += estimateContextTokens([{ text: pair }]);
     if (tokens > BLOCK_TOKENS) break;
     pairs.unshift(pair);
+    ids.push(message.id);
   }
+  if (turnThreadId) carried.set(turnThreadId, ids);
   return pairs.length ? [[BLOCK_HEAD, ...pairs].join("\n")] : [];
+}
+
+/** Marks the carried answers noted on the turn's first model event; a turn that ends before it leaves them for the next. */
+export function quickAnswersTaken(store: Pick<Store, "messagesFor" | "patchMessage">, event: RuntimeEvent): void {
+  const ids = carried.get(event.threadId);
+  const ended = event.type === "turn.completed" || event.type === "session.exited";
+  if (!ids || (!ended && !MODEL_EVENTS.has(event.type))) return;
+  carried.delete(event.threadId);
+  if (ended) return;
+  for (const row of store.messagesFor(event.threadId)) if (row.quick && ids.includes(row.id)) store.patchMessage(event.threadId, row.id, { quick: { ...row.quick, noted: true } });
 }
 
 export interface QuickDeps {
@@ -217,6 +234,13 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
       }
     }
     if (!pending(store, threadId, ask)) return;
+    queueAsk(store, botId, threadId, ask);
+    deps.drain();
+    return;
+  }
+  const path = store.activePath(threadId);
+  // the bot's own reply already stands under the ask; a late answer could contradict it
+  if (!current.busy && !stopped.has(ask.id) && path.slice(path.findIndex((row) => row.id === ask.id) + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && row.text?.trim())) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;

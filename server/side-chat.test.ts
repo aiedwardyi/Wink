@@ -262,6 +262,13 @@ describe("quickAsk without a fork", () => {
     expect(await quickAsk({ instance: instanceWith({}), messages: [] }, "t1", { text: "q?" })).toMatchObject({ route: "handoff" });
   });
 
+  it("hands off when an engine's fork returns null, without a text call", async () => {
+    const generateText = vi.fn(async () => "Port 8787.");
+    const result = await quickAsk({ instance: instanceWith({ driverKind: "claudeAgent", fork: () => null, generateText }), messages: [] }, "t1", { text: "what port?" });
+    expect(result).toMatchObject({ route: "handoff" });
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
   it("hands off an over-long answer or one quoting a changed file it was not given", async () => {
     const at = new Date().toISOString();
     observeLive({ eventId: "x1", provider: "claude", threadId: "t-text-guard", createdAt: at, type: "turn.started" });
