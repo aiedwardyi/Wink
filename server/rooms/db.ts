@@ -194,6 +194,12 @@ export function recentRoomEntries(roomId: string, limit: number): RoomEntry[] {
   return rows.reverse().map(rowToEntry);
 }
 
+/** Entries after `after`, oldest first, at most `limit`. */
+export function roomEntriesAfter(roomId: string, after: number, limit: number): RoomEntry[] {
+  const rows = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(roomId, after, limit) as LogRow[];
+  return rows.map(rowToEntry);
+}
+
 const ATTACHED = /<attached-/i;
 
 /** Line ends and control characters normalized, edges trimmed. */
