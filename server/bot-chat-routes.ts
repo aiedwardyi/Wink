@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { credentialIsConfigured, credentialResumeOutcome } from "../shared/credential-request.ts";
+import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
@@ -10,6 +11,7 @@ import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { parseCallTag } from "./live-call.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
@@ -65,7 +67,7 @@ type BotChatRouteDeps = {
   turnStartClaims: Map<string, string | undefined>;
   botHasActiveTurn: (botId: string, threadId?: string) => boolean;
   taskResumes: TaskResumeScheduler;
-  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string }) => Promise<StartedTurn>;
+  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag }) => Promise<StartedTurn>;
   resolveAndSendRoutine: (res: ServerResponse, args: { botId: string; botName?: string; threadId: string; requestId: string; behavior: string }) => boolean;
   approvalBus: ApprovalBus;
   startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string) => void;
@@ -137,7 +139,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message },
+    { adapter, replyTo, sendId, queueId, after, ask, call }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag },
   ) => {
     let steered = false;
     let dropped = false;
@@ -211,6 +213,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           replyToId: replyTo?.id,
           sendId,
           steered: true,
+          call,
         });
       peerInput?.accept(message);
       cancelUsageWait?.(bot.id, undefined, true);
@@ -223,13 +226,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
       // an idle bot takes the ask as an ordinary turn
       const userMessage = (ask && store.patchMessage(threadId, ask.id, { quick: undefined })) || undefined;
-      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage });
+      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call });
       return sendPostReceipt(started, threadId);
     }
     const queued = queueId ? { id: queueId, skipped: false } : queueSteeredMessage(current.id, threadId, text, {
       replyToId: replyTo?.id,
       sendId,
       after,
+      call,
       // Reply quote only - startTurn wraps reactions when this drains.
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
     });
@@ -303,6 +307,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         markChatLatency({ sendId, threadId }, "post.received");
       }
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      const call = parseCallTag(body.call);
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -357,16 +362,17 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           // sends race the claim and receive a false busy rejection.
           if (currentAtStart.busy || botHasActiveTurn(bot.id, threadId)) {
             const after = body.deliver === "after";
-            if (quick && routesQuick({
+            // a call order waited for a yes; it goes to the bot, never to Quick answers
+            if (!call?.order && quick && routesQuick({
               bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
               deliverAfter: after, replyTo, queueId, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             })) {
-              const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" } });
+              const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            return await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after });
+            return await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call });
           }
           // Stop cleared `busy`, but the driver holds the thread for up to
           // the cancel grace and would refuse the dispatch. Queue it - that
@@ -380,6 +386,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               replyToId: replyTo?.id,
               sendId,
               after: body.deliver === "after",
+              call,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             if (held.skipped) return { ok: true as const, cancelled: true as const, threadId };
@@ -389,13 +396,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           const syncUntil = !queueId && threadSyncGate.enabled ? syncHold.until(threadId) : undefined;
           if (syncUntil !== undefined) {
             const held = queueSteeredMessage(bot.id, threadId, text, {
-              replyToId: replyTo?.id, sendId, syncUntil,
+              replyToId: replyTo?.id, sendId, syncUntil, call,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });
             return { ok: true as const, queued: true as const, reason: "sync" as const, queueId: held.id, threadId };
           }
-          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId });
+          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call });
           return sendPostReceipt(started, threadId);
         }),
       ).finally(() => { if (queueId) drainQueuedSends(); });

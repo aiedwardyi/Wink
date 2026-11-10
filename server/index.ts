@@ -416,6 +416,8 @@ import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from ".
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
+import { isVoiceLine, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
 import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
@@ -1887,7 +1889,7 @@ const groupWithThread = (group: GroupRecord) => ({
 // still send their richer payload on top.
 store.onChange((change) => {
   try {
-    if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin) {
+    if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin && !isVoiceLine(change.message)) {
       if (!change.imported && change.message.kind === "text" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
@@ -3435,7 +3437,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
-        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => m.role === "user" || (m.role === "bot" && m.kind === "text")) : undefined;
+        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text"))) : undefined;
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -4493,6 +4495,7 @@ type StartTurnOptions = {
   /** Stable identity supplied by the composer so a network retry cannot
    * dispatch the same user action twice. */
   sendId?: string;
+  call?: CallTag;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4747,6 +4750,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           text: opts?.transcriptText ?? text,
           replyToId: opts?.replyTo?.id,
           sendId: opts?.sendId,
+          call: opts?.call,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7073,7 +7077,7 @@ function resumeSecretCard(botId: string, threadId: string, messageId: string, ou
       error: undefined,
     },
   });
-  dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
+  if (!isCallKeyCard(message.secret)) dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
   return true;
 }
 
@@ -7294,6 +7298,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
@@ -8145,6 +8150,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "POST") {
       return await botChatRoutes.send(req, res, m);
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
+    if (m && method === "POST") return await liveCall(req, res, m);
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
