@@ -5,6 +5,7 @@
 // an http.Server that never listens: no new port is opened.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { Duplex } from "node:stream";
 import { TLSSocket, createSecureContext, type SecureContext } from "node:tls";
@@ -15,12 +16,16 @@ import { parseClientHello, type ClientHelloInfo } from "../../shared/tls-client-
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { markRelaySocket } from "./via.ts";
 
+const { HTTPParser } = createRequire(import.meta.url)("node:_http_common") as {
+  HTTPParser: { kOnMessageBegin: number };
+};
+
 export const ALPN_HTTP1 = "http/1.1";
 export const PEEK_TIMEOUT_MS = 10_000;
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 /** Matches the relay's idle timeout; SSE heartbeats every 15 s keep streams alive. */
 export const IDLE_TIMEOUT_MS = 10 * 60_000;
-export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const KEEP_ALIVE_TIMEOUT_MS = 310_000;
 /** Connections per relay-reported peer that have not yet sent a complete request head. */
 export const MAX_PENDING_PER_PEER = 8;
 const MAX_PEER_LENGTH = 64;
@@ -277,34 +282,44 @@ export class RelayIngress {
     const cleaned = cleanPeer(peer);
     if (cleaned) relayPeers.set(tlsSocket, cleaned);
     markRelaySocket(tlsSocket);
-    this.armRequestDeadlines(tlsSocket, release);
     this.http.emit("connection", tlsSocket);
+    this.armRequestDeadlines(tlsSocket, release);
   }
 
-  /**
-   * While a connection waits for a request, the head must arrive within the
-   * server's headersTimeout and the whole request within requestTimeout. The
-   * wait starts when the connection opens and again when a response finishes,
-   * so a stream in progress is never cut. Once a request head arrived the
-   * connection stops counting as pending for its peer.
-   */
+  /** Idle reuse waits separately from the next request's headers and body. */
   private armRequestDeadlines(socket: TLSSocket, release: () => void): void {
     const server = this.http;
     let stopHeaders: Cancel | null = null;
     let stopRequest: Cancel | null = null;
+    let stopKeepAlive: Cancel | null = null;
+    let generation = 0;
     const clear = () => {
       stopHeaders?.();
       stopRequest?.();
-      stopHeaders = stopRequest = null;
+      stopKeepAlive?.();
+      stopHeaders = stopRequest = stopKeepAlive = null;
     };
     const deadline = (ms: number) => (ms > 0 ? this.clock.schedule(ms, () => socket.destroy()) : null);
-    function waiting(): void {
+    function requesting(): void {
       clear();
       if (socket.destroyed) return;
       stopHeaders = deadline(server.headersTimeout);
       stopRequest = deadline(server.requestTimeout);
     }
+    function waiting(current: number): void {
+      if (current !== generation) return;
+      clear();
+      if (socket.destroyed) return;
+      stopKeepAlive = deadline(KEEP_ALIVE_TIMEOUT_MS);
+    }
+    // Native message starts include partial headers buffered behind another request.
+    const parser = (socket as TLSSocket & { parser: Record<number, (() => void) | null> }).parser;
+    parser[HTTPParser.kOnMessageBegin] = () => {
+      generation++;
+      if (generation > 1) requesting();
+    };
     this.onRequest.set(socket, (req, res) => {
+      const current = generation;
       release();
       stopHeaders?.();
       stopHeaders = null;
@@ -325,10 +340,10 @@ export class RelayIngress {
         });
       }
       // Handlers run first; one that already ended its response starts the wait now.
-      if (res.writableEnded) waiting();
-      else res.once("finish", waiting);
+      if (res.writableEnded) waiting(current);
+      else res.once("finish", () => waiting(current));
     });
     socket.once("close", clear);
-    waiting();
+    requesting();
   }
 }
