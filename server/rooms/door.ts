@@ -180,6 +180,7 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   if (!parts || parts[1] !== relayHost) return send(res, 400, { error: "bad-code" });
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
+  if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
   if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
   const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });

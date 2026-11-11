@@ -6,14 +6,14 @@ import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react"
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
-import { createTeamRoom, inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, type JoinedView } from "@/lib/team-rooms";
+import { createTeamRoom, inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 
-type Sheet = "create" | "join" | "people" | "leave" | "remove" | null;
+type Sheet = "create" | "join" | "rejoin" | "people" | "leave" | "remove" | null;
 
 let sheet: Sheet = null;
 let roomTarget: { id: string; name: string } | null = null;
@@ -49,8 +49,13 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
     setBusy(true);
     setProblem(null);
     try {
-      const result: { room: JoinedView } = await request(`${joinedRoomBase(joinedId)}/rejoin`, { method: "POST" });
-      if (result.room) noteJoinedRoom(result.room);
+      const result = await rejoinRoom(joinedId);
+      if (!("room" in result)) {
+        if (result.status === 409 && result.error === "no-saved-code") pick("rejoin");
+        else setProblem(joinErrorKey(result.status, result.error));
+        return;
+      }
+      noteJoinedRoom(result.room);
       dispatch({ type: "select", id: group.id });
       onClose();
     } catch {
@@ -207,7 +212,7 @@ function CreateSheet({ closing, onClose }: { closing: boolean; onClose: () => vo
 }
 
 /** A valid code joins the moment it lands: no Enter, no button. */
-function JoinSheet({ closing, onClose }: { closing: boolean; onClose: () => void }) {
+function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: () => void; rejoin?: { roomId: string; name: string } }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [code, setCode] = useState("");
@@ -221,7 +226,7 @@ function JoinSheet({ closing, onClose }: { closing: boolean; onClose: () => void
     busy.current = true;
     setJoining(true);
     setProblem(null);
-    const result = await joinRoom(value);
+    const result = rejoin ? await rejoinRoom(rejoin.roomId, value) : await joinRoom(value);
     if ("room" in result) {
       noteJoinedRoom(result.room);
       dispatch({ type: "select", id: joinedSelection(result.room.roomId) });
@@ -242,9 +247,14 @@ function JoinSheet({ closing, onClose }: { closing: boolean; onClose: () => void
 
   useEffect(() => input.current?.focus(), []);
 
+  const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
-    <Shell label={t("teamRoom.joinMenu")} closing={closing} onClose={onClose}>
-      <div className="mb-3 text-[15px] font-semibold text-ink">{t("teamRoom.joinMenu")}</div>
+    <Shell label={title} closing={closing} onClose={onClose}>
+      <div className="mb-3 text-[15px] font-semibold text-ink">{title}</div>
+      {rejoin && <>
+        <div title={rejoin.name} className="mb-2 truncate text-[13px] text-ink-secondary">{rejoin.name}</div>
+        <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.rejoinCodeHint")}</p>
+      </>}
       <input
         ref={input}
         value={code}
@@ -302,6 +312,9 @@ export function TeamRoomDialogs() {
     <>
       <Presence open={open === "create"}>{(closing) => <CreateSheet closing={closing} onClose={close} />}</Presence>
       <Presence open={open === "join"}>{(closing) => <JoinSheet closing={closing} onClose={close} />}</Presence>
+      <Presence open={open === "rejoin" && Boolean(joinedId)}>
+        {(closing) => <JoinSheet closing={closing} onClose={close} rejoin={{ roomId: joinedId!, name: roomTarget?.name ?? "" }} />}
+      </Presence>
       <Presence open={open === "people" && isTeamRoom(group)}>
         {(closing) => isTeamRoom(group) && <TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />}
       </Presence>

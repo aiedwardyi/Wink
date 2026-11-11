@@ -179,6 +179,7 @@ async function joinedTeam(name = "Mina") {
   const group = teamRoom();
   hostSays(group, "welcome");
   const c = teammate();
+  c.start();
   const result = await c.join(codeFor(group, name));
   if (!result.ok) throw new Error(result.error);
   await live(c, group.hosted.roomId);
@@ -186,6 +187,44 @@ async function joinedTeam(name = "Mina") {
 }
 
 describe("teammate and the real door", () => {
+  it("saves an old left copy's code once and reuses it after restart", async () => {
+    const group = teamRoom();
+    const shared = roomCode(group.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const c = teammate();
+    c.start();
+    expect((await c.join(code)).ok).toBe(true);
+    await live(c, group.hosted.roomId);
+    const room = joinedRoom(group.hosted.roomId)!;
+    expect((await c.leave(room.roomId)).ok).toBe(true);
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(DATA_DIR, "joined.db"));
+    db.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(room.roomId);
+    db.close();
+    expect((await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, c, async () => ({})))?.body).toEqual({ error: "no-saved-code" });
+    const recovered = await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, c, async () => ({ code }));
+    expect(recovered?.status).toBe(200);
+    await live(c, room.roomId);
+    expect((await c.leave(room.roomId)).ok).toBe(true);
+    c.stop();
+    closeJoinedDb();
+    const restarted = teammate();
+    expect((await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, restarted, async () => ({})))?.status).toBe(200);
+    await live(restarted, room.roomId);
+  });
+
+  it("rejects another room's code before creating a membership", async () => {
+    const { c, roomId } = await joinedTeam();
+    expect((await c.leave(roomId)).ok).toBe(true);
+    const other = teamRoom();
+    const shared = roomCode(other.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const result = await joinedRoute("POST", `/api/joined/rooms/${roomId}/rejoin`, c, async () => ({ code }));
+    expect(result?.status).toBe(400);
+    expect(roomPeople(other.hosted.roomId)).toEqual([]);
+    expect(joinedRoom(other.hosted.roomId)).toBeNull();
+  });
+
   it("rejoins after leave using the saved room code after a client restart, with history", async () => {
     const group = teamRoom();
     const shared = roomCode(group.hosted.roomId);

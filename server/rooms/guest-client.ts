@@ -168,17 +168,18 @@ export class GuestClient {
   }
 
   /** The whole join: the pasted code in, a synced room out. */
-  async join(code: string): Promise<GuestResult<JoinedView>> {
+  async join(code: string, expectedRoomId?: string): Promise<GuestResult<JoinedView>> {
     const pasted = code.trim();
     const relayHost = roomCodeHost(pasted, this.deps.bases());
     if (!relayHost) return failed(400, "bad-code");
     const { name, device } = this.deps.joiner();
     // The door refuses join bodies over 1 KB, and a profile name has no cap.
-    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted, name: [...name].slice(0, NAME_MAX).join(""), device }));
+    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
     if (!reply.ok) return reply;
     const joined = joinSchema.safeParse(reply.value);
     if (!joined.success) return unavailable();
     const { roomId, person, key } = joined.data;
+    if (expectedRoomId && roomId !== expectedRoomId) return failed(400, "bad-code");
     this.unfollow(roomId);
     saveJoined(roomId, relayHost, person, key, pasted);
     this.follow(roomId);
@@ -215,16 +216,18 @@ export class GuestClient {
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
-  async rejoin(roomId: string): Promise<GuestResult<JoinedView>> {
+  async rejoin(roomId: string, suppliedCode?: unknown): Promise<GuestResult<JoinedView>> {
     const room = joinedRoom(roomId);
     if (!room) return failed(404, "not found");
     if (room.status === "removed") return failed(403, "removed");
     if (room.status !== "left" || this.changing.has(roomId)) return failed(409, "room is busy");
-    const code = joinedCode(roomId);
+    if (suppliedCode !== undefined && typeof suppliedCode !== "string") return failed(400, "bad-code");
+    const code = typeof suppliedCode === "string" ? suppliedCode : joinedCode(roomId);
     if (!code) return failed(409, "no-saved-code");
+    if (roomCodeHost(code.trim(), this.deps.bases()) !== room.relayHost) return failed(400, "bad-code");
     this.changing.add(roomId);
     try {
-      return await this.join(code);
+      return await this.join(code, roomId);
     } finally {
       this.changing.delete(roomId);
     }

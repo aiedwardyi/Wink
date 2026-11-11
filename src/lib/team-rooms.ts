@@ -124,6 +124,16 @@ export async function joinRoom(code: string): Promise<{ room: JoinedView } | Ref
   }
 }
 
+export async function rejoinRoom(roomId: string, code?: string): Promise<{ room: JoinedView } | Refused> {
+  try {
+    const res = await fetchResponse(`${joinedRoomBase(roomId)}/rejoin`, { method: "POST", ...(code === undefined ? {} : { body: JSON.stringify({ code: code.trim() }) }) });
+    const body = await responseBody(res);
+    return res.ok && body?.room ? { room: body.room } : refused(res.status, body);
+  } catch {
+    return { status: 503, error: "" };
+  }
+}
+
 export type RoomProblem = { key: MessageKey; vars?: Record<string, string> };
 
 /** Size and count checks before any byte leaves this PC; the server checks again. */

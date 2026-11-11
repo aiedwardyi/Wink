@@ -55,7 +55,7 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
-import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./JoinedRoomList";
+import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
 import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";

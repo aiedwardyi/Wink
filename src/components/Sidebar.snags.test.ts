@@ -9,7 +9,7 @@ import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { StoreProvider } from "@/state/store";
 import { Sidebar } from "./Sidebar";
 
-const joined = vi.hoisted(() => ({ rooms: [{
+const joined = vi.hoisted(() => ({ needsCode: false, rooms: [{
   roomId: "r9", status: "joined", link: "live", me: { id: "me", name: "Mina" },
   state: { roomName: "함께 만드는 아주 긴 디자인 프로젝트 대화방", host: "Studio", people: [] },
 }] }));
@@ -35,7 +35,11 @@ async function mount() {
     if (init?.method) calls.push({ path, method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined });
     if (path.startsWith("/api/bots?")) return new Response(JSON.stringify({ bots: [bot("first"), bot("last")], groups: [group] }));
     if (path === "/api/rooms/r1/invites") return new Response(JSON.stringify({ code: "fixture-code" }));
-    if (path === "/api/joined/rooms/r9/rejoin") return new Response(JSON.stringify({ room: { ...joined.rooms[0], status: "joined", link: "live" } }));
+    if (path === "/api/joined/rooms/r9/rejoin") {
+      if (joined.needsCode && !JSON.parse(String(init?.body ?? "{}"))?.code) return new Response(JSON.stringify({ error: "no-saved-code" }), { status: 409 });
+      joined.needsCode = false;
+      return new Response(JSON.stringify({ room: { ...joined.rooms[0], status: "joined", link: "live" } }));
+    }
     if (path === "/api/joined/rooms/r9" && init?.method === "DELETE") return new Response(JSON.stringify({ removed: true }));
     if (path.startsWith("/api/groups/") && init?.method === "PATCH") return new Response(JSON.stringify({ group: { ...group, ...JSON.parse(String(init.body)) } }));
     return new Response("{}", { status: 404 });
@@ -73,6 +77,7 @@ afterEach(async () => {
   persistPreference("en");
   calls.length = 0;
   joined.rooms[0].status = "joined";
+  joined.needsCode = false;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -188,4 +193,27 @@ it("rejoins a left room without a code field and opens it", async () => {
   expect(calls).toContainEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: undefined });
   expect(document.querySelector('input[aria-label="Paste a room code"]')).toBeNull();
   expect(row("joined:r9").querySelector("button")?.className).toContain("bg-raised");
+});
+
+it.each([
+  ["en", "Rejoin", "Paste this room's code once. This PC will remember it."],
+  ["ko", "다시 참여", "이 채팅방의 코드를 한 번만 붙여 넣어 주세요. 이 PC에 저장돼요."],
+] as const)("asks once for an old copy's code in %s", async (locale, label, hint) => {
+  persistPreference(locale);
+  joined.rooms[0].status = "left";
+  joined.needsCode = true;
+  await mount();
+  await choose(await context("joined:r9"), label);
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+  expect(dialog).not.toBeNull();
+  expect(dialog!.textContent).toContain(hint);
+  const code = `wkr1:studio.example.test:invite.wki_${"A".repeat(43)}`;
+  const input = dialog!.querySelector("input")!;
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: { getData: () => code } });
+  await act(async () => input.dispatchEvent(paste));
+  expect(calls).toContainEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
+  await choose(await context("joined:r9"), label);
+  expect(document.querySelector('[role="dialog"]:not([inert]) input')).toBeNull();
+  expect(calls.at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: undefined });
 });

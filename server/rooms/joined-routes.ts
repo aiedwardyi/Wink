@@ -37,7 +37,7 @@ export async function joinedRoute(
   }
   if (method !== "POST") return notFound;
   if (action === "leave") return reply(await client.leave(roomId), "room");
-  if (action === "rejoin") return reply(await client.rejoin(roomId), "room");
+  if (action === "rejoin") return reply(await client.rejoin(roomId, field(await body(), "code")), "room");
   const fields = await body();
   return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId"), field(fields, "fileIds")), "entry");
 }
