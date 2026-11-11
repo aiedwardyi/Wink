@@ -2,6 +2,7 @@
 import { Users } from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
@@ -25,7 +26,10 @@ function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDe
     <div className="group relative min-h-12 py-0.5" data-sidebar-row data-joined-room-row title={density === "icons" ? name : undefined}>
       <button
         type="button"
-        onClick={() => dispatch({ type: "select", id })}
+        onClick={(event) => {
+          dispatch({ type: "select", id });
+          focusComposerOnActivation({ activatedElement: event.currentTarget, settingsOpen: state.settingsOpen || state.appSettingsOpen });
+        }}
         className={cn(
           "flex w-full items-center rounded-xl text-left",
           density === "icons" ? "justify-center px-1 py-1.5" : density === "compact" ? "gap-2 px-2 py-1.5" : "gap-2 px-3 py-1.5",

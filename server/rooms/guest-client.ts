@@ -172,8 +172,9 @@ export class GuestClient {
     const room = joinedRoom(roomId);
     if (!room) return failed(404, "not found");
     const last = joinedEntries(roomId, 1)[0]?.seq ?? 0;
-    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0 || seq > last) return failed(400, "bad-read");
-    if (readJoined(roomId, seq)) this.changed(roomId);
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1 || seq > last) return failed(400, "bad-read");
+    const readSeq = Math.min(seq, joinedCursor(roomId));
+    if (readSeq > 0 && readJoined(roomId, readSeq)) this.changed(roomId);
     return { ok: true, value: this.view(room) };
   }
 

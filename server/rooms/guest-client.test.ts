@@ -116,8 +116,28 @@ describe("room codes", () => {
     closeJoinedDb();
     expect(guest().rooms()[0]).toMatchObject({ unread: 0 });
     expect((await read("3"))?.status).toBe(400);
+    expect((await read(0))?.status).toBe(400);
     expect((await read(999))?.status).toBe(400);
     expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
+  });
+
+  it("keeps delayed teammate lines unread when an own-send reply leads the stream", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });
+    addJoinedEntries("r1", [line(1)], 1);
+    addJoinedEntries("r1", [{ ...line(3), author: { kind: "person", ...STATE.me } }]);
+    const c = guest();
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    const read = () => joinedRoute("POST", "/api/joined/rooms/r1/read", c, async () => ({ seq: 3 }));
+    expect((await read())?.status).toBe(200);
+    expect(c.room("r1")?.unread).toBe(0);
+    addJoinedEntries("r1", [line(2)], 2);
+    closeJoinedDb();
+    expect(c.room("r1")?.unread).toBe(1);
+    await read();
+    expect(c.room("r1")?.unread).toBe(0);
+    addJoinedEntries("r1", [line(3)], 3);
+    expect(c.room("r1")?.unread).toBe(0);
   });
 
   it("takes only a strict code whose host is a label under an allowed base", () => {
