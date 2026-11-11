@@ -147,6 +147,10 @@ export const en = {
   "settings.rainbowBox.rainbow": "Rainbow",
   "settings.rainbowBox.theme": "Theme Colors",
   "settings.rainbowBox.help": "Animated outline around the chat box.",
+  "settings.pickerLook.title": "Model Picker",
+  "settings.pickerLook.dark": "Dark",
+  "settings.pickerLook.light": "Light",
+  "settings.pickerLook.atelier": "Atelier",
 
   "settings.title": "Settings",
   "settings.close": "Close Settings",
@@ -1804,6 +1808,10 @@ export const ko = {
   "settings.rainbowBox.rainbow": "무지개",
   "settings.rainbowBox.theme": "테마 색상",
   "settings.rainbowBox.help": "입력창에 움직이는 테두리를 둘러요.",
+  "settings.pickerLook.title": "모델 선택",
+  "settings.pickerLook.dark": "다크",
+  "settings.pickerLook.light": "라이트",
+  "settings.pickerLook.atelier": "Atelier",
 
   "settings.title": "설정",
   "settings.close": "설정 닫기",
