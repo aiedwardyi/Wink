@@ -4,19 +4,24 @@ import { holdReload } from "./reload-hold";
 
 export function useFileDrop(onFiles: (files: File[], isActive: () => boolean) => void | Promise<void>, disabled = false) {
   const [dragging, setDragging] = useState(false);
-  const depth = useRef(0);
+  const intake = useRef({ onFiles });
+  useEffect(() => {
+    intake.current = { onFiles };
+  }, [onFiles]);
   useEffect(() => {
     let active = true;
+    let depth = 0;
+    setDragging(false);
     const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
     const enter = (e: DragEvent) => {
       if (disabled || !carriesFiles(e)) return;
-      depth.current += 1;
+      depth += 1;
       setDragging(true);
     };
     const leave = (e: DragEvent) => {
       if (!carriesFiles(e)) return;
-      depth.current = Math.max(0, depth.current - 1);
-      if (depth.current === 0) setDragging(false);
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
     };
     const over = (e: DragEvent) => {
       if (carriesFiles(e)) e.preventDefault();
@@ -24,9 +29,10 @@ export function useFileDrop(onFiles: (files: File[], isActive: () => boolean) =>
     const drop = (e: DragEvent) => {
       if (!carriesFiles(e)) return;
       e.preventDefault();
-      depth.current = 0;
+      depth = 0;
       setDragging(false);
-      if (!disabled) void holdReload(Promise.resolve(onFiles(Array.from(e.dataTransfer?.files ?? []), () => active)));
+      const current = intake.current;
+      if (!disabled) void holdReload(Promise.resolve(current.onFiles(Array.from(e.dataTransfer?.files ?? []), () => active && intake.current === current)));
     };
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragleave", leave);
@@ -39,6 +45,6 @@ export function useFileDrop(onFiles: (files: File[], isActive: () => boolean) =>
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
     };
-  }, [onFiles, disabled]);
+  }, [disabled]);
   return dragging;
 }

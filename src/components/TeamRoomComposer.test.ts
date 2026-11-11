@@ -183,6 +183,68 @@ describe("room composer height", () => {
 });
 
 describe("room drafts", () => {
+  it.each(["host", "joined"])("keeps a pending %s upload blocked across navigation", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((path: string) => path.includes("/files?")
+      ? new Promise<Response>((resolve) => { finish = resolve; })
+      : Promise.resolve(reply({ ok: true }))));
+    await render(side);
+    await drag("drop", [file("pending.txt")]);
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render(side);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
+    await send();
+    expect(fetch).toHaveBeenCalledOnce();
+    await act(async () => finish(reply({ file: { id: "uploaded" } })));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain("pending.txt");
+  });
+
+  it.each(["host", "joined"])("keeps a pending %s send blocked across navigation", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render(side);
+    await type("Only once");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render(side);
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
+    expect(button.disabled).toBe(true);
+    await send();
+    expect(fetch).toHaveBeenCalledOnce();
+    await act(async () => finish(reply({ ok: true })));
+    expect(box().value).toBe("");
+  });
+
+  it("blocks duplicate Enter events before React renders the pending state", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render();
+    await type("Only once");
+    await act(async () => {
+      for (let i = 0; i < 2; i++) box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    await act(async () => finish(reply({ ok: true })));
+  });
+
+  it("reuses the send identity when retrying after navigation", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(reply({ error: "offline" }, 500))
+      .mockResolvedValueOnce(reply({ ok: true })));
+    await render();
+    await type("Retry me");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render();
+    await send();
+    const ids = vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse(String(init?.body)).sendId);
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).toBe(ids[0]);
+    expect(box().value).toBe("");
+  });
+
   it("restores stored text and a re-pick chip after a reload", async () => {
     setDraft(localStorage, "g1", "Saved before reload");
     setDraftAttachments(localStorage, "g1", [uploadAttachment(file("reload.txt"))]);

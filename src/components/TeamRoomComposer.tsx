@@ -15,10 +15,8 @@ import { FileDropOverlay } from "./FileDropOverlay";
 
 export function TeamRoomComposer({ name, base, draftId }: { name: string; base: string; draftId: string }) {
   const { t } = useI18n();
-  const { text, setText, files, keepFiles, removeFile, clear } = useRoomDraft(draftId);
+  const { text, setText, files, keepFiles, removeFile, clear, sending, startSend } = useRoomDraft(draftId);
   const [problem, setProblem] = useState<RoomProblem | null>(null);
-  const [sending, setSending] = useState(false);
-  const sendId = useRef(crypto.randomUUID());
   const fileInput = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const repick = useRef<string | undefined>(undefined);
@@ -48,12 +46,11 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
   const send = async () => {
     if (!ready || sending || needsFile) return;
     const revision = draftRevision(draftId);
-    setSending(true);
-    const failed = await sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId.current);
-    setSending(false);
+    const request = startSend((sendId) => sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId));
+    if (!request) return;
+    const failed = await request;
     setProblem(failed);
     if (failed) return;
-    sendId.current = crypto.randomUUID();
     if (draftRevision(draftId) === revision) clear();
   };
 
