@@ -63,7 +63,7 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },

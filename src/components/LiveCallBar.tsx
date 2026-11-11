@@ -197,8 +197,8 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.id, micGone, onEnd, snap.error, words]);
 
   useEffect(() => {
-    call.observe({ busy: Boolean(bot.busy), messages, needs: firstNeed(messages) });
-  }, [bot.busy, call, messages]);
+    call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
+  }, [bot.busy, bot.threadId, call, messages]);
 
   const [sendBefore, sendAfter] = words.send.split("{order}");
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;

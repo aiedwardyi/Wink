@@ -9,6 +9,7 @@ vi.mock("./quick-ask.ts", async (original) => ({
 }));
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { cancelQuickAsks } from "./quick-ask.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, queueMark, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -16,18 +17,20 @@ import { Store } from "./store.ts";
 const CALL = { id: "c-0123456789ab" };
 afterEach(() => { _resetSteerQueue(); });
 
-function harness(opts: { quick?: boolean; activeTurn?: boolean } = {}) {
+type Steer = (threadId: string, prompt: string, taken: (ok: boolean) => void) => Promise<boolean>;
+
+function harness(opts: { quick?: boolean; activeTurn?: boolean; steer?: Steer; drain?: () => void } = {}) {
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({}, { seedMessages: false });
   store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "earlier" });
-  const steer = vi.fn(async () => true);
+  const steer = vi.fn<Steer>(opts.steer ?? (async () => true));
   const startTurn = vi.fn(async () => ({}));
   const noop = () => {};
   const routes = createBotChatRoutes({
     cfg: {}, threadSyncGate: { enabled: false }, store, registry: new Map([["claude", { adapter: { capabilities: { queueing: true }, steer, interruptTurn: async () => {} } }]]),
     wireBot: () => ({}), wireTask: () => ({}), sendSequencer: new SendSequencer(), startTurn, noteTalked: noop, pullSyncedThread: noop,
     resolveReplyTarget: () => undefined, ensureChatLatency: noop, markChatLatency: noop, broadcast: noop, clearUnattended: noop, resumePaneWakes: noop,
-    botHasActiveTurn: () => Boolean(opts.activeTurn || store.bot(bot.id)?.busy), paneNoteTurnThreads: new Set(), busyResumeThreads: new Set(), drainQueuedSends: noop,
+    botHasActiveTurn: () => Boolean(opts.activeTurn || store.bot(bot.id)?.busy), paneNoteTurnThreads: new Set(), busyResumeThreads: new Set(), drainQueuedSends: opts.drain ?? noop,
     routines: { activeRunForBot: () => null }, taskResumes: { forgetBot: noop }, closeOpenApprovals: noop,
     ...(opts.quick ? { quick: { ask: {}, accountReady: () => true } } : {}),
   } as unknown as Parameters<typeof createBotChatRoutes>[0]);
@@ -89,4 +92,65 @@ it("orders skip Quick answers; asks and plain sends take them", async () => {
   expect((await h.send({ text: "what are you doing?", call: { ...CALL, ask: true } })).data.quick).toBe(true);
   expect(h.last()).toMatchObject({ quick: { state: "asked" }, call: { ...CALL, ask: true } });
   expect((await h.send({ text: "how far along?" })).data.quick).toBe(true);
+});
+
+it("a steered call send carries the call lines since the last user turn", async () => {
+  const h = harness();
+  h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Can you check the build?", call: CALL });
+  h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...CALL, voice: true } });
+  h.busy();
+  await h.send({ text: "Check the build.", call: { ...CALL, ask: true } });
+  await h.send({ text: "plain" });
+  const [spoken, plain] = h.steer.mock.calls.map((call) => call[1]);
+  expect(spoken).toContain("Person: Can you check the build?\nYou: Let me check.");
+  expect(spoken!.endsWith("Check the build.")).toBe(true);
+  expect(plain).not.toContain("Person:");
+});
+
+it("a call steer the engine dropped before the receipt goes down the queue", async () => {
+  const h = harness({ steer: async (_threadId, _prompt, taken) => { taken(false); return true; } });
+  h.busy();
+  const { data } = await h.send({ text: "check the build", call: { ...CALL, order: true } });
+  expect(data.queued).toBe(true);
+  expect(h.last().text).toBe("earlier");
+});
+
+it("a call steer dropped after it was recorded goes down the queue once, on its own row", async () => {
+  let taken!: (ok: boolean) => void;
+  const drain = vi.fn();
+  const h = harness({ steer: async (_threadId, _prompt, cb) => { taken = cb; return true; }, drain });
+  h.busy();
+  expect((await h.send({ text: "check the build", sendId: "send-call-0000000001", call: { ...CALL, order: true } })).data.steered).toBe(true);
+  taken(false);
+  taken(false);
+  expect(drain).toHaveBeenCalledTimes(1);
+  expect(h.last()).toMatchObject({ text: "check the build", call: { ...CALL, order: true } });
+  expect(h.last().steered).toBeUndefined();
+  h.store.setActivity(h.bot.id, "idle");
+  const run = vi.fn();
+  drainSteeredMessages(h.store, run);
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(h.store.activePath(h.bot.threadId).filter((row) => row.text === "check the build")).toHaveLength(1);
+});
+
+it("a call steer dropped after Stop stays stopped", async () => {
+  let taken!: (ok: boolean) => void;
+  const drain = vi.fn();
+  const h = harness({ steer: async (_threadId, _prompt, cb) => { taken = cb; return true; }, drain });
+  h.busy();
+  await h.send({ text: "check the build", call: { ...CALL, order: true } });
+  cancelQuickAsks(h.store, h.bot.id, [h.bot.threadId]);
+  taken(false);
+  expect(drain).not.toHaveBeenCalled();
+  expect(h.last().steered).toBe(true);
+});
+
+it("a call steer taken as the turn ended is recorded, not refused", async () => {
+  let h!: ReturnType<typeof harness>;
+  h = harness({ steer: async () => { h.store.setActivity(h.bot.id, "idle"); return true; } });
+  h.busy();
+  const { status, data } = await h.send({ text: "check the build", call: { ...CALL, order: true } });
+  expect(status).toBe(202);
+  expect(data.steered).toBe(true);
+  expect(h.last()).toMatchObject({ text: "check the build", steered: true });
 });
