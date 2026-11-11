@@ -36,7 +36,10 @@ export type RoomJoin = { personId: string; name: string; at: number };
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
+const ready = new WeakSet<DatabaseSync>();
+
 function tables(db: DatabaseSync): DatabaseSync {
+  if (ready.has(db)) return db;
   db.exec(`
     CREATE TABLE IF NOT EXISTS group_shares (
       group_id TEXT PRIMARY KEY,
@@ -57,6 +60,7 @@ function tables(db: DatabaseSync): DatabaseSync {
       PRIMARY KEY (room_id, person_id)
     );
   `);
+  ready.add(db);
   return db;
 }
 
@@ -155,7 +159,8 @@ export async function shareRoute(
   else {
     try {
       const shared = shareGroup(deps, route[1]!);
-      json(res, 200, { ...shared, group: deps.publicGroupState(deps.store.group(route[1]!)!) });
+      const updated = deps.store.group(route[1]!);
+      json(res, updated ? 200 : 500, updated ? { ...shared, group: deps.publicGroupState(updated) } : { error: "group vanished" });
     } catch (error) {
       const status = (error as { status?: number }).status;
       if (status === undefined) throw error;

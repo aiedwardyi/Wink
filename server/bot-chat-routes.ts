@@ -11,11 +11,11 @@ import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
-import { parseCallTag } from "./live-call.ts";
+import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
-import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, requeueDroppedCall, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -144,6 +144,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     let steered = false;
     let dropped = false;
     let recorded = false;
+    let callRow: Message | undefined;
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     if (steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
@@ -157,6 +158,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const consumable = adapter.capabilities.steerConsumed === true;
       const prompt = [
         ...closedAskNotes(turnOpts.messages, text, ask?.id),
+        ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
         consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
@@ -166,11 +168,12 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
           // a drop after the ask was recorded as delivered goes once down the queue
           else if (ask && recorded) requeueDroppedAsk(store, bot.id, threadId, ask, drainQueuedSends);
+          else if (callRow) requeueDroppedCall(store, bot.id, threadId, callRow, drainQueuedSends);
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
-      // an ask the engine already dropped goes once down the idle or queue path
-      if (ask && dropped) steered = false;
+      // an ask or call send the engine already dropped goes once down the idle or queue path
+      if ((ask || call) && dropped) steered = false;
       if (!steered) peerInput?.cancel();
     }
     // steer() is awaited adapter work. The turn can settle, the task can
@@ -193,7 +196,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     if (isSendCancelled(sendId) || (ask && askStopped(ask))) return { ok: true as const, cancelled: true as const, threadId };
     if (steered) {
       // an ask the engine accepted counts as delivered: a replay would answer it twice
-      if (!current.busy && !ask) {
+      if (!current.busy && !ask && !call) {
         throw Object.assign(
           new Error("the running turn ended before the steered message could be recorded"),
           { status: 409 },
@@ -215,6 +218,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           steered: true,
           call,
         });
+      if (call) callRow = message;
       peerInput?.accept(message);
       cancelUsageWait?.(bot.id, undefined, true);
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");

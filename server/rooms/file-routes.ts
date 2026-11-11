@@ -50,7 +50,7 @@ const HOST_ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(send|files(?:\/[A-Za-z0-9_-]{
 
 /** The host's side: upload, download, preview, and a send that carries files. False when the path isn't ours. */
 export async function hostFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor"> },
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor">; botCaller: boolean },
 ): Promise<boolean> {
   if (!url.pathname.startsWith("/api/rooms/")) return false;
   const route = HOST_ROUTE.exec(url.pathname);
@@ -60,6 +60,10 @@ export async function hostFileRoute(
   const action = file ? fileAction(file) : "send";
   if (!route || !group || method !== (action === "upload" || action === "send" ? "POST" : "GET")) {
     reply(res, 404, { error: "not found" });
+    return true;
+  }
+  if (deps.botCaller) {
+    reply(res, 403, { error: "forbidden" });
     return true;
   }
   if (file) {

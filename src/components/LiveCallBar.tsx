@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { useStore, visibleMessages, type Bot, type Message } from "@/state/store";
+import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
@@ -9,6 +9,7 @@ import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { usePresence } from "@/lib/use-presence";
+import { firstNeed } from "../../shared/call-status";
 import { ORDER_EXPIRY_MS } from "../../shared/live-call";
 import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
@@ -65,16 +66,6 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
 async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
-}
-
-function firstNeed(messages: Message[]): { id: string; short: string } | undefined {
-  for (const row of messages) {
-    const card = row.card;
-    if (row.kind === "options" && card?.requestId && !card.answered && !card.dismissed) return { id: row.id, short: card.title || card.tool || "a question" };
-    const secret = row.secret;
-    if (row.kind === "secret" && secret && !secret.provided && !secret.dismissed && !secret.requestKey.startsWith("call-")) return { id: row.id, short: secret.label };
-  }
-  return undefined;
 }
 
 function seenPrivacy(): boolean {
@@ -197,8 +188,8 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.id, micGone, onEnd, snap.error, words]);
 
   useEffect(() => {
-    call.observe({ busy: Boolean(bot.busy), messages, needs: firstNeed(messages) });
-  }, [bot.busy, call, messages]);
+    call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
+  }, [bot.busy, bot.threadId, call, messages]);
 
   const [sendBefore, sendAfter] = words.send.split("{order}");
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;

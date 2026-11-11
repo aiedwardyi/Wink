@@ -300,6 +300,9 @@ export function queueRoomParticipation(
   return { id };
 }
 
+// a queued quick handoff's ask row, or a requeued call row, already shows this line
+const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
+
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
 }
@@ -351,8 +354,7 @@ export function drainSteeredMessages(
       }
       // queueId is the pending-chip identity from the 202; append still
       // assigns a fresh transcript id so replay/exclude keep using message.id.
-      // a queued quick handoff's ask row already shows this line
-      const ask = store.messagesFor(entry.threadId).find((message) => message.queueId === item.messageId && message.quick?.state === "handoff");
+      const ask = store.messagesFor(entry.threadId).find((message) => showsQueued(message, item.messageId));
       let appended: Message;
       try {
         appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined })) || store.appendMessage(entry.threadId, {
@@ -442,8 +444,7 @@ export function foldQueuedSends(
   const appended = new Set<string>();
   try {
     const prompts = takeQueuedSteers(botId, threadId, since).map((item) => {
-      // a queued quick handoff's ask row already shows this line
-      const ask = store.messagesFor(threadId).find((message) => message.queueId === item.id && message.quick?.state === "handoff");
+      const ask = store.messagesFor(threadId).find((message) => showsQueued(message, item.id));
       const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",

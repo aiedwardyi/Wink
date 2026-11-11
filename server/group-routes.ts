@@ -215,7 +215,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
-      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
+      if (group.hosted) {
+        // The shared thread stays active; an older task opens to read only.
+        if (!store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such channel task" });
+        const view = { ...group, threadId: m[2] };
+        return json(res, 200, { group: url.searchParams.get("messages") === "0" ? publicGroupState(view) : groupWithThread(view) });
+      }
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }

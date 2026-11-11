@@ -84,7 +84,7 @@ async function localApp(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   if (client && (await joinedFileRoute(req, res, method, url, client))) return;
-  if (await hostFileRoute(req, res, method, url, { store })) return;
+  if (await hostFileRoute(req, res, method, url, { store, botCaller: false })) return;
   res.writeHead(404).end();
 }
 
