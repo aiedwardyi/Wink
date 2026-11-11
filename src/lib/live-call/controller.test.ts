@@ -323,6 +323,7 @@ describe("LiveCall", () => {
     call.observe({ busy: false, messages: rows });
     await flush();
     expect(call.state().status).toBe("working");
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A done.", "[Wink] Nova replied: A verified."]);
     rows.push(orderRow("o2", "Do B."), botRow("b", "B done."));
     call.observe({ busy: false, messages: rows });
     await flush();

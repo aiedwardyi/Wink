@@ -385,8 +385,8 @@ export class LiveCall {
         }
       }
       // A reply to a typed message is already on screen, so only this call's orders are read aloud.
-      for (const [order, { reply, orders }] of replies) {
-        if (orders.length) void this.report(reply.text!, orders);
+      for (const [order, { reply, orders: replyOrders }] of replies) {
+        if (replyOrders.length) void this.report(reply.text!, replyOrders);
         else this.remember(order, reply.text!);
       }
     }
@@ -403,6 +403,7 @@ export class LiveCall {
       this.settled.add(id);
       this.awaiting = Math.max(0, this.awaiting - 1);
     }
+    // Later replies still speak after their orders have settled.
     let speakable = text.slice(0, REPORT_CHARS);
     try {
       const prepared = await this.deps.post("/api/tts/prepare", { text: speakable });
