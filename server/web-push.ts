@@ -21,6 +21,7 @@ const vapidKeysSchema = z.object({ publicKey: b64url, privateKey: b64url });
 export const pushSubscriptionSchema = z.object({
   endpoint: z.string().url().startsWith("https://"),
   keys: z.object({ p256dh: b64url, auth: b64url }),
+  off: z.array(z.string().max(100)).max(500).optional(),
 });
 const subscriptionsFileSchema = z.object({ subscriptions: z.array(z.unknown()) });
 export const pushEndpointSchema = z.object({ endpoint: z.string() });
@@ -96,7 +97,8 @@ export function encryptPushPayload(
 
 /** The tag matches desktop toasts so one bot stacks as one; `chat` and `at` let a later read close it. */
 export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.botId, at = Date.now()): PushPayload {
-  const query = new URLSearchParams({ bot: target.botId, thread: target.threadId });
+  const room = target.threadId.startsWith("joined:") ? target.threadId.slice("joined:".length) : null;
+  const query = room ? new URLSearchParams({ room }) : new URLSearchParams({ bot: target.botId, thread: target.threadId });
   return {
     title: redactSecretsInText(ping.title),
     body: redactSecretsInText(ping.message),
@@ -160,10 +162,11 @@ function savePushSubscriptions(dataDir: string, subscriptions: PushSubscriptionR
   writeFileAtomic(join(dataDir, WEB_PUSH_SUBS_FILE), JSON.stringify({ subscriptions }, null, 2), { mode: 0o600 });
 }
 
-/** One entry per device; re-enabling the same browser replaces its entry. */
+/** One entry per device; re-enabling the same browser replaces its entry. `off` lists the rooms this device muted. */
 export function addPushSubscription(dataDir: string, subscription: PushSubscriptionRecord): void {
   const rest = loadPushSubscriptions(dataDir).filter((sub) => sub.endpoint !== subscription.endpoint);
-  savePushSubscriptions(dataDir, [...rest, { endpoint: subscription.endpoint, keys: subscription.keys }]);
+  const off = subscription.off?.length ? { off: subscription.off } : {};
+  savePushSubscriptions(dataDir, [...rest, { endpoint: subscription.endpoint, keys: subscription.keys, ...off }]);
 }
 
 export function removePushSubscription(dataDir: string, endpoint: string): void {
@@ -181,7 +184,7 @@ export async function sendWebPushToDevices(
   fetchImpl: typeof fetch = fetch,
   warn?: (line: string) => void,
 ): Promise<WebPushResult[]> {
-  const subscriptions = loadPushSubscriptions(dataDir).filter((sub) => only === undefined || sub.endpoint === only);
+  const subscriptions = loadPushSubscriptions(dataDir).filter((sub) => (only === undefined || sub.endpoint === only) && !(payload.chat && sub.off?.includes(payload.chat)));
   if (!subscriptions.length) return [];
   const keys = loadOrCreateVapidKeys(dataDir);
   const results = await Promise.all(subscriptions.map((sub) => sendWebPush(sub, payload, keys, subject, fetchImpl, warn)));

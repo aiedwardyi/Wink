@@ -2,6 +2,7 @@
 // a person's through the door. Plain lines cost nothing; one bot, at most,
 // gets an ask.
 import { roomResponder } from "../../shared/room-routing.ts";
+import { alertWhenUnread, roomLineText } from "./alerts.ts";
 import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
 import { ownRoomFiles } from "./files.ts";
@@ -16,7 +17,7 @@ const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "h
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
-  const { store, hostName, driverKind } = roomAskDeps();
+  const { store, hostName, driverKind, alert } = roomAskDeps();
   const roomId = group.hosted.roomId;
   const people = roomPeople(roomId);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;
@@ -39,6 +40,8 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   if (person) {
     spend(roomId, person.id, "message");
     store.patchGroup(group.id, { unread: true });
+    const line = { chat: group.id, threadId: group.threadId, room: group.name, name: person.name, text: roomLineText(entry.text, entry.files) };
+    alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert);
   }
   if (!bot) return { entry, message, ask: null };
   const ask = createAsk({
