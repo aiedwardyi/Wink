@@ -1985,10 +1985,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           session: { kind: "loaded", id: session.sessionId! },
           alive: () => usable(session),
           close: async (why) => {
-            if (session.prepared !== prepared) return;
-            closeSession(threadId, `prepared ${why}`);
+            if (session.prepared !== prepared && !session.closing) return;
+            if (sessions.get(threadId) === session) closeSession(threadId, `prepared ${why}`);
             killCliTree(child);
-            if (child.exitCode === null) await new Promise((resolve) => { child.once("close", resolve); setTimeout(resolve, 5_000).unref(); });
+            if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once("close", resolve));
           },
         });
         lease.ready();
@@ -2250,6 +2250,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           const s = sessions.get(threadId);
           // expired, not cleared: a duplicate notification must not re-arm it
           if (s) s.wakeDeadline = 0;
+          if (s?.prepared) closeSession(threadId, "interrupted");
         },
         respondToRequest: async (threadId, requestId, decision) => {
           // fail-closed by construction: no broker, or an ask that already
@@ -2281,19 +2282,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         return spawn && admitted && !accountBlocked ? forkClaude({ ...spawn, cursor: sessions.get(side.threadId)?.sessionId ?? spawn.cursor }, side) : null;
       },
       prepare: async (_shape?: PrepareTurn, focus?: PrepareFocus) => {
-        if (!focus || !admitted || accountBlocked || preparing.has(focus.threadId)) return;
-        const plan = plans.get(focus.threadId);
-        if (!plan?.resumeCursor || usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
-        if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
+        if (!focus) return;
         let moved = false;
         for (const [threadId, s] of sessions) {
           if (threadId === focus.threadId || !s.prepared) continue;
           closeSession(threadId, "prepare moved");
           moved = true;
         }
+        if (!admitted || accountBlocked || preparing.has(focus.threadId)) return;
+        const plan = plans.get(focus.threadId);
+        if (!plan?.resumeCursor || usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
         preparing.add(focus.threadId);
         try {
-          // the pool frees a released lease a tick later
+          // let completed closes release their pool slots
           if (moved) await new Promise((resolve) => setImmediate(resolve));
           await sendTurn(plan, undefined, undefined, true);
         } finally {
