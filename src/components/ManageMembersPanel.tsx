@@ -59,7 +59,8 @@ export function ManageMembersPanel({
       [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(
         (element) => !element.hasAttribute("hidden"),
       );
-    focusable()[0]?.focus();
+    // Start past People: Enter on open must never press Remove.
+    focusable().find((element) => !element.closest("[data-group-people]"))?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();

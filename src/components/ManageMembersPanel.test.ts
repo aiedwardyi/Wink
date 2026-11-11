@@ -289,6 +289,12 @@ describe("ManageMembersPanel people", () => {
     expect(people().querySelector("[data-group-invite]")).not.toBeNull();
   });
 
+  it("never opens with focus on a Remove", async () => {
+    await open(shared([{ id: "p1", name: "Seo-yeon Park" }]), "en", () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
+    expect(document.activeElement?.getAttribute("aria-label")).not.toBe("Remove Seo-yeon Park");
+    expect(people().contains(document.activeElement)).toBe(false);
+  });
+
   it("shows the code once a missing room comes back while open", async () => {
     await open({ ...group, hosted: { roomId: "r1" }, room: { missing: true } }, "en", () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
     const { ManageMembersPanel } = await import("./ManageMembersPanel");
