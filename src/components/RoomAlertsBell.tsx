@@ -16,8 +16,8 @@ export function RoomAlertsBell({ chat }: { chat: string }) {
   const on = wanted && (push === null || push === "on");
   const toggle = () => {
     setRoomAlerts(chat, !on);
-    if (push === "on") void syncWebPushRooms().catch(() => {});
-    else if (!on && push !== null) void enableWebPush().then(setPush).catch(() => {});
+    if (push === "off" || push === "blocked") void enableWebPush().then(setPush).catch(() => {});
+    else if (webPushSupported()) void syncWebPushRooms().catch(() => {});
   };
   const label = t(on ? "teamRoom.alertsOff" : "teamRoom.alertsOn");
   return (

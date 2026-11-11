@@ -118,7 +118,7 @@ export function showNotification(
   onOpen: (target: NotificationTarget) => void,
   visibleThreadId?: string | null,
 ) {
-  if (roomAlertsOff().includes(frame.botId)) return;
+  if (frame.kind === "room" && roomAlertsOff().includes(frame.botId)) return;
   const native = typeof window !== "undefined" ? window.ogb?.showNotification : undefined;
   if (typeof native === "function") {
     const payload: Parameters<typeof native>[0] = {
