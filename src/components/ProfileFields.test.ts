@@ -7,7 +7,7 @@ const mock = vi.hoisted(() => ({
   dispatch: vi.fn(),
   config: {
     profile: { name: "", email: "" },
-  } as { profile: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean } },
+  } as { profile: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean } } | null,
 }));
 
 vi.mock("@/state/store", async (importOriginal) => {
@@ -176,6 +176,18 @@ describe("ProfileFields photo", () => {
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
+
+  it("holds a quiet placeholder, never an empty name or a ? photo, until the profile loads", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    const { host, root, name, save } = await renderProfile();
+    expect(name.disabled).toBe(true);
+    expect(name.placeholder).toBe("");
+    expect(save.disabled).toBe(true);
+    expect(host.textContent).not.toContain("?");
+    await act(async () => root.unmount());
+    mock.config = loaded;
+  });
 
   it("offers Change Photo and shows Remove Photo only when a photo is set", async () => {
     const empty = await renderProfile();

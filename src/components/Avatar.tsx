@@ -267,13 +267,18 @@ export function InitialsAvatar({
   initials,
   imageUrl,
   size = 32,
+  pending = false,
 }: {
   initials: string;
   imageUrl?: string;
   size?: number;
+  pending?: boolean;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [imageUrl]);
+  if (pending) {
+    return <div aria-hidden="true" className="shrink-0 animate-pulse rounded-full bg-raised motion-reduce:animate-none" style={{ width: size, height: size }} />;
+  }
   if (imageUrl && !imageFailed) {
     return (
       <img
