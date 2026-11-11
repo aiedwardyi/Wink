@@ -264,8 +264,8 @@ describe("live call in the message box", () => {
       await act(async () => button(host, "Call Atlas")!.click());
       await vi.waitFor(() => expect(intro()).not.toBeNull());
       const card = intro()!;
-      expect(card.textContent).toContain("Voice call");
-      expect(card.textContent).toContain("Uses your Gemini credit while live. End stops it.");
+      expect(card.textContent).toContain("Talk with your bot");
+      expect(card.textContent).toContain("Runs on your Gemini credit. End anytime.");
       expect(pick(card, "Start call").className).toContain("bg-accent");
       expect(tokens()).toBe(0);
       expect(frame(host).querySelector("[data-call-box]")).toBeNull();
