@@ -49,20 +49,19 @@ function CaptionLine({ caption, who }: { caption: NonNullable<CallState["caption
   useLayoutEffect(() => {
     const el = line.current;
     if (!el) return;
-    el.scrollLeft = el.scrollWidth;
-    el.toggleAttribute("data-clipped", el.scrollWidth > el.clientWidth);
-  }, [caption.text]);
+    el.scrollTop = el.scrollHeight;
+  }, [caption.id, caption.text, who]);
   return (
-    <p data-call-caption className="pointer-events-none col-span-full row-start-1 flex min-w-0 items-center gap-2 self-center px-1 py-1 text-[15px] leading-6">
-      <span className="shrink-0 font-medium text-ink">{who}</span>
-      <span key={caption.id} ref={line} className="min-w-0 overflow-hidden whitespace-nowrap text-ink-secondary data-clipped:[mask-image:linear-gradient(to_right,transparent,black_1.5rem)]">
+    <p data-call-caption className="pointer-events-none col-span-full row-start-1 flex min-w-0 items-start gap-2 self-center px-1 py-1 text-[15px] leading-6">
+      <span className="max-w-[35%] shrink-0 truncate font-medium text-ink">{who}</span>
+      <span key={caption.id} ref={line} className="max-h-[4.5rem] min-w-0 flex-1 overflow-hidden whitespace-normal text-ink-secondary [overflow-wrap:anywhere]">
         {caption.text.split(/(?<=\s)/).map((word, i) => <span key={i} className="animate-fade-in">{word}</span>)}
       </span>
     </p>
   );
 }
 
-function Controls({ bot, live, empty, closing }: { bot: Bot; live: Live; empty: boolean; closing: boolean }) {
+function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boolean }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const { call } = live;
@@ -89,8 +88,8 @@ function Controls({ bot, live, empty, closing }: { bot: Bot; live: Live; empty: 
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
   return (
     <>
-      {captions && empty && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
-      <div data-call-box={snap.status} data-leaving={closing || undefined} className="col-start-2 row-start-2 mt-1 flex min-w-0 items-center gap-1">
+      {captions && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
+      <div data-call-box={snap.status} data-leaving={closing || undefined} className="col-start-2 row-start-3 mt-1 flex min-w-0 items-center gap-1">
         <p role="status" className="flex min-w-0 items-center gap-2 px-1 text-[13px] tabular-nums text-ink-secondary">
           {snap.status === "starting"
             ? <><Loader2 size={15} className="shrink-0 animate-spin" aria-hidden /><span className="truncate">{words.starting}</span></>
@@ -119,11 +118,10 @@ function Controls({ bot, live, empty, closing }: { bot: Bot; live: Live; empty: 
   );
 }
 
-/** The call's controls in the message box's bottom row, and its caption line where the placeholder sits. */
-export function LiveCallBox({ bot, empty, closing }: { bot: Bot; empty: boolean; closing: boolean }) {
+export function LiveCallBox({ bot, closing }: { bot: Bot; closing: boolean }) {
   const live = useLive(bot.id);
   const last = useRef(live);
   if (live) last.current = live;
   const shown = live ?? (closing ? last.current : undefined);
-  return shown ? <Controls bot={bot} live={shown} empty={empty} closing={closing || !live} /> : null;
+  return shown ? <Controls bot={bot} live={shown} closing={closing || !live} /> : null;
 }
