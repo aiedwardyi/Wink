@@ -11,6 +11,7 @@ type Load = () => Promise<unknown>;
 const EXTRAS: Load[] = [
   () => import("@/components/MemoryMap"),
   () => import("@/components/ActivityCard").then((m) => m.warmActivity()),
+  () => import("@/components/PhoneAccessSettings").then((m) => m.warmRelay()),
 ];
 
 /** A phone warms only on Wi-Fi or an unknown link; Save-Data always skips. */
