@@ -10,6 +10,7 @@ import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy } from "lucide-react";
+import { LinkedFolderLink } from "./LinkedFolderSheet";
 import { ReadableImage } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
 import { z } from "zod";
@@ -540,7 +541,11 @@ function PhoneFile({
       </span>
     );
   }
-  if (phase === "desktop") return <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>;
+  if (phase === "desktop") {
+    return kind
+      ? <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>
+      : <LinkedFolderLink folderPath={filePath} threadId={threadId} fileSrc={(path) => linkedFileSrc(threadId, path)}>{children}</LinkedFolderLink>;
+  }
   if (phase === "remote" && remote) {
     return (
       <a
