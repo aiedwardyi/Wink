@@ -124,7 +124,40 @@ const KO_MIXED: Array<[string, "quick" | "main"]> = [
   ["커밋 메시지 뭐라고 썼어?", "quick"],
 ];
 
+// Greetings, pings and asks aimed at the helper (Edward's 11-11 sidekick test, verbatim), then orders wrapped in them.
+const CASUAL: Array<[string, "quick" | "main"]> = [
+  ["sidekick test hello", "quick"],
+  ["sidekick testing", "quick"],
+  ["sidekick test 2", "quick"],
+  ["sidekick test 3", "quick"],
+  ["sidekick test 4", "quick"],
+  ["whatsup", "quick"],
+  ["can u say hi", "quick"],
+  ["if you're sidekick please respond with a hello sentence", "quick"],
+  ["if you're sidekick please respond with a hello sentence\nwhy arent u responding hello misterr lol", "quick"],
+  ["yeah if you'r sidekick let me know one last time please. and main one please dont respond HAHAHA", "quick"],
+  ["sidekick is sleeping i think", "quick"],
+  ["i dont think so, is that u? can u tell which one u received or not?", "quick"],
+  ["안녕하세요", "quick"],
+  ["사이드킥 테스트", "quick"],
+  ["사이드킥이면 인사해줘", "quick"],
+  ["hi, fix the login bug", "main"],
+  ["hey sidekick, push it", "main"],
+  ["test the build", "main"],
+  ["if you're the sidekick please deploy", "main"],
+  ["sidekick please run the tests", "main"],
+  ["hello. please restart the server", "main"],
+  ["please dont", "main"],
+  ["sidekick doesnt work", "main"],
+  ["안녕, 버그 고쳐줘", "main"],
+  ["사이드킥이면 푸시해줘", "main"],
+];
+
 describe("nominate", () => {
+  it.each(CASUAL)("casual: %s", (text, want) => {
+    expect(nominate(text)).toBe(want);
+  });
+
   it.each(LABELED)("labeled: %s", (text, want) => {
     expect(nominate(text)).toBe(want);
   });
