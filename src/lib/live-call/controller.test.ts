@@ -65,6 +65,8 @@ async function started(responses?: Record<string, Posted | (() => Promise<Posted
 }
 
 const botRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "bot", kind: "text", text, at: 2_000, ...extra }) as Message;
+const userRow = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", text, at: 2_000, ...extra }) as Message;
+const orderRow = (id: string, text: string) => userRow(id, text, { call: { id: "c-0123456789ab", order: true } });
 
 beforeEach(() => { vi.stubGlobal("crypto", { randomUUID: () => "send-1" }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -192,6 +194,7 @@ describe("LiveCall", () => {
       botRow("old", "before", { at: 10 }),
       botRow("v", "voice", { call: { id: "c-0123456789ab", voice: true } }),
       botRow("q", "quick", { quick: { state: "answer" } }),
+      orderRow("o", "Fix the bug."),
       botRow("r", "Fixed the bug. Tests pass."),
     ];
     call.observe({ busy: true, messages: rows });
@@ -230,9 +233,75 @@ describe("LiveCall", () => {
     call.observe({ busy: false, messages: [botRow("typed", "Typed answer.")] });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
     await call.answer(true);
-    call.observe({ busy: false, messages: [botRow("typed", "Typed answer."), botRow("r", "Fixed.")] });
+    call.observe({ busy: false, messages: [botRow("typed", "Typed answer."), orderRow("o", "Fix it."), botRow("r", "Fixed.")] });
     await flush();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed."]);
+  });
+
+  it("each voice order reply is spoken, a typed reply between stays silent", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Do B." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o1", "Do A."), userRow("u", "What time is it?"), botRow("t", "Noon.")] });
+    await flush();
+    call.observe({ busy: false, messages: [orderRow("o1", "Do A."), userRow("u", "What time is it?"), botRow("t", "Noon."), orderRow("o2", "Do B."), botRow("b", "B done.")] });
+    await flush();
+    call.observe({ busy: false, messages: [orderRow("o1", "Do A."), botRow("a", "A done."), userRow("u", "What time is it?"), botRow("t", "Noon."), orderRow("o2", "Do B."), botRow("b", "B done.")] });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: B done.", "[Wink] Nova replied: A done."]);
+    expect(engine().contexts).toHaveLength(1);
+    expect(engine().contexts[0]).toContain("Nova: Noon.");
+  });
+
+  it("a quick ask during a voice order keeps the order reply spoken", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o", "Do A."), userRow("q", "Quick one?", { quick: { state: "asked" } }), botRow("qa", "Yes.", { quick: { state: "answer" } }), botRow("r", "A done.")] });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A done."]);
+    expect(engine().contexts).toEqual([]);
+  });
+
+  it("a relayed report is not flagged as an invented done", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Do B." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o1", "Do A."), botRow("a", "A done.")] });
+    await flush();
+    engine().events.said("All done, I fixed A.");
+    engine().events.turnDone();
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toHaveLength(0);
+    engine().events.said("B is done too.");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toHaveLength(1);
+  });
+
+  it("typed context trims the typed text so the reply fits", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [userRow("u", "x".repeat(2_000)), botRow("r", "Short answer.")] });
+    expect(engine().contexts[0]!.length).toBeLessThanOrEqual(1_500);
+    expect(engine().contexts[0]).toMatch(/xxx\nNova: Short answer\.$/);
+  });
+
+  it("keeps held context through a reconnect", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engines, engine } = await started({}, audio);
+    audio.onStart();
+    audio.playing = true;
+    engine().events.turnDone();
+    call.observe({ busy: false, messages: [userRow("u", "What broke?"), botRow("r", "The token expired.")] });
+    engine().events.resumable("h1");
+    engine().events.goAway();
+    audio.playing = false;
+    audio.onIdle();
+    await flush();
+    engine().events.ready();
+    expect(engines[0]!.contexts).toEqual([]);
+    expect(engine().contexts).toHaveLength(1);
   });
 
   it("holds the report until the voice finishes its turn", async () => {
@@ -242,7 +311,7 @@ describe("LiveCall", () => {
     await call.answer(true);
     audio.onStart();
     audio.playing = true;
-    call.observe({ busy: false, messages: [botRow("r", "Fixed.")] });
+    call.observe({ busy: false, messages: [orderRow("o", "Fix it."), botRow("r", "Fixed.")] });
     await flush();
     expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
     engine().events.turnDone();

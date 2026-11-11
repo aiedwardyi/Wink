@@ -80,6 +80,13 @@ describe("call token", () => {
     expect(brief).toContain("Never point the person to the chat or tell them to check it for details, in any language.");
   });
 
+  it("brief greets in the app language", async () => {
+    const h = harness();
+    await h.post("token", { locale: "ko" });
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Greet in Korean.");
+  });
+
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
     const h = harness();
     await h.post("token");
