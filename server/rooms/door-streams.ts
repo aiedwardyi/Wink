@@ -67,7 +67,7 @@ export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
 export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean): DoorEntry {
   if (largeFiles || !entry.files?.length) return entry;
   const files = entry.files.filter((file) => !file.deleted && file.bytes <= 25 * 1024 ** 2).slice(0, 10);
-  const omitted = entry.files.filter((file) => !files.includes(file));
+  const omitted = entry.files.filter((file) => !file.deleted && !files.includes(file));
   return { ...entry, files, text: [entry.text, ...omitted.map((file) => file.name)].filter(Boolean).join("\n").slice(0, 20_000) };
 }
 

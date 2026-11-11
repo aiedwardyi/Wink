@@ -15,4 +15,10 @@ describe("room file compatibility", () => {
     const stress = { ...entry, text: "가".repeat(20_000), files: files.map((file) => ({ ...file, name: "가".repeat(196) + ".pdf" })) };
     expect(Buffer.byteLength(JSON.stringify({ kind: "entry", entry: stress }))).toBeLessThan(256 * 1024);
   });
+
+  it("never names a deleted file to an old client", () => {
+    const file = { id: "a".repeat(24), name: "private-plan.pdf", bytes: 10, type: "application/pdf", sha256: "0".repeat(64), deleted: true };
+    const entry: DoorEntry = { seq: 1, id: "line1", at: Date.now(), author: { kind: "host", id: "host", name: "Edward" }, text: "shared", files: [file] };
+    expect(compatibleDoorEntry(entry, false)).toMatchObject({ files: [], text: "shared" });
+  });
 });
