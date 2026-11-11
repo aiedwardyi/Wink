@@ -358,6 +358,11 @@ export class PhoneAccess {
       return HANDLED;
     }
     const verdict = relayVerdict(req, host);
+    if ((verdict.kind === "pair-page" || verdict.kind === "google-start") && this.session(req, res)) {
+      res.writeHead(302, { location: "/", "cache-control": "no-store" });
+      res.end();
+      return HANDLED;
+    }
     switch (verdict.kind) {
       case "deny":
         send(res, verdict.status, { error: verdict.error });

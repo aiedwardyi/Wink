@@ -21,7 +21,7 @@ import { GPAIR_TTL_MS, pairNonce } from "./phone-google.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { enrollWith } from "./phone-relay/enroll.ts";
 import { createPhoneRelay } from "./phone-relay/runtime.ts";
-import { readTicket, writeAccount } from "./phone-relay/store.ts";
+import { readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
 import type { JsonObject } from "./schema.ts";
 import { FakeClock } from "./phone-relay/testing/fake-clock.ts";
 import { loopbackLookup } from "./phone-relay/testing/fake-relay.ts";
@@ -349,6 +349,18 @@ async function googleSignIn(w: World, init: { label?: string; sub?: string; cook
 }
 
 describe("phone Google sign-in through the relay", () => {
+  it.each(["/pair", "/pair?g=1", "/api/phone/google/start"])("reuses the phone session for %s", async (path) => {
+    const w = await world({ google: {} });
+    const { res } = await googleSignIn(w);
+    const cookie = res.headers["set-cookie"]![0]!.split(";")[0]!;
+    const again = await viaRelay(w.r, path, { headers: { cookie } });
+    expect(again.status).toBe(302);
+    expect(again.headers.location).toBe("/");
+    expect(again.headers["set-cookie"]).toBeUndefined();
+    expect(again.headers["cache-control"]).toBe("no-store");
+    expect(phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body)).phones).toHaveLength(1);
+  });
+
   it("sends the phone to the sign-in page and admits it with the normal phone cookie", async () => {
     const w = await world({ google: {} });
     expect((await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" })).status).toBe(204);
@@ -368,6 +380,58 @@ describe("phone Google sign-in through the relay", () => {
     const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
     expect(phones.map((phone) => phone.name)).toEqual(["Galaxy S25"]);
     expect(JSON.parse(readFileSync(join(w.r.dataDir, PHONES_FILE), "utf8")).phones[0].via).toBe("google");
+  });
+
+  it("keeps the host and Google session across fresh PC instances and an updated build", async () => {
+    const w = await world({ google: {} });
+    const first = await googleSignIn(w);
+    const cookie = first.res.headers["set-cookie"]![0]!.split(";")[0]!;
+    const before = readFileSync(join(w.r.dataDir, "phone-relay", "identity.pem"), "utf8");
+    await w.access.stop();
+    for (const build of ["restart", "updated build"]) {
+      const access = new PhoneAccess({
+        dataDir: w.r.dataDir,
+        env: {},
+        staticDir: null,
+        config: () => w.config,
+        saveEnabled: () => {},
+        clock: w.clock,
+        start: (options) => createPhoneRelay(options, { clock: new FakeClock(), env: {}, connector: w.r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+        google: { webClientId: WEB_CLIENT, sub: () => OWNER, idToken: () => null, freshIdToken: async () => null, name: () => "Desk PC", keys: w.google.issuer.keys },
+      });
+      try {
+        await access.start(async (req, res) => {
+          const gate = await access.gate(req, res);
+          if (!gate.handled) res.end(build);
+        });
+        await vi.waitFor(() => expect(access.status().state).toBe("connected"));
+        expect(access.status().host).toBe(w.r.host);
+        expect(readIdentity(w.r.dataDir)).toMatchObject({ kind: "ok", value: { pk: w.r.identity.pk, label: w.r.identity.label } });
+        expect(readFileSync(join(w.r.dataDir, "phone-relay", "identity.pem"), "utf8")).toBe(before);
+        expect(await viaRelay(w.r, "/", { headers: { cookie } })).toMatchObject({ status: 200, body: build });
+        const paired = await viaRelay(w.r, "/pair?g=1", { headers: { cookie } });
+        expect(paired).toMatchObject({ status: 302, headers: { location: "/" } });
+        expect(paired.headers["set-cookie"]).toBeUndefined();
+        expect(await viaRelay(w.r, "/api/bots")).toMatchObject({ status: 401 });
+      } finally {
+        await access.stop();
+      }
+    }
+  });
+
+  it("requires pairing after browser sign-out, PC removal, or navigation to another PC", async () => {
+    const w = await world({ google: {} });
+    const first = await googleSignIn(w);
+    const cookie = first.res.headers["set-cookie"]![0]!.split(";")[0]!;
+    expect(await viaRelay(w.r, "/pair")).toMatchObject({ status: 200, body: "PAIR PAGE" });
+    expect((await viaRelay(w.r, "/api/phone/google/start")).headers.location).toMatch(/^https:\/\/wink\.test\/signin\?/);
+    const other = await world({ google: {} });
+    expect((await viaRelay(other.r, "/pair?g=1", { headers: { cookie } })).status).toBe(200);
+    expect((await viaRelay(other.r, "/api/bots", { headers: { cookie } })).status).toBe(401);
+    const id = JSON.parse(first.res.body).phone.id;
+    expect((await w.local(`/api/phone/devices/${id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await viaRelay(w.r, "/pair?g=1", { headers: { cookie } })).status).toBe(200);
+    expect((await viaRelay(w.r, "/api/phone/google/start", { headers: { cookie } })).headers.location).toMatch(/^https:\/\/wink\.test\/signin\?/);
   });
 
   it("refuses another Google account, a Desktop token and another browser's cookie", async () => {

@@ -155,4 +155,27 @@ describe("service worker", () => {
     await install(listeners);
     expect(await (await load(listeners, "navigate")).text()).toBe("live page");
   });
+
+  it.each([["en", "Choose another PC"], ["ko", "다른 PC 선택"]])("links the %s offline page to PC discovery", (lang, text) => {
+    const page = readFileSync(join(ROOT, "public/offline.html"), "utf8");
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+    const elements = new Map();
+    const element = (id) => {
+      if (!elements.has(id)) elements.set(id, { textContent: "", hidden: true, addEventListener() {} });
+      return elements.get(id);
+    };
+    for (const script of scripts) runInNewContext(script, {
+      URL,
+      location: { hostname: RELAY, href: `https://${RELAY}/` },
+      history: {},
+      navigator: { onLine: false, language: lang },
+      localStorage: { getItem: () => lang },
+      document: { documentElement: {}, getElementById: element },
+      window: { addEventListener() {} },
+      setInterval() {},
+    });
+    expect(element("pick").href).toBe("https://wink.test/?pick=1");
+    expect(element("pick").textContent).toBe(text);
+    expect(element("pick").hidden).toBe(false);
+  });
 });
