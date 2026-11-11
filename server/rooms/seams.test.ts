@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { closeRoomsDb } from "./db.ts";
-import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./guards.ts";
+import { hostedRoomView, isHostedThread } from "./guards.ts";
 
 const SERVER = join(import.meta.dirname, "..");
 const parse = (file: string) => {
@@ -57,44 +57,44 @@ beforeEach(() => {
 });
 afterEach(closeRoomsDb);
 
-describe("team rooms stay off the iPhone", () => {
-  it("drops hosted frames for phone clients, live and in replay", () => {
+describe("team rooms on the phone", () => {
+  it("includes hosted and joined frames live and in replay, while keeping screen filtering", () => {
     const wants = load("wants", {});
-    const replayBuffer: Array<{ hosted: boolean }> = [];
-    const phone = { res: { write: vi.fn() }, screens: true, phone: true };
-    const desktop = { res: { write: vi.fn() }, screens: true, phone: false };
+    const replayBuffer: Array<{ kind: string; frame: string }> = [];
+    const phone = { res: { write: vi.fn() }, screens: true };
+    const desktop = { res: { write: vi.fn() }, screens: true };
     const write = load("writeBroadcastFrame", {
       lastSeq: 0, STREAM_ID: "s", REPLAY_MAX: 500, replayBuffer, sseClients: new Set([phone, desktop]), wants,
-      maskRuntimePayload: (p: unknown) => p, redactSecrets: (p: unknown) => p, hostedFrame, store,
+      maskRuntimePayload: (p: unknown) => p, redactSecrets: (p: unknown) => p, store,
     });
     write({ kind: "message", threadId: hosted.threadId, message: { text: "room line" } });
     write({ kind: "message", threadId: plain.threadId, message: { text: "plain line" } });
-    expect(desktop.res.write).toHaveBeenCalledTimes(2);
-    expect(phone.res.write).toHaveBeenCalledTimes(1);
-    expect(phone.res.write.mock.calls[0][0]).toContain("plain line");
-    expect(replayBuffer.map((item) => item.hosted)).toEqual([true, false]);
-    expect(wants(phone, "message", true)).toBe(false);
-    expect(wants(desktop, "message", true)).toBe(true);
+    write({ kind: "joined", hosted: true, roomId: "r9" });
+    expect(desktop.res.write).toHaveBeenCalledTimes(3);
+    expect(phone.res.write).toHaveBeenCalledTimes(3);
+    expect(phone.res.write.mock.calls[0][0]).toContain("room line");
+    expect(replayBuffer.filter((item) => wants(phone, item.kind)).map((item) => item.frame)).toEqual(phone.res.write.mock.calls.map((call) => call[0]));
+    expect(wants({ screens: false }, "screen")).toBe(false);
+    expect(wants(phone, "screen")).toBe(true);
   });
 
-  it("leaves hosted groups out of GET /api/bots for relay callers", async () => {
+  it("keeps the same manual group order for relay callers", async () => {
     const deps = (relay: boolean) => ({
       relay, store, json, traceOpenBots: () => {}, pageSize: () => undefined, OPEN_CHAT_HEADER: "x-open-chat", offscreenLimit: () => 0,
       publicBotRecord: (bot: unknown) => bot, messagePage: () => ({}), publicGroupState: (group: GroupRecord) => group,
       computerControl: { snapshot: () => ({ held: false }) }, STREAM_ID: "s", lastSeq: 0,
     });
     const run = (relay: boolean) => routeBlock('path === "/api/bots"', deps(relay))({ headers: {} }, {}, "/api/bots", "GET", new URL("http://x/api/bots"));
-    expect((await run(true)).body.groups.map((g: GroupRecord) => g.id)).toEqual([plain.id]);
+    expect((await run(true)).body.groups.map((g: GroupRecord) => g.id)).toEqual([hosted.id, plain.id]);
     expect((await run(false)).body.groups.map((g: GroupRecord) => g.id)).toEqual([hosted.id, plain.id]);
-    expect(hostedRelayTarget(store, `/api/groups/${hosted.id}`)).toBe(true);
   });
 
-  it("keeps hosted threads out of relay search", async () => {
+  it("includes hosted threads in relay search", async () => {
     const search = vi.fn();
-    const run = (relay: boolean) => routeBlock('path === "/api/search"', { relay, store, threadRoutes: { search }, hostedThreadIds })({}, "res", "/api/search", "GET", "url");
+    const run = (relay: boolean) => routeBlock('path === "/api/search"', { relay, store, threadRoutes: { search } })({}, "res", "/api/search", "GET", "url");
     await run(true);
     await run(false);
-    expect(search.mock.calls).toEqual([["res", "url", [hosted.threadId]], ["res", "url", []]]);
+    expect(search.mock.calls).toEqual([["res", "url"], ["res", "url"]]);
   });
 
   it("sends no phone push for a hosted room", () => {

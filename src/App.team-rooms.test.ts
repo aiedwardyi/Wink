@@ -148,6 +148,76 @@ afterEach(async () => {
 });
 
 describe("Team rooms for the host", () => {
+  it.each(["New team room", "Join team room", "People"])("Back closes %s first", async (label) => {
+    const layers = new Map<string, () => void>();
+    const layer = (event: CustomEvent<{ key: string; close?: () => void }>) => {
+      if (event.detail.close) layers.set(event.detail.key, event.detail.close);
+      else layers.delete(event.detail.key);
+    };
+    window.addEventListener("orbit:back-layer", layer);
+    try {
+      await boot({ groups: [teamRoom()] });
+      await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+      if (label !== "People") await openPlus();
+      await click(button(label));
+      expect($('[role="dialog"]')?.getAttribute("aria-label")).toBe(label);
+      expect(layers.size).toBeGreaterThan(0);
+      await act(async () => [...layers.values()].at(-1)!());
+      expect($('[role="dialog"]')).toBeNull();
+      expect(store.selectedId).toBe("g1");
+    } finally {
+      window.removeEventListener("orbit:back-layer", layer);
+    }
+  });
+
+  it("loads older host lines on scroll-up and keeps the reader's place", async () => {
+    const group = { ...teamRoom([], [line("m2", { kind: "host", id: "host", name: "Edward" }, "Recent")]), hasMore: true };
+    const older = line("m1", { kind: "person", id: "p1", name: "Mina" }, "Older");
+    await boot({ groups: [group], route: (call) => call.path === "/api/threads/g1-thread/messages?limit=200&before=m2" ? reply({ messages: [older], hasMore: false }) : undefined });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const scroller = $('[data-team-room-transcript]')!;
+    Object.defineProperty(scroller, "scrollHeight", { get: () => document.querySelectorAll("[data-team-room-line]").length * 400, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+    scroller.scrollTop = 20;
+    await act(async () => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(asked("GET", "/api/threads/g1-thread/messages?limit=200&before=m2")).toHaveLength(1);
+    expect([...document.querySelectorAll("[data-mid]")].map((each) => each.getAttribute("data-mid"))).toEqual(["m1", "m2"]);
+    expect(scroller.scrollTop).toBe(420);
+  });
+
+  it("discards the scroll snapshot when an older page's cursor is stale", async () => {
+    const person = { kind: "person", id: "p1", name: "Mina" } as const;
+    const recent = line("m2", person, "Recent");
+    const head = line("m0", person, "Restored history");
+    let finish!: (response: Response) => void;
+    await boot({ groups: [{ ...teamRoom([], [recent]), hasMore: true }], route: (call) => call.path === "/api/threads/g1-thread/messages?limit=200&before=m2" ? new Promise((resolve) => { finish = resolve; }) : undefined });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const scroller = $('[data-team-room-transcript]')!;
+    Object.defineProperty(scroller, "scrollHeight", { get: () => document.querySelectorAll("[data-team-room-line]").length * 400, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+    scroller.scrollTop = 20;
+    await act(async () => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await act(async () => store.dispatch!({ type: "groupPatched", group: { id: "g1", messages: [head, recent], hasMore: false } }));
+    scroller.scrollTop = 100;
+    await act(async () => finish(reply({ messages: [line("m1", person, "Old page")], hasMore: false })));
+    expect(document.querySelectorAll("[data-team-room-line]")).toHaveLength(2);
+    scroller.scrollTop = 200;
+    await act(async () => store.dispatch!({ type: "groupPatched", group: { id: "g1", messages: [head, recent, line("m3", person, "New line")] } }));
+    expect(scroller.scrollTop).toBe(200);
+  });
+
+  it("fills a short host transcript without needing a scroll gesture", async () => {
+    const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.hasAttribute("data-team-room-transcript") ? 300 : 0; });
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.hasAttribute("data-team-room-transcript") ? this.querySelectorAll("[data-team-room-line]").length * 50 : 0; });
+    const person = { kind: "person", id: "p1", name: "Mina" } as const;
+    await boot({ groups: [{ ...teamRoom([], [line("m2", person, "Recent")]), hasMore: true }], route: (call) => call.path === "/api/threads/g1-thread/messages?limit=200&before=m2" ? reply({ messages: [line("m1", person, "Older")], hasMore: false }) : undefined });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    expect(asked("GET", "/api/threads/g1-thread/messages?limit=200&before=m2")).toHaveLength(1);
+    expect(document.querySelectorAll("[data-team-room-line]")).toHaveLength(2);
+    height.mockRestore();
+    scroll.mockRestore();
+  });
+
   it("creates a zero-bot room from a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });

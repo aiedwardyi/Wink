@@ -6,6 +6,7 @@ import { KeyRound, UsersRound } from "lucide-react";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { createTeamRoom, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 
@@ -47,6 +48,7 @@ export function TeamRoomMenuItems({ onPick }: { onPick: () => void }) {
 }
 
 function Shell({ label, closing, onClose, children }: { label: string; closing: boolean; onClose: () => void; children: React.ReactNode }) {
+  useBackLayer(!closing, onClose);
   return createPortal(
     <div
       data-closing={closing || undefined}
