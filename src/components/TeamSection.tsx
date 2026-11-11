@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { z } from "zod";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
+import { useBarTip } from "./BarTip";
 
 export interface TeamPerson {
   id: string;
@@ -119,7 +120,7 @@ function TodayCounts({ today }: { today: TeamToday }) {
 
 function PersonCard({ person, days, now, locale }: { person: TeamPerson; days: string[]; now: number; locale: string }) {
   const { t } = useI18n();
-  const [tip, setTip] = useState<string | null>(null);
+  const barTip = useBarTip();
   const today = person.hours.at(-1) ?? 0;
   const status = person.online ? t("team.online") : seenText(person.lastSeen, now, t);
   const peak = person.hours.reduce((best, hours, index) => (hours > (person.hours[best] ?? 0) ? index : best), 0);
@@ -159,11 +160,7 @@ function PersonCard({ person, days, now, locale }: { person: TeamPerson; days: s
               type="button"
               className="group relative h-full min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
               aria-label={text.replaceAll("\n", ", ")}
-              onMouseEnter={() => setTip(text)}
-              onMouseLeave={() => setTip(null)}
-              onFocus={() => setTip(text)}
-              onBlur={() => setTip(null)}
-              onClick={() => setTip(text)}
+              {...barTip.props(text)}
             >
               <span
                 className={hours > 0 ? "absolute inset-x-0 bottom-0 rounded-t-[2px] bg-accent group-hover:bg-accent-text group-focus-visible:bg-accent-text" : "absolute inset-x-0 bottom-0 bg-hairline group-hover:bg-ink-secondary"}
@@ -177,20 +174,16 @@ function PersonCard({ person, days, now, locale }: { person: TeamPerson; days: s
         <span>{dayLabel(days[0] ?? "", locale).short}</span>
         <span>{dayLabel(days.at(-1) ?? "", locale).short}</span>
       </div>
-      <div className="grid">
-        <div className={tip ? "col-start-1 row-start-1 mt-2.5 invisible" : "col-start-1 row-start-1 mt-2.5"} aria-hidden={tip ? true : undefined}>
-          <div className="flex justify-between gap-2 text-[12px] text-ink-secondary">
-            <span className="tabular-nums">
-              {phoneToday.count === 0 ? t("team.mobileNone") : t(phoneToday.count === 1 ? "team.mobileOne" : "team.mobileMany", { n: phoneToday.count, time: visitTime(phoneToday.minutes) })}
-            </span>
-            <span>{t(active === 1 ? "team.dayActive" : "team.daysActive", { n: active })}</span>
-          </div>
-          <p className="mt-1 text-[12px] text-ink-secondary">
-            {t("team.busiest", { when, hours: hoursText(person.hours[peak] ?? 0) })}
-          </p>
-        </div>
-        {tip && <p className="col-start-1 row-start-1 whitespace-pre-line text-[12px] leading-snug text-ink">{tip}</p>}
+      <div className="mt-2.5 flex justify-between gap-2 text-[12px] text-ink-secondary">
+        <span className="tabular-nums">
+          {phoneToday.count === 0 ? t("team.mobileNone") : t(phoneToday.count === 1 ? "team.mobileOne" : "team.mobileMany", { n: phoneToday.count, time: visitTime(phoneToday.minutes) })}
+        </span>
+        <span>{t(active === 1 ? "team.dayActive" : "team.daysActive", { n: active })}</span>
       </div>
+      <p className="mt-1 text-[12px] text-ink-secondary">
+        {t("team.busiest", { when, hours: hoursText(person.hours[peak] ?? 0) })}
+      </p>
+      {barTip.node}
     </article>
   );
 }

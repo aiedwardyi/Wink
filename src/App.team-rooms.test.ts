@@ -238,6 +238,7 @@ describe("Team rooms for the host", () => {
     const scroller = $('[data-team-room-transcript]')!;
     Object.defineProperty(scroller, "scrollHeight", { get: () => document.querySelectorAll("[data-team-room-line]").length * 400, configurable: true });
     Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true })));
     scroller.scrollTop = 20;
     await act(async () => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
     await act(async () => store.dispatch!({ type: "groupPatched", group: { id: "g1", messages: [head, recent], hasMore: false } }));

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
+import { googleSubHash } from "../shared/google-id-token.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 import { teamIdToken, teamRelayOrigin, teamRoute, type TeamTokenSource } from "./team-route.ts";
 
@@ -75,6 +76,16 @@ describe("team route", () => {
       headers: { authorization: "Bearer token" },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("leaves the owner's own person out and keeps the rest in order", async () => {
+    const own = createHash("sha256").update(`wink-team-person/1\0${googleSubHash("owner")}`, "utf8").digest("base64url");
+    const people = [{ id: "a", name: "Ada" }, { id: own, name: "Me" }, { id: "b", name: "Bea" }];
+    const fetchImpl = vi.fn(async () => Response.json({ ...payload, people }));
+    const now = Date.parse("2026-10-12T00:00:00Z");
+    const hash = createHash("sha256").update("owner@example.com").digest("hex");
+    const reply = await teamRoute(null, "wink.example", hash, "owner@example.com", source(jwt(now - 60_000)), fetchImpl, () => now);
+    expect(reply).toEqual({ status: 200, body: { ...payload, people: [people[0], people[2]] } });
   });
 
   it("calls the relay only for the baked owner's email", async () => {
