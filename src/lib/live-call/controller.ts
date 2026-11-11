@@ -1,5 +1,5 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
-import { callStatus } from "../../../shared/call-status";
+import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
 import { isVoiceLine, ORDER_EXPIRY_MS, type CallLine } from "../../../shared/live-call";
 import { isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
@@ -84,7 +84,7 @@ export function told(result: string, subject: string): string {
 /** How the bot's open card reads aloud: its question and options, never just the title. */
 function cardNotice(botName: string, card: Message["card"]): string {
   const question = (card?.subtitle?.trim() || card?.title?.trim() || "").slice(0, REPORT_CHARS);
-  const options = card?.options?.filter((option) => option.trim()).join("; ");
+  const options = card?.options?.filter((option) => option.trim()).map((option) => clip(option, OPTION_CHARS)).join("; ");
   return options
     ? `[Wink] ${botName} asks: ${question} Options: ${options}. Read it out with the options, then wait for their answer.`
     : `[Wink] ${botName} asks: ${question} Read it out, then wait for their answer.`;

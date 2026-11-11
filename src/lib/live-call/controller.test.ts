@@ -1103,6 +1103,12 @@ describe("VOICE-KNOWS: cards aloud", () => {
     expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Your bot has a question Read it out, then wait for their answer.");
   });
 
+  it("clips each long option the way STATUS does", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [{ id: "q1", role: "bot", kind: "options", at: 2_000, card: { title: "q", subtitle: "Which one?", options: ["가".repeat(200), "Short"], askUser: true } } as Message] });
+    expect(engine().texts.at(-1)).toBe(`[Wink] Nova asks: Which one? Options: ${"가".repeat(79)}…; Short. Read it out with the options, then wait for their answer.`);
+  });
+
   it("a superseded card is never read; the newer one is, and takes the answer", async () => {
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine, posts } = await started({}, audio);

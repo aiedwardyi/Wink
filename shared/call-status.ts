@@ -6,7 +6,7 @@ export const STATUS_MAX_BYTES = 1_600;
 const WORKERS_KEPT = 5;
 const ORDER_CHARS = 300;
 const QUESTION_CHARS = 300;
-const OPTION_CHARS = 80;
+export const OPTION_CHARS = 80;
 const REPORT = { done: "DONE", failed: "FAILED", blocked: "BLOCKED" } as const;
 
 interface Row {
@@ -21,7 +21,7 @@ interface Row {
   secret?: { label: string; provided?: boolean; dismissed?: boolean; requestKey: string };
 }
 
-const clip = (text: string, max: number) => {
+export const clip = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 };
