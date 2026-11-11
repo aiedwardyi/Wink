@@ -47,14 +47,26 @@ export function dialStep(rows: PickerRow[], current: ModelSelection, dir: number
 
 const WHEEL_PX = 16;
 const WHEEL_IDLE_MS = 200;
+const WHEEL_NOTCH_MS = 130;
+const WHEEL_NOTCH_PX = 50;
 
-/** True once per wheel or trackpad burst, momentum tail included; a 200 ms pause or a reversal starts the next. */
-export function dialWheel(burst: { at: number; dir: number; sum: number }, event: WheelEvent): boolean {
+type WheelBurst = { at: number; dir: number; sum: number; step?: number; fine?: boolean };
+
+// Mouse notches are line/page deltas or whole pixels of 50 or more (Chrome sends 100); trackpads send small or fractional pixels.
+const isNotch = (event: WheelEvent) => event.deltaMode > 0 || (Math.abs(event.deltaY) >= WHEEL_NOTCH_PX && Number.isInteger(event.deltaY));
+
+/** True once per trackpad burst, momentum tail included, and once per mouse notch at most every 130 ms; a 200 ms pause or a reversal starts the next. */
+export function dialWheel(burst: WheelBurst, event: WheelEvent): boolean {
   const now = performance.now();
   const dir = Math.sign(event.deltaY);
-  const before = now - burst.at < WHEEL_IDLE_MS && dir === burst.dir ? burst.sum : 0;
-  Object.assign(burst, { at: now, dir, sum: before + Math.abs(event.deltaY) * [1, 16, window.innerHeight][event.deltaMode]! });
-  return before < WHEEL_PX && burst.sum >= WHEEL_PX;
+  const live = now - burst.at < WHEEL_IDLE_MS && dir === burst.dir;
+  const before = live ? burst.sum : 0;
+  const fine = (live && burst.fine) || !isNotch(event);
+  const due = !live || now - (burst.step ?? -Infinity) >= WHEEL_NOTCH_MS;
+  Object.assign(burst, { at: now, dir, sum: before + Math.abs(event.deltaY) * [1, 16, window.innerHeight][event.deltaMode]!, fine });
+  if (fine) return before < WHEEL_PX && burst.sum >= WHEEL_PX;
+  if (due) burst.step = now;
+  return due;
 }
 
 /** Effort stops at either end; the list picker wraps. */
