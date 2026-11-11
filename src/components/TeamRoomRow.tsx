@@ -1,5 +1,5 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, type TranscriptScroll } from "@/lib/bottom-follow";
@@ -58,11 +58,16 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
 }
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label, loadOlder }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; loadOlder?: (beforeCommit: () => void) => void }) {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
   const beforePage = useRef<TranscriptScroll | null>(null);
+  const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
+  const fill = useCallback(() => {
+    const el = scrollRef.current;
+    if (hasMore && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) loadPage();
+  }, [hasMore, loadPage]);
   useLayoutEffect(() => {
     if (beforePage.current && scrollRef.current) restoreTranscriptScroll(scrollRef.current, beforePage.current);
     beforePage.current = null;
@@ -74,6 +79,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, loadOlder }: { li
     const el = scrollRef.current;
     if (el && (atEnd.current || lastMine)) el.scrollTop = el.scrollHeight;
   }, [lastId, lastMine]);
+  useEffect(fill, [fill, lines]);
   // pictures loading and a growing composer fire no scroll event; re-pin while following
   useEffect(() => {
     const el = scrollRef.current;
@@ -81,11 +87,12 @@ export function TeamRoomTranscript({ lines, mine, base, label, loadOlder }: { li
     if (!el || !log || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       if (atEnd.current) el.scrollTop = el.scrollHeight;
+      fill();
     });
     observer.observe(log);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [fill]);
   return (
     <div
       ref={scrollRef}
@@ -94,7 +101,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, loadOlder }: { li
       onScroll={(e) => {
         const el = e.currentTarget;
         atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-        if (el.scrollTop < 80 && !atEnd.current) loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); });
+        if (el.scrollTop < 80) loadPage();
       }}
     >
       <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>

@@ -119,6 +119,43 @@ afterEach(() => {
 });
 
 describe("useOlderMessages", () => {
+  it("separates new cursors and skips stale page measurements", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const replies: Array<(response: Response) => void> = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { replies.push(resolve); })));
+    const dispatch = vi.fn();
+    let head = "m2";
+    let load: ReturnType<typeof useOlderMessages> = () => {};
+    function Probe() {
+      load = useOlderMessages(dispatch, "thread-a", head, true);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    const first = vi.fn();
+    const joined = vi.fn();
+    const fresh = vi.fn();
+    const freshFailed = vi.fn();
+    const failed = vi.fn();
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => load(first, failed));
+    await act(async () => load(joined, failed));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    head = "m0";
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => load(fresh, freshFailed));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => replies[0](new Response(JSON.stringify({ messages: [], hasMore: false }))));
+    expect(first).not.toHaveBeenCalled();
+    expect(joined).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledTimes(2);
+    await act(async () => replies[1](new Response(JSON.stringify({ messages: [], hasMore: false }))));
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(freshFailed).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
   it("tells a caller that joined a failing page about the failure", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
