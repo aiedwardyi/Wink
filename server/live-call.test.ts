@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_URL } from "../shared/live-call.ts";
-import { capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag } from "./live-call.ts";
+import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
+import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { workspaceDir } from "./workspace.ts";
 
@@ -72,7 +74,7 @@ describe("call token", () => {
     const brief = body.bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("You are Juno");
     expect(brief).toContain("fix the login page");
-    expect(brief).toMatch(/NOW: idle/);
+    expect(brief).toContain("STATUS:\nJuno is idle.\nLocal time ");
   });
 
   it("keeps the brief for a resumed callId", async () => {
@@ -189,6 +191,58 @@ describe("brief caps", () => {
   });
 });
 
+describe("brief STATUS", () => {
+  afterEach(() => { _resetSteerQueue(); });
+  const statusOf = (brief: string) => brief.split("STATUS:\n")[1]!.split("\nLocal time ")[0]!;
+
+  it("replaces NOW with busy state, waiting sends, the open card and worker reports", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "note", text: "[pane aaaaaaaa] [BUILD | opus | high] from Juno (b1): FAIL BUILD branch=x sha=1 dirty=0\nstack trace" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Your bot has a question", subtitle: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM", "Still 1 AM"], askUser: true } });
+    h.store.setActivity(h.bot.id, "working");
+    queueSteeredMessage(h.bot.id, h.bot.threadId, "then deploy", {});
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).not.toContain("NOW:");
+    expect(brief).toContain("FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines.");
+    expect(statusOf(brief)).toBe([
+      "Juno is busy, working on: fix the login page.",
+      "Sends waiting to run after this.",
+      "Open question for the person: Restart at 8:15 PM instead? Options: Yes, 8:15 PM; Still 1 AM.",
+      "Workers, newest first: BUILD reported FAILED.",
+    ].join("\n"));
+    expect(statusOf(brief)).not.toContain("stack trace");
+  });
+
+  it("stays under 1.6 KB in Korean", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "평가 루프를 다시 시작해 주세요. ".repeat(60) });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "질문", subtitle: "새벽 1시에 재시작할까요? ".repeat(60), options: Array.from({ length: 40 }, (_, i) => `선택지 ${"가".repeat(60)} ${i}`), askUser: true } });
+    h.store.setActivity(h.bot.id, "working");
+    await h.post("token", { locale: "ko" });
+    const status = statusOf(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string);
+    expect(Buffer.byteLength(status, "utf8")).toBeLessThanOrEqual(STATUS_MAX_BYTES);
+    expect(status).not.toContain("�");
+  });
+});
+
+describe("call context on sends", () => {
+  it("a call turn reads the lines said before it, skipping its own row and a line written after it", () => {
+    const call = { id: "c-0123456789ab" };
+    const at = 1;
+    const rows = [
+      { id: "t", role: "user", kind: "text", text: "typed before the call", at },
+      { id: "l1", role: "user", kind: "text", text: "Can you check the build?", call, at },
+      { id: "l2", role: "bot", kind: "text", text: "Want me to check it?", call: { ...call, voice: true }, at },
+      { id: "o", role: "user", kind: "text", text: "Check the build.", call: { ...call, order: true }, at },
+      { id: "l3", role: "user", kind: "text", text: "Yes.", call, at },
+    ] as Parameters<typeof callLinesSinceLastUserTurn>[0];
+    const [block] = callLinesSinceLastUserTurn(rows, new Set(["o"]));
+    expect(block!.split("\n").slice(1)).toEqual(["Person: Can you check the build?", "You: Want me to check it?", "Person: Yes."]);
+    expect(block).not.toContain("typed before the call");
+  });
+});
+
 describe("call lines and end", () => {
   it("appends user and voice rows tagged with the call", async () => {
     const h = harness();
@@ -211,8 +265,10 @@ describe("call lines and end", () => {
     const h = harness();
     const stats = { device: "phone", ms: 61_000, turns: 4, userLines: 4, voiceLines: 4, hangulShare: 0.5, ttfaMs: { p50: 1_100, p90: 1_900 }, interrupted: 1, orders: { proposed: 1, confirmed: 1, declined: 0, expired: 0 }, doneGuard: 0, hidden: { spans: 0, ms: 0 }, reconnects: 0, closeCodes: [1000], usage: { total: 900 } };
     expect((await h.post("end", { callId: "c-0123456789ab", stats })).data).toEqual({ ok: true });
+    const full = { ...stats, asks: { sent: 2, retried: 0, answered: 1, ms: { p50: 9_000, p90: 9_000 } }, guard: { nudges: 1, failLines: 0, promise: 1, cant: 0, unsure: 0 }, ackMs: { p50: 1_200, p90: 2_400 } };
+    expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }]);
+    expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
   });
 });
 

@@ -1,4 +1,5 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
+import { callStatus, clip, OPTION_CHARS } from "../../../shared/call-status";
 import { isVoiceLine, ORDER_EXPIRY_MS, type CallLine } from "../../../shared/live-call";
 import { isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
@@ -66,6 +67,7 @@ const MAX_RECONNECTS = 3;
 const MAX_NUDGES = 3;
 const REPORT_CHARS = 1_500;
 const RETRY_MS = 1_500;
+const STATUS_MS = 30_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
@@ -77,6 +79,15 @@ export function told(result: string, subject: string): string {
   if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
   if (result.startsWith("already proposed")) return `Waiting for their answer: ${subject}`;
   return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
+}
+
+/** How the bot's open card reads aloud: its question and options, never just the title. */
+function cardNotice(botName: string, card: Message["card"]): string {
+  const question = (card?.subtitle?.trim() || card?.title?.trim() || "").slice(0, REPORT_CHARS);
+  const options = card?.options?.filter((option) => option.trim()).map((option) => clip(option, OPTION_CHARS)).join("; ");
+  return options
+    ? `[Wink] ${botName} asks: ${question} Options: ${options}. Read it out with the options, then wait for their answer.`
+    : `[Wink] ${botName} asks: ${question} Read it out, then wait for their answer.`;
 }
 
 /** Transcript text without the model's markers ("<no speech>", "{pause}"); empty if nothing speakable is left. */
@@ -140,17 +151,26 @@ export class LiveCall {
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
-    asks: { sent: 0, retried: 0 },
-    guard: { nudges: 0, failLines: 0 },
+    asks: { sent: 0, retried: 0, answered: 0 },
+    guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
     hidden: { spans: 0, ms: 0 }, closeCodes: [] as number[], ttfa: [] as number[], usage: 0,
   };
   private hiddenAt = 0;
+  private askSends = new Set<string>();
+  private askMs: number[] = [];
+  private ack: number[] = [];
+  private turnSent = false;
+  private turnTtfa?: number;
+  private status?: { told: string; at: number; next?: string; timer?: ReturnType<typeof setTimeout> };
 
   constructor(deps: Deps) {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
     deps.audio.onStart = () => {
-      if (!this.turnHadAudio && this.spokeAt) this.stats.ttfa.push(this.now() - this.spokeAt);
+      if (!this.turnHadAudio && this.spokeAt) {
+        this.turnTtfa = this.now() - this.spokeAt;
+        this.stats.ttfa.push(this.turnTtfa);
+      }
       this.spokeAt = 0;
       this.turnHadAudio = true;
       this.refresh();
@@ -266,6 +286,7 @@ export class LiveCall {
         this.flushHeard();
         this.guard(spokenText(this.saidBuf));
         this.flushSaid(1);
+        this.ackOut();
         this.turnHadAudio = false;
         this.generating = false;
         this.guarded = false;
@@ -280,6 +301,7 @@ export class LiveCall {
         const share = this.deps.audio.heardShare();
         this.deps.audio.flush();
         this.flushSaid(share);
+        this.ackOut();
         this.turnHadAudio = false;
         this.generating = false;
         this.guarded = false;
@@ -421,7 +443,9 @@ export class LiveCall {
     let run = req.asks.get(key);
     if (!run) {
       this.stats.asks.sent += 1;
-      run = this.send(question, { ask: true }).then((result) => {
+      const sendId = crypto.randomUUID();
+      this.askSends.add(sendId);
+      run = this.send(question, { ask: true }, sendId).then((result) => {
         if (!reached(result)) {
           req.accounted = false;
           this.postLines([{ who: "voice", text: told(result, question), at: this.now() }]);
@@ -433,19 +457,20 @@ export class LiveCall {
     void run.then((result) => this.toolResult([id], "ask", question, result));
   }
 
-  private send(text: string, tag: { order: true } | { ask: true }): Promise<string> {
-    const run = this.deliver(text, tag);
+  private send(text: string, tag: { order: true } | { ask: true }, sendId = crypto.randomUUID()): Promise<string> {
+    this.turnSent = true;
+    const run = this.deliver(text, tag, sendId);
     this.sends.add(run);
     void run.finally(() => this.sends.delete(run));
     return run;
   }
 
   // A negative 202 or a 4xx never reached the bot; only a lost receipt is retried, with the same body.
-  private async deliver(text: string, tag: { order: true } | { ask: true }): Promise<string> {
+  private async deliver(text: string, tag: { order: true } | { ask: true }, sendId: string): Promise<string> {
     const threadId = this.threadId;
     // The bot reads the call lines before the prompt, so the heard line must land first.
     await Promise.all([...this.writes]);
-    const body = { text, sendId: crypto.randomUUID(), ...(threadId ? { threadId } : {}), call: { id: this.callId, ...tag } };
+    const body = { text, sendId, ...(threadId ? { threadId } : {}), call: { id: this.callId, ...tag } };
     let reason = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (attempt) {
@@ -489,6 +514,7 @@ export class LiveCall {
       return;
     }
     if (!req.text || req.accounted || req.failed || req.told) return;
+    this.stats.guard[claim.claim] += 1;
     if (!req.nudged && this.stats.guard.nudges < MAX_NUDGES) {
       req.nudged = true;
       this.stats.guard.nudges += 1;
@@ -577,6 +603,7 @@ export class LiveCall {
       const askId = row.quick?.state === "answer" ? row.quick.askId : undefined;
       if (row.role === "bot" && askId && asks.has(askId) && row.text?.trim() && !this.reported.has(row.id)) {
         this.reported.add(row.id);
+        this.answered(input.messages, [askId], row);
         void this.report(row.text, [askId]);
       }
     }
@@ -605,6 +632,7 @@ export class LiveCall {
         }
         // A settled order can be asked for again later in the call.
         for (const row of replyOrders) this.sent.delete(orderKey(row.text!));
+        this.answered(replyOrders, replyOrders.map((row) => row.id), reply);
         void this.report(reply.text!, replyOrders.map((row) => row.id));
       }
     }
@@ -615,7 +643,7 @@ export class LiveCall {
       if (id && question && !this.toldCards.has(id)) {
         this.toldCards.add(id);
         const notice: Held = {
-          text: `[Wink] ${this.deps.botName} needs you in chat: ${question.card?.title ?? ""}`,
+          text: cardNotice(this.deps.botName, question.card),
           valid: () => this.card?.id === id,
           played: () => { if (this.card?.id === id) this.card.armed = true; },
           // re-queues itself: a cut notice was never heard, so it must play again
@@ -628,8 +656,56 @@ export class LiveCall {
       this.toldNeeds.add(input.needs.id);
       this.held.push({ text: `[Wink] ${this.deps.botName} needs you in chat: ${input.needs.short}` });
     }
+    this.statusNow(callStatus(this.deps.botName, input.busy, input.messages));
     this.release();
     this.refresh();
+  }
+
+  /** The first audio of a turn that sent something is how fast the voice acknowledged it. */
+  private ackOut() {
+    if (this.turnSent && this.turnTtfa !== undefined) this.ack.push(this.turnTtfa);
+    this.turnSent = false;
+    this.turnTtfa = undefined;
+  }
+
+  /** A spoken ask settles once, timed from its row to the answer. */
+  private answered(rows: Message[], ids: string[], reply: Message) {
+    for (const row of rows) {
+      if (!ids.includes(row.id) || !row.sendId || !this.askSends.delete(row.sendId)) continue;
+      this.stats.asks.answered += 1;
+      this.askMs.push(Math.max(0, reply.at - row.at));
+    }
+  }
+
+  // The brief already holds the first look; later changes go silently, one per 30 s, the newest kept for a trailing flush.
+  private statusNow(text: string) {
+    if (!this.status) {
+      this.status = { told: text, at: 0 };
+      return;
+    }
+    const status = this.status;
+    status.next = text;
+    if (status.timer) return;
+    const wait = status.at + STATUS_MS - this.now();
+    if (status.at && wait > 0) {
+      status.timer = setTimeout(() => {
+        status.timer = undefined;
+        if (!this.ended) this.tellStatus();
+      }, wait);
+      return;
+    }
+    this.tellStatus();
+  }
+
+  private tellStatus() {
+    const status = this.status!;
+    const text = status.next;
+    status.next = undefined;
+    if (!text || text === status.told) return;
+    status.told = text;
+    status.at = this.now();
+    this.context.push(`[Wink] Status now. Context only, do not read it out.\n${text}`);
+    this.release();
   }
 
   private async report(text: string, orders: string[]) {
@@ -729,6 +805,7 @@ export class LiveCall {
       this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at: this.now() }]);
       this.pending = undefined;
     }
+    clearTimeout(this.status?.timer);
     engine?.close();
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;
@@ -741,6 +818,8 @@ export class LiveCall {
         ms: this.now() - this.snapshot.startedAt,
         hangulShare: this.letters.all ? Math.round((this.letters.hangul / this.letters.all) * 100) / 100 : 0,
         ttfaMs: { p50: percentile(ttfa, 0.5), p90: percentile(ttfa, 0.9) },
+        ackMs: { p50: percentile(this.ack, 0.5), p90: percentile(this.ack, 0.9) },
+        asks: { ...counts.asks, ms: { p50: percentile(this.askMs, 0.5), p90: percentile(this.askMs, 0.9) } },
         usage: { total: usage },
       },
     };
