@@ -8,7 +8,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0 }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "" }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -27,7 +27,7 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture() {}
+    async capture() { if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
     play() {}
     flush() {}
     close() {}
@@ -93,6 +93,8 @@ afterEach(() => {
   posts.length = 0;
   fakes.level = 0;
   fakes.engines.length = 0;
+  fakes.micError = "";
+  Reflect.deleteProperty(window, "ogb");
 });
 
 describe("live call in the message box", () => {
@@ -181,6 +183,40 @@ describe("live call in the message box", () => {
       for (let i = 0; i < 30; i++) frames.shift()?.(i * 16);
       expect(scale(bars[1]!)).toBeGreaterThan(0.95);
       expect(scale(bars[0]!)).toBeLessThan(scale(bars[1]!));
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("shows the same phone button in the desktop app and calls from it", async () => {
+    Object.assign(window, { ogb: { permOpenSettings: vi.fn(), speechStop: vi.fn() } });
+    const { host, unmount } = await mount();
+    try {
+      const header = button(host, "Call Atlas")!;
+      expect(header.className).toContain("size-9");
+      await connect(host);
+      expect(button(host, "Hang up on Atlas")).not.toBeNull();
+      await act(async () => button(host, "Hang up on Atlas")!.click());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+      await connect(host);
+      await act(async () => button(frame(host), "End")!.click());
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each(["NotAllowedError", "NotReadableError"])("says the mic is off with an Open settings action in the desktop app on %s", async (name) => {
+    const permOpenSettings = vi.fn();
+    Object.assign(window, { ogb: { permOpenSettings, speechStop: vi.fn() } });
+    fakes.micError = name;
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      const alert = await vi.waitFor(() => host.querySelector<HTMLElement>("[data-live-call] [role=alert]")!);
+      expect(alert.textContent).toBe("Microphone is off for Wink.Open settings");
+      await act(async () => [...alert.querySelectorAll("button")].find((b) => b.textContent === "Open settings")!.click());
+      expect(permOpenSettings).toHaveBeenCalledWith("mic");
     } finally {
       await unmount();
     }
