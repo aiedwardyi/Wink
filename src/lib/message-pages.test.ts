@@ -119,6 +119,30 @@ afterEach(() => {
 });
 
 describe("useOlderMessages", () => {
+  it("keeps an inactive thread's page without measuring the visible thread", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let release!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
+    const dispatch = vi.fn();
+    let load: ReturnType<typeof useOlderMessages> = () => {};
+    function Probe({ threadId }: { threadId: string }) {
+      load = useOlderMessages(dispatch, threadId, "m2", true);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    const measure = vi.fn();
+    const failed = vi.fn();
+    try {
+      await act(async () => root.render(createElement(Probe, { threadId: "thread-a" })));
+      await act(async () => load(measure, failed));
+      await act(async () => root.render(createElement(Probe, { threadId: "thread-b" })));
+      await act(async () => release(Response.json({ messages: rows(0, 2), hasMore: false })));
+      expect(measure).not.toHaveBeenCalled();
+      expect(failed).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "olderMessages", threadId: "thread-a", before: "m2", messages: rows(0, 2), hasMore: false });
+    } finally { await act(async () => root.unmount()); }
+  });
+
   it("separates new cursors and skips stale page measurements", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const replies: Array<(response: Response) => void> = [];

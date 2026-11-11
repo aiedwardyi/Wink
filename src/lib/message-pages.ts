@@ -387,11 +387,12 @@ export function useOlderMessages(
       fetchOlderPage(threadId, oldestId, pages)
         .then((page) => {
           inflight.current.delete(key);
-          if (current.current.threadId !== threadId || current.current.oldestId !== oldestId) {
+          const visible = current.current.threadId === threadId;
+          if (visible && current.current.oldestId !== oldestId) {
             for (const fail of waiting.fails) fail();
             return;
           }
-          for (const measure of waiting.measures) measure();
+          if (visible) for (const measure of waiting.measures) measure();
           dispatch({ type: "olderMessages", threadId, before: oldestId, ...page });
         })
         .catch(() => {
