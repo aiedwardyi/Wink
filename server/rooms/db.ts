@@ -96,6 +96,16 @@ function open(): DatabaseSync {
       joined_at INTEGER NOT NULL,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS translations (
+      room_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      lang TEXT NOT NULL,
+      text TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (room_id, entry_id, lang)
+    );
+    CREATE TRIGGER IF NOT EXISTS room_translations_delete AFTER DELETE ON rooms
+    BEGIN DELETE FROM translations WHERE room_id = OLD.id; END;
     CREATE TABLE IF NOT EXISTS log (
       room_id TEXT NOT NULL,
       seq INTEGER NOT NULL,
@@ -219,6 +229,16 @@ const rowToEntry = (row: LogRow): RoomEntry => ({
 export function roomEntry(roomId: string, id: string): RoomEntry | null {
   const row = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND id = ?`).get(roomId, id) as LogRow | undefined;
   return row ? rowToEntry(row) : null;
+}
+
+export function roomTranslation(roomId: string, entryId: string, lang: string): string | undefined {
+  return (db().prepare("SELECT text FROM translations WHERE room_id = ? AND entry_id = ? AND lang = ?")
+    .get(roomId, entryId, lang) as { text: string } | undefined)?.text;
+}
+
+export function saveRoomTranslation(roomId: string, entryId: string, lang: string, text: string): void {
+  db().prepare("INSERT OR IGNORE INTO translations (room_id, entry_id, lang, text, at) VALUES (?, ?, ?, ?, ?)")
+    .run(roomId, entryId, lang, text, Date.now());
 }
 
 /** The newest `limit` entries, oldest first. */

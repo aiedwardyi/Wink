@@ -1,5 +1,6 @@
 import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
@@ -8,6 +9,7 @@ import {
   closeJoinedDb,
   endJoined,
   joinedEntries,
+  joinedEntry,
   joinedCursor,
   joinedKey,
   joinedRoom,
@@ -30,6 +32,17 @@ beforeAll(() => mkdirSync(DATA_DIR, { recursive: true }));
 afterEach(() => closeJoinedDb());
 
 describe("joined.db", () => {
+  it("finds held entry ids through an index", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    addJoinedEntries("r1", [entry(1)]);
+    expect(joinedEntry("r1", "e1")?.text).toBe("line 1");
+    const database = new DatabaseSync(join(DATA_DIR, "joined.db"), { readOnly: true });
+    try {
+      const plan = database.prepare("EXPLAIN QUERY PLAN SELECT body FROM entries WHERE room_id = ? AND json_extract(body, '$.id') = ? LIMIT 1").all("r1", "e1");
+      expect(JSON.stringify(plan)).toContain("USING INDEX entries_id");
+    } finally { database.close(); }
+  });
+
   it.skipIf(process.platform === "win32")("is created owner-only", () => {
     saveJoined("r1", HOST, ME, KEY);
     expect(statSync(join(DATA_DIR, "joined.db")).mode & 0o777).toBe(0o600);

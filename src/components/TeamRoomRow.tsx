@@ -1,26 +1,41 @@
 // One renderer for team room lines, on the host and the teammate side.
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { Languages } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { useRoomFilesState } from "@/lib/room-files-state";
+import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import { isRoomPicture, roomFileUrl, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 
-export function TeamRoomRow({ line, mine, named, base, authorName }: { line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string }) {
+export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false }: { line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string; canTranslate?: boolean }) {
   const { t, locale } = useI18n();
+  const translation = useRoomTranslation(base, line.entryId ?? line.id, locale);
+  const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
   const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
   return (
     <div className="contents" data-mid={line.id} data-team-room-line={mine ? "mine" : "theirs"}>
-      {named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
+      {named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
       <div className={cn("group flex w-full flex-col", mine ? "items-end" : "items-start")}>
-        <div className="relative w-fit max-w-[min(42rem,78%)]">
+        <div className={cn("relative w-fit max-w-[min(42rem,78%)]", !mine && "ml-8")}>
+          {!mine && <span data-room-translate-gutter className="absolute top-0 -left-8 flex w-8 justify-start">
+            {showTranslate && <button
+              type="button"
+              data-room-translate
+              aria-label={t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}
+              title={t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}
+              aria-pressed={translation.visible}
+              onClick={translation.toggle}
+              className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            ><Languages size={16} /></button>}
+          </span>}
           <div
             className={cn(
               "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap",
@@ -30,6 +45,11 @@ export function TeamRoomRow({ line, mine, named, base, authorName }: { line: Roo
           >
             {pictures.length > 0 && <AttachedImageGallery pictures={pictures} className={cn(!mine && "justify-start", !line.text && !files.length && "mb-0")} />}
             {line.text}
+            {translation.visible && <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
+              {translation.pending ? t("teamRoom.translating") : translation.failed
+                ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
+                : translation.text}
+            </div>}
             {line.files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
             {files.length > 0 && (
               <div className={cn("flex flex-col gap-1.5", line.text && "mt-2")}>
@@ -63,6 +83,7 @@ export function TeamRoomRow({ line, mine, named, base, authorName }: { line: Roo
 export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string }) {
   const { t } = useI18n();
   const fileState = useRoomFilesState(base);
+  const canTranslate = useTranslationAvailable(base);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
@@ -143,7 +164,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
           const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
           const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
           const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
-          return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} />;
+          return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} canTranslate={canTranslate} />;
         })}
       </div>
     </div>

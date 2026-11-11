@@ -7,6 +7,11 @@ import { I18nProvider } from "@/lib/i18n";
 import type { RoomLine } from "@/lib/team-rooms";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
+vi.mock("@/lib/room-translate", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/room-translate")>(),
+  useTranslationAvailable: () => false,
+}));
+
 let root: Root | null = null;
 let resize: () => void;
 

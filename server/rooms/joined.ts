@@ -96,6 +96,17 @@ function open(): DatabaseSync {
       room_id TEXT PRIMARY KEY,
       name TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS entries_id ON entries(room_id, json_extract(body, '$.id'));
+    CREATE TABLE IF NOT EXISTS translations (
+      room_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      lang TEXT NOT NULL,
+      text TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (room_id, entry_id, lang)
+    );
+    CREATE TRIGGER IF NOT EXISTS joined_translations_delete AFTER DELETE ON joined
+    BEGIN DELETE FROM translations WHERE room_id = OLD.room_id; END;
   `);
   return db;
 }
@@ -149,6 +160,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -198,6 +210,7 @@ export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]
 export function resetJoined(roomId: string): void {
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("UPDATE joined SET state = NULL, version = 0, cursor = 0 WHERE room_id = ?").run(roomId);
   });
 }
@@ -223,6 +236,22 @@ export function readJoined(roomId: string, seq: number): boolean {
     INSERT INTO room_reads (room_id, seq) VALUES (?, ?)
     ON CONFLICT(room_id) DO UPDATE SET seq = excluded.seq WHERE excluded.seq > room_reads.seq
   `).run(roomId, seq).changes > 0;
+}
+
+export function joinedEntry(roomId: string, entryId: string): JoinedEntry | null {
+  const row = db().prepare("SELECT body FROM entries WHERE room_id = ? AND json_extract(body, '$.id') = ? LIMIT 1")
+    .get(roomId, entryId) as { body: string } | undefined;
+  return row ? JSON.parse(row.body) as JoinedEntry : null;
+}
+
+export function joinedTranslation(roomId: string, entryId: string, lang: string): string | undefined {
+  return (db().prepare("SELECT text FROM translations WHERE room_id = ? AND entry_id = ? AND lang = ?")
+    .get(roomId, entryId, lang) as { text: string } | undefined)?.text;
+}
+
+export function saveJoinedTranslation(roomId: string, entryId: string, lang: string, text: string): void {
+  db().prepare("INSERT OR IGNORE INTO translations (room_id, entry_id, lang, text, at) VALUES (?, ?, ?, ?, ?)")
+    .run(roomId, entryId, lang, text, Date.now());
 }
 
 /** A file some held entry of this room carries; nothing else can be fetched. */

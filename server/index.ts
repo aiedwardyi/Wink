@@ -62,6 +62,7 @@ import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
 import { peopleRoute } from "./rooms/people-routes.ts";
 import { shareRoute } from "./rooms/share.ts";
+import { translateRoute, translationInstances } from "./rooms/translate.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -8459,6 +8460,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;

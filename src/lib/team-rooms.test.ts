@@ -43,7 +43,7 @@ describe("team room shape", () => {
       { id: "a", role: "user", kind: "text", text: "hi", at: 1, author: { kind: "person", id: "p", name: "Mina" }, roomEntryId: "e1" },
       { id: "b", role: "bot", kind: "text", text: "system note", at: 2 },
     ];
-    expect(hostLines(messages)).toEqual([{ id: "a", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [] }]);
+    expect(hostLines(messages)).toEqual([{ id: "a", entryId: "e1", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [] }]);
   });
 
   it("reads joined, link and leave into one phase", () => {
