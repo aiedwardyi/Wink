@@ -11,6 +11,8 @@ export class CallAudio {
   private startedAt = 0;
   private queuedSec = 0;
   private readonly voice: AnalyserNode;
+  private readonly destination: MediaStreamAudioDestinationNode;
+  private readonly output = new Audio();
   private mic: AnalyserNode | null = null;
   private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
@@ -20,7 +22,8 @@ export class CallAudio {
   constructor(readonly ctx: AudioContext) {
     this.voice = ctx.createAnalyser();
     this.voice.fftSize = this.samples.length;
-    this.voice.connect(ctx.destination);
+    this.destination = ctx.createMediaStreamDestination();
+    this.voice.connect(this.destination);
   }
 
   async capture(onFrame: (pcm: ArrayBuffer) => void) {
@@ -41,6 +44,9 @@ export class CallAudio {
     this.mic.fftSize = this.samples.length;
     source.connect(this.mic);
     await this.ctx.resume();
+    // Open the speaker stream after capture selects Android's call audio mode.
+    this.output.srcObject = this.destination.stream;
+    await this.output.play();
   }
 
   /** Loudness 0-1 of the voice, or of whoever is louder when `mic` is on; read per frame. */
@@ -107,6 +113,9 @@ export class CallAudio {
 
   close() {
     this.flush();
+    this.output.pause();
+    this.output.srcObject = null;
+    for (const track of this.destination.stream.getTracks()) track.stop();
     this.node?.disconnect();
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     void this.ctx.close().catch(() => {});

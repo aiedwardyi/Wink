@@ -167,13 +167,13 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
-export function liveSetup(brief: string) {
+export function liveSetup(brief: string, locale = "en") {
   return {
     model: `models/${LIVE_MODEL}`,
     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } } },
     systemInstruction: { parts: [{ text: brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
-    inputAudioTranscription: {},
+    inputAudioTranscription: { languageCodes: [locale === "ko" ? "ko" : "en"] },
     outputAudioTranscription: {},
     realtimeInputConfig: { automaticActivityDetection: LIVE_VAD },
     contextWindowCompression: { triggerTokens: LIVE_COMPRESSION.triggerTokens, slidingWindow: { targetTokens: LIVE_COMPRESSION.targetTokens } },
@@ -190,16 +190,18 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const briefs = new Map<string, { botId: string; brief: string; at: number }>();
+  const briefs = new Map<string, { botId: string; brief: string; locale: string; at: number }>();
 
   const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
     const cached = briefs.get(callId);
-    if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached.brief;
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), typeof locale === "string" ? locale : undefined);
+    if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
+    const language = locale === "ko" ? "ko" : "en";
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), language);
+    const entry = { botId: bot.id, brief, locale: language, at: now() };
     briefs.delete(callId);
-    briefs.set(callId, { botId: bot.id, brief, at: now() });
+    briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
-    return brief;
+    return entry;
   };
 
   const keyCard = (bot: BotRecord) => {
@@ -225,7 +227,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const brief = await briefFor(bot, callId, body.locale);
+    const { brief, locale } = await briefFor(bot, callId, body.locale);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -238,7 +240,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(brief),
+          bidiGenerateContentSetup: liveSetup(brief, locale),
         }),
         signal: AbortSignal.timeout(15_000),
       });
