@@ -14,6 +14,10 @@ import { TeamRoomView } from "./TeamRoomView";
 
 const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
+vi.mock("@/lib/room-translate", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/room-translate")>(),
+  useTranslationAvailable: () => false,
+}));
 vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
 
 const group = {
