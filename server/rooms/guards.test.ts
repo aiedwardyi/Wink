@@ -47,6 +47,6 @@ describe("team room guards", () => {
   it("shows a restored room without its data as missing, never empty", () => {
     expect(hostedRoomView({ roomId: "restored-without-rooms-db" })).toEqual({ missing: true });
     const room = createRoom("Team");
-    expect(hostedRoomView({ roomId: room.id })).toEqual({ name: "Team", people: [] });
+    expect(hostedRoomView({ roomId: room.id })).toEqual({ name: "Team", people: [], joins: [] });
   });
 });
