@@ -12,7 +12,6 @@ const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64}))$/
 
 export interface PeopleRouteDeps {
   store: Pick<Store, "groups">;
-  teamRooms: boolean;
   hostName: () => string;
   /** This PC's relay host, null while it has none. */
   relayHost: () => string | null;
@@ -25,7 +24,7 @@ export async function peopleRoute(req: IncomingMessage, res: ServerResponse, met
   const route = ROUTE.exec(path);
   if (!route) return false;
   const [, roomId, personId] = route as unknown as [string, string, string | undefined];
-  const served = deps.teamRooms && peopleOnlyRoom(roomId) && deps.store.groups.some((group) => group.hosted?.roomId === roomId);
+  const served = peopleOnlyRoom(roomId) && deps.store.groups.some((group) => group.hosted?.roomId === roomId);
   if (!served || method !== (personId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
   else if (deps.botCaller) json(res, 403, { error: "forbidden" });
   else if (personId) {

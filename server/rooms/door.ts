@@ -46,7 +46,6 @@ const JOIN_STATUS = {
 
 export interface RoomDoorDeps {
   store: Pick<Store, "groups" | "messagesFor" | "onChange">;
-  teamRooms(): boolean;
   hostName(): string;
 }
 
@@ -272,7 +271,7 @@ export function removeRoomPerson(roomId: string, personId: string, keep?: Duplex
 
 /** Every relay request under /room. Unknown paths and other rooms are 404 before any room lookup. */
 export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, relay: { host: string; peer: string | null }): Promise<void> {
-  if (!door?.deps.teamRooms()) return notFound(res);
+  if (!door) return notFound(res);
   const url = new URL(req.url ?? "/", "https://relay.invalid");
   const method = req.method ?? "GET";
   if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host) : notFound(res);

@@ -69,14 +69,12 @@ const watch = (watcher: () => void) => {
   return () => void watchers.delete(watcher);
 };
 
-export function useJoinedRooms(on: boolean): JoinedView[] {
+export function useJoinedRooms(): JoinedView[] {
   useEffect(() => {
-    if (!on) return;
     void loadRooms();
     return follow(() => void loadRooms());
-  }, [on]);
-  const list = useSyncExternalStore(watch, () => rooms);
-  return on ? list : NONE;
+  }, []);
+  return useSyncExternalStore(watch, () => rooms);
 }
 
 /** undefined while loading, null once this PC no longer holds the room. */

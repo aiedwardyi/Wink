@@ -32,7 +32,6 @@ beforeEach(() => {
   };
   deps = {
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "codex",
     instance: () => null,
@@ -50,12 +49,6 @@ afterEach(() => {
 });
 
 describe("hostedSend", () => {
-  it("refuses while team rooms are off", () => {
-    deps.teamRooms = () => false;
-    expect(() => hostedSend(group, { kind: "host" }, "@Wink hi")).toThrow(expect.objectContaining({ status: 409 }));
-    expect(recentRoomEntries(group.hosted.roomId, 10)).toEqual([]);
-  });
-
   it("posts plain lines with no ask and no call, and marks the room unread for people only", () => {
     const sent = hostedSend(group, person("chat"), "lunch at noon?");
     expect(sent.ask).toBeNull();

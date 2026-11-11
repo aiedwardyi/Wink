@@ -26,7 +26,6 @@ import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
-import { teamRoomsEnabled } from "@/lib/feature-flags";
 import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
@@ -141,7 +140,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
-  const joinedId = teamRoomsEnabled(state.config) ? joinedRoomIdOf(state.selectedId) : null;
+  const joinedId = joinedRoomIdOf(state.selectedId);
   const bot = group || joinedId ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
@@ -704,7 +703,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         </main>
       ) : joinedId ? (
         <JoinedRoomView key={joinedId} roomId={joinedId} />
-      ) : group && isTeamRoom(group) && teamRoomsEnabled(state.config) ? (
+      ) : group && isTeamRoom(group) ? (
         <TeamRoomView key={group.id} group={group} />
       ) : group ? (
         LIVE_VERIFY_V0 ? (

@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { KeyRound, UsersRound } from "lucide-react";
 
-import { teamRoomsEnabled } from "@/lib/feature-flags";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { createTeamRoom, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode } from "@/lib/team-rooms";
@@ -29,8 +28,6 @@ const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] t
 
 export function TeamRoomMenuItems({ onPick }: { onPick: () => void }) {
   const { t } = useI18n();
-  const { state } = useStore();
-  if (!teamRoomsEnabled(state.config)) return null;
   const pick = (next: Sheet) => {
     onPick();
     openSheet(next);

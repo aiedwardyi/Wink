@@ -45,7 +45,6 @@ beforeEach(() => {
   order = [];
   deps = {
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: () => null,

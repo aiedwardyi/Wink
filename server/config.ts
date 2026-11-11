@@ -82,8 +82,6 @@ const featureConfigSchema = z.object({
   memoryNotes: z.boolean().optional(),
   /** Experimental dial view of the model picker. Off unless explicitly enabled. */
   modelDial: z.boolean().optional(),
-  /** Hosted team rooms. Off unless explicitly enabled. */
-  teamRooms: z.boolean().optional(),
 });
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
@@ -189,7 +187,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes and liveVerifyAuto. */
-  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean; teamRooms?: boolean };
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
 }

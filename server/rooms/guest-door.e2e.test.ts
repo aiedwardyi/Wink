@@ -124,7 +124,6 @@ beforeEach(() => {
   roomAskHooks.words = vi.fn();
   configureRoomAsks({
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
@@ -132,7 +131,7 @@ beforeEach(() => {
     stopTurn: vi.fn(async () => {}),
     endSession: vi.fn(async () => {}),
   });
-  configureRoomDoor({ store, teamRooms: () => true, hostName: () => "Edward" });
+  configureRoomDoor({ store, hostName: () => "Edward" });
 });
 
 afterEach(() => {
@@ -304,7 +303,7 @@ describe("teammate and the real door", () => {
     await c.send(roomId, "hello");
     const bodies: unknown[] = [];
     const route = async (method: string, path: string, body: unknown = {}) => {
-      const reply = await joinedRoute(method, path, c, true, async () => body);
+      const reply = await joinedRoute(method, path, c, async () => body);
       bodies.push(reply);
       return reply;
     };
@@ -324,11 +323,7 @@ describe("teammate and the real door", () => {
     expect(doorHeaders.every((headers) => headers.cookie === undefined)).toBe(true);
   });
 
-  it("the routes are 404 with team rooms off", async () => {
-    const c = teammate();
-    for (const [method, path] of [["GET", "/api/joined/rooms"], ["POST", "/api/joined/join"], ["GET", "/api/joined/rooms/r1"]] as const) {
-      expect(await joinedRoute(method, path, c, false, async () => ({}))).toEqual({ status: 404, body: { error: "not found" } });
-    }
-    expect(await joinedRoute("GET", "/api/joinedx", c, false, async () => ({}))).toBeNull();
+  it("leaves paths outside /api/joined/ alone", async () => {
+    expect(await joinedRoute("GET", "/api/joinedx", teammate(), async () => ({}))).toBeNull();
   });
 });

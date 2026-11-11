@@ -61,8 +61,7 @@ let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 let calls: Call[] = [];
 
-async function boot({ teamRooms, groups = [], route = () => undefined, locale = "en" }: {
-  teamRooms: boolean;
+async function boot({ groups = [], route = () => undefined, locale = "en" }: {
   groups?: Group[];
   route?: (call: Call, init?: RequestInit) => Answer;
   locale?: "en" | "ko";
@@ -87,7 +86,7 @@ async function boot({ teamRooms, groups = [], route = () => undefined, locale = 
       snapshot: { state: "available" }, models: { default: "default", options: [] },
     }] } as never);
     store.dispatch!({ type: "connected", value: true });
-    store.dispatch!({ type: "configStatus", config: { features: { teamRooms } } as never });
+    store.dispatch!({ type: "configStatus", config: { features: {} } as never });
     store.dispatch!({ type: "hydrate", bots: [nova], groups, botsUnreadable: false, computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } } as never);
   });
 }
@@ -148,25 +147,10 @@ afterEach(async () => {
   store.dispatch = null;
 });
 
-describe("Team rooms with the flag off", () => {
-  it("adds nothing and keeps a hosted people-only room on the ordinary group screen", async () => {
-    await boot({ teamRooms: false, groups: [teamRoom([{ id: "p1", name: "Mina" }], [line("m1", { kind: "person", id: "p1", name: "Mina" }, "hi")])] });
-    await openPlus();
-    expect(button("New group")).toBeTruthy();
-    expect(button("New team room")).toBeUndefined();
-    expect(button("Join team room")).toBeUndefined();
-    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-    expect($("[data-room-transcript]")).not.toBeNull();
-    expect($("[data-team-room]")).toBeNull();
-    expect($("[data-joined-room-row]")).toBeNull();
-    expect(calls.some((call) => call.path.startsWith("/api/joined/") || call.path.startsWith("/api/rooms/"))).toBe(false);
-  });
-});
-
 describe("Team rooms for the host", () => {
   it("creates a zero-bot room from a name alone and opens it", async () => {
     const created = teamRoom();
-    await boot({ teamRooms: true, route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
+    await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
     await openPlus();
     await click(button("New team room"));
     const name = $<HTMLInputElement>('input[aria-label="Room name"]')!;
@@ -180,7 +164,7 @@ describe("Team rooms for the host", () => {
   });
 
   it("shows no bot, level, work, approval or hold controls in the room", async () => {
-    await boot({ teamRooms: true, groups: [teamRoom()] });
+    await boot({ groups: [teamRoom()] });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     expect($('[data-team-room="host"]')).not.toBeNull();
     const main = $('[data-team-room="host"]')!;
@@ -197,7 +181,6 @@ describe("Team rooms for the host", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     await boot({
-      teamRooms: true,
       groups: [teamRoom()],
       route: (call) => {
         if (call.path === "/api/rooms/r1/invites") return reply({ invite: { id: "inv_mina", name: "Mina" }, code: CODE });
@@ -232,7 +215,6 @@ describe("Team rooms for the host", () => {
 
   it("keeps a person listed when Remove fails", async () => {
     await boot({
-      teamRooms: true,
       groups: [teamRoom([{ id: "p1", name: "Mina" }])],
       route: (call) => (call.method === "DELETE" ? reply({ error: "room store is busy" }, 500) : undefined),
     });
@@ -245,7 +227,6 @@ describe("Team rooms for the host", () => {
 
   it("says why an invite failed in one line", async () => {
     await boot({
-      teamRooms: true,
       groups: [teamRoom()],
       route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ error: "phone access is off" }, 409) : undefined),
     });
@@ -263,7 +244,6 @@ describe("Team rooms for the host", () => {
       { id: "D".repeat(24), name: "plan.pdf", type: "application/pdf", bytes: 4096, sha256: "b" },
     ];
     await boot({
-      teamRooms: true,
       groups: [teamRoom([{ id: "p1", name: "Mina" }], [
         line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning"),
         line("m2", { kind: "person", id: "p1", name: "Mina" }, "Here it is", files),
@@ -312,7 +292,7 @@ describe("Team rooms for the host", () => {
       unobserve() {}
       disconnect() {}
     });
-    await boot({ teamRooms: true, groups: [teamRoom([], [line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning")])] });
+    await boot({ groups: [teamRoom([], [line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning")])] });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     const scroller = $('[data-team-room-transcript]')!;
     const pins = observers.filter((observer) => observer.targets.includes(scroller));
@@ -327,7 +307,6 @@ describe("Team rooms for a teammate", () => {
   it("joins the moment a valid code is pasted, with no Enter and no button", async () => {
     let answer!: (response: Response) => void;
     await boot({
-      teamRooms: true,
       route: (call) => {
         if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
         if (call.path === "/api/joined/join") return new Promise<Response>((resolve) => { answer = resolve; });
@@ -352,7 +331,6 @@ describe("Team rooms for a teammate", () => {
 
   it("shows one short line for a bad code and joins nothing", async () => {
     await boot({
-      teamRooms: true,
       route: (call) => {
         if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
         if (call.path === "/api/joined/join") return reply({ error: "wrong-secret" }, 401);
@@ -374,7 +352,6 @@ describe("Team rooms for a teammate", () => {
   it("walks connecting, live, offline, removed and left, sending only while live", async () => {
     let view = joinedView("joined", "connecting");
     await boot({
-      teamRooms: true,
       route: (call) => {
         if (call.path === "/api/joined/rooms") return reply({ rooms: [view] });
         if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...view, entries: joinedEntries } });
@@ -433,7 +410,6 @@ describe("Team rooms for a teammate", () => {
 
   it("never offers bot features or owner screens in a joined room", async () => {
     await boot({
-      teamRooms: true,
       route: (call) => {
         if (call.path === "/api/joined/rooms") return reply({ rooms: [joinedView("joined", "live")] });
         if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...joinedView("joined", "live"), entries: joinedEntries } });
@@ -453,7 +429,7 @@ describe("Team rooms for a teammate", () => {
   });
 
   it("speaks Korean", async () => {
-    await boot({ teamRooms: true, locale: "ko", route: (call) => (call.path === "/api/joined/rooms" ? reply({ rooms: [] }) : undefined) });
+    await boot({ locale: "ko", route: (call) => (call.path === "/api/joined/rooms" ? reply({ rooms: [] }) : undefined) });
     await openPlus();
     expect(button("새 팀 채팅방")).toBeTruthy();
     await click(button("팀 채팅방 참여"));
