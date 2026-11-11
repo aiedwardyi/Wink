@@ -6529,7 +6529,7 @@ async function runClaimedGroupMemberTurn(
     .join(", ");
   // A Chief answering in a room gets the same roster and delegation framing as
   // its 1:1 turns. Without it the tools are mounted but unexplained, and the
-  // Chief improvises in front of the whole room (QA 13).
+  // Chief improvises in front of the whole room.
   const coordinationPrompt = bot.chiefOfStaff
     ? chiefOfStaffSystemPrompt(
         bot.id,

@@ -1,5 +1,5 @@
-// Live Verify v0 main-process protocol. Frozen by Orbit-cards/live-verify/V0.md;
-// change it only in LV0-INTEGRATE. Mirrors shared/live-verify.ts where they overlap.
+// Live Verify v0 main-process protocol. Frozen: change it only with its server side.
+// Mirrors shared/live-verify.ts where they overlap.
 
 /** Scoped signed grant; see the bridge auth rule below. */
 export const VERIFY_GRANT_PREFIX = "orbit-verify-v1";
