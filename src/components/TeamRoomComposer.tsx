@@ -1,13 +1,32 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUp, File as FileIcon, Image as ImageIcon, Paperclip, X } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { useI18n } from "@/lib/i18n";
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
+import type { Message } from "@/state/store-types";
+
+import { ReplyQuote } from "./ReplyQuote";
+
+export function useTeamRoomReply(base: string) {
+  const [draft, setDraft] = useState<{ base: string; message: Message } | null>(null);
+  const replyTo = draft?.base === base ? draft.message : null;
+  const clearReply = () => setDraft(null);
+  useBackLayer(Boolean(replyTo), clearReply);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("[data-message-menu], [data-selection-menu]")) clearReply();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return { replyTo, selectReply: (message: Message) => setDraft({ base, message }), clearReply };
+}
 
 /** Text, pictures and files for one team room. Nothing here talks to a bot. */
-export function TeamRoomComposer({ name, base }: { name: string; base: string }) {
+export function TeamRoomComposer({ name, base, replyTo, onClearReply }: { name: string; base: string; replyTo: Message | null; onClearReply: () => void }) {
   const { t } = useI18n();
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -15,9 +34,13 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
   const [sending, setSending] = useState(false);
   const sendId = useRef(crypto.randomUUID());
   const fileInput = useRef<HTMLInputElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const composeEnded = useRef(0);
   const ready = Boolean(text.trim() || files.length);
+  useEffect(() => {
+    if (replyTo) textarea.current?.focus();
+  }, [replyTo]);
 
   const add = (picked: File[]) => {
     if (!picked.length) return;
@@ -30,17 +53,19 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
   const send = async () => {
     if (!ready || sending) return;
     setSending(true);
-    const failed = await sendToRoom(base, text.trim(), files, sendId.current);
+    const failed = await sendToRoom(base, text.trim(), files, sendId.current, replyTo?.roomEntryId ?? replyTo?.id);
     setSending(false);
     setProblem(failed);
     if (failed) return;
     sendId.current = crypto.randomUUID();
     setText("");
     setFiles([]);
+    onClearReply();
   };
 
   return (
     <div className="relative px-5 pb-3">
+      {replyTo && <div className="mb-2"><ReplyQuote message={replyTo} fallbackName={replyTo.author?.name} onClear={onClearReply} /></div>}
       {problem && (
         <div role="alert" className="mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
           <span className="min-w-0 flex-1">{t(problem.key, problem.vars)}</span>
@@ -88,6 +113,7 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
           }}
         />
         <textarea
+          ref={textarea}
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}

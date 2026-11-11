@@ -11,7 +11,7 @@ import { hostLines, hostRoomBase, roomPeople, type TeamRoom } from "@/lib/team-r
 import { Presence } from "@/lib/use-presence";
 
 import { ReconnectingCue } from "./ReconnectingCue";
-import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
+import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
@@ -22,6 +22,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
   const peopleButton = useRef<HTMLButtonElement>(null);
   const lines = useMemo(() => hostLines(group.messages), [group.messages]);
   const base = hostRoomBase(group.hosted.roomId);
+  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const count = roomPeople(group).length;
   const missing = Boolean(group.room && "missing" in group.room);
   return (
@@ -46,9 +47,9 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} />
+      <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} onReply={selectReply} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} replyTo={replyTo} onClearReply={clearReply} />}
       </div>
     </main>
   );

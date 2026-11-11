@@ -13,7 +13,7 @@ import { joinedLines, joinedPhase, joinedRoomBase } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 
 import { ConfirmDialog } from "./ConfirmDialog";
-import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
+import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function JoinedRoomView({ roomId }: { roomId: string }) {
@@ -24,6 +24,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const entries = room?.entries;
   const lines = useMemo(() => joinedLines(entries ?? []), [entries]);
   const base = joinedRoomBase(roomId);
+  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const name = room?.state?.roomName ?? "";
   const phase = room ? joinedPhase(room) : room === null ? null : "connecting";
   const status =
@@ -52,13 +53,15 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         )}
       </div>
       <TeamRoomTranscript
+        key={base}
         lines={lines}
         mine={(line) => line.author.kind === "person" && line.author.id === me}
         base={base}
         label={t("chat.roomAria", { name })}
+        onReply={selectReply}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} /> : <TeamRoomStatus text={status} />}
+        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
       </div>
       <Presence open={leaving}>
         {(closing) => (

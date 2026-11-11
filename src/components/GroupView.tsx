@@ -1829,7 +1829,7 @@ export function GroupView({ group }: { group: Group }) {
       </div>
 
       {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onClose={() => setMenu(null)} />
+        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
       ) : menu ? (
         <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
       ) : null}

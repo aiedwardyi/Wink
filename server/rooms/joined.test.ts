@@ -54,6 +54,12 @@ describe("joined.db", () => {
     expect(joinedRoom("r1")?.state?.roomName).toBe("New");
   });
 
+  it("returns the saved reply id with a joined line", () => {
+    saveJoined("reply-room", HOST, ME, KEY);
+    addJoinedEntries("reply-room", [entry(1), { ...entry(2), replyToId: "e1" }]);
+    expect(joinedEntries("reply-room", 10)[1]?.replyToId).toBe("e1");
+  });
+
   it("reset drops the copy and the state", () => {
     saveJoined("r1", HOST, ME, KEY);
     addJoinedEntries("r1", [entry(1)]);
