@@ -69,6 +69,9 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
     const merged = JSON.stringify({ ...settings, hooks: { PreToolUse: [hook] } });
     if (settingsAt === -1) args.push("--settings", merged);
     else args[settingsAt + 1] = merged;
+    const effort = args.indexOf("--effort");
+    // xhigh/max think for seconds before a one-line answer; the CLI keeps the cache across effort
+    if (effort !== -1 && ["xhigh", "max"].includes(args[effort + 1]!)) args[effort + 1] = "low";
     args.push("--resume", spawn.cursor, "--fork-session", "--no-session-persistence");
 
     const env: NodeJS.ProcessEnv = { ...spawn.env, ELECTRON_RUN_AS_NODE: "1" };

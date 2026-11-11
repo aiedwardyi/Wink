@@ -216,6 +216,38 @@ describe("quickAsk on a fork", () => {
     expect(stub.closes).toEqual([0]);
   });
 
+  it("gives a fork that reads or writes a fresh 12 s, up to 25 s", async () => {
+    vi.useFakeTimers();
+    const stub = stubFork();
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "what's in config?" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    stub.emit({ type: "tool", name: "Read", path: "config.json" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    stub.emit({ type: "text", delta: "Port " });
+    await vi.advanceTimersByTimeAsync(3_000);
+    stub.emit({ type: "done", ok: true, text: "Port 4180." });
+    expect(await pending).toMatchObject({ route: "answer", text: "Port 4180." });
+  });
+
+  it("hands off at 25 s even while the fork keeps going", async () => {
+    vi.useFakeTimers();
+    const stub = stubFork();
+    let settled = false;
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "slow?" }).then((result) => {
+      settled = true;
+      return result;
+    });
+    for (let at = 0; at < 24_000; at += 8_000) {
+      stub.emit({ type: "tool", name: "Grep" });
+      await vi.advanceTimersByTimeAsync(8_000);
+    }
+    expect(settled).toBe(false);
+    stub.emit({ type: "text", delta: "almost" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ route: "handoff" });
+    expect(stub.closes).toEqual([0]);
+  });
+
   it("hands off when the fork fails or exits early", async () => {
     const stub = stubFork();
     const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "hm?" });
@@ -511,6 +543,23 @@ describe("Claude fork (fake CLI)", () => {
     const settings = await settled(forkOf({ permissions: { ask: ["Bash"] }, hooks: { SessionStart: other, PreToolUse: other, Stop: other } }));
     expect(settings.permissions).toEqual({ ask: ["Bash"] });
     expect(settings.hooks).toEqual({ PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: expect.stringContaining("side-hook.cjs") }] }] });
+  });
+
+  it("runs the fork at low effort only when the main is at xhigh or max", async () => {
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");
+    const effortOf = async (args: string[]) => {
+      const handle = forkClaude({ cli: FAKE_CLI, args: ["-p", ...args], mcpServers: {}, cwd: work, env: { ...process.env }, policy: {}, cursor: "s-main" }, { threadId: "t", text: "q" });
+      await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
+      await handle.close(5_000);
+      const argv = prompts().filter((line) => line.argv.includes("--fork-session")).at(-1)!.argv;
+      return argv.includes("--effort") ? argv[argv.indexOf("--effort") + 1] : null;
+    };
+    expect(await effortOf(["--effort", "max"])).toBe("low");
+    expect(await effortOf(["--effort", "xhigh"])).toBe("low");
+    expect(await effortOf(["--effort", "high"])).toBe("high");
+    expect(await effortOf(["--effort", "medium"])).toBe("medium");
+    expect(await effortOf([])).toBeNull();
   });
 
   it("forks an account bot's thread", async () => {
