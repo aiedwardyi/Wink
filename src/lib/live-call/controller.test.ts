@@ -428,6 +428,27 @@ describe("LiveCall", () => {
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Restart set for 8:15 PM."]);
   });
 
+  it("a failed spoken answer still lands as a call line", async () => {
+    const { call, engine, posts } = await started({ "/messages": { status: 500, data: { error: "down" } } });
+    call.observe({ busy: false, messages: [{ id: "ask", role: "bot", kind: "options", at: 2_000, card: { title: "q", subtitle: "8:15?", options: [], askUser: true } } as Message] });
+    engine().events.heard("Yeah, that's better.");
+    engine().events.answering();
+    await flush();
+    expect(posts.filter((p) => p.path.endsWith("/call/lines")).map((p) => p.body.lines[0].text)).toEqual(["Yeah, that's better."]);
+  });
+
+  it("the bot's reply to a spoken answer can offer new work", async () => {
+    const { call, engine } = await started();
+    const ask = { id: "ask", role: "bot", kind: "options", at: 2_000, card: { title: "q", subtitle: "8:15?", options: [], askUser: true } } as Message;
+    call.observe({ busy: false, messages: [ask] });
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    call.observe({ busy: false, messages: [ask, userRow("a", "Yes.", { call: { id: "c-0123456789ab", ask: true } }), botRow("r", "Set for 8:15. Want me to close the panes first?")] });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Close the panes." } }]);
+    expect(call.state().pending?.order).toBe("Close the panes.");
+  });
+
   it("a question from before the call keeps spoken lines as call lines", async () => {
     const { call, engine, posts } = await started();
     call.observe({ busy: false, messages: [{ id: "ask", role: "bot", kind: "options", at: 10, card: { title: "q", subtitle: "Old?", options: [], askUser: true } } as Message] });

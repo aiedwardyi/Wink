@@ -363,7 +363,12 @@ export class LiveCall {
       this.askAnswered.add(this.ask);
       this.ask = undefined;
       this.justAnswered = true;
-      void this.send(text, { ask: true });
+      const at = this.now();
+      void this.send(text, { ask: true }).then((result) => {
+        if (!result.startsWith("failed")) return;
+        this.justAnswered = false;
+        this.postLines([{ who: "user", text, at }]);
+      });
       return;
     }
     this.postLines([{ who: "user", text, at: this.now() }]);
@@ -408,6 +413,7 @@ export class LiveCall {
           if ((row.call?.order || row.call?.ask) && row.call.id === this.callId) orders.push(row.id);
         } else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
           this.reported.add(row.id);
+          this.justAnswered = false;
           replies.set(asked, { reply: row, orders: [...orders] });
         }
       }
