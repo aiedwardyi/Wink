@@ -118,6 +118,7 @@ describe("sharing a bot group", () => {
     const group = crew();
     say(group, 'see this\n\n<attached-file path="C:/PRIVATE/report.txt" name="report.txt" size="9" />');
     answer(group, 'done <attached-image path="C:/PRIVATE/shot.png" />');
+    say(group, "ok <attac<attached-x>hed-y>");
     answer(group, "engine summary", { summarized: true });
     store.appendMessage(group.threadId, { role: "bot", kind: "activity", tool: { name: "Read", ok: true }, from: { botId: wink, name: "Wink", color: "white" } });
     say(group, "still waiting", { queued: true });
@@ -128,8 +129,8 @@ describe("sharing a bot group", () => {
     const old = say(group, "old version");
     store.branchMessage(group.threadId, old.id, "new version");
     const { roomId } = shareGroup(deps(), group.id);
-    expect(rows(roomId).map((entry) => entry.text)).toEqual(["see this", "done", "new version"]);
-    expect(JSON.stringify(rows(roomId))).not.toContain("PRIVATE");
+    expect(rows(roomId).map((entry) => entry.text)).toEqual(["see this", "done", "ok", "new version"]);
+    expect(JSON.stringify(rows(roomId))).not.toMatch(/PRIVATE|attached/);
   });
 
   it("carries the active task's last 200 lines, at the room's text caps", () => {
