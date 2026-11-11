@@ -1718,7 +1718,7 @@ export function Sidebar({
         </div>
       ) : (
         <div className="px-3 pt-2 pb-3">
-          <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
+          <div data-sidebar-search className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
             <Search size={16} className="text-ink-secondary" />
             <input
               ref={searchInputRef}

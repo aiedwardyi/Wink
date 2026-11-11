@@ -285,7 +285,8 @@ button.model-cross-binding:disabled { opacity: 0.4; }
 
   .model-cross-cell:focus-visible, .model-cross-dialog button:focus-visible { outline-color: var(--color-ink); }
   .model-cross-chevron { color: var(--color-ink-secondary); }
-  .model-cross-edge { color: oklch(from var(--picker-accent) min(l, .45) c h); }
+  .model-cross-edge { color: oklch(from var(--picker-accent) min(l, .3) c h); }
+  .model-cross-edge svg { stroke-width: 3; }
   .model-cross-left, .model-cross-right { background: none; box-shadow: none; }
 
   .model-cross-options {

@@ -1,4 +1,4 @@
-/* Three dark skins with both sides in wide bubbles. Faces are Latin-subset, so Hangul falls through. */
+/* Dark and dim skins with both sides in wide bubbles. Faces are Latin-subset, so Hangul falls through. */
 @font-face {
   font-family: "Atkinson Hyperlegible Next";
   src: url("/fonts/AtkinsonHyperlegibleNext-Variable.woff2") format("woff2");
@@ -124,8 +124,135 @@
   --radius-xl: 26px;
 }
 
+/* ── Precision Dimmed ──────────────────────────────────────────────────────
+   Precision's charcoal and limit bar in GitHub Dimmed's type, with a neutral
+   user bubble and pale silver links instead of periwinkle ones.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="precision-dimmed"],
+[data-skin="precision-dimmed"] {
+  --color-app: #121316;
+  --color-panel: #191a1f;
+  --color-raised: #23252c;
+  --color-raised-hover: #2b2e36;
+  --color-card: #23252c;
+  --color-inset: #0f1013;
+  --color-control: #272a32;
+  --color-hairline: #353944;
+
+  --color-ink: #eeeff3;
+  --color-ink-secondary: #a3a7b3;
+
+  --color-accent: #929fff;
+  --color-accent-border: #aab0dd;
+  --color-accent-text: #c3c7e8;
+  --color-focus: #c3c7e8;
+  --color-accent-ink: #121316;
+  --color-bubble-user: #1f2127;
+
+  --color-success: #b3c1cd;
+  --color-danger: #ff8c98;
+  --color-danger-ink: #121316;
+  --color-warning: #e7c56e;
+  --color-scrollbar: #3b3f4a;
+  --color-maus-line: #a3a7b3;
+  --color-edge: #6c707b;
+
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
+/* ── Bronze ────────────────────────────────────────────────────────────────
+   Warm graphite with one bronze line, like the case of a good watch.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="bronze"],
+[data-skin="bronze"] {
+  --color-app: #181512;
+  --color-panel: #120f0c;
+  --color-raised: #2d2926;
+  --color-raised-hover: #373330;
+  --color-card: #23201c;
+  --color-inset: #0d0b08;
+  --color-control: #302d2a;
+  --color-hairline: #47433f;
+
+  --color-ink: #ebe7e1;
+  --color-ink-secondary: #b4ada3;
+
+  --color-accent: #cca779;
+  --color-accent-border: #d7b489;
+  --color-accent-text: #debe98;
+  --color-focus: #d7b489;
+  --color-accent-ink: #1a120a;
+  --color-bubble-user: #413321;
+
+  --color-success: #a8c3d0;
+  --color-danger: #f29891;
+  --color-danger-ink: #181512;
+  --color-warning: #e5d183;
+  --color-scrollbar: #504c48;
+  --color-maus-line: #b4ada3;
+  --color-edge: #78746e;
+
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+}
+
+/* ── Dim Sand ──────────────────────────────────────────────────────────────
+   Warm sand at half the light of a day skin, so it never glares; dark ink
+   and one brick line, every text pair at AA.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="dim-sand"],
+[data-skin="dim-sand"] {
+  color-scheme: light;
+  --color-app: #c2b49a;
+  --color-panel: #bcae93;
+  --color-raised: #cfc2a9;
+  --color-raised-hover: #c8bba1;
+  --color-card: #d1c4ab;
+  --color-inset: #bfb196;
+  --color-control: #b4a589;
+  --color-hairline: #9a8a6c;
+
+  --color-ink: #1c160e;
+  --color-ink-secondary: #43392b;
+
+  --color-accent: #7a4630;
+  --color-accent-border: #8f5a40;
+  --color-accent-text: #56301d;
+  --color-focus: #56301d;
+  --color-accent-ink: #fbf3e6;
+  --color-bubble-user: #d6c4a6;
+
+  --color-success: #263b49;
+  --color-danger: #701b14;
+  --color-danger-ink: #fbf3e6;
+  --color-warning: #4c3711;
+  --color-scrollbar: #8f7f63;
+  --color-maus-line: #43392b;
+  --color-edge: #635540;
+
+  --color-syntax-fg: #1c160e;
+  --color-syntax-comment: #43392b;
+  --color-syntax-keyword: #6e1a24;
+  --color-syntax-string: #1b3556;
+  --color-syntax-function: #4a2668;
+  --color-syntax-constant: #173a62;
+  --color-syntax-variable: #5a3010;
+  --color-syntax-tag: #2a3d4a;
+  --color-syntax-invalid: #6e1a24;
+
+  --font-sans: "Manrope", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+}
+
 /* Shared: both sides bubbled, wide enough for pasted code and long replies. */
-@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {
+@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
   [data-orbit-message-body] {
     max-width: min(54rem, 94%);
   }
@@ -213,9 +340,44 @@
   }
 }
 
+/* Field edges at 3:1 on every ground. */
+@scope (:is([data-skin="precision-dimmed"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
+  [data-orbit-composer-frame] {
+    border: 1px solid var(--color-edge);
+    box-shadow: none;
+  }
+
+  [data-orbit-composer-frame]:focus-within {
+    border-color: var(--color-accent-border);
+  }
+
+  [data-sidebar-search] {
+    box-shadow: inset 0 0 0 1px var(--color-edge);
+  }
+}
+
+@scope (:is([data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
+  [data-orbit-message] {
+    padding-block: 0.2rem;
+  }
+
+  [data-orbit-message-content] {
+    border: 1px solid var(--color-hairline);
+    font-size: 14.5px;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-hairline));
+  }
+
+  [data-orbit-composer-frame] {
+    border-radius: var(--radius-xl);
+  }
+}
+
 /* Last, so it beats each skin's roomier desktop padding. */
 @media (max-width: 767px) {
-  @scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {
+  @scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {
     [data-orbit-message-body] {
       max-width: 96%;
     }

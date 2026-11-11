@@ -370,10 +370,16 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
     --dial-rail-hover: color-mix(in srgb, var(--color-ink) 5%, transparent);
     --dial-kbd-edge: color-mix(in srgb, var(--color-ink) 14%, transparent);
     --dial-kbd-bg: color-mix(in srgb, var(--color-ink) 3%, transparent);
+    --dial-near-fade: .7;
   }
   :scope:has(.model-dial) { background: var(--color-app); }
   .model-dial { --ink: var(--color-ink); --ink-2: color-mix(in srgb, var(--color-ink) 40%, var(--color-ink-secondary)); --ink-3: var(--color-ink-secondary); --ink-4: var(--color-ink-secondary); background: var(--color-app); }
   .dial-stage { --glow: .35; --accent-ink: oklch(from var(--accent) min(l, .45) c h); }
+  .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) { --hot: oklch(.55 .17 var(--hue)); --halo: oklch(.74 .14 var(--hue)); }
+  .dial-stage[data-max] .dial-bar b { background-image: linear-gradient(90deg, oklch(.5 .17 20), oklch(.5 .17 90), oklch(.5 .17 150), oklch(.5 .17 240), oklch(.5 .17 300)); filter: none; }
+  .dial-shock { background: conic-gradient(in oklch, oklch(.66 .17 20), oklch(.66 .17 140), oklch(.66 .17 260), oklch(.66 .17 20)); }
+  .dial-seg[data-on] .dial-mark.lit { color: var(--accent-ink); }
+  .dial-card:not([aria-pressed="true"]) :is(.dial-card-line, .dial-card-badge) { color: var(--ink); }
   .dial-scene { opacity: 1; }
   .dial-scene-base { background: radial-gradient(closest-side at var(--cx) var(--cy), var(--picker-tint)); }
   .dial-socket { background: radial-gradient(circle, #ffffff 60%, #eef0fc); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 6%, transparent), inset 0 10px 30px color-mix(in srgb, var(--color-ink) 8%, transparent); }
