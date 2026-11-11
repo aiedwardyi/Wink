@@ -50,7 +50,7 @@ import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { buffersForTurn, currentTurnId, turnPhase, turnStageLabel } from "@/lib/turn-stage";
-import { Bubble, QuickTyping, bubbleBot, versionProps } from "./ChatBubble";
+import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -671,22 +671,20 @@ const MessagesList = memo(function MessagesList({
     const order = new Map(messages.map((m, index) => [m.id, index]));
     return at < 0 ? -1 : items.findLastIndex((item) => (order.get(item.kind === "message" ? item.message.id : item.messages[0].id) ?? Infinity) <= at);
   }, [whatsNewAnchor, messages, items]);
-  // answers whose ask is not the text row right above them quote it; asks still waiting have no answer yet
-  const { quickAsks, answeredAsks } = useMemo(() => {
+  // answers whose ask is not the text row right above them quote it
+  const quickAsks = useMemo(() => {
     const quickAsks = new Map<string, Message>();
-    const answeredAsks = new Set<string>();
     let prev: Message | undefined;
     for (const message of transcript) {
       if (message.kind !== "text") continue;
       const askId = message.quick?.state === "answer" ? message.quick.askId : undefined;
       if (askId) {
-        answeredAsks.add(askId);
         const ask = transcript.find((candidate) => candidate.id === askId);
         if (ask && prev?.id !== ask.id) quickAsks.set(message.id, ask);
       }
       prev = message;
     }
-    return { quickAsks, answeredAsks };
+    return quickAsks;
   }, [transcript]);
   const peerReplies = useMemo(() => {
     const replies = new Map<string, NonNullable<Message["comm"]>>();
@@ -880,7 +878,6 @@ const MessagesList = memo(function MessagesList({
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
-            {m.role === "user" && m.quick?.state === "asked" && !answeredAsks.has(m.id) && <QuickTyping />}
           </div>
         );
       }).toSpliced(whatsNewAfter + 1, 0, whatsNewAfter < 0 ? null : <WhatsNewSlot key="whats-new" hidden={hidden} />)}
