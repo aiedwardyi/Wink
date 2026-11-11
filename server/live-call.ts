@@ -5,12 +5,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
+import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
 import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, type CallLine, type CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import { loadMemory } from "./workspace.ts";
 
@@ -54,7 +56,10 @@ const statsSchema = z.object({
   hangulShare: z.number().min(0).max(1),
   ttfaMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   interrupted: count,
-  orders: z.object({ proposed: count, confirmed: count, declined: count, expired: count }),
+  orders: z.object({ proposed: count, confirmed: count, declined: count, expired: count, replaced: count.optional(), cancelled: count.optional(), dropped: count.optional(), failed: count.optional(), retried: count.optional() }),
+  asks: z.object({ sent: count, retried: count.optional(), answered: count.optional(), ms: z.object({ p50: ms.nullable(), p90: ms.nullable() }).optional() }),
+  guard: z.object({ nudges: count, failLines: count, promise: count.optional(), cant: count.optional(), unsure: count.optional() }),
+  ackMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   doneGuard: count,
   hidden: z.object({ spans: count, ms }),
   reconnects: count,
@@ -105,19 +110,17 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
-  const lastUser = messages.findLast((row) => row.role === "user" && row.kind === "text" && row.text?.trim());
   const speak = locale === "ko" ? "Korean" : "English";
-  const order = bot.busy ? lastUser?.text?.trim().slice(0, 300) : undefined;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return [
     `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
-    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so.",
-    "FACTS: Only from YOUR NOTES, RECENT CHAT and [Wink] lines. Not sure: say so.",
+    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will check, look into or add something unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
+    "FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines. Anything else: call ask.",
     `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
-    `NOW: ${bot.busy ? `busy${order ? `, working on: ${order}` : ""}` : "idle"}. Local time ${new Date(now).toString()}.`,
+    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id))}\nLocal time ${new Date(now).toString()}.`,
   ].join("\n\n");
 }
 

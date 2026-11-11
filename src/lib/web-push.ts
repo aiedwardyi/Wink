@@ -1,6 +1,8 @@
 // Phone notifications over Web Push, for Orbit opened in a phone browser (never the desktop app).
 import { api } from "@/state/store";
 import type { NotificationTarget } from "./notify";
+import { roomAlertsOff } from "./room-alerts";
+import { joinedSelection } from "./team-rooms";
 
 export type WebPushState = "unsupported" | "off" | "on" | "blocked";
 
@@ -36,8 +38,18 @@ export async function enableWebPush(): Promise<WebPushState> {
   const subscription =
     (await registration.pushManager.getSubscription()) ??
     (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) }));
-  await api("/api/web-push/subscribe", { method: "POST", body: JSON.stringify(subscription.toJSON()) });
+  await postSubscription(subscription);
   return "on";
+}
+
+/** The PC sends the push, so it keeps each phone's muted rooms with its subscription. */
+export async function syncWebPushRooms(): Promise<void> {
+  const subscription = await currentSubscription();
+  if (subscription) await postSubscription(subscription);
+}
+
+function postSubscription(subscription: PushSubscription) {
+  return api("/api/web-push/subscribe", { method: "POST", body: JSON.stringify({ ...subscription.toJSON(), off: roomAlertsOff() }) });
 }
 
 export async function disableWebPush(): Promise<void> {
@@ -53,9 +65,11 @@ export async function testWebPush(botId?: string): Promise<void> {
   await api("/api/web-push/test", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint, botId }) });
 }
 
-/** The bot/thread a push notification opens, from its `/?bot=&thread=` url. */
+/** The bot/thread a push notification opens, from its `/?bot=&thread=` url, or a joined room from `/?room=`. */
 export function webPushTarget(search: string): NotificationTarget | null {
   const params = new URLSearchParams(search);
+  const room = params.get("room");
+  if (room) return { botId: joinedSelection(room), threadId: joinedSelection(room) };
   const botId = params.get("bot");
   const threadId = params.get("thread");
   return botId && threadId ? { botId, threadId } : null;

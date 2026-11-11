@@ -227,6 +227,7 @@ describe("rooms through the fake phone relay", () => {
     expect(invite.status).toBe(200);
     expect(invite.body.code).toMatch(/^wkr1:/);
     expect((await call(`${base}/invites`, { relay: false, method: "POST", authorization: BOT })).status).toBe(403);
+    expect((await call(`${base}/send`, { relay: false, method: "POST", authorization: BOT, body: { text: "as the host" } })).status).toBe(403);
     expect((await call("/room/rooms", { relay: false })).status).toBe(404);
     const code = roomCode(group.hosted.roomId);
     expect((await guest.join(`wkr1:${r.host}:${code.id}.${code.secret}`)).ok).toBe(true);

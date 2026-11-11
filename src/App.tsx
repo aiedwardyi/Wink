@@ -46,7 +46,7 @@ import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestar
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { webPushSupported, webPushTarget } from "@/lib/web-push";
-import { closeReadAlerts } from "@/lib/read-alerts";
+import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -102,6 +102,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     latestState.current = state;
   }, [state]);
   const joinedRooms = useJoinedRooms();
+  const latestJoined = useRef(joinedRooms);
+  useLayoutEffect(() => {
+    latestJoined.current = joinedRooms;
+  }, [joinedRooms]);
   const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
   const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
@@ -462,9 +466,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
-  const readChats = [...state.bots, ...state.groups].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
+  const readChats = [...state.bots, ...state.groups, ...joinedReadState(joinedRooms)].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
   useEffect(() => {
-    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups, ...joinedReadState(latestJoined.current)]).catch(() => {});
   }, [readChats]);
   // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
   useEffect(() => {
@@ -473,7 +477,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       if (document.visibilityState !== "visible") return;
       void closeReadAlerts(async () => {
         const { bots, groups } = await api("/api/bots?messages=0");
-        return [...bots, ...groups];
+        return [...bots, ...groups, ...joinedReadState(latestJoined.current)];
       }).catch(() => {});
     };
     sweep();

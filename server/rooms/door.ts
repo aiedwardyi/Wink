@@ -1,4 +1,4 @@
-// The relay-facing door to people-only team rooms: a teammate's PC joins with
+// The relay-facing door to hosted team rooms: a teammate's PC joins with
 // an invite code, then reads and sends in that one room. Routes and frames are
 // frozen in the door protocol; the guest key opens nothing else.
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -19,17 +19,20 @@ import {
   sendDoorState,
   trackDoorSocket,
   writeFrame,
+  type DoorEntry,
   type DoorState,
 } from "./door-streams.ts";
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, type JoinResult } from "./invites.ts";
-import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
+import { recordRoomJoin } from "./share.ts";
 
 const MINUTE = 60_000;
 const BODY_BYTES = 16 * 1024;
 const JOIN_BODY_BYTES = 1024;
 const SNAPSHOT_ENTRIES = 200;
+/** Under the 4 MiB reply cap older guests read, with room left for state. */
+const SNAPSHOT_BYTES = 3 * 1024 * 1024;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|asks\/[\w-]{1,64}\/cancel)$/;
@@ -47,7 +50,7 @@ const JOIN_STATUS = {
 } satisfies Record<Extract<JoinResult, { ok: false }>["error"], number>;
 
 export interface RoomDoorDeps {
-  store: Pick<Store, "groups" | "messagesFor" | "onChange">;
+  store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot">;
   hostName(): string;
 }
 
@@ -96,15 +99,18 @@ function send(res: ServerResponse, status: number, body: unknown, headers: Recor
 
 const notFound = (res: ServerResponse) => send(res, 404, { error: "not found" });
 
-/** A people-only hosted room the door serves; anything else reads as absent. */
+/** The hosted group the door serves for a room; anything else reads as absent. */
 function doorGroup(roomId: string): HostedGroup | null {
-  const group = door?.deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId);
-  return group && peopleOnlyRoom(roomId) ? (group as HostedGroup) : null;
+  return (door?.deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) as HostedGroup | undefined) ?? null;
 }
 
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
-  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people };
+  const bots = group.memberIds.flatMap((id) => {
+    const bot = door!.deps.store.bot(id);
+    return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
+  });
+  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots };
 }
 
 /** Full state for one viewer. The version moves only when what everyone sees changed. */
@@ -115,7 +121,7 @@ function doorState(group: HostedGroup, person: RoomPerson): DoorState {
   const last = door!.versions.get(roomId);
   const version = last?.shared === text ? last.version : Math.max((last?.version ?? 0) + 1, Date.now());
   door!.versions.set(roomId, { version, shared: text });
-  return { version, ...shared, me: { id: person.id, name: person.name }, bots: [], myAsks: [] };
+  return { version, ...shared, me: { id: person.id, name: person.name }, myAsks: [] };
 }
 
 function pushRoomState(roomId: string): void {
@@ -180,10 +186,13 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   if (!parts || parts[1] !== relayHost) return send(res, 400, { error: "bad-code" });
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
+  if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
   if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
   const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
+  recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
+  tellHost(result.roomId);
   send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key });
 }
 
@@ -199,10 +208,23 @@ function guestFor(req: IncomingMessage, res: ServerResponse, peer: string | null
   return null;
 }
 
-function snapshot(res: ServerResponse, group: HostedGroup, person: RoomPerson): void {
+/** The newest entries that fit SNAPSHOT_BYTES, oldest first. */
+function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
+  let bytes = 0;
+  let from = entries.length;
+  for (; from > 0; from--) {
+    const size = Buffer.byteLength(JSON.stringify(entries[from - 1])) + 1;
+    if (bytes + size > SNAPSHOT_BYTES) break;
+    bytes += size;
+  }
+  return entries.slice(from);
+}
+
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
   const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: entries.map(doorEntry), state: doorState(group, person) });
+  const bots = url.searchParams.get("with") === "bots";
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => doorEntry(entry, bots))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
@@ -215,7 +237,7 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res);
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots");
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
@@ -265,10 +287,19 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: strin
   }
 }
 
+/** The host's own views read the room's people from the group frame. */
+function tellHost(roomId: string): void {
+  const group = doorGroup(roomId);
+  if (group) door!.deps.store.emit({ type: "group", groupId: group.id });
+}
+
 /** Remove and Leave: the person and keys go, `ended` goes out, their sockets are cut. */
 export function removeRoomPerson(roomId: string, personId: string, keep?: Duplex): boolean {
   const removed = removeGuest(roomId, personId, keep);
-  if (removed) pushRoomState(roomId);
+  if (removed) {
+    pushRoomState(roomId);
+    tellHost(roomId);
+  }
   return removed;
 }
 
@@ -289,7 +320,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
   if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
-  if (action === "snapshot") return snapshot(res, group, guest.person);
+  if (action === "snapshot") return snapshot(res, url, group, guest.person);
   if (action === "stream") return stream(res, url, group, guest.person);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });

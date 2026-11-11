@@ -14,6 +14,7 @@ import { Presence } from "@/lib/use-presence";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { RoomAlertsBell } from "./RoomAlertsBell";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
@@ -56,15 +57,18 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{name}</span>
         {room && joined && (
-          <button
-            type="button"
-            onClick={() => setLeaving(true)}
-            aria-label={t("teamRoom.leave")}
-            title={t("teamRoom.leave")}
-            className="flex shrink-0 items-center rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-          >
-            <LogOut size={18} />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <RoomAlertsBell chat={joinedSelection(roomId)} />
+            <button
+              type="button"
+              onClick={() => setLeaving(true)}
+              aria-label={t("teamRoom.leave")}
+              title={t("teamRoom.leave")}
+              className="flex shrink-0 items-center rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         )}
       </div>
       <TeamRoomTranscript

@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server } from "node:https";
 import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
@@ -14,13 +15,14 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, type HostedGroup } from "./asks.ts";
-import { closeRoomsDb, recentRoomEntries, roomPeople } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
-import { closeInvitesDb, createInvite, revokeGuestKeys } from "./invites.ts";
+import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
-import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
+import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 
@@ -178,6 +180,7 @@ async function joinedTeam(name = "Mina") {
   const group = teamRoom();
   hostSays(group, "welcome");
   const c = teammate();
+  c.start();
   const result = await c.join(codeFor(group, name));
   if (!result.ok) throw new Error(result.error);
   await live(c, group.hosted.roomId);
@@ -185,6 +188,100 @@ async function joinedTeam(name = "Mina") {
 }
 
 describe("teammate and the real door", () => {
+  it("saves an old left copy's code once and reuses it after restart", async () => {
+    const group = teamRoom();
+    const shared = roomCode(group.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const c = teammate();
+    c.start();
+    expect((await c.join(code)).ok).toBe(true);
+    await live(c, group.hosted.roomId);
+    const room = joinedRoom(group.hosted.roomId)!;
+    expect((await c.leave(room.roomId)).ok).toBe(true);
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(DATA_DIR, "joined.db"));
+    db.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(room.roomId);
+    db.close();
+    expect((await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, c, async () => ({})))?.body).toEqual({ error: "no-saved-code" });
+    const recovered = await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, c, async () => ({ code }));
+    expect(recovered?.status).toBe(200);
+    await live(c, room.roomId);
+    expect((await c.leave(room.roomId)).ok).toBe(true);
+    c.stop();
+    closeJoinedDb();
+    const restarted = teammate();
+    expect((await joinedRoute("POST", `/api/joined/rooms/${room.roomId}/rejoin`, restarted, async () => ({})))?.status).toBe(200);
+    await live(restarted, room.roomId);
+  });
+
+  it("rejects another room's code before creating a membership", async () => {
+    const { c, roomId } = await joinedTeam();
+    expect((await c.leave(roomId)).ok).toBe(true);
+    const other = teamRoom();
+    const shared = roomCode(other.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const result = await joinedRoute("POST", `/api/joined/rooms/${roomId}/rejoin`, c, async () => ({ code }));
+    expect(result?.status).toBe(400);
+    expect(roomPeople(other.hosted.roomId)).toEqual([]);
+    expect(joinedRoom(other.hosted.roomId)).toBeNull();
+  });
+
+  it("rejoins after leave using the saved room code after a client restart, with history", async () => {
+    const group = teamRoom();
+    const shared = roomCode(group.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const c = teammate();
+    hostSays(group, "before leaving");
+    expect((await c.join(code)).ok).toBe(true);
+    await live(c, group.hosted.roomId);
+    expect((await c.leave(group.hosted.roomId)).ok).toBe(true);
+    c.stop();
+    closeJoinedDb();
+    hostSays(group, "while away");
+    const restarted = teammate();
+    const result = await joinedRoute("POST", `/api/joined/rooms/${group.hosted.roomId}/rejoin`, restarted, async () => ({}));
+    expect(result?.status).toBe(200);
+    await live(restarted, group.hosted.roomId);
+    expect(texts(group.hosted.roomId)).toEqual(["before leaving", "while away"]);
+    expect(roomPeople(group.hosted.roomId)).toHaveLength(1);
+    expect(JSON.stringify(restarted.rooms())).not.toContain(shared.secret);
+  });
+
+  it("keeps a host-removed PC barred from the same code", async () => {
+    const group = teamRoom();
+    const shared = roomCode(group.hosted.roomId);
+    const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
+    const c = teammate();
+    expect((await c.join(code)).ok).toBe(true);
+    await live(c, group.hosted.roomId);
+    const person = roomPeople(group.hosted.roomId)[0]!;
+    removeRoomPerson(group.hosted.roomId, person.id);
+    barRoomPerson(group.hosted.roomId, person.id);
+    await until(() => joinedRoom(group.hosted.roomId)?.status === "removed");
+    expect(await c.join(code)).toMatchObject({ ok: false, status: 403, error: "removed" });
+    expect(roomPeople(group.hosted.roomId)).toEqual([]);
+  });
+
+  it("removes only the ended local copy, leaving the host history and other copies intact", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    const hosted = recentRoomEntries(roomId, 100);
+    const other = "other-local-room";
+    saveJoined(other, HOST, { id: "other", name: "Other" }, `wkg_${"z".repeat(43)}`);
+    expect((await joinedRoute("DELETE", `/api/joined/rooms/${roomId}`, c, async () => ({})))?.status).toBe(409);
+    expect((await c.leave(roomId)).ok).toBe(true);
+    const cache = join(DATA_DIR, "joined-files", roomId);
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "fake-file"), "local copy");
+    const result = await joinedRoute("DELETE", `/api/joined/rooms/${roomId}`, c, async () => ({}));
+    expect(result?.status).toBe(200);
+    expect(c.room(roomId)).toBeNull();
+    expect(joinedEntries(roomId, 100)).toEqual([]);
+    expect(existsSync(cache)).toBe(false);
+    expect(joinedRoom(other)).not.toBeNull();
+    expect(recentRoomEntries(roomId, 100)).toEqual(hosted);
+    expect(store.groups.find((each) => each.id === group.id)).toBeDefined();
+  });
+
   it("counts three remote lines, ignores own sends and shares the local read marker", async () => {
     const { group, c, roomId } = await joinedTeam();
     expect(c.read(roomId, c.room(roomId)!.lastEntry!.seq).ok).toBe(true);
@@ -344,5 +441,47 @@ describe("teammate and the real door", () => {
 
   it("leaves paths outside /api/joined/ alone", async () => {
     expect(await joinedRoute("GET", "/api/joinedx", teammate(), async () => ({}))).toBeNull();
+  });
+});
+
+describe("an older teammate build in a shared bot group", () => {
+  // The join limiter is per process; the file's earlier joins have spent this minute.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const crew = () => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    return { wink, group, roomId: group.hosted.roomId, says: (text: string) => appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink.id, name: "Wink" }, text }) };
+  };
+
+  it("reads bot lines from the snapshot and the stream as named people, never as itself", async () => {
+    const { wink, group, roomId, says } = crew();
+    appendRoomEntry(roomId, { author: { kind: "host", id: "host", name: "Edward" }, text: "welcome" });
+    says("hello from the bot");
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    writeRoomEntry(store, group, { author: { kind: "bot", id: wink.id, name: "Wink" }, text: "live bot line" });
+    await until(() => texts(roomId).includes("live bot line"));
+    expect(joinedEntries(roomId, 10).map((entry) => [entry.text, entry.author])).toEqual([
+      ["welcome", { kind: "host", id: "host", name: "Edward" }],
+      ["hello from the bot", { kind: "person", id: `bot-${wink.id}`, name: "Wink" }],
+      ["live bot line", { kind: "person", id: `bot-${wink.id}`, name: "Wink" }],
+    ]);
+  });
+
+  it("lands a 200-line Korean bot history", async () => {
+    const { group, roomId, says } = crew();
+    for (let i = 0; i < 200; i += 1) says(`${i} ${"한".repeat(19_990)}`);
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    expect(seqs(roomId).at(-1)).toBe(200);
   });
 });

@@ -50,9 +50,10 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { hostedRoomView, isHostedThread } from "./rooms/guards.ts";
+import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
+import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
@@ -60,6 +61,7 @@ import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
 import { peopleRoute } from "./rooms/people-routes.ts";
+import { shareRoute } from "./rooms/share.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -2927,6 +2929,11 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
   if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+}
+
+function roomAlert(alert: RoomAlert) {
+  broadcast({ kind: "notify", notification: roomNotification(alert), at: Date.now() });
+  void sendWebPushToDevices(DATA_DIR, pushPayload(roomPing(alert), { botId: alert.chat, threadId: alert.threadId }, alert.chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -6243,6 +6250,7 @@ configureRoomAsks({
   dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
+  alert: roomAlert,
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
 sweepRoomFiles();
@@ -6250,6 +6258,7 @@ const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  alert: roomAlert,
 });
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
@@ -7951,7 +7960,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
-      if ((!bot && !group) || group?.hosted) return json(res, 404, { error: "no such conversation" });
+      if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
       const messages = store.messagesFor(threadId).map((message) => ({
         id: message.id,
         role: message.role,
@@ -8454,7 +8463,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await hostFileRoute(req, res, method, url, { store })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await hostFileRoute(req, res, method, url, { store, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {

@@ -10,22 +10,30 @@ export const PEOPLE_ONLY_LINE = "a people-only room has no bots";
 
 const DB_FILE = () => join(DATA_DIR, "rooms.db");
 
+const TABLE = "CREATE TABLE IF NOT EXISTS people_only_rooms (room_id TEXT PRIMARY KEY)";
+
 // Opened per call: a held handle would outlive closeRoomsDb and keep the file locked.
 function withDb<T>(run: (db: DatabaseSync) => T): T {
   // db.ts owns the file, its mode and WAL.
   roomById("");
   const db = new DatabaseSync(DB_FILE());
   try {
-    db.exec("CREATE TABLE IF NOT EXISTS people_only_rooms (room_id TEXT PRIMARY KEY)");
+    db.exec(TABLE);
     return run(db);
   } finally {
     db.close();
   }
 }
 
+/** On the caller's connection, so a share can lock a room in its own transaction. */
+export function markPeopleOnly(db: DatabaseSync, roomId: string): void {
+  db.exec(TABLE);
+  db.prepare("INSERT INTO people_only_rooms (room_id) VALUES (?)").run(roomId);
+}
+
 export function createPeopleOnlyRoom(name: string): RoomRecord {
   const room = createRoom(name);
-  withDb((db) => db.prepare("INSERT INTO people_only_rooms (room_id) VALUES (?)").run(room.id));
+  withDb((db) => markPeopleOnly(db, room.id));
   return room;
 }
 

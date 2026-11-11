@@ -2,6 +2,7 @@
 import type { GroupRecord, Store } from "../store.ts";
 import { roomById, roomPeople, type RoomPerson } from "./db.ts";
 import { nameClash } from "./names.ts";
+import { roomJoins, type RoomJoin } from "./share.ts";
 
 /** Team rooms run only on engines whose relaunches and lifetime they bound. */
 const ROOM_ENGINES: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
@@ -18,13 +19,16 @@ export function roomBotsRefusal(bots: ReadonlyArray<{ name: string; driverKind: 
 
 export const isHostedThread = (store: Pick<Store, "groupByThread">, threadId: string) => Boolean(store.groupByThread(threadId)?.hosted);
 
-export type HostedRoomView = { missing: true } | { name: string; people: RoomPerson[] };
+/** The owner's linked files stay open on a shared group's older tasks; only the shared thread is closed. */
+export const linkedFilesClosed = (group: GroupRecord | undefined, threadId: string) => Boolean(group?.hosted) && group!.threadId === threadId;
+
+export type HostedRoomView = { missing: true } | { name: string; people: RoomPerson[]; joins: RoomJoin[] };
 
 /** A hosted group restored without its rooms.db rows reads as missing, never as an empty room. */
 export function hostedRoomView(hosted: NonNullable<GroupRecord["hosted"]>): HostedRoomView {
   try {
     const room = roomById(hosted.roomId);
-    return room ? { name: room.name, people: roomPeople(room.id) } : { missing: true };
+    return room ? { name: room.name, people: roomPeople(room.id), joins: roomJoins(room.id) } : { missing: true };
   } catch {
     return { missing: true };
   }

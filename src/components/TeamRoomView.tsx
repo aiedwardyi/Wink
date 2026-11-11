@@ -13,6 +13,7 @@ import { Presence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
+import { RoomAlertsBell } from "./RoomAlertsBell";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomTranscript } from "./TeamRoomRow";
@@ -36,17 +37,20 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
         {!missing && (
-          <button
-            ref={peopleButton}
-            type="button"
-            onClick={() => setPeopleOpen(true)}
-            aria-label={t("teamRoom.people")}
-            title={t("teamRoom.people")}
-            className="flex shrink-0 items-center gap-1 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-          >
-            <Users size={18} />
-            {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <RoomAlertsBell chat={group.id} />
+            <button
+              ref={peopleButton}
+              type="button"
+              onClick={() => setPeopleOpen(true)}
+              aria-label={t("teamRoom.people")}
+              title={t("teamRoom.people")}
+              className="flex shrink-0 items-center gap-1 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              <Users size={18} />
+              {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
+            </button>
+          </div>
         )}
       </div>
       <ReconnectingCue />

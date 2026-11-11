@@ -153,6 +153,16 @@ describe("opening a notification on a cold page", () => {
     window.history.replaceState(null, "", "/");
   });
 
+  it("opens a joined room from its /?room= alert", async () => {
+    const store = await mount(current, current);
+    await store.open(webPushTarget("?room=r1")!);
+    expect(store.state().selectedId).toBe("joined:r1");
+    await store.hydrate();
+    expect(store.state().selectedId).toBe("joined:r1");
+    expect(store.switches).toEqual([]);
+    await store.unmount();
+  });
+
   it("drops the target when another chat is picked before hydrate", async () => {
     const store = await mount({ bots: [bot("t-new"), other], groups: [] }, { bots: [bot("t-new"), other], groups: [] });
     await store.open({ botId: "b1", threadId: "t-old" });

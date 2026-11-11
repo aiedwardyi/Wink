@@ -98,6 +98,7 @@ export function DeviceSwitcher({
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
   const presence = usePresence(open);
   // The menu lives on the body, so the drawer sliding shut would strand it over the chat.
   useEffect(() => {
@@ -141,21 +142,31 @@ export function DeviceSwitcher({
       >
             {devices.map((device) =>
               device.current && renaming ? (
-                <li key={device.deviceId} className="px-2.5 py-1">
+                <li key={device.deviceId} className="flex items-center gap-1 px-2.5 py-1">
                   <input
+                    ref={renameInput}
                     autoFocus
                     defaultValue={device.name}
                     maxLength={64}
                     aria-label={t("chrome.renameDevice")}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") rename(event.currentTarget.value);
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) rename(event.currentTarget.value);
                       if (event.key === "Escape") {
                         event.stopPropagation();
                         setRenaming(false);
                       }
                     }}
-                    className="w-full rounded-md border border-hairline bg-raised px-2 py-1.5 text-[14px] text-ink outline-none focus:border-accent"
+                    className="min-w-0 flex-1 rounded-md border border-hairline bg-raised px-2 py-1.5 text-[14px] text-ink outline-none focus:border-accent"
                   />
+                  <button
+                    type="button"
+                    onClick={() => rename(renameInput.current?.value ?? "")}
+                    aria-label={t("room.save")}
+                    title={t("room.save")}
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+                  >
+                    <Check size={15} />
+                  </button>
                 </li>
               ) : (
                 <li key={device.deviceId} className="flex items-center">

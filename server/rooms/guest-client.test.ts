@@ -8,6 +8,7 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
+import * as joinedFiles from "./joined-files.ts";
 import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
 
@@ -174,6 +175,57 @@ describe("room codes", () => {
 });
 
 describe("join", () => {
+  it("refuses an ordinary join while local removal awaits its files", async () => {
+    route = (req, res) => req.url?.endsWith("/leave") ? reply(res, 200, {}) : quietDoor(req, res);
+    const c = guest();
+    c.start();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+    expect((await c.leave("r1")).ok).toBe(true);
+    let release!: () => void;
+    const files = vi.spyOn(joinedFiles, "removeJoinedFiles").mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    const removing = c.remove("r1");
+    let result;
+    try {
+      result = await c.join(CODE);
+      if (result.ok) await until(() => c.rooms()[0]?.link === "live");
+    } finally {
+      release();
+      await removing;
+      files.mockRestore();
+    }
+    expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
+    expect(joinedRoom("r1")).toBeNull();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+  });
+
+  it("refuses local removal while an ordinary join awaits the door", async () => {
+    route = (req, res) => req.url?.endsWith("/leave") ? reply(res, 200, {}) : quietDoor(req, res);
+    const c = guest();
+    c.start();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+    expect((await c.leave("r1")).ok).toBe(true);
+    let release: (() => void) | undefined;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") release = () => quietDoor(req, res);
+      else quietDoor(req, res);
+    };
+    const joining = c.join(CODE);
+    await until(() => Boolean(release));
+    let result;
+    try {
+      result = await c.remove("r1");
+    } finally {
+      release!();
+      await joining;
+      await until(() => c.rooms()[0]?.link === "live");
+    }
+    expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
+    await until(() => c.rooms()[0]?.link === "live");
+  });
+
   it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {
     route = quietDoor;
     const result = await guest().join(`  ${CODE}\n`);
@@ -368,5 +420,52 @@ describe("races and floods", () => {
     await c.send("r1", "too late");
     await leaving;
     expect(joinedRoom("r1")).toMatchObject({ status: "left" });
+  });
+});
+
+describe("room alerts on a teammate", () => {
+  const entry = (seq: number, author: JoinedEntry["author"], text: string) => `data: ${JSON.stringify({ kind: "entry", entry: { seq, id: `e${seq}`, at: seq, author, text } })}\n\n`;
+  const edward = { kind: "host" as const, id: "host", name: "Edward" };
+  const mina = { kind: "person" as const, ...STATE.me };
+  const ping = (text: string) => [{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "Edward", text }];
+  const stream = (frames: Array<[number, string]>) => (req: IncomingMessage, res: ServerResponse) => {
+    if (!req.url?.includes("/stream")) return quietDoor(req, res);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ kind: "state", state: STATE })}\n\n`);
+    for (const [ms, frame] of frames) setTimeout(() => res.write(frame), ms);
+  };
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("pings someone else's line after the wait and never an own line", async () => {
+    route = stream([[0, entry(1, mina, "on my way")], [0, entry(2, edward, "hi")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 50 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 2);
+    await sleep(200);
+    expect(alert.mock.calls).toEqual([ping("hi")]);
+  });
+
+  it("stays quiet when the room is read on screen within the wait", async () => {
+    route = stream([[0, entry(1, edward, "first")], [400, entry(2, edward, "second")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 150 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 1);
+    expect((await joinedRoute("POST", "/api/joined/rooms/r1/read", c, async () => ({ seq: 1 })))?.status).toBe(200);
+    await until(() => c.room("r1")?.entries.length === 2);
+    await sleep(300);
+    expect(alert.mock.calls).toEqual([ping("second")]);
+  });
+
+  it("pings a reconnect replay once with its latest line, then live lines again", async () => {
+    const replay = Array.from({ length: 60 }, (_, index): [number, string] => [0, entry(index + 1, edward, `line ${index + 1}`)]);
+    route = stream([...replay, [300, entry(61, edward, "live")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 100 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 61);
+    await sleep(250);
+    expect(alert.mock.calls).toEqual([ping("line 60"), ping("live")]);
   });
 });

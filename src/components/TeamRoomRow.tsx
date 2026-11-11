@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import { cn } from "@/lib/cn";
-import { captureTranscriptScroll, restoreTranscriptScroll, type TranscriptScroll } from "@/lib/bottom-follow";
+import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { isRoomPicture, roomFileUrl, type RoomLine } from "@/lib/team-rooms";
@@ -62,6 +62,9 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
+  const previousTop = useRef(0);
+  const previousSize = useRef({ height: 0, viewport: 0 });
+  const touchY = useRef(0);
   const beforePage = useRef<TranscriptScroll | null>(null);
   const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
   const fill = useCallback(() => {
@@ -77,16 +80,25 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   const lastMine = last ? mine(last) : false;
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && (atEnd.current || lastMine)) el.scrollTop = el.scrollHeight;
+    if (el && (atEnd.current || lastMine)) {
+      atEnd.current = true;
+      el.scrollTop = el.scrollHeight;
+      previousTop.current = el.scrollTop;
+      previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
+    }
   }, [lastId, lastMine]);
   useEffect(fill, [fill, lines]);
-  // pictures loading and a growing composer fire no scroll event; re-pin while following
+  // Layout scrolls must not disarm follow before pictures finish growing.
   useEffect(() => {
     const el = scrollRef.current;
     const log = logRef.current;
     if (!el || !log || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (atEnd.current) el.scrollTop = el.scrollHeight;
+      if (atEnd.current) {
+        el.scrollTop = el.scrollHeight;
+        previousTop.current = el.scrollTop;
+      }
+      previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
       fill();
     });
     observer.observe(log);
@@ -98,9 +110,24 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
       ref={scrollRef}
       data-team-room-transcript
       className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
+      onWheel={(event) => { if (event.deltaY < 0) atEnd.current = false; }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY ?? touchY.current;
+        if (y > touchY.current) atEnd.current = false;
+        touchY.current = y;
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) atEnd.current = false;
+      }}
+      tabIndex={0}
       onScroll={(e) => {
         const el = e.currentTarget;
-        atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        const size = { height: el.scrollHeight, viewport: el.clientHeight };
+        if (el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
+        if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
+        previousTop.current = el.scrollTop;
+        previousSize.current = size;
         if (el.scrollTop < 80) loadPage();
       }}
     >

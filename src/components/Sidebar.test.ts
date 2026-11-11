@@ -297,8 +297,8 @@ describe("Sidebar row time", () => {
       expect(row).toContain("@max-[10rem]/rowtext:hidden!");
     }
     expect(botTime).toContain('!selected && "hidden group-hover:inline group-focus-within:inline"');
-    expect(groupTime).toContain('!selected && !group.hosted && "hidden group-hover:inline group-focus-within:inline"');
-    expect(groupTime).toContain('!group.hosted && "@max-[10rem]/rowtext:hidden!"');
+    expect(groupTime).toContain('!selected && !group.hosted && !joined && "hidden group-hover:inline group-focus-within:inline"');
+    expect(groupTime).toContain('!group.hosted && !joined && "@max-[10rem]/rowtext:hidden!"');
     expect(botTime).toContain("min-w-0 flex-1 truncate");
     expect(botTime).toContain("overflow-hidden");
   });
