@@ -74,3 +74,17 @@ it("keeps following when a taller viewport moves the scroll position upward", as
   await act(async () => resize());
   expect(pane.scrollHeight - pane.scrollTop - pane.clientHeight).toBe(0);
 });
+
+it("names a bot line with the bot's face, on the left", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+    lines: [{ id: "answer", at: Date.now(), author: { kind: "bot", id: "b1", name: "Wink" }, color: "blue", text: "on it", files: [] }],
+    mine: () => false, base: "/api/joined/rooms/r1", label: "Crew",
+  }))));
+  const row = host.querySelector<HTMLElement>('[data-mid="answer"]')!;
+  expect(row.dataset.teamRoomLine).toBe("theirs");
+  const label = row.querySelector<HTMLElement>("[data-team-room-bot]")!;
+  expect(label.textContent).toBe("Wink");
+  expect(label.querySelector("svg, img")).not.toBeNull();
+});

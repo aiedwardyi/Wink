@@ -231,7 +231,6 @@ beforeEach(() => {
   deps = {
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
@@ -397,6 +396,13 @@ describe("a shared bot group", () => {
     expect(removeRoomPerson(group.hosted.roomId, first.body.person.id)).toBe(true);
     expect(changed).toContain(group.id);
     expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], joins: view.joins });
+  });
+
+  it("never gives a teammate a bot's name, so an @ reaches the bot", async () => {
+    const group = crew([newBot("Wink").id]);
+    const shared = roomCode(group.hosted.roomId);
+    const res = await post("/room/v1/join", { code: `wkr1:${HOST}:${shared.id}.${shared.secret}`, name: "Wink", device: "pc-wink-0123456789abcdef" });
+    expect(res.body.person.name).not.toBe("Wink");
   });
 });
 

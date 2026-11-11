@@ -60,7 +60,7 @@ const entrySchema = z.object({
   seq: z.number().int().positive(),
   id,
   at: z.number(),
-  author: z.object({ kind: z.enum(["host", "person"]), id, name }),
+  author: z.object({ kind: z.enum(["host", "person", "bot"]), id, name }),
   text: z.string().max(20_000),
   replyToId: id.optional(),
   files: z.array(fileSchema).max(MAX_FILES).optional(),
@@ -72,6 +72,7 @@ const stateSchema = z.object({
   host: name,
   me: personSchema,
   people: z.array(personSchema).max(100),
+  bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
 });
 const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/) });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
@@ -452,7 +453,7 @@ export class GuestClient {
   private async loadSnapshot(roomId: string, sync: Sync): Promise<boolean> {
     const creds = joinedKey(roomId);
     if (!creds || sync.stopped) return false;
-    const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot`, creds.key);
+    const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot?with=bots`, creds.key);
     if (sync.stopped) return false;
     if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
     const snapshot = reply.ok ? snapshotSchema.safeParse(reply.value) : null;
@@ -479,7 +480,7 @@ export class GuestClient {
       hostname: creds.relayHost,
       servername: creds.relayHost,
       port: https.port ?? 443,
-      path: `/room/v1/rooms/${roomId}/stream?after=${head}`,
+      path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots`,
       headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device },
       ca: https.ca,
       lookup: https.lookup,

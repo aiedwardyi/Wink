@@ -68,7 +68,6 @@ beforeEach(() => {
   configureRoomAsks({
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: () => null,
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
@@ -122,17 +121,17 @@ describe("every room runner caller on a hosted thread", () => {
     ["drain without an ask", [0, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined]],
   ];
 
-  it.each(SHAPES)("refuses the %s shape with 0 model calls", async (_name, args) => {
+  it.each(SHAPES)("refuses the %s shape off the room's thread with 0 model calls", async (_name, args) => {
     const deps = spies();
     const cfg = { profile: {} };
     const run = load("runGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {}, turnStartClaims: new Map() });
-    expect(await run(group.id, group.threadId, botId, ...args)).toBe(false);
+    expect(await run(group.id, "other-thread", botId, ...args)).toBe(false);
     const claimed = load("runClaimedGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, currentTurnEpoch: () => 0 });
-    expect(await claimed(group.id, group.threadId, botId, ...args.slice(0, 5), undefined, ...args.slice(5))).toBe(false);
+    expect(await claimed(group.id, "other-thread", botId, ...args.slice(0, 5), undefined, ...args.slice(5))).toBe(false);
     for (const spy of Object.values(deps)) expect(spy).not.toHaveBeenCalled();
   });
 
-  it("refuses the Live Verify doc fix and any askless drain before ready or a queue slot", async () => {
+  it("refuses the Live Verify doc fix and any askless drain off the room's thread before ready or a queue slot", async () => {
     const ready = vi.fn(async () => true);
     const failed = vi.fn();
     const groupQueues = new Map();
@@ -142,7 +141,7 @@ describe("every room runner caller on a hosted thread", () => {
       store, hostedTurnRefused, roomTurnStillAssigned: () => true, beginGroupTurnOperation, groupQueues, runGroupMemberTurn,
       finishGroupTurnOperation: vi.fn(), writeChatError: () => false, terminalBridgeAccess: null,
     });
-    await drain(botId, group.threadId, { groupId: group.id, hop: 0, cardContinuation: "fix the doc", onDispatchError: failed, ready });
+    await drain(botId, "other-thread", { groupId: group.id, hop: 0, cardContinuation: "fix the doc", onDispatchError: failed, ready });
     expect(failed).toHaveBeenCalledTimes(1);
     expect([ready, beginGroupTurnOperation, runGroupMemberTurn].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
     expect(groupQueues.size).toBe(0);
@@ -161,14 +160,18 @@ describe("every room runner caller on a hosted thread", () => {
     expect((runGroupMemberTurn.mock.calls[0] as unknown[]).at(-1)).toBe(live.id);
   });
 
-  it("sends the host's own room message to hostedSend, never the room responders", () => {
+  it("commits the host's own room line with hostedSend, then wakes the group's responders", () => {
     const hostedSend = vi.fn(() => ({ message: { id: "m1" } }));
+    const roomResponders = vi.fn(() => []);
     const appendMessage = vi.spyOn(store, "appendMessage");
-    const start = load("startGroupTurn", { store, hostedSend, roomSetupPending: () => false });
+    const start = load("startGroupTurn", {
+      store, hostedSend, roomResponders, peopleOnlyRoom: () => false, roomSetupPending: () => false, rootForStart: vi.fn(), noteTalked: vi.fn(), mentionedBots: () => [],
+    });
     let sent: unknown;
     expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"); }).not.toThrow();
     expect(sent).toEqual({ id: "m1" });
     expect(hostedSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), { kind: "host" }, "@Wink hi", "e1", "send-0000000001"]);
+    expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder);
     expect(appendMessage).not.toHaveBeenCalled();
   });
 });

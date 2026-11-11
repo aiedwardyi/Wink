@@ -187,8 +187,10 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
-  if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const group = roomId ? doorGroup(roomId) : null;
+  if (roomId && !group) return send(res, 404, { error: "no-invite" });
+  const taken = [deps.hostName(), ...(group ? sharedState(group).bots.map((bot) => bot.name) : [])];
+  const result = joinRoom(parts[2]!, parts[3]!, taken, { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);

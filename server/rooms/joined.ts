@@ -11,7 +11,7 @@ export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person"; id: string; name: string };
+  author: { kind: "host" | "person" | "bot"; id: string; name: string };
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
@@ -32,6 +32,7 @@ export interface JoinedState {
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
+  bots: Array<{ id: string; name: string; color: string }>;
 }
 
 /** `removed` and `left` rooms are read-only. */
@@ -133,7 +134,7 @@ const rowToRoom = (row: RoomRow): JoinedRoom => ({
   relayHost: row.relay_host,
   me: { id: row.person_id, name: row.person_name },
   status: row.status,
-  state: row.state ? (JSON.parse(row.state) as JoinedState) : null,
+  state: row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null,
   joinedAt: row.joined_at,
 });
 
@@ -191,7 +192,13 @@ export function resetJoined(roomId: string): void {
 /** The newest `limit` entries, oldest first. */
 export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
   const rows = db().prepare("SELECT body FROM entries WHERE room_id = ? ORDER BY seq DESC LIMIT ?").all(roomId, limit) as Array<{ body: string }>;
-  return rows.reverse().map((row) => JSON.parse(row.body) as JoinedEntry);
+  return rows.reverse().map((row) => botLine(JSON.parse(row.body) as JoinedEntry));
+}
+
+// A copy held from before bot lines stored each bot as the host's person alias.
+function botLine(entry: JoinedEntry): JoinedEntry {
+  const { author } = entry;
+  return author.kind === "person" && author.id.startsWith("bot-") ? { ...entry, author: { kind: "bot", id: author.id.slice(4), name: author.name } } : entry;
 }
 
 export function joinedSummary(room: JoinedRoom): { unread: number; lastEntry?: JoinedEntry } {
@@ -225,10 +232,10 @@ export function joinedCursor(roomId: string): number {
   return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
-/** Keeps the highest version; an older state is ignored. */
+/** Keeps the highest version; an older state is ignored, and a held state without bots takes them at its version. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ? WHERE room_id = ? AND status = 'joined' AND version < ?")
-    .run(JSON.stringify(state), state.version, roomId, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND json_extract(state, '$.bots') IS NULL))")
+    .run(JSON.stringify(state), state.version, roomId, state.version, state.version).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */

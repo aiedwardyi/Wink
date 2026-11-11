@@ -24,7 +24,13 @@ const HOST = "abcdefghijklmnop.wink.test";
 const ME = { id: "p1", name: "Mina" };
 
 const entry = (seq: number, text = `line ${seq}`): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, author: { kind: "host", id: "host", name: "Edward" }, text });
-const state = (version: number, roomName = "Team"): JoinedState => ({ version, roomName, instructions: "", host: "Edward", me: ME, people: [ME] });
+const state = (version: number, roomName = "Team"): JoinedState => ({ version, roomName, instructions: "", host: "Edward", me: ME, people: [ME], bots: [] });
+const WINK = { id: "b1", name: "Wink", color: "blue" };
+/** A state held by a build from before bots in rooms. */
+const heldState = (version: number) => {
+  const { bots: _bots, ...held } = state(version);
+  return held as JoinedState;
+};
 
 beforeAll(() => mkdirSync(DATA_DIR, { recursive: true }));
 afterEach(() => closeJoinedDb());
@@ -75,5 +81,26 @@ describe("joined.db", () => {
     expect(joinedRoom("r1")).toMatchObject({ status: "removed" });
     expect(joinedEntries("r1", 10)).toHaveLength(1);
     expect(JSON.stringify(joinedRooms())).not.toContain(KEY);
+  });
+});
+
+describe("a copy held from before bot lines", () => {
+  it("reads a held bot alias as that bot and a held state without bots as none", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", heldState(5));
+    addJoinedEntries("r1", [entry(1), { ...entry(2, "on it"), author: { kind: "person", id: "bot-b1", name: "Wink" } }]);
+    expect(joinedEntries("r1", 10).map((row) => row.author)).toEqual([
+      { kind: "host", id: "host", name: "Edward" },
+      { kind: "bot", id: "b1", name: "Wink" },
+    ]);
+    expect(joinedRoom("r1")?.state?.bots).toEqual([]);
+  });
+
+  it("takes the bot roster at the version a pre-bots copy already holds", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    expect(setJoinedState("r1", heldState(5))).toBe(true);
+    expect(setJoinedState("r1", { ...state(5), bots: [WINK] })).toBe(true);
+    expect(setJoinedState("r1", { ...state(5), bots: [WINK] })).toBe(false);
+    expect(joinedRoom("r1")?.state?.bots).toEqual([WINK]);
   });
 });

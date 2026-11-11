@@ -1,5 +1,6 @@
 // Which bot a team room message wakes: the first @bot by position, else the
-// bot whose entry it replies to. @everyone and people's names wake nobody.
+// bot whose entry it replies to, else the only bot for a line that tags no one.
+// @everyone and people's names wake nobody.
 // The server and the composer share it so the hint matches what runs.
 
 const fold = (text: string) => text.normalize("NFC").toLowerCase();
@@ -17,11 +18,13 @@ export function roomResponder<T extends { id: string; name: string }>(
   ].filter(({ key }) => key).sort((a, b) => b.key.length - a.key.length);
   const lower = fold(text);
   let at = -1;
+  let tagged = false;
   while ((at = lower.indexOf("@", at + 1)) !== -1) {
     if (at > 0 && !/\s/.test(lower[at - 1]!)) continue;
     const rest = lower.slice(at + 1);
     const hit = names.find(({ key }) => rest.startsWith(key) && !/[a-z0-9]/i.test(rest[key.length] ?? ""));
     if (hit?.bot) return hit.bot;
+    if (hit) tagged = true;
   }
-  return bots.find((bot) => bot.id === replyToBotId) ?? null;
+  return bots.find((bot) => bot.id === replyToBotId) ?? (!tagged && bots.length === 1 ? bots[0]! : null);
 }

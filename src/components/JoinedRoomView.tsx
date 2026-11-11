@@ -25,7 +25,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const room = useJoinedRoom(roomId);
   const [leaving, setLeaving] = useState(false);
   const entries = room?.entries;
-  const lines = useMemo(() => joinedLines(entries ?? []), [entries]);
+  const bots = room?.state?.bots;
+  const lines = useMemo(() => joinedLines(entries ?? [], bots), [entries, bots]);
   const base = joinedRoomBase(roomId);
   const name = room?.state?.roomName ?? "";
   const phase = room ? joinedPhase(room) : room === null ? null : "connecting";

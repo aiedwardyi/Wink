@@ -111,7 +111,7 @@ beforeAll(async () => {
   rmSync(DATA_DIR, { recursive: true, force: true });
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   group = store.createGroup("팀과 함께하는 아주 긴 출시 준비 대화방", [], false, undefined, undefined, { roomId: createPeopleOnlyRoom("팀과 함께하는 아주 긴 출시 준비 대화방").id }) as HostedGroup;
-  configureRoomAsks({ store, hostName: () => "Edward", driverKind: () => undefined, instance: () => null, dispatch: () => {}, stopTurn: async () => {}, endSession: async () => {} });
+  configureRoomAsks({ store, hostName: () => "Edward", instance: () => null, dispatch: () => {}, stopTurn: async () => {}, endSession: async () => {} });
   configureRoomDoor({ store, hostName: () => "Edward" });
   r = await rig();
   const statuses = new StatusLog();

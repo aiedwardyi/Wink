@@ -14,6 +14,7 @@ export interface RoomLine {
   author: RoomAuthor;
   text: string;
   files: RoomFile[];
+  color?: string;
 }
 
 export type TeamRoom = Group & { hosted: { roomId: string } };
@@ -40,16 +41,22 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[] } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; bots?: JoinedBot[] } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
+}
+
+export interface JoinedBot {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person"; id: string; name: string };
+  author: RoomAuthor;
   text: string;
   files?: RoomFile[];
 }
@@ -59,8 +66,11 @@ export type JoinedPhase = "connecting" | "live" | "offline" | "removed" | "left"
 export const joinedPhase = (view: JoinedView): JoinedPhase =>
   view.status !== "joined" ? view.status : view.link === "live" ? "live" : view.link === "offline" ? "offline" : "connecting";
 
-export const joinedLines = (entries: readonly JoinedEntry[]): RoomLine[] =>
-  entries.map((entry) => ({ id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [] }));
+export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = []): RoomLine[] =>
+  entries.map((entry) => {
+    const color = entry.author.kind === "bot" ? bots.find((bot) => bot.id === entry.author.id)?.color : undefined;
+    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], ...(color ? { color } : {}) };
+  });
 
 const JOINED = "joined:";
 

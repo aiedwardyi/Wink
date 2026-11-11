@@ -5,10 +5,12 @@ import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { isRoomPicture, roomFileUrl, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
+import { BotAvatar } from "./Avatar";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 
 export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine: boolean; named: boolean; base: string }) {
@@ -17,7 +19,12 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
   const files = line.files.filter((file) => !isRoomPicture(file));
   return (
     <div className="contents" data-mid={line.id} data-team-room-line={mine ? "mine" : "theirs"}>
-      {named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{line.author.name}</div>}
+      {named && line.author.kind === "bot" ? (
+        <div className="mt-1 flex items-center gap-1.5 pl-0.5" data-team-room-bot>
+          <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
+          <span className="text-[11px] font-medium text-ink-secondary">{line.author.name}</span>
+        </div>
+      ) : named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{line.author.name}</div>}
       <div className={cn("group flex w-full flex-col", mine ? "items-end" : "items-start")}>
         <div className="relative w-fit max-w-[min(42rem,78%)]">
           <div

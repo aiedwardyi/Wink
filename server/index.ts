@@ -52,6 +52,8 @@ import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { hostedSend } from "./rooms/send.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
@@ -6244,7 +6246,6 @@ _loadPending();
 configureRoomAsks({
   store,
   hostName: () => cfg.profile?.name?.trim() || "The host",
-  driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
   instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
@@ -6550,6 +6551,7 @@ async function runClaimedGroupMemberTurn(
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
     `Room members: ${roster}, and ${userName} (the human).`,
+    teammatesLine(group),
     group.bulletin.trim() && `Room bulletin (shared instructions for everyone):\n${group.bulletin.trim()}`,
     `Reply as yourself, ${detailedRepliesEnabled(cfg) ? "" : "briefly and "}conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     reactionSystemGuidance(),
@@ -6566,7 +6568,7 @@ async function runClaimedGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${roomContext}\n\n(Reply to the conversation above as ${bot.name}.)${
+  const text = `${roomContext}\n\n${askNote(authority, bot.name)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
   }`;
 
@@ -6654,7 +6656,8 @@ async function runClaimedGroupMemberTurn(
 
 ${text}` : text,
         system: roomSystem,
-        approval: bot.autoApprove ? "auto" : "ask",
+        // A teammate's request never waits on the host's approval card.
+        approval: authority || bot.autoApprove ? "auto" : "ask",
         attended: !isUnattended(bot.id),
         cwd,
         integrations,
@@ -6695,7 +6698,9 @@ ${text}` : text,
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
+  if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
+  if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
@@ -6716,7 +6721,7 @@ ${text}` : text,
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && !group.hosted && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -6735,7 +6740,6 @@ ${text}` : text,
 }
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
-  if (store.group(groupId)?.hosted) return;
   const key = `${botId}\0${threadId}`;
   if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
@@ -6756,14 +6760,16 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
-  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message;
-  if (roomSetupPending(group)) {
+  // A shared group commits the host's line to the room, then answers it like any group.
+  const shared = group.hosted ? hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message : null;
+  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
+  if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
   // Capture the active thread once. Every queued responder below is bound to
   // this task even if another client asks to switch later.
   const threadId = group.threadId;
-  const message = store.appendMessage(threadId, {
+  const message = shared ?? store.appendMessage(threadId, {
     role: "user",
     kind: "text",
     text,
