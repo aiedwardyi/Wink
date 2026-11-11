@@ -6247,7 +6247,7 @@ configureRoomAsks({
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
-sweepRoomFiles();
+sweepRoomFiles(store.groups);
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),

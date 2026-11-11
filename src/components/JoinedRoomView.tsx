@@ -9,10 +9,11 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { joinedLines, joinedPhase, joinedRoomBase } from "@/lib/team-rooms";
+import { joinedLines, joinedPhase, joinedRoomBase, roomPictureUrl } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { RoomPicture } from "./RoomPicture";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
@@ -38,7 +39,10 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   return (
     <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
-        <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{name}</span>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <RoomPicture src={roomPictureUrl(base, room?.state?.picture)} />
+          <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{name}</span>
+        </div>
         {room && joined && (
           <button
             type="button"

@@ -13,6 +13,7 @@ import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
+import { roomFile } from "./rooms/files.ts";
 import { createPeopleOnlyRoom, PEOPLE_ONLY_LINE, peopleOnlyRoom, peopleOnlyRoster } from "./rooms/people-only.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
@@ -323,6 +324,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         const checked = validateBotCwd(body.cwd);
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.cwd ?? undefined;
+      }
+      if (body.picture !== undefined) {
+        if (!existing.hosted || !peopleOnlyRoom(existing.hosted.roomId)) return json(res, 400, { error: "not a team room" });
+        const file = typeof body.picture === "string" ? roomFile(existing.hosted.roomId, body.picture) : null;
+        if (body.picture !== null && !file?.type.startsWith("image/")) return json(res, 400, { error: "picture must be a room image id" });
+        patch.picture = file?.id;
       }
       // one pinned message per room; null/"" clears. The id is not
       // validated against the transcript here - a pin whose message was

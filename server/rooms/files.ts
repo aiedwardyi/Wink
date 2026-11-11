@@ -300,6 +300,7 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
     "content-length": String(file.bytes),
     "content-disposition": `${preview ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
     "x-content-type-options": "nosniff",
+    "x-content-sha256": file.sha256,
     "content-security-policy": "default-src 'none'; sandbox",
     "cache-control": "no-store",
   };
@@ -328,7 +329,7 @@ export function serveRoomFile(res: ServerResponse, roomId: string, id: string, p
 }
 
 /** On start: half-written uploads, blobs without a row, and day-old uploads no message took. */
-export function sweepRoomFiles(): void {
+export function sweepRoomFiles(groups: readonly { hosted?: { roomId: string }; picture?: string }[] = []): void {
   if (!existsSync(ROOT())) return;
   try {
     const cutoff = Date.now() - UNSENT_MS;
@@ -340,7 +341,9 @@ export function sweepRoomFiles(): void {
         )
       `).all(cutoff) as Array<{ room_id: string; id: string }>;
       const drop = db.prepare("DELETE FROM room_files WHERE room_id = ? AND id = ?");
-      for (const row of stale) drop.run(row.room_id, row.id);
+      for (const row of stale) {
+        if (!groups.some((group) => group.hosted?.roomId === row.room_id && group.picture === row.id)) drop.run(row.room_id, row.id);
+      }
       const known = db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND id = ?");
       for (const roomId of readdirSync(ROOT())) {
         try {

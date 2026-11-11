@@ -1,13 +1,13 @@
 // Rooms this PC joined on someone else's Wink, after the sidebar's own chats.
-import { Users } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
-import { joinedPhase, joinedSelection, type JoinedView } from "@/lib/team-rooms";
+import { joinedPhase, joinedRoomBase, joinedSelection, roomPictureUrl, type JoinedView } from "@/lib/team-rooms";
 import { useStore } from "@/state/store";
+import { RoomPicture } from "./RoomPicture";
 
 function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDensity }) {
   const { t } = useI18n();
@@ -34,7 +34,7 @@ function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDe
         aria-current={selected || undefined}
       >
         <span className={cn("flex shrink-0 items-center justify-center", density === "compact" ? "size-8" : "size-12")}>
-          <Users size={24} className="text-ink-secondary" />
+          <RoomPicture src={roomPictureUrl(joinedRoomBase(room.roomId), room.state?.picture)} size={density === "compact" ? 32 : 48} />
         </span>
         <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
           <div className="truncate text-[15px] font-semibold text-ink">{name}</div>

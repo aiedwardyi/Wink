@@ -104,7 +104,7 @@ function doorGroup(roomId: string): HostedGroup | null {
 
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
-  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people };
+  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, ...(group.picture ? { picture: group.picture } : {}) };
 }
 
 /** Full state for one viewer. The version moves only when what everyone sees changed. */

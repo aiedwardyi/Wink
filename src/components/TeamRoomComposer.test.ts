@@ -256,7 +256,7 @@ describe("room drafts", () => {
     await send();
     expect(fetch).not.toHaveBeenCalled();
     await act(async () => repick!.click());
-    const picker = host.querySelector('input[type="file"]')!;
+    const picker = host.querySelector('input[type="file"]:not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("reload.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
@@ -283,7 +283,7 @@ describe("room drafts", () => {
   it.each(["host", "joined"])("restores the %s draft and files after a bot switch, isolates room B, and clears on send", async (side) => {
     await render(side);
     await type("Room A draft");
-    const picker = host.querySelector('input[type="file"]')!;
+    const picker = host.querySelector('input[type="file"]:not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("draft.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));

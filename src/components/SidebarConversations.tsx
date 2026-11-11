@@ -4,6 +4,8 @@ import { Crown, Loader2, Pin, Users, X } from "lucide-react";
 import { roomConversationPreview } from "@/lib/conversation-preview";
 import { api, terminalAttentionForBot, useStore, formatTime, previewMessages, shownModelSelection, type Bot, type Group, type TerminalAttention } from "@/state/store";
 import { BotAvatar } from "./Avatar";
+import { RoomPicture } from "./RoomPicture";
+import { hostRoomBase, isTeamRoom, roomPictureUrl } from "@/lib/team-rooms";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -223,7 +225,7 @@ function GroupListItem({
         aria-keyshortcuts={drag?.onMove ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
       >
         <span className="relative shrink-0">
-          <StackedMauses members={members} density={density} />
+          {isTeamRoom(group) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
           <UnreadCountBadge count={unreadCount} selected={selected} />
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>

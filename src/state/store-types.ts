@@ -146,6 +146,7 @@ export type GroupDefaultResponder =
 
 /** A room: several bots + you in one shared thread. */
 export interface Group {
+  picture?: string | null;
   id: string;
   threadId: string;
   name: string;

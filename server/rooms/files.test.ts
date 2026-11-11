@@ -274,6 +274,16 @@ describe("room file isolation", () => {
 });
 
 describe("room file edges", () => {
+  it("keeps the current picture and sweeps a replaced day-old picture", async () => {
+    const room = createRoom("Team").id;
+    const old = (await upload(room, png(64))).json.file;
+    const current = (await upload(room, png(64))).json.file;
+    exec("UPDATE room_files SET at = ?", Date.now() - 25 * 60 * 60_000);
+    (sweepRoomFiles as (...args: unknown[]) => void)([{ hosted: { roomId: room }, picture: current.id }]);
+    expect((await call("GET", `/rooms/${room}/files/${current.id}/preview`)).status).toBe(200);
+    expect((await call("GET", `/rooms/${room}/files/${old.id}/preview`)).status).toBe(404);
+  });
+
   it("hold a room's cap when uploads race for the last space", async () => {
     const room = createRoom("Team").id;
     expect((await upload(room, Buffer.from("first"))).status).toBe(200);
