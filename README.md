@@ -10,7 +10,9 @@
 </p>
 
 <p align="center">
-  Your AI coding subscriptions, in one desktop app, at terminal speed.
+  <b>Context switching, in style.</b>
+  <br>
+  Claude, Codex, Grok, Gemini and Muse in one app, at terminal speed.
   <br>
   Runs on the Claude Code, Codex, Gemini, Grok and Muse logins you already have. No API keys. No analytics.
 </p>
