@@ -9,7 +9,7 @@ import { broadcastDoorEntry } from "./door-streams.ts";
 export function askNote(askId: string | undefined, botName: string): string {
   const ask = askId ? askById(askId) : null;
   const asked = ask ? roomEntry(ask.roomId, ask.entryId) : null;
-  return asked ? `(${asked.author.name} asked you: "${asked.text}". Reply to them as ${botName}.)` : `(Reply to the conversation above as ${botName}.)`;
+  return asked ? `(${asked.author.name} asked you: ${JSON.stringify(asked.text)}. Reply to them as ${botName}.)` : `(Reply to the conversation above as ${botName}.)`;
 }
 
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {
@@ -23,7 +23,7 @@ export function teammatesLine(group: { hosted?: { roomId: string } }): string {
 }
 
 const shown = (message: Message, botId: string) =>
-  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && !message.roomEntryId && Boolean(message.text?.trim());
+  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && Boolean(message.text?.trim());
 
 /** A settled turn's shown words as one bot entry. Its thread row is linked by `roomEntryId`, never copied. */
 export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessage">, group: HostedGroup, threadId: string, bot: { id: string; name: string }, since: number, askId?: string): void {

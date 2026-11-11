@@ -112,6 +112,12 @@ describe("a teammate's line in a shared bot group", () => {
     expect(askNote(ask!.id, "Wink")).toBe('(Sora asked you: "@Wink 남은 거 정리해 줘". Reply to them as Wink.)');
     expect(askNote(undefined, "Wink")).toBe("(Reply to the conversation above as Wink.)");
   });
+
+  it("keeps quotes in the asked words inside the quote", () => {
+    const mina = addPerson(group.hosted.roomId, "Mina", "chat", ["Wink"]);
+    const { ask } = hostedSend(group, said(mina), '@Wink he said "done"');
+    expect(askNote(ask!.id, "Wink")).toBe('(Mina asked you: "@Wink he said \\"done\\"". Reply to them as Wink.)');
+  });
 });
 
 describe("the answer", () => {
