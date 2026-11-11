@@ -286,17 +286,19 @@ describe("Sidebar bot section drag", () => {
 });
 
 describe("Sidebar row time", () => {
-  it("keeps the active time visible and reveals inactive times on hover or focus", () => {
+  it("keeps hosted times visible and reveals other inactive times on hover or focus", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "SidebarConversations.tsx"), "utf8");
     const botTime = source.slice(source.indexOf("function BotListItem"), source.indexOf("function ArchivedBotsPanel"));
     const groupTime = source.slice(source.indexOf("function GroupListItem"), source.indexOf("type SidebarRowDrag"));
     for (const row of [botTime, groupTime]) {
-      expect(row).toContain('!selected && "hidden group-hover:inline group-focus-within:inline"');
       expect(row).not.toContain("group-hover:hidden");
       expect(row).not.toContain("group-focus-within:hidden");
       expect(row).toContain("@container/rowtext");
       expect(row).toContain("@max-[10rem]/rowtext:hidden!");
     }
+    expect(botTime).toContain('!selected && "hidden group-hover:inline group-focus-within:inline"');
+    expect(groupTime).toContain('!selected && !group.hosted && "hidden group-hover:inline group-focus-within:inline"');
+    expect(groupTime).toContain('!group.hosted && "@max-[10rem]/rowtext:hidden!"');
     expect(botTime).toContain("min-w-0 flex-1 truncate");
     expect(botTime).toContain("overflow-hidden");
   });

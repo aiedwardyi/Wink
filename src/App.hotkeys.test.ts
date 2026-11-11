@@ -52,7 +52,7 @@ describe("phone drawer menu button", () => {
     const button = menuButtonSource();
     expect(button).toContain("data-menu-unread");
     expect(button).toContain("{menuUnreadBadge}");
-    expect(app).toContain("collapsedUnreadCount(state.bots, state.groups, state.selectedId)");
+    expect(app).toContain("collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms)");
   });
 
   it("glows while another chat has a question or an open approval", () => {
@@ -485,7 +485,7 @@ describe("split number shortcuts", () => {
 
 describe("terminal attention routing", () => {
   it("includes terminal attention in the taskbar count", () => {
-    expect(app).toContain("unreadConversationCount(state.bots, state.groups) + terminalAttentionCount(state.terminalAttention)");
+    expect(app).toContain("unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention)");
   });
 
   it("keys each attention event by PTY session without marking chat unread", () => {
