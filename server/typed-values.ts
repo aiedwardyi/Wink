@@ -1,4 +1,4 @@
-import { userTyping } from "./memory-pass.ts";
+import { secretLike, userTyping } from "./memory-pass.ts";
 import type { Message } from "./store.ts";
 
 export const TYPED_VALUES_HEADER =
@@ -40,8 +40,13 @@ const CODE_LINE = /^\s*(?:def \w+\(|class \w+[(:]|import \w|from [\w.]+ import |
 const LIST_MARK = /^\s*(?:[-*•]\s+|\d{1,3}[.)]\s+)/;
 // No \b on the Korean half: it never fires between Hangul syllables.
 // A bare "token" is a label only with an owner ("my token is") or a value holding a letter ("token: ab12"), not "max tokens: 4000".
-const CREDENTIAL = /\b(?:passwords?|passcodes?|passwd|pins?|otp|2fa|mfa|verification codes?|security codes?|cvv|ssn|social security|account numbers?|card numbers?|routing numbers?|private keys?|credentials?|api[\s_-]?(?:keys?|tokens?|secrets?)|(?:access|auth|bearer|refresh|oauth|client|secret|license)[\s_-]?(?:tokens?|keys?|secrets?))\b|\b(?:my|our|your|the|this)\s+(?:\w+\s+)?(?:secret|token)s?\s*(?:is\b|was\b|[:=])|\bsecrets?\s*[:=]|\btokens?\s*[:=]\s*(?=\S*[A-Za-z])|비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|인증\s*(?:번호|코드|키|토큰)|보안\s*코드|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|(?:api|에이피아이)\s*(?:키|토큰)|(?:액세스|접근|시크릿)\s*(?:키|토큰)|시크릿|토큰\s*(?:값)?\s*(?:은|는|[:=])\s*(?=\S*[A-Za-z])/i;
-const KEY_SHAPED = /«redacted|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xox[abposr])[_-][A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/;
+const CREDENTIAL = /\b(?:passwords?|passcodes?|passwd|pins?|otp|2fa|mfa|one[\s-]time codes?|verification codes?|security codes?|cvv|ssn|social security|account numbers?|card numbers?|routing numbers?|private keys?|credentials?|api[\s_-]?(?:keys?|tokens?|secrets?)|(?:access|auth|bearer|refresh|oauth|client|secret|license)[\s_-]?(?:tokens?|keys?|secrets?))\b|\b(?:my|our|your|the|this)\s+(?:\w+\s+)?(?:secret|token)s?\s*(?:is\b|was\b|[:=])|\bsecrets?\s*[:=]|\btokens?\s*[:=]\s*(?=\S*[A-Za-z])|비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|인증\s*(?:번호|코드|키|토큰)|보안\s*코드|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|(?:api|에이피아이)\s*(?:키|토큰)|(?:액세스|접근|시크릿)\s*(?:키|토큰)|시크릿|토큰\s*(?:값)?\s*(?:은|는|[:=])\s*(?=\S*[A-Za-z])/i;
+const BARE_WORDS = /\btokens?\b|\bone[- ]time\b/gi;
+// A label whose value is still to come, though the sentence holds another number ("My PIN for card 12 is").
+const DANGLING = /(?:\b(?:is|was|are|were)|[:=]|[은는])\s*$/i;
+
+/** This file's labels and every one the memory pass screens for, but a bare "token" or "one time" only by CREDENTIAL's narrower rules. */
+const credential = (sentence: string) => CREDENTIAL.test(sentence) || secretLike(sentence.replace(BARE_WORDS, " "));
 
 const MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const UNIT = "(?:%|percent|minutes?|hours?|days?|weeks?|months?|years?|seconds?|k|m|b|bn|ms|s|sec|secs|min|mins|h|hr|hrs|x|gb|mb|kb|tb|px|pt|fps|usd|krw|won|원|만원|억|달러|개|명|번|시간|분|초|일|주|개월|년|살|세)";
@@ -98,7 +103,7 @@ function sentences(text: string): string[] {
     const noise = MACHINE_LINE.test(line) || CODE_LINE.test(line);
     for (const sentence of line.replace(LIST_MARK, "").split(/(?<=[.!?。])\s+/).map((part) => part.trim()).filter(Boolean)) {
       if (!held && !noise) kept.push(sentence);
-      held = CREDENTIAL.test(sentence) && !valuesIn(sentence).length;
+      held = credential(sentence) && (!valuesIn(sentence).length || DANGLING.test(sentence));
     }
   }
   return kept;
@@ -119,14 +124,18 @@ function valuesIn(sentence: string): Value[] {
     .sort((a, b) => a.at - b.at);
 }
 
-/** A short number is told apart by the word next to it: the same digits beside another word are another fact. */
+/** A short number is told apart by the word next to it, a long one by the word it follows: the same digits about another thing are another fact. */
 function keysOf(sentence: string, values: Value[]): Map<Value, string> {
   let words = sentence;
   for (const value of values) words = `${words.slice(0, value.at)}${" ".repeat(value.end - value.at)}${words.slice(value.end)}`;
   return new Map(values.map((value) => {
     const key = `${value.kind === "money" || value.kind === "quantity" ? "amount" : value.kind}:${value.value}`;
-    if (!SHORT_KINDS.has(value.kind) || value.value.replace(/\D/g, "").length >= 4) return [value, key];
+    if (!SHORT_KINDS.has(value.kind)) return [value, key];
     const next = /^\s*([A-Za-zㄱ-힝]{2,})/.exec(words.slice(value.end))?.[1]?.toLowerCase();
+    if (value.value.replace(/\D/g, "").length >= 4) {
+      const subject = words.slice(0, value.at).toLowerCase().match(/[a-zㄱ-힝]{2,}/g)?.filter((word) => !FILLER.has(word)).at(-1);
+      return [value, `${key}|${subject ?? (next && !FILLER.has(next) ? next : "")}`];
+    }
     const previous = /([A-Za-zㄱ-힝]{2,})[\s:=#(-]*$/.exec(words.slice(0, value.at))?.[1]?.toLowerCase();
     const near = next && !FILLER.has(next) ? next : previous && !FILLER.has(previous) ? previous : next ?? previous ?? "";
     return [value, `${key}|${near}`];
@@ -176,7 +185,7 @@ export function typedValueLines(messages: readonly Message[], excludeIds: Readon
     const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
     for (const sentence of sentences(userTyping(message.text, false))) {
       const values = valuesIn(sentence);
-      if (!values.length || CREDENTIAL.test(sentence) || KEY_SHAPED.test(sentence)) continue;
+      if (!values.length || credential(sentence)) continue;
       if (sentence.length >= PASTED_MIN_CHARS) {
         recent ??= botTexts.slice(-PASTED_FROM_MESSAGES).map(flat);
         const said = flat(sentence);
@@ -220,6 +229,7 @@ export function typedValuesBlock(lines: readonly TypedLine[], maxBytes: number):
     }
     kept.add(entry);
     used += entry.bytes;
+    // The first removal adds the left-out note, so size() can grow before it shrinks.
     while (size() > maxBytes && kept.size > 1) {
       remove(kept.values().next().value!);
       leftOut += 1;

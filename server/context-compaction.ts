@@ -1281,6 +1281,7 @@ export async function prepareModelContext(input: {
       previousText = good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "";
       history = spanUnits(input, good?.coveredIndex ?? -1, Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1), good?.value.deferredMail, plan.deferredMail);
     }
+    // Sizes the text only: compactionRecord rebuilds the block in what the text leaves of summaryBudget + valuesRoom, so the two never overflow it.
     const block = typedValuesBlock(typedLines, Math.min(VALUES_CAP_TOKENS, Math.floor((summaryBudget + valuesRoom) * VALUES_FALLBACK_SHARE)) * 3);
     const text = fallbackSummary({
       previousSummary: previousText,

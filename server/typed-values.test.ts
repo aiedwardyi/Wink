@@ -33,6 +33,8 @@ describe("typed value lines", () => {
     ["a negative number", "temperature is -12 degrees"],
     ["a negative amount", "budget is -40000"],
     ["a Korean hour", "회의는 3시야"],
+    ["a token limit", "max tokens: 4000"],
+    ["a token count", "that run used 12,000 tokens"],
   ])("carries %s", (_name, text) => {
     expect(typedLines(text)).toEqual([`- 11-08 ${text}`]);
   });
@@ -94,6 +96,16 @@ describe("typed value lines", () => {
     ["an account number on the line after its label", "Account number:\n123456789"],
     ["an API token in prose", "my API token is abc123def456"],
     ["a Korean API key in prose", "API 키는 abc123def456 입니다"],
+    ["a PIN on the line after its sentence", "my PIN is\n4821"],
+    ["a wifi password on the line after its sentence", "my wifi password is\nhunter2024"],
+    ["a numeric API key", "my API key is 12345678"],
+    ["an API key in prose", "the api key is a1b2c3d4e5f6"],
+    ["a Korean password with a particle", "암호는 482100"],
+    ["a PIN after a label holding its own number", "My PIN for card 12 is\n4821"],
+    ["a one-time code", "one-time code 482100"],
+    ["a secret in prose", "the secret word is 482100"],
+    ["a Korean passcode", "패스코드 482100"],
+    ["a Korean one-time code", "일회용 코드 482100"],
   ])("never carries %s", (_name, secret) => {
     expect(typedLines(`${secret}\nthe budget is 40,000`)).toEqual(["- 11-08 the budget is 40,000"]);
   });
@@ -141,7 +153,7 @@ describe("typed value lines", () => {
   });
 
   it.each([
-    ["launch on 2026-11-11", "date:2026-11-11"],
+    ["launch on 2026-11-11", "date:2026-11-11|launch"],
     ["merge PR-1230 first", "code:PR-1230"],
     ["ship v1.0.250 tonight", "version:1.0.250"],
     ["3시간 걸렸어", "amount:3시간|걸렸어"],
@@ -174,6 +186,13 @@ describe("typed values block", () => {
     expect(block(12_000, "the budget is 40,000", "the venue holds 250 people", "actually the budget is 40,000 total").split("\n").slice(1)).toEqual([
       "- 11-08 the venue holds 250 people",
       "- 11-08 actually the budget is 40,000 total",
+    ]);
+  });
+
+  it("keeps two facts that share a long number", () => {
+    expect(block(12_000, "The venue capacity is 1200 people.", "My monthly rent is 1200 dollars.").split("\n").slice(1)).toEqual([
+      "- 11-08 The venue capacity is 1200 people.",
+      "- 11-08 My monthly rent is 1200 dollars.",
     ]);
   });
 
