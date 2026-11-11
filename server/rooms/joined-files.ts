@@ -72,6 +72,10 @@ export async function joinedFileRoute(
   const route = ROUTE.exec(url.pathname);
   if (!route) return false;
   const [, roomId, fileId, preview] = route as unknown as [string, string, string | undefined, string | undefined];
+  if (method === "DELETE" && fileId) {
+    reply(res, 403, { error: "forbidden" });
+    return true;
+  }
   if (method !== (fileId ? "GET" : "POST")) {
     reply(res, 404, { error: "not found" });
     return true;

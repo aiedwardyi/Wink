@@ -115,7 +115,12 @@ const close = () => {
   closeJoinedDb();
 };
 
+// The join limiter is per process, so each test starts on a later minute.
+let skew = 0;
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+  vi.setSystemTime(Date.now() + (skew += 2 * 60_000));
   close();
   rmSync(DATA_DIR, { recursive: true, force: true });
   mkdirSync(DATA_DIR, { recursive: true });
@@ -139,6 +144,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   delete roomAskHooks.words;
   vi.restoreAllMocks();
   hop.drop();
@@ -444,16 +450,42 @@ describe("teammate and the real door", () => {
   it("leaves paths outside /api/joined/ alone", async () => {
     expect(await joinedRoute("GET", "/api/joinedx", teammate(), async () => ({}))).toBeNull();
   });
+
+  it("carries own and host renames over TLS within a second and keeps new author names", async () => {
+    let hostName = "Edward";
+    configureRoomDoor({ store, hostName: () => hostName });
+    const { c, roomId } = await joinedTeam();
+    await live(c, roomId);
+    await c.send(roomId, "before rename");
+    const started = Date.now();
+    ownName = "민아";
+    await c.nameChanged();
+    await until(() => c.room(roomId)?.me.name === ownName);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
+    expect(await c.send(roomId, "after rename")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
+    hostName = "에드워드";
+    hostNameChanged();
+    await until(() => c.room(roomId)?.state?.host === hostName);
+    expect(joinedEntries(roomId, 10).find((entry) => entry.text === "before rename")?.author.name).toBe("Mina");
+  });
+
+  it("delivers an offline name change when the relay reconnects", async () => {
+    const { c, roomId } = await joinedTeam();
+    await live(c, roomId);
+    hop.up = false;
+    hop.drop();
+    ownName = "민아";
+    await c.nameChanged();
+    expect(roomPeople(roomId)[0]?.name).toBe("Mina");
+    hop.up = true;
+    await until(() => c.room(roomId)?.me.name === ownName);
+    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
+    expect(await c.send(roomId, "after reconnect")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
+  });
 });
 
 describe("an older teammate build in a shared bot group", () => {
-  // The join limiter is per process; the file's earlier joins have spent this minute.
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 2 * 60_000);
-  });
-  afterEach(() => vi.useRealTimers());
-
   const crew = () => {
     const wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
     const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
@@ -485,46 +517,5 @@ describe("an older teammate build in a shared bot group", () => {
     expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
     await live(c, roomId);
     expect(seqs(roomId).at(-1)).toBe(200);
-  });
-});
-
-describe("names over the real door", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 2 * 60_000);
-  });
-  afterEach(() => vi.useRealTimers());
-
-  it("carries own and host renames over TLS within a second and keeps new author names", async () => {
-    let hostName = "Edward";
-    configureRoomDoor({ store, hostName: () => hostName });
-    const { c, roomId } = await joinedTeam();
-    await live(c, roomId);
-    await c.send(roomId, "before rename");
-    const started = performance.now();
-    ownName = "민아";
-    await c.nameChanged();
-    await until(() => c.room(roomId)?.me.name === ownName);
-    expect(performance.now() - started).toBeLessThan(1_000);
-    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
-    expect(await c.send(roomId, "after rename")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
-    hostName = "에드워드";
-    hostNameChanged();
-    await until(() => c.room(roomId)?.state?.host === hostName);
-    expect(joinedEntries(roomId, 10).find((entry) => entry.text === "before rename")?.author.name).toBe("Mina");
-  });
-
-  it("delivers an offline name change when the relay reconnects", async () => {
-    const { c, roomId } = await joinedTeam();
-    await live(c, roomId);
-    hop.up = false;
-    hop.drop();
-    ownName = "민아";
-    await c.nameChanged();
-    expect(roomPeople(roomId)[0]?.name).toBe("Mina");
-    hop.up = true;
-    await until(() => c.room(roomId)?.me.name === ownName);
-    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
-    expect(await c.send(roomId, "after reconnect")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
   });
 });

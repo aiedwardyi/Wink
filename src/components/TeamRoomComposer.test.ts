@@ -14,6 +14,7 @@ import { TeamRoomView } from "./TeamRoomView";
 
 const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
+vi.mock("@/lib/room-files-state", () => ({ useRoomFilesState: () => ({ deleted: [], error: null }) }));
 vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
 
 const group = {
@@ -109,9 +110,9 @@ describe("room file drop", () => {
     const large = file("large.txt");
     Object.defineProperty(large, "size", { value: 10 ** 12 });
     await drag("drop", [large]);
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("large.txt is too big to send.");
-    await drag("drop", Array.from({ length: 11 }, (_, at) => file(`${at}.txt`)));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Up to 10 files per message.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("large.txt is too big. Pictures can be up to 100 MB; other files up to 1 GB.");
+    await drag("drop", Array.from({ length: 51 }, (_, at) => file(`${at}.txt`)));
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Up to 50 files per message.");
     expect(host.querySelectorAll('button[aria-label^="Remove "]')).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });

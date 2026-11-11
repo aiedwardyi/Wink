@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { useRoomFilesState } from "@/lib/room-files-state";
 import { isRoomPicture, roomFileUrl, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
 
@@ -13,8 +14,8 @@ import { FileAttachmentRow } from "./FileAttachmentRow";
 
 export function TeamRoomRow({ line, mine, named, base, authorName }: { line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string }) {
   const { t, locale } = useI18n();
-  const pictures = line.files.filter(isRoomPicture).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
-  const files = line.files.filter((file) => !isRoomPicture(file));
+  const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
+  const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
   return (
     <div className="contents" data-mid={line.id} data-team-room-line={mine ? "mine" : "theirs"}>
       {named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
@@ -29,6 +30,7 @@ export function TeamRoomRow({ line, mine, named, base, authorName }: { line: Roo
           >
             {pictures.length > 0 && <AttachedImageGallery pictures={pictures} className={cn(!mine && "justify-start", !line.text && !files.length && "mb-0")} />}
             {line.text}
+            {line.files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
             {files.length > 0 && (
               <div className={cn("flex flex-col gap-1.5", line.text && "mt-2")}>
                 {files.map((file) => (
@@ -59,6 +61,8 @@ export function TeamRoomRow({ line, mine, named, base, authorName }: { line: Roo
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
 export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string }) {
+  const { t } = useI18n();
+  const fileState = useRoomFilesState(base);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
@@ -132,12 +136,14 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
       }}
     >
       <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
+        {fileState.error && <div role="alert" className="text-[13px] text-danger">{t("teamRoom.folderError")}</div>}
         {lines.map((line, index) => {
           const own = mine(line);
           const before = lines[index - 1];
           const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
           const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
-          return <TeamRoomRow key={line.id} line={line} mine={own} named={named} base={base} authorName={authorName} />;
+          const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
+          return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} />;
         })}
       </div>
     </div>

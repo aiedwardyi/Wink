@@ -16,6 +16,7 @@ import { ReconnectingCue } from "./ReconnectingCue";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
+import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
@@ -39,6 +40,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         {!missing && (
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
+            <TeamRoomFilesMenu roomId={group.hosted.roomId} />
             <button
               ref={peopleButton}
               type="button"

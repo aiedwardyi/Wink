@@ -40,6 +40,7 @@ export interface DoorStream {
   res: ServerResponse;
   /** Asked with `with=bots`; anyone else reads a bot as a person by its name. */
   bots: boolean;
+  largeFiles?: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
 }
@@ -61,6 +62,13 @@ export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
   ...(entry.files ? { files: entry.files } : {}),
 });
+
+export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean): DoorEntry {
+  if (largeFiles || !entry.files?.length) return entry;
+  const files = entry.files.filter((file) => !file.deleted && file.bytes <= 25 * 1024 ** 2).slice(0, 10);
+  const omitted = entry.files.filter((file) => !files.includes(file));
+  return { ...entry, files, text: [entry.text, ...omitted.map((file) => file.name)].filter(Boolean).join("\n").slice(0, 20_000) };
+}
 
 /** Remembers which sockets a person used, so Remove can cut keep-alive ones too. */
 export function trackDoorSocket(roomId: string, personId: string, socket: Duplex): void {
@@ -84,13 +92,13 @@ function write(stream: DoorStream, chunk: string): void {
 }
 
 export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
-  const sent = frame.kind === "entry" ? { kind: "entry", entry: { ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) } } : frame;
+  const sent = frame.kind === "entry" ? { kind: "entry", entry: compatibleDoorEntry({ ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) }, stream.largeFiles !== false) } : frame;
   write(stream, `data: ${JSON.stringify(sent)}\n\n`);
 }
 
 /** Registered and buffering: live frames wait until goLive. */
-export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false): DoorStream {
-  const stream: DoorStream = { roomId, personId, res, bots, buffer: [] };
+export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false, largeFiles = true): DoorStream {
+  const stream: DoorStream = { roomId, personId, res, bots, buffer: [], largeFiles };
   streams.add(stream);
   const heartbeat = setInterval(() => write(stream, ": ping\n\n"), HEARTBEAT_MS);
   res.once("close", () => {
@@ -115,6 +123,10 @@ function deliver(stream: DoorStream, frame: DoorFrame): void {
 }
 
 const roomStreams = (roomId: string) => [...streams].filter((stream) => stream.roomId === roomId);
+
+export function resetDoorRoom(roomId: string): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "reset" });
+}
 
 export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {
   if (!streams.size) return;

@@ -23,6 +23,7 @@ export interface JoinedFile {
   type: string;
   bytes: number;
   sha256: string;
+  deleted?: boolean;
 }
 
 export interface JoinedState {
@@ -230,7 +231,8 @@ export function joinedFile(roomId: string, fileId: string): JoinedFile | null {
     SELECT file.value AS file FROM entries, json_each(entries.body, '$.files') AS file
     WHERE entries.room_id = ? AND json_extract(file.value, '$.id') = ? LIMIT 1
   `).get(roomId, fileId) as { file: string } | undefined;
-  return row ? (JSON.parse(row.file) as JoinedFile) : null;
+  const file = row ? (JSON.parse(row.file) as JoinedFile) : null;
+  return file?.deleted ? null : file;
 }
 
 /** The seq the stream resumes after. */

@@ -11,6 +11,7 @@ import type { HostedGroup } from "./asks.ts";
 import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
+  compatibleDoorEntry,
   doorEntry,
   doorStreamCount,
   endDoorRoom,
@@ -242,15 +243,15 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
   return entries.slice(from);
 }
 
-function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson): void {
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
   const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
   const bots = url.searchParams.get("with") === "bots";
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => doorEntry(entry, bots))), state: doorState(group, person) });
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson): void {
+function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -259,7 +260,7 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots");
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
@@ -334,16 +335,18 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
   const route = file ?? ROUTE.exec(url.pathname);
   const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
-  if (!route || !action || method !== (METHODS[action] ?? "POST")) return notFound(res);
+  if (!route || !action || (method !== (METHODS[action] ?? "POST") && !(file && method === "DELETE"))) return notFound(res);
   const guest = guestFor(req, res, relay.peer);
   if (!guest) return;
   if (guest.roomId !== route[1]) return notFound(res);
+  if (file && method === "DELETE") return send(res, 403, { error: "forbidden" });
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
   if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
-  if (action === "snapshot") return snapshot(res, url, group, guest.person);
-  if (action === "stream") return stream(res, url, group, guest.person);
+  const largeFiles = req.headers["x-orbit-room-files"] === "1";
+  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles);
+  if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
