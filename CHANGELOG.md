@@ -2,6 +2,15 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.252] - 2026-11-11
+
+### Added
+- Team rooms are on for everyone: share your room code and teammates join right away.
+
+### Changed
+- Long chats keep the numbers and values you typed, word for word, when they summarize. PINs and keys stay out.
+- Quick answers while your bot is busy come faster and no longer cut off mid-lookup.
+
 ## [1.0.251] - 2026-11-11
 
 ### Added
