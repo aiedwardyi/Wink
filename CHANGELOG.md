@@ -2,6 +2,35 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.253] - 2026-11-11
+
+### Added
+- Team rooms on your phone, with unread counts and each room's last line.
+- One invite code per team room; teammates show under their own Wink name.
+- Drop files into team rooms; the message box grows as you type, and drafts stay.
+- A welcome card the first time you start a voice call.
+
+### Changed
+- The Devices page leads with one link; the setup code and Tailscale fold away.
+- Settings, bot details and Devices open fast the first time.
+- The first reply after a quiet spell comes faster.
+- Voice calls stay quiet while you type and speak in your app language.
+- Call captions sit on their own row above the message box and wrap.
+- Browser sign-in remembers you and shows the Wink logo and Google button.
+- Team snag notes read plainly and skip your own PC.
+
+### Fixed
+- End on a voice call never stops the bot, and one spoken yes does one thing.
+- Phone volume keys now change the call voice.
+- Removed teammates can't rejoin with the room code.
+- Phone alerts close once their chat is read.
+- Opening a linked folder from another PC works.
+- The same account can't be added twice; the empty credit row is gone.
+- The sidebar resize cursor no longer sticks after a drag.
+- Startup device picks stay on Tailscale.
+- Phone sign-in asks for your Google account once.
+- Prepared Claude sessions no longer pile up past the memory cap or outlive a deleted bot.
+
 ## [1.0.251] - 2026-11-11
 
 ### Added
