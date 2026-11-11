@@ -82,7 +82,7 @@ describe("MemoryMap", () => {
     expect(rule(".mm-bottom .mm-count b")).toContain("background: none; color: var(--color-ink);");
   });
 
-  it("keeps Live now at 4.5:1 on its panel in every skin, in the same cyan hue", () => {
+  it("keeps Live now at 4.5:1 on its panel in every skin, cyan on dark and indigo on light", () => {
     const skins = ["../styles.css", "../skins/fresh-dark.css"].map((file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
     const rootCard = skins.match(/(?:@theme|:root)\s*\{[^}]*--color-card:\s*(#[0-9a-f]{6})/i)![1];
     const card = (id: string) => [...skins.matchAll(/([^{}]*)\{[^{}]*--color-card:\s*(#[0-9a-f]{6})[^{}]*\}/gi)].filter(([, selector]) => selector.includes(`[data-skin="${id}"]`)).at(-1)?.[2] ?? rootCard;
@@ -94,7 +94,8 @@ describe("MemoryMap", () => {
     const [cyan, indigo, lightInk] = [triplet("cyan", rule(".mm")), triplet("indigo", rule(".mm")), triplet("live-ink", light)];
     expect(rule(".mm")).toContain("--mm-live-ink: var(--mm-cyan);");
     expect(rule(".mm-live-tag")).toContain("color: rgb(var(--mm-live-ink));");
-    expect(Math.abs(hue(lightInk) - hue(cyan))).toBeLessThan(1);
+    expect(Math.abs(hue(lightInk) - hue(indigo))).toBeLessThan(1);
+    expect(rule(".mm-live-dot")).toContain("background: rgb(var(--mm-live-ink));");
     for (const { id } of SKINS) {
       expect(light.slice(0, light.indexOf(" .mm {")).includes(`[data-skin="${id}"]`), id).toBe(LIGHT_SKIN_IDS.has(id));
       const panel = hex(card(id)).map((c, i) => c * 0.92 + indigo[i] * 0.08);

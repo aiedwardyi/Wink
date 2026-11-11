@@ -117,7 +117,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
   transition: opacity var(--motion-large) var(--ease-standard); }
 .mm[data-open] .mm-live { opacity: 0.18; }
 .mm-live-tag { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: rgb(var(--mm-live-ink)); font-weight: 600; }
-.mm-live-dot { width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--mm-cyan)); box-shadow: 0 0 10px rgb(var(--mm-cyan) / var(--mem-glow)); animation: mm-breathe 2.4s ease-in-out infinite; }
+.mm-live-dot { width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--mm-live-ink)); box-shadow: 0 0 10px rgb(var(--mm-live-ink) / var(--mem-glow)); animation: mm-breathe 2.4s ease-in-out infinite; }
 .mm-sec-head { display: flex; align-items: center; gap: 8px; }
 .mm-sec-head svg { flex: none; color: rgb(var(--mm-cyan)); }
 .mm-sec-name { font-size: 15px; line-height: 20px; font-weight: 600; white-space: nowrap; }
@@ -207,7 +207,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 /* light skins: a pearl badge, and a mist that pales toward the middle instead of deepening */
 :is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"]) .mm {
   --mm-grain: 0.6;
-  --mm-live-ink: 5 113 127;
+  --mm-live-ink: 70 82 210;
   --mm-badge: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%);
   --mm-badge-glow: 0 0 22px rgb(var(--mm-indigo) / 0.18), 0 0 60px rgb(var(--mm-pale) / 0.5);
   --mm-aura: radial-gradient(closest-side at 50% 22%, rgb(255 255 255 / 0.9), rgb(199 230 255 / 0.4) 32%, rgb(var(--mm-pale) / 0.32) 62%, transparent 100%);
