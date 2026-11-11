@@ -8,6 +8,7 @@ import { useI18n, type LocaleId } from "@/lib/i18n";
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
+import { usePresence } from "@/lib/use-presence";
 import { ORDER_EXPIRY_MS } from "../../shared/live-call";
 import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
@@ -148,6 +149,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   const [fresh, setFresh] = useState(() => configured && !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
   const intro = fresh || (snap.status === "needsKey" && configured);
+  const introShown = usePresence(intro);
   const messages = visibleMessages(bot);
 
   useEffect(() => {
@@ -213,9 +215,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
 
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
-      <Fold open={intro} soft keep>
-        <CallIntro onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />
-      </Fold>
+      {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
       <Fold open={Boolean(snap.pending)} soft keep>
         <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
           {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}

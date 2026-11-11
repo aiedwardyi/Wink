@@ -88,7 +88,7 @@ async function connect(host: HTMLElement) {
   return engine;
 }
 
-const intro = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-call-intro]");
+const intro = () => document.querySelector("[data-call-intro]")?.closest<HTMLElement>('[role="dialog"]') ?? null;
 const pick = (root: HTMLElement, text: string) => [...root.querySelectorAll("button")].find((b) => b.textContent === text)!;
 const tokens = () => posts.filter((path) => path.endsWith("/call/token")).length;
 
@@ -247,11 +247,11 @@ describe("live call in the message box", () => {
       await vi.waitFor(() => expect(host.querySelector("[data-live-call]")?.getAttribute("data-live-call")).toBe("needsKey"));
       fakes.token = undefined;
       await saveKey();
-      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
       expect(tokens()).toBe(1);
       expect(fakes.engines).toHaveLength(0);
       expect(frame(host).querySelector("[data-call-box]")).toBeNull();
-      await act(async () => pick(intro(host)!, "Start call").click());
+      await act(async () => pick(intro()!, "Start call").click());
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
     } finally {
       await unmount();
@@ -262,8 +262,8 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount(true);
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
-      const card = intro(host)!;
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      const card = intro()!;
       expect(card.textContent).toContain("Voice call");
       expect(card.textContent).toContain("Uses your Gemini credit while live. End stops it.");
       expect(pick(card, "Start call").className).toContain("bg-accent");
@@ -273,7 +273,7 @@ describe("live call in the message box", () => {
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
       await act(async () => fakes.engines[0]!.events.ready());
       await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).not.toBeNull());
-      await vi.waitFor(() => expect(intro(host)).toBeNull());
+      await vi.waitFor(() => expect(intro()).toBeNull());
       expect(button(frame(host), "End")!.className).toContain("bg-danger");
       expect(host.textContent).toContain("Free Gemini");
     } finally {
@@ -285,14 +285,14 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount(true);
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
-      await act(async () => pick(intro(host)!, "Start call").click());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      await act(async () => pick(intro()!, "Start call").click());
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
       await act(async () => fakes.engines[0]!.events.ready());
       await act(async () => button(host, "Hang up on Atlas")!.click());
       await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
       await connect(host);
-      expect(intro(host)).toBeNull();
+      expect(intro()).toBeNull();
     } finally {
       await unmount();
     }
@@ -302,15 +302,38 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount(true);
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
-      await act(async () => pick(intro(host)!, "Not now").click());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      await act(async () => pick(intro()!, "Not now").click());
       await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
-      expect(intro(host)).toBeNull();
+      expect(intro()).toBeNull();
       expect(tokens()).toBe(0);
       expect(fakes.engines).toHaveLength(0);
       expect(posts.some((path) => path.includes("/call/") && !path.endsWith("/call/token"))).toBe(false);
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("escape or a tap outside the intro means not now", async () => {
+    const { host, unmount } = await mount(true);
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      const backdrop = intro()!.parentElement!;
+      expect(backdrop.className).toContain("backdrop-blur-[2px]");
+      expect(backdrop.className).toContain("bg-black/25");
+      expect(intro()!.querySelectorAll("[data-call-intro] svg")).toHaveLength(3);
+      expect(intro()!.querySelector("[data-call-intro] linearGradient")).not.toBeNull();
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      await act(async () => intro()!.parentElement!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+      expect(tokens()).toBe(0);
+      expect(fakes.engines).toHaveLength(0);
     } finally {
       await unmount();
     }
