@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { redactSecretsInText } from "../../shared/redact.ts";
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
-import { checkedRoomName } from "./names.ts";
+import { checkedRoomName, joinerName } from "./names.ts";
 
 export type RoomLevel = "chat" | "ask" | "trusted";
 export type RoomGrant = "words" | "work";
@@ -157,6 +157,12 @@ export function roomPeople(roomId: string): RoomPerson[] {
   const rows = db().prepare("SELECT id, name, level, joined_at FROM people WHERE room_id = ? ORDER BY joined_at, rowid").all(roomId) as
     Array<{ id: string; name: string; level: RoomLevel; joined_at: number }>;
   return rows.map((row) => ({ id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at }));
+}
+
+export function renameRoomPerson(roomId: string, personId: string, value: string, taken: readonly string[]): string {
+  const name = joinerName(value, [...taken, ...roomPeople(roomId).filter((person) => person.id !== personId).map((person) => person.name)]);
+  db().prepare("UPDATE people SET name = ? WHERE room_id = ? AND id = ?").run(name, roomId, personId);
+  return name;
 }
 
 /** `taken` is the host's and the bots' names; people are checked here. */

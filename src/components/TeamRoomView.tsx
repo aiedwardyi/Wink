@@ -9,6 +9,7 @@ import { useI18n } from "@/lib/i18n";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { hostLines, hostRoomBase, roomPeople, type TeamRoom } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
+import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
@@ -17,6 +18,7 @@ import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
   const { t } = useI18n();
+  const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
@@ -46,7 +48,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} />
+      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} people={roomPeople(group)} hostName={state.config?.profile?.name} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} />}
       </div>

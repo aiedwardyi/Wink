@@ -83,6 +83,10 @@ function open(): DatabaseSync {
       body TEXT NOT NULL,
       PRIMARY KEY (room_id, seq)
     );
+    CREATE TABLE IF NOT EXISTS sent_names (
+      room_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -134,6 +138,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
   const joinedAt = Date.now();
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -149,6 +154,14 @@ export function joinedRooms(): JoinedRoom[] {
 export function joinedRoom(roomId: string): JoinedRoom | null {
   const row = db().prepare(`SELECT ${COLUMNS} FROM joined WHERE room_id = ?`).get(roomId) as RoomRow | undefined;
   return row ? rowToRoom(row) : null;
+}
+
+export function joinedSentName(roomId: string): string | null {
+  return (db().prepare("SELECT name FROM sent_names WHERE room_id = ?").get(roomId) as { name: string } | undefined)?.name ?? null;
+}
+
+export function setJoinedSentName(roomId: string, name: string): void {
+  db().prepare("INSERT OR REPLACE INTO sent_names (room_id, name) VALUES (?, ?)").run(roomId, name);
 }
 
 /** Only the guest client reads this. */
@@ -200,8 +213,8 @@ export function joinedCursor(roomId: string): number {
 
 /** Keeps the highest version; an older state is ignored. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ? WHERE room_id = ? AND status = 'joined' AND version < ?")
-    .run(JSON.stringify(state), state.version, roomId, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND version < ?")
+    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */

@@ -17,6 +17,7 @@ import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
+import * as roomDoor from "./door.ts";
 import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomInvites } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
@@ -851,5 +852,57 @@ describe("wiring", () => {
     expect(index).toContain("room: handleRoomDoor,");
     expect(index).toContain("configureRoomDoor({ store,");
     expect(index).toMatch(/if \(!relay && roomDoorPath\(path\)\) return json\(res, 404, \{ error: "not found" \}\);/);
+  });
+});
+
+
+describe("own name", () => {
+  it("cleans and numbers the caller's name and limits changes", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const other = await joined(group, "민아");
+    const path = `/room/v1/rooms/${group.hosted.roomId}/name`;
+    const rename = (name: unknown) => post(path, { name, personId: other.personId }, { key: mina.key });
+    expect((await rename("@민아")).body).toEqual({ name: "민아 2" });
+    expect((await rename("민아 2")).body).toEqual({ name: "민아 2" });
+    expect((await rename("")).body).toEqual({ name: "Guest" });
+    expect(roomPeople(group.hosted.roomId).find((person) => person.id === other.personId)?.name).toBe("민아");
+    expect((await rename(12)).status).toBe(400);
+    expect((await call(path, { key: mina.key })).status).toBe(404);
+    expect((await post(path, { name: "x" })).status).toBe(401);
+    for (let i = 0; i < 10; i++) await rename("Guest");
+    expect((await rename("Guest")).status).toBe(429);
+  });
+
+  it("pushes renamed people to both live viewers", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const other = await joined(group, "Daniel");
+    const streams = await Promise.all([openStream(group.hosted.roomId, mina.key, 0), openStream(group.hosted.roomId, other.key, 0)]);
+    try {
+      expect((await post(`/room/v1/rooms/${group.hosted.roomId}/name`, { name: "민아" }, { key: mina.key })).status).toBe(200);
+      for (const stream of streams) {
+        const frames = await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.people.some((person) => person.name === "민아")));
+        expect(Buffer.byteLength(JSON.stringify(frames.at(-1)))).toBeLessThan(256 * 1024);
+      }
+    } finally {
+      streams.forEach((stream) => stream.close());
+    }
+  });
+
+  it("pushes a profile rename without a group edit", async () => {
+    let host = "Edward";
+    configureRoomDoor({ store, hostName: () => host });
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const stream = await openStream(group.hosted.roomId, mina.key, 0);
+    try {
+      expect(typeof roomDoor.hostNameChanged).toBe("function");
+      host = "에드워드";
+      roomDoor.hostNameChanged();
+      await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.host === host));
+    } finally {
+      stream.close();
+    }
   });
 });

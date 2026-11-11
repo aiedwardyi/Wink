@@ -8,7 +8,7 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
-import { closeJoinedDb, joinedKey, joinedRoom } from "./joined.ts";
+import { closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedSentName } from "./joined.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
@@ -300,5 +300,53 @@ describe("races and floods", () => {
     await c.send("r1", "too late");
     await leaving;
     expect(joinedRoom("r1")).toMatchObject({ status: "left" });
+  });
+});
+
+
+describe("own name", () => {
+  it("sends to every joined room, persists the sent name, and follows the current own name", async () => {
+    let name = "Mina Park";
+    const state = { ...STATE, version: 2, me: { id: "p1", name: "민아 2" }, people: [{ id: "p1", name: "민아 2" }] };
+    const streams: ServerResponse[] = [];
+    route = (req, res, body) => {
+      if (req.url?.endsWith("/name")) {
+        expect(JSON.parse(body)).toEqual({ name: "민아" });
+        for (const stream of streams) stream.write(`data: ${JSON.stringify({ kind: "state", state })}\n\n`);
+        return reply(res, 200, { name: "민아 2" });
+      }
+      if (req.url?.includes("/stream")) streams.push(res);
+      quietDoor(req, res);
+    };
+    const c = guest({ joiner: () => ({ name, device: PC }) });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    saveJoined("r2", HOST, { id: "p1", name: "Mina" }, KEY);
+    setJoinedSentName("r2", name);
+    name = "민아";
+    await c.nameChanged();
+    await until(() => c.room("r1")?.me.name === "민아 2");
+    await c.nameChanged();
+    c.stop();
+    c.start();
+    await c.nameChanged();
+    expect(seen.filter((row) => row.url.endsWith("/name")).map((row) => row.url).sort()).toEqual(["/room/v1/rooms/r1/name", "/room/v1/rooms/r2/name"]);
+  });
+
+  it("keeps 404 quiet until the next start across later profile edits", async () => {
+    route = quietDoor;
+    let name = "Mina Park";
+    const c = guest({ joiner: () => ({ name, device: PC }) });
+    await c.join(CODE);
+    expect(typeof c.nameChanged).toBe("function");
+    name = "민아";
+    await c.nameChanged();
+    name = "이서연";
+    await c.nameChanged();
+    expect(seen.filter((row) => row.url.endsWith("/name"))).toHaveLength(1);
+    expect(c.room("r1")?.me.name).toBe("Mina");
+    c.stop();
+    c.start();
+    await until(() => seen.filter((row) => row.url.endsWith("/name")).length === 2);
   });
 });
