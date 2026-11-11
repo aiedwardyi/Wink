@@ -426,6 +426,16 @@ describe("pictures and files in a team room, through the real door", () => {
     expect((await call("GET", `/api/joined/rooms/${roomId}/picture`)).status).toBe(404);
   });
 
+  it("clears the room picture when its file is deleted from the Files list", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, png(128), "room.png");
+    store.patchGroup(group.id, { picture: file.id } as never);
+    await until(() => (c.room(roomId)?.state as any)?.picture === file.id);
+    expect((await call("DELETE", `/api/rooms/${roomId}/files/${file.id}`)).status).toBe(200);
+    expect(store.group(group.id)?.picture).toBeUndefined();
+    await until(() => !(c.room(roomId)?.state as any)?.picture);
+  });
+
   it("go both ways, and every byte matches by SHA-256", async () => {
     const { c, group, roomId } = await joinedTeam();
     const hostPicture = png(300 * 1024);

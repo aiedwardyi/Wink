@@ -54,7 +54,7 @@ const HOST_ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(send|files(?:\/[A-Za-z0-9_-]{
 
 /** The host's side: upload, download, preview, and a send that carries files. False when the path isn't ours. */
 export async function hostFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor" | "patchMessage">; hostName?: () => string; botCaller: boolean },
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor" | "patchMessage" | "patchGroup">; hostName?: () => string; botCaller: boolean },
 ): Promise<boolean> {
   if (url.pathname === "/api/room-files-folder") {
     if (isRelayRequest(req) || deps.botCaller) reply(res, 403, { error: "forbidden" });
@@ -88,6 +88,7 @@ export async function hostFileRoute(
         else if (!file[2] || file[3]) reply(res, 404, { error: "not found" });
         else {
           await deleteRoomFile(roomId!, file[2]);
+          if (group.picture === file[2]) deps.store.patchGroup(group.id, { picture: undefined });
           for (const message of deps.store.messagesFor(group.threadId)) {
             if (!message.roomFiles?.some((each) => each.id === file[2])) continue;
             deps.store.patchMessage(group.threadId, message.id, { roomFiles: message.roomFiles.map((each) => each.id === file[2] ? { ...each, deleted: true } : each) });
