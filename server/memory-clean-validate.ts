@@ -21,7 +21,7 @@ const changeSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("remind"), id, text: z.string(), reason }).strict(),
   z.object({ op: z.literal("learn"), text: z.string(), quote: z.string(), lesson: z.boolean().optional(), reason }).strict(),
   z.object({ op: z.literal("own"), id, quote: z.string(), reason }).strict(),
-  z.object({ op: z.literal("file"), ids: z.array(id).min(1).max(20), topic: z.string(), pointer: z.string(), reason }).strict(),
+  z.object({ op: z.literal("file"), ids: z.array(id).min(1).max(20), topic: z.string(), pointer: z.string().optional(), reason }).strict(),
 ]);
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
@@ -31,6 +31,8 @@ const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보�
 const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text.replace(/\b(?:don['’]t|do not) forget\b/gi, ""));
 const NOTED = /\s*\(noted (\d{4}-\d{2}-\d{2})\)/gi;
 const undated = (text: string) => text.replace(NOTED, "");
+const CLAUSES = /;|(?<=[.!?])\s+(?=[A-Z가-힣])|\s+and\s+(?=[A-Z가-힣])/;
+const clauseWords = (part: string) => contentWords(part.replace(/[A-Za-z]{40,}/g, ""));
 // a merge carries its sources' newest stamp; the archive keeps the older ones
 const dated = (text: string, sources: string[]) => {
   const newest = sources.flatMap((line) => [...line.matchAll(NOTED)].map((match) => match[1]!)).sort().at(-1);
@@ -188,6 +190,45 @@ function newer(a: string, b: string, olderId: number, newerId: number): boolean 
   return oldDate !== null && newDate !== null ? newDate > oldDate : newerId > olderId;
 }
 
+/** Pointer that names every clause and three held facts of the filed lines in their own words and order, on one line when it fits. */
+export function filedPointer(text: string, ids: number[], topic: string, k = 3): string {
+  const lines = text.split("\n");
+  const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, text)))];
+  const labels = ids.flatMap((n) => undated(lines[n - 1]!).split(CLAUSES).map((part) => {
+    const wanted = clauseWords(part);
+    const got = new Set<string>();
+    const all = part.split(/\s+/).map((raw) => raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""));
+    const words = new Map<number, string>();
+    for (const [at, word] of all.entries()) {
+      if (got.size >= Math.min(k, wanted.size)) break;
+      const stems = [...contentWords(word)].filter((stem) => wanted.has(stem) && !got.has(stem));
+      const name = word.length > 1 && /\p{Lu}/u.test(word) && held.some((token) => word.includes(token));
+      // path words stay out, so a pointer line never files
+      if ((!stems.length && !name) || /[A-Za-z]{40,}/.test(word) || pointerLine(word) || [...words.values()].includes(word)) continue;
+      words.set(at, word);
+      stems.forEach((stem) => got.add(stem));
+    }
+    return { line: lines[n - 1]!, part, all, words };
+  }));
+  const pointer = () => `- ${topic}: ${[...new Set(labels.map((label) => [...label.words].sort(([a], [b]) => a - b).map(([, word]) => word).join(" ")).filter(Boolean))].join("; ")}`;
+  const number = /^\d+(?:[.,:]\d+)*$/;
+  const unit = /^\p{L}{1,3}$/u;
+  for (const token of [...held].sort((a, b) => Buffer.byteLength(a) - Buffer.byteLength(b))) {
+    const pointed = pointer().toLowerCase();
+    if (held.filter((item) => pointed.includes(item.toLowerCase())).length >= Math.min(3, held.length)) break;
+    const label = labels.find((item) => item.part.includes(token)) ?? labels.findLast((item) => item.line.includes(token));
+    if (!label || pointed.includes(token.toLowerCase()) || token.includes(";") || pointerLine(token)) continue;
+    const kept = new Map(label.words);
+    const at = label.all.findIndex((word) => word.includes(token) && !pointerLine(word));
+    const offset = label.part.indexOf(token);
+    if (at < 0) label.words.set(offset < 0 ? label.all.length : label.part.slice(0, offset).split(/\s+/).length - 1, token);
+    // a number keeps its unit, so the pointer never pairs facts the line keeps apart
+    else for (const i of [at, ...number.test(label.all[at]!) && unit.test(label.all[at + 1] ?? "") ? [at + 1] : unit.test(label.all[at]!) && number.test(label.all[at - 1] ?? "") ? [at - 1] : []]) label.words.set(i, label.all[i]!);
+    if (secretLike(pointer())) label.words = kept;
+  }
+  return k > 2 && Buffer.byteLength(pointer()) > 300 ? filedPointer(text, ids, topic, 2) : pointer();
+}
+
 export function prepareChangeList(input: ValidateInput): ValidateResult {
   let raw = input.list;
   if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return { ok: false, errors: [{ reason: "shape" }] }; } }
@@ -230,6 +271,7 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     const ids = changedIds(change);
     const refs = change.op === "replace" ? [...ids, change.newer] : change.op === "own" ? [change.id] : ids;
     if (refs.some((n) => !lines[n - 1]?.trim())) { fail("unknown-id", index); return; }
+    const pointer = change.op === "file" ? change.pointer ?? filedPointer(input.text, ids, `memory/${change.topic}.md`) : "";
     if (change.op === "merge") change.text = dated(change.text, ids.map((n) => lines[n - 1]!));
     if (change.op === "learn") change.text = undated(change.text);
     if (refs.some((n, i) => used.has(n) || refs.indexOf(n) !== i)) fail("reused-id", index);
@@ -272,14 +314,14 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       const topic = `memory/${change.topic}.md` as CleanFile;
       if (Buffer.byteLength(input.text) <= FILE_FLOOR && lines.length <= 140) fail("op-not-allowed", index);
       if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(change.topic) || !isMemoryTopicName(`${change.topic}.md`) || isHistory(topic) || /^memory-history/.test(change.topic) || topic === input.side) fail("op-not-allowed", index);
-      if (!filePointers(change.pointer, topic) || secretLike(change.pointer)) fail("pointer", index);
+      if (!filePointers(pointer, topic) || secretLike(pointer)) fail("pointer", index);
       const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, input.text)))];
-      const pointed = change.pointer.toLowerCase();
-      const words = contentWords(change.pointer);
+      const pointed = pointer.toLowerCase();
+      const words = contentWords(pointer);
       // every filed line needs its subject in the pointer, or MEMORY.md alone can't find it
       const named = (line: string) => factTokens(undated(line), input.text).some((token) => pointed.includes(token.toLowerCase())) || [...contentWords(undated(line))].some((word) => words.has(word));
-      const relations = (line: string) => undated(line).split(/;|(?<=[.!?])\s+(?=[A-Z가-힣])|\s+and\s+(?=[A-Z가-힣])/).every((part) => {
-        const content = [...contentWords(part.replace(/[A-Za-z]{40,}/g, ""))];
+      const relations = (line: string) => undated(line).split(CLAUSES).every((part) => {
+        const content = [...clauseWords(part)];
         return !content.length || content.filter((word) => words.has(word)).length >= Math.min(2, content.length);
       });
       if (held.filter((token) => pointed.includes(token.toLowerCase())).length < Math.min(3, held.length) || ids.some((n) => !named(lines[n - 1]!) || !relations(lines[n - 1]!))) fail("pointer", index);
@@ -295,7 +337,7 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       if ((change.op === "retire" || change.op === "file") && openLine(line)) fail("protected", index);
       const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => changedIds(op).includes(i + 1)));
       // a rule or pointer line may merge, and a pointer line may file, when every rule word and path stays in the new line
-      const into = change.op === "merge" ? change.text : change.op === "file" && !ruleWords(line).length ? change.pointer : null;
+      const into = change.op === "merge" ? change.text : change.op === "file" && !ruleWords(line).length ? pointer : null;
       const loose = into !== null && !hardIds.has(n) && ruleWords(line).every((word) => ruleWords(into).includes(word)) && [...line.matchAll(PATHS)].every(([path]) => into.includes(path));
       if (pointerLine(line) && !exactCopy && !loose) fail("pointer", index);
       if (!protectedIds.has(n)) continue;
@@ -326,7 +368,7 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       wrote = [marker + change.keep.join(" ") + (line.endsWith("\r") ? "\r" : "")];
       counts.moved++;
     } else if (change.op === "remind") { wrote = [change.text + (lines[change.id - 1]!.endsWith("\r") ? "\r" : "")]; counts.moved++; }
-    else if (change.op === "file") wrote = (filePointers(change.pointer, `memory/${change.topic}.md`) ?? []).map((line) => line + cr);
+    else if (change.op === "file") wrote = (filePointers(pointer, `memory/${change.topic}.md`) ?? []).map((line) => line + cr);
     else counts.moved++;
     for (const n of ids) removed.add(n);
     if (change.op === "file") {

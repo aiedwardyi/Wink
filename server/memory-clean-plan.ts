@@ -1,5 +1,5 @@
 import { archiveBlock, appendBlock, hashText, historyPointer, HISTORY_FILE, loadedPrefix } from "./memory-clean-format.ts";
-import type { ArchiveEntry, Change, ChangeList, CleanFile, CleanInput, RunHeader, SleepLine } from "./memory-clean-types.ts";
+import type { ArchiveEntry, Change, ChangeList, CleanFile, CleanInput, RejectReason, RunHeader, SleepLine, ValidateInput } from "./memory-clean-types.ts";
 import { contentWords, measureChanges, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
 
 export type CleanSource = { file: CleanFile; text: string };
@@ -43,16 +43,40 @@ export function workPackets(sources: CleanSource[], typed: ReadonlySet<string>, 
   return packets;
 }
 
+type Dropped = { reason: RejectReason; change: number; over?: number };
+
+// an op that fails its checks drops alone, with any op sharing its ids; code writes every file pointer
+function keptList(input: ValidateInput) {
+  let given = input.list;
+  if (typeof given === "string") { try { given = JSON.parse(given); } catch {} }
+  const changes = (given as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes)) return { result: prepareChangeList(input), list: given as ChangeList, dropped: [] };
+  let kept = changes.map((change, index) => ({ index, change: change?.op === "file" ? { ...change, pointer: undefined } : change }));
+  const dropped: Dropped[] = [];
+  for (;;) {
+    const list = { ...(given as ChangeList), changes: kept.map((item) => item.change) };
+    const result = prepareChangeList({ ...input, list });
+    if (result.ok || result.errors.some((error) => error.change === undefined)) return { result, list, dropped };
+    const bad = new Set(result.errors.map((error) => error.change!));
+    const ids = new Set([...bad].flatMap((at) => changeIds(kept[at]!.change)));
+    const shared = kept.filter((item, at) => !bad.has(at) && changeIds(item.change).some((id) => ids.has(id)));
+    dropped.push(...result.errors.map((error) => ({ ...error, change: kept[error.change!]!.index })), ...shared.map((item) => ({ reason: "reused-id" as const, change: item.index })));
+    kept = kept.filter((item, at) => !bad.has(at) && !shared.includes(item));
+  }
+}
+
 export function stagedCandidate(input: CleanInput, sources: CleanSource[], lists: Map<CleanFile, unknown>, runId: string, at: number, reserve = false) {
   const entries: ArchiveEntry[] = [];
   const raw = new Map<CleanFile, string>();
   const filed = new Map<CleanFile, { lines: string[]; reason: string }>();
   const parsed = new Map<CleanFile, ChangeList>();
+  const dropped: Array<Dropped & { file: CleanFile }> = [];
   for (const source of sources) {
     const list = lists.get(source.file) ?? { version: 1, file: source.file, changes: [] };
-    const result = prepareChangeList({ file: source.file, text: source.text, list, typed: input.typed, user: input.user, side: input.side?.file });
-    if (!result.ok) return { ok: false as const, file: source.file, errors: result.errors, budgets: [] };
-    parsed.set(source.file, (typeof list === "string" ? JSON.parse(list) : list) as ChangeList);
+    const { result, list: kept, dropped: lost } = keptList({ file: source.file, text: source.text, list, typed: input.typed, user: input.user, side: input.side?.file });
+    dropped.push(...lost.map((item) => ({ file: source.file, ...item })));
+    if (!result.ok) return { ok: false as const, file: source.file, errors: result.errors, budgets: [], dropped };
+    parsed.set(source.file, kept);
     raw.set(source.file, result.text);
     entries.push(...result.entries);
     for (const topic of result.topics) {
@@ -105,6 +129,6 @@ export function stagedCandidate(input: CleanInput, sources: CleanSource[], lists
       if (!topic || entry.lines.some((line) => !topic.text.split("\n").some((row) => row.replace(/\r$/, "") === line.replace(/\r$/, "")))) errors.push({ reason: "pointer" });
     }
   }
-  if (errors.length) return { ok: false as const, file: budgets.find((item) => item.errors.length)?.file ?? sources.at(-1)!.file, errors, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })) };
-  return { ok: true as const, memory, ...built, entries, topics, parsed, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })) };
+  if (errors.length) return { ok: false as const, file: budgets.find((item) => item.errors.length)?.file ?? sources.at(-1)!.file, errors, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })), dropped };
+  return { ok: true as const, memory, ...built, entries, topics, parsed, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })), dropped };
 }

@@ -8,7 +8,7 @@ export type Change =
   | { op: "remind"; id: number; text: string; reason: string }
   | { op: "learn"; text: string; quote: string; lesson: boolean; reason: string }
   | { op: "own"; id: number; quote: string; reason: string }
-  | { op: "file"; ids: number[]; topic: string; pointer: string; reason: string };
+  | { op: "file"; ids: number[]; topic: string; pointer?: string; reason: string };
 export type RejectReason = "shape" | "unknown-id" | "reused-id" | "protected" | "fact-lost" | "too-long" |
   "not-newer" | "not-verbatim" | "op-not-allowed" | "pointer" | "cap-lines" | "cap-chars" | "budget" | "not-quoted" | "secret" | "cap-learn" | "cap-file" | "cap-growth" | "packet";
 type FileInfo = { beforeBytes: number; afterBytes: number; beforeHash: string; afterHash: string };

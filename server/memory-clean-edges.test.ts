@@ -371,4 +371,92 @@ describe("memory cleanup edges", () => {
     for (const id of [1, 2]) expect(check(big, file([id, 3]))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "protected" })]) });
     expect(check(big, file([3], "memory-history"))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "op-not-allowed" })]) });
   });
+
+  it.each([
+    ["misses a clause", 1, "- memory/notes.md: reply length cap; tables and bullets"],
+    ["copies a bot id", 2, "- memory/notes.md: Helper bot id 0f8a4c2e-1b3d-4e5f-8a9b-0c1d2e3f4a5b; app friction"],
+  ])("files behind a pointer code writes when the model's %s", async (_, id, pointer) => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = [
+      "- REPLY STYLE (asked 3x, last 11-06): 1-3 short lines, hard cap; no tables or bullets unless asked; flags = 1 line. Pane notes too. Write like texts, ~12 words a line. Status = What | Now | When table. No recaps. (detail)",
+      "- Helper snags (Ada, 10-17): report app friction to the Helper bot. It lives in the Orbit section, bot id 0f8a4c2e-1b3d-4e5f-8a9b-0c1d2e3f4a5b (delegate needs the id); it queues when busy.",
+      ...kept,
+    ].join("\n") + "\n";
+    const line = memory.split("\n")[id - 1]!;
+    const result = await cleanFiles({ ...fixture(memory, [{ op: "file", ids: [id], topic: "notes", pointer, reason: "Detail" }]), typed: new Set(kept.map(lineHash)) });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    const rows = result.memory.split("\n").filter((row) => row.startsWith("- memory/notes.md: "));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(result.memory).not.toContain(pointer);
+    expect(rows.join(" ")).not.toContain("0f8a4c2e");
+    expect(result.memory).not.toContain(line);
+    expect(result.topics[0]!.text).toBe(`${line}\n`);
+    if (id === 1) expect(rows.join(" ")).toMatch(/Pane notes.*recaps/);
+    expect(undoText("MEMORY.md", result.memory, parseHistory(result.block)[0]!).text).toBe(memory);
+  });
+
+  it("drops a replace that is not newer alone and lands the rest", async () => {
+    const memory = "- kept\n- Harbor CLI lists films but caps at 100 (verified 10-26)\n- Has a Harbor account (noted 2026-10-26)\n- Logo owner: Velmont (noted 2026-11-05)\n- Logo owner: Kasren (noted 2026-11-07)\n";
+    const input = fixture(memory, [{ op: "replace", id: 3, newer: 2, reason: "Current" }, { op: "replace", id: 4, newer: 5, reason: "Current" },
+      { op: "learn", text: "- Jun moved to Jeju in May", quote: "Jun moved to Jeju in May", lesson: false, reason: "User said it" }]);
+    let proposals = 0;
+    const result = await cleanFiles({ ...input, user: [{ text: "Jun moved to Jeju in May", at: 1, kind: "said" }], propose: async (prompt, opts) => {
+      if (prompt.startsWith("[memory-clean:propose]")) proposals++;
+      return input.propose(prompt, opts);
+    } });
+    expect(result).toMatchObject({ ok: true });
+    expect(proposals).toBe(1);
+    if (!result.ok) return;
+    expect(result.memory).toContain("- Harbor CLI lists films but caps at 100 (verified 10-26)\n- Has a Harbor account (noted 2026-10-26)\n");
+    expect(result.memory).not.toContain("Velmont");
+    expect(result.memory).toContain("- Jun moved to Jeju in May (noted");
+  });
+
+  it("drops a reworded learn alone and still appends the remember verbatim", async () => {
+    const remember = "Remember the spare key is under the blue pot";
+    const input = fixture("- kept\n- old plan done\n", [{ op: "learn", text: "- Spare key is not under the pot", quote: remember, lesson: false, reason: "User said it" }, retire(2)]);
+    const result = await cleanFiles({ ...input, user: [{ text: remember, at: 1, kind: "remember" }] });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.memory).toContain(`- ${remember}\n`);
+    expect(result.memory).not.toContain("not under");
+    expect(result.memory).not.toContain("- old plan done");
+  });
+
+  it("drops a file op that holds a rule line alone and lands the rest", async () => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = ["- Never deploy on Fridays (detail)", `- Bob garage code 5531 ${"y".repeat(200)}`, "- old plan done", ...kept].join("\n") + "\n";
+    const input = fixture(memory, [{ op: "file", ids: [1, 2], topic: "details", pointer: "- memory/details.md: deploys; Bob garage code 5531", reason: "Details" }, retire(3)]);
+    const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)) });
+    expect(result).toMatchObject({ ok: true, topics: [] });
+    if (!result.ok) return;
+    expect(result.memory).toContain(`- Never deploy on Fridays (detail)\n- Bob garage code 5531 ${"y".repeat(200)}\n- kept 0\n`);
+  });
+
+  it("drops every op that shares an id with an invalid op", async () => {
+    const input = fixture("- kept\n- Eddie has 9 cats\n- Eddie has 2 dogs\n- old plan done\n", [retire(2), { op: "merge", ids: [2, 3], text: "- Eddie has cats and dogs", reason: "Pets" }, retire(4)]);
+    const result = await cleanFiles(input);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.memory).toContain("- kept\n- Eddie has 9 cats\n- Eddie has 2 dogs\n");
+    expect(result.memory).not.toContain("- old plan done");
+  });
+
+  it("writes a pointer in the filed lines' own words and order, a number with its unit, on one line when it fits", async () => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = [
+      "- Lag gates (my miss 10-26): max-of-3 fails on noise. Gate on p95 + dropped frames, and allow max within one refresh (4.2 ms at 240 Hz) or run more rounds.",
+      "- REPLY STYLE (asked 3x, last 11-06): 1-3 short lines, hard cap; no tables or bullets unless asked; flags = 1 line. Pane notes too. Write like texts, ~12 words a line. Status = What | Now | When table. No recaps. (detail)",
+      "- NO EMAILS (11-04, third catch; my 18:57 promise): account emails show as text only in Connections account rows (Usage too only if asked). No picker menu, hover, title or icon exception. Elsewhere: nickname only. (detail)",
+      "- Remote SSH (11-07, I wrongly said I couldn't reach the lab PCs): ssh lab works from here. Check the ssh config before saying a machine is unreachable. Both run nightly backups at 23:00.",
+      ...kept,
+    ].join("\n") + "\n";
+    const rows = async (ids: number[], topic: string) => {
+      const result = await cleanFiles({ ...fixture(memory, [{ op: "file", ids, topic, pointer: `- memory/${topic}.md: ${topic}`, reason: "Detail" }]), typed: new Set(kept.map(lineHash)) });
+      return result.ok ? result.memory.split("\n").filter((row) => row.startsWith(`- memory/${topic}.md: `)) : [];
+    };
+    expect(await rows([1], "gates")).toEqual(["- memory/gates.md: gates miss max-of-3 fails; Gate p95 dropped frames 240 Hz"]);
+    expect(await rows([2, 3, 4], "rules")).toHaveLength(1);
+  });
 });

@@ -41,7 +41,7 @@ function prompt(source: CleanSource, input: CleanInput, packets: WorkPacket[], r
     `Shape: {"version":1,"file":${JSON.stringify(source.file)},"changes":[...]}. Only supplied IDs may be referenced, including newer. Unselected lines are copied by code. An ID is used once.`,
     'Ops: {op:"merge",ids:[2 or 3 ids],text:"one line <=300 UTF-8 bytes",reason:"one line <=120 chars"}; {op:"replace",id:older,newer:id,reason}; {op:"retire",id,reason}; side files only: {op:"split",id,keep:[ordered byte-exact non-overlapping substrings],reason}; {op:"remind",id,text:"<=200 UTF-8 bytes",reason} only for declined side lines.',
     ...(memory ? [
-      'MEMORY.md only: {op:"learn",text:"<=300 UTF-8 bytes",quote:"verbatim words from one eligible user line",lesson:true for a correction or lesson,reason}, at most 8; {op:"own",id,quote:"verbatim remember quote",reason}; {op:"file",ids:[supplied detail IDs],topic:"lowercase-slug",pointer:"- memory/<topic>.md: entity relation label; entity relation label",reason}. Filing is allowed above 16000 bytes or 140 lines, at most 4096 bytes total. Include a label for EVERY distinct subject and relation, multiple labels for multi-fact lines. Keep all labels; code packs them into <=300-byte pointers. Each label must fit with its path. Prefer exact duplicates and verbatim filing for heavy files.',
+      'MEMORY.md only: {op:"learn",text:"<=300 UTF-8 bytes",quote:"verbatim words from one eligible user line",lesson:true for a correction or lesson,reason}, at most 8; {op:"own",id,quote:"verbatim remember quote",reason}; {op:"file",ids:[supplied detail IDs],topic:"lowercase-slug",reason}. Filing is allowed above 16000 bytes or 140 lines, at most 4096 bytes total. Code writes each pointer from the filed lines; pointer lines stay. Prefer exact duplicates and verbatim filing for heavy files.',
       `Eligible user lines (context explains corrections but is never a fact source): ${JSON.stringify(input.user ?? [])}`,
     ] : []),
     "Verify each source before enriching memory. Learn only facts the user typed, not assistant or tool statements. Lack of support in today's messages does not invalidate an existing fact. Preserve uncertain conflicts. Never invent facts.",
@@ -107,22 +107,25 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
           const allowed = new Set(packets.filter((packet) => packet.file === file).flatMap((packet) => packet.ids));
           return list.changes.some((change) => changeIds(change).some((id) => !allowed.has(id)));
         });
-        if (outside) candidate = { ok: false, file: outside[0], errors: [{ reason: "packet" }], budgets: candidate.budgets };
+        if (outside) candidate = { ok: false, file: outside[0], errors: [{ reason: "packet" }], budgets: candidate.budgets, dropped: candidate.dropped };
       }
-      if (!candidate.ok) {
+      if (!candidate.ok || !candidate.entries.length && candidate.dropped.length) {
+        const errors = candidate.ok ? [] : candidate.errors;
         if (repaired) {
-          const capacity = candidate.errors.some((error) => ["budget", "cap-growth", "too-long"].includes(error.reason));
+          const capacity = errors.some((error) => ["budget", "cap-growth", "too-long"].includes(error.reason));
           const mandatory = reserve.budgets.some((item) => item.forcedBytes > 0);
           const blocked = !packets.some((packet) => {
             const hard = protectedLines(sources.find((source) => source.file === packet.file)!.text, input.typed, true, false);
             return packet.ids.some((id) => !hard.has(id));
           });
           const reason = capacity && (mandatory || blocked) ? mandatory ? "infeasible-remembers: " : "infeasible-protected: " : "";
-          return { ok: false, stage: "validate", detail: reason + candidate.errors.map((error) => error.reason).join(", "), tokens };
+          return { ok: false, stage: "validate", detail: reason + [...errors, ...candidate.dropped].map((error) => error.reason).join(", "), tokens };
         }
         repaired = true;
-        const source = sources.find((source) => source.file === candidate.file)!;
-        lists.set(source.file, await call(input.propose, `${asks.get(source.file)}\n\nRejected complete candidate: ${JSON.stringify({ errors: candidate.errors, budgets: candidate.budgets })}. One repair remains. Return the WHOLE corrected change list; any invalid submitted operation voids this attempt. Keep all required facts.\n\nRejected: ${JSON.stringify(lists.get(source.file))}`));
+        const file = candidate.ok ? candidate.dropped[0]!.file : candidate.file;
+        const source = sources.find((source) => source.file === file)!;
+        const dropped = candidate.dropped.filter((item) => item.file === file);
+        lists.set(source.file, await call(input.propose, `${asks.get(source.file)}\n\nRejected complete candidate: ${JSON.stringify({ errors, dropped, budgets: candidate.budgets })}. One repair remains. Return the WHOLE corrected change list; an operation that fails its checks is dropped alone, with any operation sharing its IDs. Keep all required facts.\n\nRejected: ${JSON.stringify(lists.get(source.file))}`));
         candidate = stagedCandidate(input, sources, lists, runId, at);
         continue;
       }

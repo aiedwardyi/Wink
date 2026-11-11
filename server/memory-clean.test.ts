@@ -494,7 +494,7 @@ describe("sleep", () => {
       clock += 600_000; await service.run(bot.id);
       const memory = memoryFileRaw(bot.id);
       expect(memory).toMatch(/\n- Jun moved to Jeju in May \(noted \d{4}-\d{2}-\d{2}\)\n/);
-      expect(memory).toContain("- memory/details.md: details 0 and 1\n");
+      expect(memory).toContain("- memory/details.md: detail 0; detail 1\n");
       expect(readFileSync(join(workspaceDir(bot.id), "memory/details.md"), "utf8")).toBe(`${detail(0)}\n${detail(1)}\n`);
       expect(await typed()).toContain(lineHash("- Mom's birthday is March 3"));
       const runId = service.summary(bot.id).run!.runId;

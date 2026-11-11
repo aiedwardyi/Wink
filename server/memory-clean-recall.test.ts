@@ -196,10 +196,10 @@ describe("recall grading", () => {
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
     const [asking] = missed.engine.prompts("questions");
     expect(asking).toContain('"filedTo":"memory/trips.md"');
-    expect(asking).not.toContain("- memory/trips.md: trip stops 0, 1 and 2");
+    expect(asking).not.toContain("- memory/trips.md: trip 0 stop harbor; trip 1 stop harbor; trip 2 stop harbor");
     expect(asking).toContain("Derive routing questions only from the original entity and relation");
     const [answers] = missed.engine.prompts("answers");
-    expect(answers).toContain("- memory/trips.md: trip stops 0, 1 and 2");
+    expect(answers).toContain("- memory/trips.md: trip 0 stop harbor; trip 1 stop harbor; trip 2 stop harbor");
     expect(answers).not.toContain("trip 1 stop at harbor 1");
     expect(missed.engine.prompts("grade")).toHaveLength(1);
     const found = await run("memory/trips.md");
