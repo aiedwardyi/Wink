@@ -26,7 +26,6 @@ const BRIEF_TTL_MS = 2 * 60 * 60_000;
 const BRIEFS_KEPT = 16;
 const LINES_MAX = 50;
 const LINE_MAX_CHARS = 4_000;
-const HANGUL = /[가-힣]/;
 export const SUMMARY_MODEL = "gemini-3.5-flash-lite";
 const SUMMARY_URL = `https://generativelanguage.googleapis.com/v1beta/models/${SUMMARY_MODEL}:generateContent`;
 const SUMMARY_MAX_CHARS = 280;
@@ -107,7 +106,6 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const lastUser = messages.findLast((row) => row.role === "user" && row.kind === "text" && row.text?.trim());
-  const language = lastUser && HANGUL.test(lastUser.text!) ? "Korean" : "English";
   const speak = locale === "ko" ? "Korean" : "English";
   const order = bot.busy ? lastUser?.text?.trim().slice(0, 300) : undefined;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
@@ -115,7 +113,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
     `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so.",
     "FACTS: Only from YOUR NOTES, RECENT CHAT and [Wink] lines. Not sure: say so.",
-    `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${language}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
+    `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,

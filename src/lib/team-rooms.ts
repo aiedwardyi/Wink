@@ -97,21 +97,18 @@ type Refused = { status: number; error: string };
 
 const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
 
-export async function inviteToRoom(roomId: string, name: string): Promise<{ code: string; invite: { id: string; name: string } } | Refused> {
+/** The room's one code; the same every time it's asked for. */
+export async function inviteToRoom(roomId: string): Promise<{ code: string } | Refused> {
   try {
-    const res = await fetchResponse(`${hostRoomBase(roomId)}/invites`, { method: "POST", body: JSON.stringify({ name }) });
+    const res = await fetchResponse(`${hostRoomBase(roomId)}/invites`, { method: "POST" });
     const body = await responseBody(res);
-    return res.ok && typeof body?.code === "string" ? { code: body.code, invite: body.invite } : refused(res.status, body);
+    return res.ok && typeof body?.code === "string" ? { code: body.code } : refused(res.status, body);
   } catch {
     return { status: 0, error: "" };
   }
 }
 
-export function inviteErrorKey(status: number, error: string): MessageKey {
-  if (status === 409) return "teamRoom.phoneOff";
-  if (status === 400) return /already has|reserved/.test(error) ? "teamRoom.nameTaken" : "teamRoom.nameBad";
-  return "errors.request";
-}
+export const inviteErrorKey = (status: number): MessageKey => (status === 409 ? "teamRoom.phoneOff" : "errors.request");
 
 export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });

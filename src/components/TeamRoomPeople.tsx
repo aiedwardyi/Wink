@@ -1,4 +1,4 @@
-// The host's People sheet: invite by name (one code to copy), the list, Remove.
+// The host's People sheet: the room's one code to copy, the list, Remove.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Check, Copy, X } from "lucide-react";
 
@@ -11,9 +11,7 @@ import type { Group } from "@/state/store-types";
 // Joins and removals at the door send no group frame, so the open sheet asks.
 const POLL_MS = 3_000;
 
-type Invited = { id: string; name: string; code: string };
-
-function CodeBox({ invited }: { invited: Invited }) {
+function CodeBox({ code }: { code: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<number | null>(null);
@@ -22,7 +20,7 @@ function CodeBox({ invited }: { invited: Invited }) {
   }, []);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(invited.code);
+      await navigator.clipboard.writeText(code);
       setCopied(true);
       if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
       resetTimer.current = window.setTimeout(() => setCopied(false), 1_200);
@@ -33,18 +31,17 @@ function CodeBox({ invited }: { invited: Invited }) {
   return (
     <div data-team-room-code className="rounded-lg bg-inset px-3 py-2">
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{invited.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{t("teamRoom.inviteCode")}</span>
         <button
           type="button"
           onClick={() => void copy()}
-          aria-label={t("teamRoom.copyCode", { name: invited.name })}
           className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-text hover:bg-control"
         >
           {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
           {copied ? t("teamRoom.copied") : t("teamRoom.copy")}
         </button>
       </div>
-      <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{invited.code}</div>
+      <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{code}</div>
     </div>
   );
 }
@@ -57,14 +54,24 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
-  const [name, setName] = useState("");
-  const [inviting, setInviting] = useState(false);
+  const [code, setCode] = useState<string | null>(null);
   const [problem, setProblem] = useState<MessageKey | null>(null);
-  const [invited, setInvited] = useState<Invited[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
   const roomId = group.hosted.roomId;
   const people = roomPeople(group);
-  const waiting = invited.filter((each) => !people.some((person) => person.name === each.name));
+
+  useEffect(() => {
+    if (closing) return;
+    let alive = true;
+    void inviteToRoom(roomId).then((result) => {
+      if (!alive) return;
+      if ("code" in result) setCode(result.code);
+      else setProblem(inviteErrorKey(result.status));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [closing, roomId]);
 
   useEffect(() => {
     if (closing) return;
@@ -91,7 +98,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     const dialog = dialogRef.current;
     if (!dialog) return;
     const focusable = () => [...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])")];
-    dialog.querySelector<HTMLInputElement>("input")?.focus();
+    dialog.querySelector<HTMLElement>("button")?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -117,19 +124,6 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
       triggerRef.current?.focus();
     };
   }, [closing, onClose, triggerRef]);
-
-  const invite = async () => {
-    const wanted = name.trim();
-    if (!wanted || inviting) return;
-    setInviting(true);
-    const result = await inviteToRoom(roomId, wanted);
-    setInviting(false);
-    if ("code" in result) {
-      setInvited((list) => [{ id: result.invite.id, name: result.invite.name, code: result.code }, ...list]);
-      setName("");
-      setProblem(null);
-    } else setProblem(inviteErrorKey(result.status, result.error));
-  };
 
   const remove = async (personId: string) => {
     const room = group.room && "people" in group.room ? group.room : null;
@@ -169,39 +163,13 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
           </button>
         </div>
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void invite();
-          }}
-        >
-          <input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setProblem(null);
-            }}
-            maxLength={40}
-            placeholder={t("teamRoom.personName")}
-            aria-label={t("teamRoom.personName")}
-            className="min-w-0 flex-1 rounded-lg border border-hairline/60 bg-inset px-3 py-1.5 text-[14px] text-ink placeholder:text-ink-secondary focus:border-accent/60 focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={!name.trim() || inviting}
-            className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
-          >
-            {t("teamRoom.invite")}
-          </button>
-        </form>
-        {problem && <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(problem)}</p>}
-        {waiting.length > 0 && (
-          <div className="mt-3 flex flex-col gap-2">
-            {waiting.map((each) => <CodeBox key={each.id} invited={each} />)}
+        {code && (
+          <div className="flex flex-col gap-2">
+            <CodeBox code={code} />
             <p className="text-[12px] text-ink-secondary">{t("teamRoom.codeHint")}</p>
           </div>
         )}
+        {problem && <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(problem)}</p>}
         <ul className="mt-3 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
           {people.map((person) => (
             <li key={person.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised/50">
@@ -216,7 +184,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
               </button>
             </li>
           ))}
-          {people.length === 0 && waiting.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}
+          {people.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}
         </ul>
       </div>
     </div>

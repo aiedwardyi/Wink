@@ -397,7 +397,7 @@ import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from 
 import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
-import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -2936,7 +2936,8 @@ const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:o
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
-  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  const chat = store.groupByThread(open.threadId)?.id;
+  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
@@ -6247,7 +6248,11 @@ configureRoomAsks({
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
 sweepRoomFiles();
-const guestClient = new GuestClient({ bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)], onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }) });
+const guestClient = new GuestClient({
+  bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
+  joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
+  onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+});
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
@@ -7837,7 +7842,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {
@@ -7943,7 +7948,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/uploads") && (await uploads.handle(req, res, method, path, url))) return;
 
-    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-file(?:\/.*)?$/);
+    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-(file(?:\/.*)?|folder)$/);
     if (m && method === "GET") {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
@@ -7955,7 +7960,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         text: message.text,
         fromBotId: message.from?.botId,
       }));
-      return serveLinkedFile(req, res, {
+      return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         threadId,
         messages,
@@ -8450,7 +8455,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, status);
     }
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);

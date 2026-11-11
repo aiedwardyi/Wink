@@ -6,6 +6,9 @@ import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 
 export const MIC_BLOCKED = "Microphone blocked";
+export const MIC_MISSING = "Microphone missing";
+export const MIC_BUSY = "Microphone busy";
+const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "ended" | "failed";
 export type CallState = {
@@ -88,13 +91,13 @@ export class LiveCall {
   private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
   private guarded = false;
   private pending?: { order: string; toolId: string; timer: ReturnType<typeof setTimeout> };
-  private awaiting = false;
+  private awaiting = 0;
   private busy = false;
   private reported = new Set<string>();
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
   private turnHadAudio = false;
-  private held = "";
+  private held: string[] = [];
   private context: string[] = [];
   private letters = { hangul: 0, all: 0 };
   private stats = {
@@ -153,7 +156,7 @@ export class LiveCall {
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
-      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? MIC_BLOCKED : String(error));
+      return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });
@@ -193,6 +196,7 @@ export class LiveCall {
         this.refresh();
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
         if (!resumed) engine.sendText("[Wink] The call just started. Greet the user in one short sentence.");
+        else this.release();
       },
       audio: (pcm) => { if (mine()) this.deps.audio.play(pcm); },
       heard: (text) => {
@@ -311,7 +315,7 @@ export class LiveCall {
       });
       if (sent.status >= 400) throw new Error(String(sent.data.error ?? sent.status));
       result = sent.data.queued ? "queued" : "sent";
-      this.awaiting = true;
+      this.awaiting += 1;
       this.refresh();
     } catch (error) {
       result = `failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -364,12 +368,20 @@ export class LiveCall {
     const startedAt = this.snapshot.startedAt;
     if (!this.connected || startedAt === undefined || this.ended) return this.refresh();
     if (!input.busy) {
-      const fresh = input.messages.filter((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id));
-      for (const row of fresh) this.reported.add(row.id);
-      const reply = fresh.at(-1);
-      // A reply to a typed message is already on screen, so only voice orders are read aloud.
-      if (reply && this.awaiting) void this.report(reply.text!);
-      else if (reply) this.remember(reply, input.messages);
+      const replies = new Map<Message | undefined, Message>();
+      let asked: Message | undefined;
+      for (const row of input.messages) {
+        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) asked = row;
+        else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
+          this.reported.add(row.id);
+          replies.set(asked, row);
+        }
+      }
+      // A reply to a typed message is already on screen, so only this call's orders are read aloud.
+      for (const [order, reply] of replies) {
+        if (order?.call?.order && order.call.id === this.callId) void this.report(reply.text!);
+        else this.remember(order, reply.text!);
+      }
     }
     if (input.needs && !this.toldNeeds.has(input.needs.id)) {
       this.toldNeeds.add(input.needs.id);
@@ -379,7 +391,7 @@ export class LiveCall {
   }
 
   private async report(text: string) {
-    this.awaiting = false;
+    this.awaiting = Math.max(0, this.awaiting - 1);
     let speakable = text.slice(0, REPORT_CHARS);
     try {
       const prepared = await this.deps.post("/api/tts/prepare", { text: speakable });
@@ -389,24 +401,28 @@ export class LiveCall {
       // the raw text still reads
     }
     if (this.ended) return;
-    this.held = `[Wink] ${this.deps.botName} replied: ${speakable}`;
+    this.held.push(`[Wink] ${this.deps.botName} replied: ${speakable}`);
     this.release();
   }
 
-  private remember(reply: Message, messages: Message[]) {
-    const typed = messages.slice(0, messages.indexOf(reply)).findLast((row) => row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim());
-    const said = [typed && `User: ${typed.text!.trim()}`, `${this.deps.botName}: ${reply.text!.trim()}`].filter(Boolean).join("\n");
-    this.context.push(`[Wink] Typed in chat, already on screen. Context only, do not read it out.\n${said}`.slice(0, REPORT_CHARS));
+  private remember(typed: Message | undefined, reply: string) {
+    const head = "[Wink] Typed in chat, already on screen. Context only, do not read it out.\n";
+    const answer = `${this.deps.botName}: ${reply.trim()}`.slice(0, REPORT_CHARS - head.length);
+    const room = REPORT_CHARS - head.length - answer.length - "User: \n".length;
+    const asked = typed && room > 0 ? `User: ${typed.text!.trim().slice(0, room)}\n` : "";
+    this.context.push(`${head}${asked}${answer}`);
     this.release();
   }
 
   // Text sent while the voice talks cuts it off mid-word, so reports and context wait for the turn to end.
   private release() {
-    if (this.turnHadAudio || this.deps.audio.playing) return;
+    if (!this.connected || this.turnHadAudio || this.deps.audio.playing) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
-    if (!this.held) return;
-    this.engine?.sendText(this.held);
-    this.held = "";
+    const report = this.held.shift();
+    if (!report) return;
+    // The next turn relays a real result, so the done guard sits it out.
+    this.guarded = true;
+    this.engine?.sendText(report);
   }
 
   mute(muted: boolean) {

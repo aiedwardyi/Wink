@@ -15,6 +15,7 @@ const HOST = `abcdefghijklmnop.${BASE}`;
 const SECRET = `wki_${"s".repeat(43)}`;
 const KEY = `wkg_${"k".repeat(43)}`;
 const CODE = `wkr1:${HOST}:inv1.${SECRET}`;
+const PC = "pc-mina-0123456789abcdef";
 const STATE = { version: 1, roomName: "Team", instructions: "", host: "Edward", me: { id: "p1", name: "Mina" }, people: [{ id: "p1", name: "Mina" }], bots: [], myAsks: [] };
 
 let server: Server;
@@ -72,7 +73,7 @@ function quietDoor(req: IncomingMessage, res: ServerResponse) {
   reply(res, 404, { error: "not found" });
 }
 
-const guest = (deps: Partial<GuestClientDeps> = {}) => (client = new GuestClient({ bases: () => [BASE], https, ...deps }));
+const guest = (deps: Partial<GuestClientDeps> = {}) => (client = new GuestClient({ bases: () => [BASE], joiner: () => ({ name: "Mina Park", device: PC }), https, ...deps }));
 
 const until = async (test: () => boolean, ms = 3_000) => {
   const end = Date.now() + ms;
@@ -117,12 +118,12 @@ describe("room codes", () => {
 });
 
 describe("join", () => {
-  it("is one call with the pasted code: the door gets the code and nothing typed", async () => {
+  it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {
     route = quietDoor;
     const result = await guest().join(`  ${CODE}\n`);
     expect(result).toMatchObject({ ok: true, value: { roomId: "r1", status: "joined", me: { id: "p1", name: "Mina" } } });
     expect(seen[0]).toMatchObject({ method: "POST", url: "/room/v1/join", headers: { host: HOST, origin: `https://${HOST}` } });
-    expect(JSON.parse(seen[0]!.body)).toEqual({ code: CODE });
+    expect(JSON.parse(seen[0]!.body)).toEqual({ code: CODE, name: "Mina Park", device: PC });
     expect(seen[0]!.headers.authorization).toBeUndefined();
     await until(() => seen.some((row) => row.url.includes("/stream")));
     expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot", "/room/v1/rooms/r1/stream?after=0"]);

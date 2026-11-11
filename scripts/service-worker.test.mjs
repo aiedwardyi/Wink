@@ -98,6 +98,12 @@ describe("service worker", () => {
     expect(shown.map(({ options }) => options.badge)).toEqual(["/app-icon-192.png?v=2", "/app-icon-192.png?v=2"]);
   });
 
+  it("tags each alert with its chat and send time", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    await push(listeners, { title: "Scout finished", body: "done", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
+    expect(shown[0].options.data).toEqual({ url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
+  });
+
   it("adds the tap time to the url when it opens a window", async () => {
     const { listeners, opened, now } = worker("home.tail1234.ts.net");
     await click(listeners, "/?bot=b1&thread=t-new");

@@ -103,7 +103,7 @@ self.addEventListener("push", (event) => {
       vibrate: [200, 100, 200],
       icon: data.icon || "/app-icon-192.png?v=2",
       badge: "/app-icon-192.png?v=2",
-      data: { url: data.url || "/" },
+      data: { url: data.url || "/", chat: data.chat, at: data.at },
     }),
   );
 });

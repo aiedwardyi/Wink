@@ -14,6 +14,7 @@ const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".ts
 const SKIP = new Set(["node_modules", "coverage"]);
 const OPT_OUT = /(?:^|[.!?,;:\n]|\b(?:but|and|then)\b)\s*(?:please\s+)?(?:(?:don['’]?t|do\s+not|never)\s+(?:(?:check|verify|test)(?:\s*[/,]\s*(?:check|verify|test))*|run\s+(?:checks?|verification|tests?))|(?:skip|no)\s+(?:checks?|verification|tests?|testing))\b|(?:확인|검사|검증|테스트)\s*(?:하지\s*마|하지\s*말|빼고|없이|안\s*해도\s*(?:돼|되))/i;
 const READ_ONLY = /^(?:Read|Grep|Glob|LS|WebFetch|WebSearch|TodoWrite|verify_site)$|^mcp__/i;
+const DOC_ASK = /\b(?:translat|proofread)\w*|번역|교정|맞춤법|\b(?:write|draft|rewrite|revise|edit|check|review)\b[^.!?\n]{0,40}?\b(?:docs?|documents?|essays?|reports?|letters?|articles?|resumes?|memos?|proposals?)\b|(?:문서|보고서|에세이|편지|대본|이력서|자기소개서)[^.!?\n]{0,20}?(?:써|작성|검토|확인|고쳐|다듬)/i;
 
 export interface VerifyAutoTurn {
   botId: string;
@@ -169,8 +170,12 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
       const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
-      // A document the bot wrote is for the person only when the reply or their message names it; the rest are its own notes.
-      const docs = found.filter(path => scanned.includes(path) || named(input.reply, path, found) || named(input.humanText, path, found));
+      const asked = DOC_ASK.test(input.humanText);
+      const made = async (path: string) => asked || ((await stat(resolve(input.roots[0]!, path)).catch(() => null))?.birthtimeMs ?? 0) >= input.startedAt - 2_000;
+      // A document the bot wrote is for the person only when their message names or asks for it, or the reply names one the bot made this turn; the rest are its own notes.
+      const docs: string[] = [];
+      for (const path of found) if (scanned.includes(path) || named(input.humanText, path, found) || named(input.reply, path, found) && await made(path)) docs.push(path);
+      if (latest.get(input.threadId) !== token) return;
       // A file only the mtime scan found may be the user's own: checked, never fixed, unless the reply names it.
       const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, found));
       if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, ...(unnamed.length ? { scanned: unnamed } : {}), humanId: input.humanId }); return; }
