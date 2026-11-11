@@ -27,6 +27,7 @@ import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
 import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
 import { LazyView } from "@/components/LazyView";
@@ -100,8 +101,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useLayoutEffect(() => {
     latestState.current = state;
   }, [state]);
-  const unreadCount = unreadConversationCount(state.bots, state.groups) + terminalAttentionCount(state.terminalAttention);
-  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId));
+  const joinedRooms = useJoinedRooms();
+  const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
+  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
   const menuExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
   const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId);

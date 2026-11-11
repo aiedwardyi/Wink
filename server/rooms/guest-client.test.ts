@@ -8,7 +8,8 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
-import { closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedState } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { joinedRoute } from "./joined-routes.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
@@ -84,6 +85,61 @@ const until = async (test: () => boolean, ms = 3_000) => {
 };
 
 describe("room codes", () => {
+  it("returns all unread teammate lines and the last entry in list and detail", () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const lines: JoinedEntry[] = Array.from({ length: 203 }, (_, index) => ({
+      seq: index + 1, id: `e${index}`, at: index + 1, text: `line ${index}`,
+      author: { kind: "host", id: "host", name: "Edward" },
+    }));
+    lines.push({ seq: 204, id: "mine", at: 204, text: "Thanks", author: { kind: "person", ...STATE.me } });
+    addJoinedEntries("r1", lines, 204);
+    const c = guest();
+    expect(c.rooms()[0]).toMatchObject({ unread: 203, lastEntry: lines.at(-1) });
+    expect(c.room("r1")).toMatchObject({ unread: 203, lastEntry: lines.at(-1) });
+    expect(c.room("r1")?.entries).toHaveLength(200);
+  });
+
+  it("clears only observed entries through the local read route and broadcasts", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });
+    addJoinedEntries("r1", [line(1), line(2), line(3)], 3);
+    const changed = vi.fn();
+    const c = guest({ onChange: changed });
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    const read = (seq: unknown) => joinedRoute("POST", "/api/joined/rooms/r1/read", c, async () => ({ seq }));
+    expect((await read(2))?.status).toBe(200);
+    expect(c.room("r1")).toMatchObject({ unread: 1 });
+    expect(changed).toHaveBeenCalledWith("r1");
+    await read(1);
+    expect(c.room("r1")).toMatchObject({ unread: 1 });
+    await read(3);
+    closeJoinedDb();
+    expect(guest().rooms()[0]).toMatchObject({ unread: 0 });
+    expect((await read("3"))?.status).toBe(400);
+    expect((await read(0))?.status).toBe(400);
+    expect((await read(999))?.status).toBe(400);
+    expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
+  });
+
+  it("keeps delayed teammate lines unread when an own-send reply leads the stream", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });
+    addJoinedEntries("r1", [line(1)], 1);
+    addJoinedEntries("r1", [{ ...line(3), author: { kind: "person", ...STATE.me } }]);
+    const c = guest();
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    const read = () => joinedRoute("POST", "/api/joined/rooms/r1/read", c, async () => ({ seq: 3 }));
+    expect((await read())?.status).toBe(200);
+    expect(c.room("r1")?.unread).toBe(0);
+    addJoinedEntries("r1", [line(2)], 2);
+    closeJoinedDb();
+    expect(c.room("r1")?.unread).toBe(1);
+    await read();
+    expect(c.room("r1")?.unread).toBe(0);
+    addJoinedEntries("r1", [line(3)], 3);
+    expect(c.room("r1")?.unread).toBe(0);
+  });
+
   it("takes only a strict code whose host is a label under an allowed base", () => {
     expect(roomCodeHost(CODE, [BASE])).toBe(HOST);
     expect(roomCodeHost(CODE, [null, "other.test", BASE])).toBe(HOST);

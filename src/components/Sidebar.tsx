@@ -112,6 +112,7 @@ import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -667,7 +668,8 @@ export function Sidebar({
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
-  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId) : 0;
+  const joinedRooms = useJoinedRooms();
+  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms) : 0;
   const collapsedUnreadBadge = formatCollapsedUnreadBadge(collapsedUnread);
   const collapsedChats = [...state.bots, ...listedGroups(state.groups)];
   const collapsedExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
