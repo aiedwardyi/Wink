@@ -71,6 +71,48 @@ describe("call token", () => {
     expect(h.sent(2).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("a later line");
   });
 
+  it("brief has no details-in-chat tail", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("say it in 1-3 sentences.");
+    expect(brief).not.toContain("details in chat");
+    expect(brief).toContain("Never point the person to the chat or tell them to check it for details, in any language.");
+  });
+
+  it("brief speaks as the bot, never mentions sending to a bot", async () => {
+    const h = harness();
+    await h.post("token");
+    const setup = h.sent().bidiGenerateContentSetup;
+    const brief = setup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Never mention a bot, a helper, the chat or sending.");
+    expect(brief).toContain("\"Want me to open your Desktop folder?\"");
+    expect(brief).toContain("A vague order gets one short question first");
+    expect(brief).not.toMatch(/ask whether to send|Juno has/);
+    expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
+  });
+
+  it("brief routes PC actions to the bot", async () => {
+    const h = harness();
+    await h.post("token");
+    const setup = h.sent().bidiGenerateContentSetup;
+    const brief = setup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("You have full access to the person's PC and projects");
+    expect(brief).toContain("never say you can't do it or lack access");
+    expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
+  });
+
+  it("brief pins the app language", async () => {
+    const h = harness();
+    await h.post("token", { locale: "ko" });
+    await h.post("token");
+    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("Speak Korean");
+    expect(brief(0)).toContain("ask again in Korean");
+    expect(brief(1)).toContain("Speak English");
+    expect(brief(0)).not.toContain("the user's language");
+  });
+
   it("409s without a key and puts one Gemini key card in the chat", async () => {
     const h = harness({ key: undefined });
     const first = await h.post("token");

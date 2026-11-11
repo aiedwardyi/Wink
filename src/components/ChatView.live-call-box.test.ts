@@ -18,6 +18,7 @@ vi.mock("@/lib/live-call/gemini", () => ({
     sendAudio() {}
     audioPaused() {}
     sendText(text: string) { this.texts.push(text); }
+    sendContext() {}
     sendToolResult() {}
     close() {}
   },

@@ -1,5 +1,6 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { isVoiceLine, ORDER_EXPIRY_MS, type CallLine } from "../../../shared/live-call";
+import { activeLocale } from "@/lib/i18n";
 import type { Message } from "@/state/store-types";
 import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
@@ -94,6 +95,7 @@ export class LiveCall {
   private spokeAt = 0;
   private turnHadAudio = false;
   private held = "";
+  private context: string[] = [];
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
@@ -161,7 +163,7 @@ export class LiveCall {
   private async token(resume: boolean): Promise<LiveSession | null> {
     let posted: Posted;
     try {
-      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, this.callId ? { callId: this.callId, resume } : {});
+      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, { locale: activeLocale(), ...(this.callId ? { callId: this.callId, resume } : {}) });
     } catch (error) {
       this.fail(error instanceof Error ? error.message : String(error));
       return null;
@@ -356,7 +358,7 @@ export class LiveCall {
     void write.finally(() => this.writes.delete(write));
   }
 
-  /** The chat as the store has it: relays the bot's settled reply and anything waiting on the user. */
+  /** The chat as the store has it: speaks the reply to a voice order, passes typed replies as silent context, relays anything waiting on the user. */
   observe(input: { busy: boolean; messages: Message[]; needs?: { id: string; short: string } }) {
     this.busy = input.busy;
     const startedAt = this.snapshot.startedAt;
@@ -365,7 +367,9 @@ export class LiveCall {
       const fresh = input.messages.filter((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id));
       for (const row of fresh) this.reported.add(row.id);
       const reply = fresh.at(-1);
-      if (reply) void this.report(reply.text!);
+      // A reply to a typed message is already on screen, so only voice orders are read aloud.
+      if (reply && this.awaiting) void this.report(reply.text!);
+      else if (reply) this.remember(reply, input.messages);
     }
     if (input.needs && !this.toldNeeds.has(input.needs.id)) {
       this.toldNeeds.add(input.needs.id);
@@ -389,9 +393,18 @@ export class LiveCall {
     this.release();
   }
 
-  // Text sent while the voice talks cuts it off mid-word, so the report waits for the turn to end.
+  private remember(reply: Message, messages: Message[]) {
+    const typed = messages.slice(0, messages.indexOf(reply)).findLast((row) => row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim());
+    const said = [typed && `User: ${typed.text!.trim()}`, `${this.deps.botName}: ${reply.text!.trim()}`].filter(Boolean).join("\n");
+    this.context.push(`[Wink] Typed in chat, already on screen. Context only, do not read it out.\n${said}`.slice(0, REPORT_CHARS));
+    this.release();
+  }
+
+  // Text sent while the voice talks cuts it off mid-word, so reports and context wait for the turn to end.
   private release() {
-    if (!this.held || this.turnHadAudio || this.deps.audio.playing) return;
+    if (this.turnHadAudio || this.deps.audio.playing) return;
+    for (const text of this.context.splice(0)) this.engine?.sendContext(text);
+    if (!this.held) return;
     this.engine?.sendText(this.held);
     this.held = "";
   }
