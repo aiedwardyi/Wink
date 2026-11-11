@@ -368,7 +368,7 @@ export class LiveCall {
       const replies = new Map<Message | undefined, Message>();
       let asked: Message | undefined;
       for (const row of input.messages) {
-        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim()) asked = row;
+        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) asked = row;
         else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
           this.reported.add(row.id);
           replies.set(asked, row);
@@ -416,7 +416,10 @@ export class LiveCall {
     if (!this.connected || this.turnHadAudio || this.deps.audio.playing) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
     const report = this.held.shift();
-    if (report) this.engine?.sendText(report);
+    if (!report) return;
+    // The next turn relays a real result, so the done guard sits it out.
+    this.guarded = true;
+    this.engine?.sendText(report);
   }
 
   mute(muted: boolean) {

@@ -255,6 +255,31 @@ describe("LiveCall", () => {
     expect(engine().contexts[0]).toContain("Nova: Noon.");
   });
 
+  it("a quick ask during a voice order keeps the order reply spoken", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o", "Do A."), userRow("q", "Quick one?", { quick: { state: "asked" } }), botRow("qa", "Yes.", { quick: { state: "answer" } }), botRow("r", "A done.")] });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A done."]);
+    expect(engine().contexts).toEqual([]);
+  });
+
+  it("a relayed report is not flagged as an invented done", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Do B." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o1", "Do A."), botRow("a", "A done.")] });
+    await flush();
+    engine().events.said("All done, I fixed A.");
+    engine().events.turnDone();
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toHaveLength(0);
+    engine().events.said("B is done too.");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toHaveLength(1);
+  });
+
   it("typed context trims the typed text so the reply fits", async () => {
     const { call, engine } = await started();
     call.observe({ busy: false, messages: [userRow("u", "x".repeat(2_000)), botRow("r", "Short answer.")] });
