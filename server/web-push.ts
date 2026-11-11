@@ -28,8 +28,8 @@ export const pushTestSchema = pushEndpointSchema.extend({ botId: z.string().opti
 
 export type VapidKeys = z.infer<typeof vapidKeysSchema>;
 export type PushSubscriptionRecord = z.infer<typeof pushSubscriptionSchema>;
-export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string };
-export type ReadPayload = { read: string };
+export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number };
+export type ReadPayload = { read: string; at: number };
 export type PushTarget = { botId: string; threadId: string };
 export type WebPushResult = { ok: true } | { ok: false; gone: boolean; error: string };
 
@@ -96,7 +96,7 @@ export function encryptPushPayload(
 }
 
 /** The tag matches desktop toasts so one bot stacks as one; `chat` is the bot or room whose read closes it. */
-export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.botId): PushPayload {
+export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.botId, at = Date.now()): PushPayload {
   const query = new URLSearchParams({ bot: target.botId, thread: target.threadId });
   return {
     title: redactSecretsInText(ping.title),
@@ -105,6 +105,7 @@ export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.b
     url: `/?${query}`,
     icon: ping.icon,
     chat,
+    at,
   };
 }
 

@@ -105,8 +105,16 @@ describe("service worker", () => {
     const { listeners, shown } = worker("home.tail1234.ts.net");
     await push(listeners, { title: "Scout finished", body: "done", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", chat: "b1" });
     await push(listeners, { title: "Room", body: "hi", tag: "openmausbot:b2", url: "/?bot=b2&thread=t2", chat: "g1" });
-    await push(listeners, { read: "b1" });
+    await push(listeners, { read: "b1", at: 2 });
     expect(shown.map(({ title, closed }) => [title, closed])).toEqual([["Scout finished", true], ["Room", false]]);
+  });
+
+  it("keeps an alert that came after the read", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    await push(listeners, { title: "old", body: "", tag: "openmausbot:b1", chat: "b1", at: 1 });
+    await push(listeners, { title: "new", body: "", tag: "openmausbot:b1", chat: "b1", at: 3 });
+    await push(listeners, { read: "b1", at: 2 });
+    expect(shown.map(({ title, closed }) => [title, closed])).toEqual([["old", true], ["new", false]]);
   });
 
   it("adds the tap time to the url when it opens a window", async () => {

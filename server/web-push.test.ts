@@ -174,7 +174,7 @@ describe("subscription store", () => {
     addPushSubscription(dir, sub("a"));
     addPushSubscription(dir, { ...sub("x"), endpoint: "https://web.push.apple.com/x" });
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
-    await sendWebPushToDevices(dir, { read: "g1" }, "https://pc.tail.ts.net", undefined, fetchImpl);
+    await sendWebPushToDevices(dir, { read: "g1", at: 1 }, "https://pc.tail.ts.net", undefined, fetchImpl);
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/a"]);
     await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", undefined, fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
@@ -219,6 +219,7 @@ describe("pushPayload", () => {
       url: "/?bot=bot-1&thread=thread-1",
       icon: "/notify-icons/peach-white.png",
       chat: "bot-1",
+      at: expect.any(Number),
     });
     expect(pushPayload(pingForMailbox("Scout", "FAIL CARD branch=x\ndetail", "/app-icon-192.png?v=2")!, target)).toMatchObject({
       title: "Scout: worker failed",

@@ -2936,7 +2936,7 @@ const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 
 const readPushes = createReadPushes((chat) => {
-  void sendWebPushToDevices(DATA_DIR, { read: chat }, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  void sendWebPushToDevices(DATA_DIR, { read: chat, at: Date.now() }, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 });
 store.onChange((change) => {
   if (change.type === "bot") readPushes.settled(change.botId, store.bot(change.botId)?.unread);

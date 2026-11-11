@@ -454,9 +454,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const unreadChats = [...state.bots, ...state.groups].filter((record) => record.unread).map((record) => record.id).join(" ");
   const unreadBefore = useRef(unreadChats);
   useEffect(() => {
-    const before = new Set(unreadBefore.current.split(" "));
+    const before = new Set(unreadBefore.current.split(" ").filter(Boolean));
     unreadBefore.current = unreadChats;
-    if (webPushSupported()) void closeReadAlerts(before, new Set(unreadChats.split(" "))).catch(() => {});
+    if (webPushSupported()) void closeReadAlerts(before, new Set(unreadChats.split(" ").filter(Boolean))).catch(() => {});
   }, [unreadChats]);
   const shown = group ?? bot;
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
