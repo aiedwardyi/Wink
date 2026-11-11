@@ -47,6 +47,7 @@ import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
+import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
@@ -370,6 +371,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useEffect(() => {
     if (window.ogb) void import("@/components/SettingsModal").catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload]);
+  }, [state.hydrated]);
 
   useEffect(() => {
     const offAttention = window.ogb?.terminal?.onAttention?.(({ id: sessionId, botId, reason }) => {
