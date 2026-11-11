@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { accessSync, createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { constants, copyFile, mkdir, open, readdir, rm, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
 import { DATA_DIR } from "../config.ts";
 
 const setting = () => join(DATA_DIR, "room-files-folder.json");
+const NESTED = "Wink room files";
 const failure = () => Object.assign(new Error("room files folder is unavailable"), { status: 503 });
 let moving = false;
 let active = 0;
@@ -54,7 +55,8 @@ async function digest(path: string): Promise<string> {
 export async function moveRoomFiles(raw: unknown): Promise<ReturnType<typeof roomFilesFolder>> {
   if (typeof raw !== "string" || !isAbsolute(raw) || roomFilesBusy()) throw failure();
   const old = roomFilesRoot();
-  const next = resolve(raw);
+  // A picked folder holds the user's own files; room files live in a folder of their own inside it.
+  const next = basename(resolve(raw)) === NESTED ? resolve(raw) : join(resolve(raw), NESTED);
   if (next === old) return roomFilesFolder();
   const inside = (parent: string, child: string) => {
     const path = relative(parent, child);

@@ -12,6 +12,7 @@ import { DATA_DIR } from "../config.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
 import { FILE_PATH, fileRoute } from "./file-routes.ts";
 import { ROOM_DISK_BYTES, sweepRoomFiles } from "./files.ts";
+import { moveRoomFiles, roomFilesRoot } from "./files-folder.ts";
 
 const disk = vi.hoisted(() => ({ shortWrites: false, failSync: null as { path: string; code: string } | null }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -273,6 +274,23 @@ describe("room file isolation", () => {
 });
 
 describe("room file edges", () => {
+  it("keeps a picked folder's own files through a boot sweep", async () => {
+    const room = createRoom("Team").id;
+    const file = (await upload(room, Buffer.from("kept"))).json.file;
+    const pick = join(DATA_DIR, "Documents");
+    mkdirSync(join(pick, "Photos"), { recursive: true });
+    writeFileSync(join(pick, "notes.txt"), "mine");
+    writeFileSync(join(pick, "Photos", "trip.jpg"), "mine");
+    await moveRoomFiles(pick);
+    mkdirSync(join(roomFilesRoot(), "Scans"));
+    writeFileSync(join(roomFilesRoot(), "Scans", "receipt.pdf"), "mine");
+    sweepRoomFiles();
+    expect(readFileSync(join(pick, "notes.txt"), "utf8")).toBe("mine");
+    expect(readFileSync(join(pick, "Photos", "trip.jpg"), "utf8")).toBe("mine");
+    expect(readFileSync(join(roomFilesRoot(), "Scans", "receipt.pdf"), "utf8")).toBe("mine");
+    expect((await call("GET", `/rooms/${room}/files/${file.id}`)).status).toBe(200);
+  });
+
   it("keeps the current picture and sweeps a replaced day-old picture", async () => {
     const room = createRoom("Team").id;
     const old = (await upload(room, png(64))).json.file;

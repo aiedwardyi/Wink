@@ -396,7 +396,9 @@ export function sweepRoomFiles(groups: readonly { hosted?: { roomId: string }; p
         if (!groups.some((group) => group.hosted?.roomId === row.room_id && group.picture === row.id)) drop.run(row.room_id, row.id);
       }
       const known = db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND id = ?");
+      const rooms = new Set((db.prepare("SELECT id FROM rooms").all() as Array<{ id: string }>).map((room) => room.id));
       for (const roomId of readdirSync(ROOT())) {
+        if (!rooms.has(roomId)) continue;
         try {
           for (const name of readdirSync(roomDir(roomId))) {
             if (!FILE_ID.test(name) || !known.get(roomId, name)) rmSync(join(roomDir(roomId), name), { force: true, recursive: true });

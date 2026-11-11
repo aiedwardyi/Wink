@@ -16,7 +16,8 @@ vi.mock("node:fs/promises", async (original) => {
 });
 
 const old = join(DATA_DIR, "room-files");
-const next = join(DATA_DIR, "new-files");
+const pick = join(DATA_DIR, "new-files");
+const next = join(pick, "Wink room files");
 const setting = join(DATA_DIR, "room-files-folder.json");
 const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -32,7 +33,7 @@ afterEach(() => { disk.corrupt = false; });
 describe("room files folder", () => {
   it("keeps hashes and changes only its own PC-local setting", async () => {
     const before = hash(join(old, "room1", "file1"));
-    await moveRoomFiles(next);
+    await moveRoomFiles(pick);
     expect(hash(join(next, "room1", "file1"))).toBe(before);
     expect(existsSync(join(old, "room1", "file1"))).toBe(false);
     expect(JSON.parse(readFileSync(setting, "utf8"))).toEqual({ path: next });

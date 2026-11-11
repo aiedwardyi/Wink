@@ -387,8 +387,8 @@ describe("pictures and files in a team room, through the real door", () => {
     const { roomId } = await joinedTeam();
     const bytes = pdf(200);
     const file = await hostUpload(roomId, bytes, "kept.pdf");
-    const folder = join(DATA_DIR, "another-drive");
-    expect(await call("PUT", "/api/room-files-folder", Buffer.from(JSON.stringify({ path: folder })))).toMatchObject({ status: 200, json: { path: folder, error: null } });
+    const folder = join(DATA_DIR, "another-drive", "Wink room files");
+    expect(await call("PUT", "/api/room-files-folder", Buffer.from(JSON.stringify({ path: join(DATA_DIR, "another-drive") })))).toMatchObject({ status: 200, json: { path: folder, error: null } });
     expect(sha(readFileSync(join(folder, roomId, file.id)))).toBe(file.sha256);
     expect(existsSync(join(DATA_DIR, "room-files", roomId, file.id))).toBe(false);
     expect((await call("GET", `/api/rooms/${roomId}/files/${file.id}`)).body).toEqual(bytes);
