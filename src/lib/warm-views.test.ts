@@ -54,3 +54,16 @@ it("skips the warm-up when Save-Data is on", () => {
   expect(idle).not.toHaveBeenCalled();
   expect(load).not.toHaveBeenCalled();
 });
+
+it("falls back to a timer without requestIdleCallback, and cancels it", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("requestIdleCallback", undefined);
+  const first = vi.fn(async () => {});
+  warmViews([first], []);
+  vi.advanceTimersByTime(1);
+  expect(first).toHaveBeenCalledTimes(1);
+  const second = vi.fn(async () => {});
+  warmViews([second], [])();
+  vi.advanceTimersByTime(1);
+  expect(second).not.toHaveBeenCalled();
+});
