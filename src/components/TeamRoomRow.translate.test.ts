@@ -45,7 +45,7 @@ afterEach(async () => {
 });
 
 async function render() {
-  await act(async () => root.render(createElement(TeamRoomTranscript, { lines, mine: (line) => line.author.kind === "host", base: "/api/rooms/r1", label: "Launch week" })));
+  await act(async () => root.render(createElement(TeamRoomTranscript, { onReply: () => {}, lines, mine: (line) => line.author.kind === "host", base: "/api/rooms/r1", label: "Launch week" })));
 }
 
 const button = () => host.querySelector<HTMLButtonElement>('button[data-room-translate]');

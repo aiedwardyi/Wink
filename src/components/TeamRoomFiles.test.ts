@@ -79,7 +79,7 @@ describe("room files", () => {
     const line = { id: "m1", at: Date.now(), text: "", author: { kind: "host" as const, id: "host", name: "Edward" }, files: [{ id: "a".repeat(24), name: "photo.png", type: "image/png", bytes: 100, deleted: true }] };
     for (const [locale, text] of [["en", "File deleted"], ["ko", "파일 삭제됨"]]) {
       localStorage.setItem("omb-locale", locale!);
-      const markup = renderToStaticMarkup(createElement(I18nProvider, null, createElement(TeamRoomRow, { line, mine: true, named: false, base: "/api/rooms/room1" })));
+      const markup = renderToStaticMarkup(createElement(I18nProvider, null, createElement(TeamRoomRow, { line, mine: true, named: false, base: "/api/rooms/room1", onJump: () => {}, onMenu: () => {} })));
       expect(markup).toContain(text);
       expect(markup).not.toContain("href=");
       expect(markup).not.toContain("<img");

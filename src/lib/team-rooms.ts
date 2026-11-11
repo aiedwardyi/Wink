@@ -14,6 +14,8 @@ export interface RoomLine {
   author: RoomAuthor;
   text: string;
   files: RoomFile[];
+  replyToId?: string;
+  message?: Message;
 }
 
 export type TeamRoom = Group & { hosted: { roomId: string } };
@@ -25,7 +27,7 @@ export const roomPeople = (group: Group) => (group.room && "people" in group.roo
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
   messages.flatMap((message) => (message.author && message.roomEntryId
-    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [] }]
+    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, message }]
     : []));
 
 export type JoinedLink = "connecting" | "live" | "offline";
@@ -52,6 +54,7 @@ export interface JoinedEntry {
   author: { kind: "host" | "person"; id: string; name: string };
   text: string;
   files?: RoomFile[];
+  replyToId?: string;
 }
 
 export type JoinedPhase = "connecting" | "live" | "offline" | "removed" | "left";
@@ -60,7 +63,12 @@ export const joinedPhase = (view: JoinedView): JoinedPhase =>
   view.status !== "joined" ? view.status : view.link === "live" ? "live" : view.link === "offline" ? "offline" : "connecting";
 
 export const joinedLines = (entries: readonly JoinedEntry[]): RoomLine[] =>
-  entries.map((entry) => ({ id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [] }));
+  entries.map((entry) => ({ id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId }));
+
+export const roomMessage = (line: RoomLine): Message => line.message ?? ({
+  id: line.id, at: line.at, role: "user", kind: "text", text: line.text,
+  author: line.author, roomEntryId: line.id, roomFiles: line.files, replyToId: line.replyToId,
+});
 
 const JOINED = "joined:";
 
@@ -155,7 +163,7 @@ function uploadProblem(status: number, name: string, error?: string): RoomProble
 }
 
 /** Uploads each file, then sends one message. A retry reuses `sendId`, so it never posts twice. */
-export async function sendToRoom(base: string, text: string, files: readonly File[], sendId: string): Promise<RoomProblem | null> {
+export async function sendToRoom(base: string, text: string, files: readonly File[], sendId: string, replyToId?: string): Promise<RoomProblem | null> {
   const ahead = filesProblem(files);
   if (ahead) return ahead;
   try {
@@ -167,7 +175,7 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
       if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name, body?.error);
       fileIds.push(body.file.id);
     }
-    const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(fileIds.length ? { fileIds } : {}) }) });
+    const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(replyToId !== undefined ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}) }) });
     return res.ok ? null : { key: "teamRoom.sendFailed" };
   } catch {
     return { key: "teamRoom.sendFailed" };

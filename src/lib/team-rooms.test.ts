@@ -7,6 +7,7 @@ import {
   hostLines,
   inviteErrorKey,
   isTeamRoom,
+  joinedLines,
   joinedPhase,
   joinedRoomIdOf,
   joinedSelection,
@@ -15,6 +16,7 @@ import {
   looksLikeRoomCode,
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
+  roomMessage,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -43,7 +45,15 @@ describe("team room shape", () => {
       { id: "a", role: "user", kind: "text", text: "hi", at: 1, author: { kind: "person", id: "p", name: "Mina" }, roomEntryId: "e1" },
       { id: "b", role: "bot", kind: "text", text: "system note", at: 2 },
     ];
-    expect(hostLines(messages)).toEqual([{ id: "a", entryId: "e1", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [] }]);
+    expect(hostLines(messages)).toEqual([{ id: "a", entryId: "e1", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [], message: messages[0] }]);
+    expect(roomMessage(hostLines(messages)[0]!)).toBe(messages[0]);
+  });
+
+  it("keeps joined reply ids on the line and its message adapter", () => {
+    const entry = { seq: 2, id: "e2", at: 2, author: { kind: "person" as const, id: "mina", name: "Mina Park" }, text: "reply", replyToId: "e1" };
+    const line = joinedLines([entry])[0]!;
+    expect(line.replyToId).toBe("e1");
+    expect(roomMessage(line)).toMatchObject({ id: "e2", roomEntryId: "e2", replyToId: "e1", text: "reply", author: entry.author });
   });
 
   it("reads joined, link and leave into one phase", () => {
@@ -102,6 +112,13 @@ describe("sending to a room", () => {
     const files = Array.from({ length: 50 }, () => ({ name: "a.txt", type: "text/plain", size: 1 }));
     expect(filesProblem(files)).toBeNull();
     expect(filesProblem([...files, files[0]!])?.key).toBe("teamRoom.tooMany");
+  });
+
+  it.each(["/api/rooms/r1", "/api/joined/rooms/r9"])("carries the reply id to %s", async (base) => {
+    const fetch = vi.fn(async (_path: string, _init: RequestInit) => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await sendToRoom(base, "reply", [], "send-0123456789abcdef", "original-entry")).toBeNull();
+    expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toEqual({ text: "reply", sendId: "send-0123456789abcdef", replyToId: "original-entry" });
   });
 
   it("refuses too many or too big before any upload", () => {

@@ -26,7 +26,7 @@ async function mount() {
   vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
   const host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {},
     lines: [{ id: "picture", at: Date.now(), author: { kind: "host", id: "host", name: "Mina" }, text: "", files: [{ id: "file", name: "design.png", bytes: 100, type: "image/png" }] }],
     mine: () => false, base: "/api/rooms/r1", label: "Design team",
   }))));
@@ -90,7 +90,7 @@ it("labels old lines by current author id and keeps departed names", async () =>
     { id: "c", at: 3, author: { kind: "person", id: "gone", name: "Daniel Cho" }, text: "left", files: [] },
   ];
   try {
-    await act(async () => root.render(createElement(TeamRoomTranscript, {
+    await act(async () => root.render(createElement(TeamRoomTranscript, { onReply: () => {},
       lines, mine: () => false, base: "", label: "Room", hostName: "에드워드", people: [{ id: "p1", name: "민아" }],
     })));
     expect(host.textContent).toContain("민아");

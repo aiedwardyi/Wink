@@ -4216,7 +4216,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   [data-hold-menu][data-select-mode] {
     -webkit-touch-callout: default;
   }
-  [data-hold-menu][data-select-mode] [data-orbit-message-content] {
+  [data-hold-menu][data-select-mode] :is([data-orbit-message-content], [data-team-room-content]) {
     -webkit-user-select: text;
     user-select: text;
   }

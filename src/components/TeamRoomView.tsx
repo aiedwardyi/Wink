@@ -15,7 +15,7 @@ import { useStore } from "@/state/store";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { TeamRoomPicture } from "./RoomPicture";
-import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
+import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomTranscript } from "./TeamRoomRow";
@@ -29,6 +29,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
   const peopleButton = useRef<HTMLButtonElement>(null);
   const lines = useMemo(() => hostLines(group.messages), [group.messages]);
   const base = hostRoomBase(group.hosted.roomId);
+  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const count = roomPeople(group).length;
   const missing = Boolean(group.room && "missing" in group.room);
   return (
@@ -60,9 +61,9 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} />
+      <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} replyTo={replyTo} onClearReply={clearReply} />}
       </div>
     </main>
   );
