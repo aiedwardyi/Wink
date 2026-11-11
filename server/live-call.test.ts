@@ -10,19 +10,21 @@ import { capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCa
 import { estimateContextTokens } from "./context-compaction.ts";
 import { Store } from "./store.ts";
 import { workspaceDir } from "./workspace.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
+import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; roomTail?: (...args: any[]) => any } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
   store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "fix the login page" });
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
-  const routes = createLiveCallRoutes({ cfg: { gemini: { apiKey: "key" in opts ? opts.key : KEY } }, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const routes = createLiveCallRoutes({ cfg: { gemini: { apiKey: "key" in opts ? opts.key : KEY } }, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, ...{ roomTail: opts.roomTail } });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -35,6 +37,49 @@ function harness(opts: { key?: string; reply?: () => Response } = {}) {
 }
 
 describe("call token", () => {
+  it("locks the ROOM block with teammate lines into the brief and keys it by room", async () => {
+    const roomTail = vi.fn((room: { id: string }) => ({ name: room.id, caller: "Edward", people: ["Edward", "Minji", "Joon"], tail: "Joon: Check before 4pm\nMinji: Login breaks on Safari" }));
+    const h = harness({ roomTail });
+    const first = await h.post("token", { room: { id: "Launch", kind: "host" } });
+    const brief = (index: number) => h.sent(index).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("ROOM: Launch");
+    expect(brief(0)).toContain("Minji: Login breaks on Safari");
+    expect(brief(0)).toContain("Joon: Check before 4pm");
+    expect(brief(0)).toContain("Edward is on this call");
+    expect(brief(0)).toContain("nothing reaches the room without a yes");
+    await h.post("token", { callId: first.data.callId, room: { id: "Other", kind: "joined" } });
+    expect(brief(1)).toContain("ROOM: Other");
+    expect(brief(1)).not.toContain("ROOM: Launch");
+  });
+
+  it("rejects malformed or unavailable room context before minting", async () => {
+    const h = harness({ roomTail: () => undefined });
+    expect((await h.post("token", { room: { id: "launch", kind: "bot" } })).status).toBe(400);
+    expect((await h.post("token", { room: { id: "missing", kind: "joined" } })).status).toBe(404);
+    expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the room call transcript and recap only in the caller's bot chat", async () => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: ["Minji"], tail: "Minji: Safari broke" }));
+    const h = harness({ roomTail, reply: () => Response.json({ name: "auth_tokens/fake", candidates: [{ content: { parts: [{ text: "You asked Juno to check Safari." }] } }] }) });
+    const room = createRoom("Launch");
+    const entry = appendRoomEntry(room.id, { author: { kind: "person", id: "minji", name: "Minji" }, text: "Safari broke" });
+    saveJoined(room.id, "fixture.invalid", { id: "minji", name: "Minji" }, "fixture-key");
+    addJoinedEntries(room.id, [{ ...entry, author: { kind: "person", id: "minji", name: "Minji" } }]);
+    const group = h.store.createGroup("Launch", [], false, undefined, undefined, { roomId: room.id });
+    const before = h.store.activePath(group.threadId);
+    const { data } = await h.post("token", { room: { id: room.id, kind: "host" } });
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("ROOM: Launch");
+    await h.post("lines", { callId: data.callId, lines: [{ who: "user", text: "Can you check?" }, { who: "voice", text: "Want me to check Safari?" }] });
+    await h.post("end", { callId: data.callId, stats: { ms: 291_000 } });
+    await vi.waitFor(() => expect(h.store.activePath(h.bot.threadId).find((row) => row.call?.id === data.callId)?.call?.ms).toBe(291_000));
+    expect(h.store.activePath(group.threadId)).toEqual(before);
+    expect(recentRoomEntries(room.id, 10)).toEqual([entry]);
+    expect(joinedEntries(room.id, 10)).toHaveLength(1);
+    expect(h.store.activePath(h.bot.threadId).find((row) => row.call?.id === data.callId)?.call?.summary).toBe("You asked Juno to check Safari.");
+    expect(h.store.activePath(h.bot.threadId).filter((row) => row.call?.id === data.callId)).toHaveLength(2);
+  });
+
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");

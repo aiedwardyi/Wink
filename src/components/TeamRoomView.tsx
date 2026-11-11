@@ -11,6 +11,7 @@ import { hostLines, hostRoomBase, roomPeople, type TeamRoom } from "@/lib/team-r
 import { Presence } from "@/lib/use-presence";
 
 import { ReconnectingCue } from "./ReconnectingCue";
+import { useRoomCall } from "./RoomCall";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomTranscript } from "./TeamRoomRow";
@@ -24,6 +25,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
   const base = hostRoomBase(group.hosted.roomId);
   const count = roomPeople(group).length;
   const missing = Boolean(group.room && "missing" in group.room);
+  const call = useRoomCall({ id: group.hosted.roomId, kind: "host", name: group.name }, lines, !missing);
   return (
     <main data-team-room="host" className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <Presence open={peopleOpen && !missing}>
@@ -31,24 +33,28 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       </Presence>
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
-        {!missing && (
-          <button
-            ref={peopleButton}
-            type="button"
-            onClick={() => setPeopleOpen(true)}
-            aria-label={t("teamRoom.people")}
-            title={t("teamRoom.people")}
-            className="flex shrink-0 items-center gap-1 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-          >
-            <Users size={18} />
-            {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {call.button}
+          {!missing && (
+            <button
+              ref={peopleButton}
+              type="button"
+              onClick={() => setPeopleOpen(true)}
+              aria-label={t("teamRoom.people")}
+              title={t("teamRoom.people")}
+              className="flex shrink-0 items-center gap-1 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              <Users size={18} />
+              {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
+            </button>
+          )}
+        </div>
       </div>
       <ReconnectingCue />
       <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} />}
+        {call.bar}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} call={call.box} />}
       </div>
     </main>
   );

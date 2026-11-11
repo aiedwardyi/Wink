@@ -9,13 +9,15 @@ import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { usePresence } from "@/lib/use-presence";
-import { ORDER_EXPIRY_MS } from "../../shared/live-call";
+import type { RoomLine } from "@/lib/team-rooms";
+import { ORDER_EXPIRY_MS, type CallRoom } from "../../shared/live-call";
 import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
+const ROOM_PRIVACY_SEEN = "wink.liveCall.roomPrivacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -37,6 +39,10 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micMissing: "No microphone found. Plug one in, or type in the chat instead.",
     micBusy: "Your microphone is in use by another app.",
     openSettings: "Open settings",
+    roomPrivacy: "This call reads the room chat and sends it to Google on your Gemini key.",
+    postRoom: "Post in {room}?",
+    postFailed: "Couldn't post. Try again.",
+    keyChat: "Add a Gemini key in {bot}'s chat to call.",
   },
   ko: {
     starting: "연결 중…",
@@ -59,6 +65,10 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micMissing: "마이크를 찾을 수 없습니다. 마이크를 연결하거나 채팅으로 입력하세요.",
     micBusy: "다른 앱에서 마이크를 사용 중입니다.",
     openSettings: "설정 열기",
+    roomPrivacy: "이 통화는 채팅방 대화를 읽고 내 Gemini 키로 Google에 전송합니다.",
+    postRoom: "{room}에 올릴까요?",
+    postFailed: "올리지 못했습니다. 다시 시도하세요.",
+    keyChat: "통화하려면 {bot} 채팅에서 Gemini 키를 추가하세요.",
   },
 };
 
@@ -77,9 +87,9 @@ function firstNeed(messages: Message[]): { id: string; short: string } | undefin
   return undefined;
 }
 
-function seenPrivacy(): boolean {
+function seenPrivacy(key = PRIVACY_SEEN): boolean {
   try {
-    return Boolean(localStorage.getItem(PRIVACY_SEEN));
+    return Boolean(localStorage.getItem(key));
   } catch {
     return false;
   }
@@ -123,8 +133,8 @@ function TimeLeft({ expiresAt }: { expiresAt: number }) {
   );
 }
 
-export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; onEnd: (note?: string) => void }) {
-  const { state } = useStore();
+export function LiveCallBar({ bot, ctx, onEnd, room }: { bot: Bot; ctx: AudioContext; onEnd: (note?: string) => void; room?: CallRoom & { name: string; lines: RoomLine[] } }) {
+  const { state, dispatch } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const [live] = useState((): Live => {
@@ -133,6 +143,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
       botId: bot.id,
       botName: bot.name,
       device: matchMedia("(pointer: coarse)").matches ? "phone" : "desktop",
+      room: room ? { id: room.id, kind: room.kind } : undefined,
       engine: () => new GeminiLive(),
       audio,
       post,
@@ -142,6 +153,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
   const [privacy] = useState(() => !seenPrivacy());
+  const [roomPrivacy] = useState(() => Boolean(room) && !seenPrivacy(ROOM_PRIVACY_SEEN));
   const owner = useOnCall();
   const mounted = useRef(false);
   const kicked = useRef(false);
@@ -200,6 +212,19 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
     call.observe({ busy: Boolean(bot.busy), messages, needs: firstNeed(messages) });
   }, [bot.busy, call, messages]);
 
+  useEffect(() => {
+    if (room) call.observeRoom(room.lines);
+  }, [call, room?.lines]);
+
+  useEffect(() => {
+    if (!roomPrivacy) return;
+    try {
+      localStorage.setItem(ROOM_PRIVACY_SEEN, "1");
+    } catch {
+      // shown again next time
+    }
+  }, [roomPrivacy]);
+
   const [sendBefore, sendAfter] = words.send.split("{order}");
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
   const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
@@ -218,6 +243,18 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
       {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
+      {roomPrivacy && <p className="px-1 pb-2 text-xs text-ink-secondary">{words.roomPrivacy}</p>}
+      <Fold open={Boolean(snap.postOffer)} soft keep>
+        <div data-live-call-post className="mb-2 rounded-2xl border border-hairline/50 bg-card p-3 shadow-sm">
+          <p className="text-sm font-medium text-ink">{words.postRoom.replace("{room}", room?.name ?? "")}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-ink-secondary">{snap.postOffer?.text}</p>
+          {snap.postFailed && <p role="alert" className="mt-1 text-xs text-danger">{words.postFailed}</p>}
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(true)} className={cn(target, "bg-accent text-accent-ink disabled:opacity-40")}>{words.yes}</button>
+            <button type="button" disabled={snap.posting} onClick={() => void call.answerPost(false)} className={cn(target, "bg-control text-ink disabled:opacity-40")}>{words.no}</button>
+          </div>
+        </div>
+      </Fold>
       <Fold open={Boolean(snap.pending)} soft keep>
         <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
           {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
@@ -232,7 +269,9 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
       </Fold>
       {note && (
         <p role={snap.status === "failed" ? "alert" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
-          {note}
+          {room && snap.status === "needsKey"
+            ? <button type="button" onClick={() => dispatch({ type: "select", id: bot.id })} className="text-left text-accent hover:underline">{words.keyChat.replace("{bot}", bot.name)}</button>
+            : note}
           {micBlocked && window.ogb?.permOpenSettings && (
             <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>
           )}

@@ -430,6 +430,7 @@ import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
+import { roomTail } from "./rooms/voice-tail.ts";
 import { isVoiceLine, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
@@ -7353,7 +7354,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, roomTail });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),

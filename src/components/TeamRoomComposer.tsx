@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowUp, File as FileIcon, Image as ImageIcon, Paperclip, X } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
@@ -7,7 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 
 /** Text, pictures and files for one team room. Nothing here talks to a bot. */
-export function TeamRoomComposer({ name, base }: { name: string; base: string }) {
+export function TeamRoomComposer({ name, base, call }: { name: string; base: string; call?: (empty: boolean) => ReactNode }) {
   const { t } = useI18n();
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -119,7 +119,7 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
             e.preventDefault();
             void send();
           }}
-          placeholder={t("composer.roomLead", { name })}
+          placeholder={call ? "" : t("composer.roomLead", { name })}
           aria-label={t("composer.messageAria", { name })}
           className="col-span-full row-start-1 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
@@ -134,6 +134,7 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
             <Paperclip size={17} />
           </button>
         </div>
+        {call?.(!text && !files.length)}
         <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
           {ready && (
             <button
