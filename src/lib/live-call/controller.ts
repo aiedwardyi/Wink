@@ -1,6 +1,7 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { isVoiceLine, ORDER_EXPIRY_MS, type CallLine } from "../../../shared/live-call";
 import { activeLocale } from "@/lib/i18n";
+import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
@@ -56,6 +57,8 @@ const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
 const REPORT_CHARS = 1_500;
 
+const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
 /** Transcript text without the model's markers ("<no speech>", "{pause}"); empty if nothing speakable is left. */
 export function spokenText(text: string): string {
   const clean = text.replace(/<[^>]*>|\{[^}]*\}/g, " ").replace(/\s+/g, " ").trim();
@@ -91,6 +94,10 @@ export class LiveCall {
   private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
   private guarded = false;
   private pending?: { order: string; toolId: string; timer: ReturnType<typeof setTimeout> };
+  private sent = new Set<string>();
+  private ask?: string;
+  private askAnswered = new Set<string>();
+  private justAnswered = false;
   private awaiting = 0;
   private busy = false;
   private reported = new Set<string>();
@@ -272,6 +279,11 @@ export class LiveCall {
 
   propose(order: string, toolId: string) {
     if (!order) return this.engine?.sendToolResult(toolId, "propose_work", "declined");
+    // The bot's own question already takes the spoken answer; an order would ask twice.
+    if (this.ask || this.justAnswered) return this.engine?.sendToolResult(toolId, "propose_work", `not needed: this is ${this.deps.botName}'s open question, and the person's spoken reply goes to ${this.deps.botName} as the answer`);
+    const key = orderKey(order);
+    if (this.sent.has(key)) return this.engine?.sendToolResult(toolId, "propose_work", "already sent");
+    if (this.pending && orderKey(this.pending.order) === key) return this.engine?.sendToolResult(toolId, "propose_work", "already proposed, waiting for their answer");
     if (this.pending) this.answerTool("declined");
     this.stats.orders.proposed += 1;
     const expiresAt = this.now() + ORDER_EXPIRY_MS;
@@ -307,21 +319,27 @@ export class LiveCall {
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
-    let result: string;
+    const key = orderKey(pending.order);
+    this.sent.add(key);
+    const result = await this.send(pending.order, { order: true });
+    if (result.startsWith("failed")) this.sent.delete(key);
+    this.engine?.sendToolResult(pending.toolId, "propose_work", result);
+  }
+
+  private async send(text: string, tag: { order: true } | { ask: true }): Promise<string> {
     try {
       const sent = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/messages`, {
-        text: pending.order,
+        text,
         sendId: crypto.randomUUID(),
-        call: { id: this.callId, order: true },
+        call: { id: this.callId, ...tag },
       });
       if (sent.status >= 400) throw new Error(String(sent.data.error ?? sent.status));
-      result = sent.data.queued ? "queued" : "sent";
       this.awaiting += 1;
       this.refresh();
+      return sent.data.queued ? "queued" : "sent";
     } catch (error) {
-      result = `failed: ${error instanceof Error ? error.message : String(error)}`;
+      return `failed: ${error instanceof Error ? error.message : String(error)}`;
     }
-    this.engine?.sendToolResult(pending.toolId, "propose_work", result);
   }
 
   private caption(who: CallLine["who"], buf: string) {
@@ -339,6 +357,15 @@ export class LiveCall {
     this.stats.userLines += 1;
     this.letters.hangul += text.match(HANGUL)?.length ?? 0;
     this.letters.all += text.match(LETTER)?.length ?? 0;
+    this.justAnswered = false;
+    // The first line after the bot's question is its answer on screen, so it goes to the bot as one.
+    if (!this.pending && this.ask) {
+      this.askAnswered.add(this.ask);
+      this.ask = undefined;
+      this.justAnswered = true;
+      void this.send(text, { ask: true });
+      return;
+    }
     this.postLines([{ who: "user", text, at: this.now() }]);
     if (!this.pending) return;
     const consent = consentOf(text);
@@ -378,7 +405,7 @@ export class LiveCall {
             asked = row;
             orders = [];
           }
-          if (row.call?.order && row.call.id === this.callId) orders.push(row.id);
+          if ((row.call?.order || row.call?.ask) && row.call.id === this.callId) orders.push(row.id);
         } else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
           this.reported.add(row.id);
           replies.set(asked, { reply: row, orders: [...orders] });
@@ -390,6 +417,8 @@ export class LiveCall {
         else this.remember(order, reply.text!);
       }
     }
+    const question = openQuestion(input.messages);
+    this.ask = question && question.at >= startedAt && !this.askAnswered.has(question.id) ? question.id : undefined;
     if (input.needs && !this.toldNeeds.has(input.needs.id)) {
       this.toldNeeds.add(input.needs.id);
       this.engine?.sendText(`[Wink] ${this.deps.botName} needs you in chat: ${input.needs.short}`);
