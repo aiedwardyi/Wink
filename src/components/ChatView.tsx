@@ -110,6 +110,7 @@ import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
+import { endCall } from "@/lib/call";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
@@ -1577,26 +1578,28 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           )}
 
           {/* Before the chip: the phone header fits the chip as its last control. */}
-          {!window.ogb && (
-            <button
-              type="button"
-              aria-pressed={onLiveCall}
-              aria-label={liveCallLabel}
-              title={liveCallLabel}
-              // The audio context is born in the tap: phones only let it play from one.
-              onClick={() => {
-                if (onLiveCall) return setLiveCall(null);
-                const ctx = new AudioContext();
-                void ctx.resume();
-                setLiveCall({ botId: bot.id, ctx });
-              }}
-              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
-            >
-              <Phone size={18} />
-            </button>
-          )}
+          <button
+            type="button"
+            aria-pressed={onLiveCall}
+            aria-label={liveCallLabel}
+            title={liveCallLabel}
+            // The audio context is born in the tap: phones only let it play from one.
+            onClick={() => {
+              if (onLiveCall) {
+                // Release the call first, or the desktop's old call overlay mounts for a render.
+                endCall(bot.id);
+                return setLiveCall(null);
+              }
+              const ctx = new AudioContext();
+              void ctx.resume();
+              setLiveCall({ botId: bot.id, ctx });
+            }}
+            className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
+          >
+            <Phone size={18} />
+          </button>
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
-          {callAvailable && <CallButton bot={bot} />}
+          {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
       </div>
 

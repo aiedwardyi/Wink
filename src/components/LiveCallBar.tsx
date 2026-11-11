@@ -6,14 +6,14 @@ import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { CallAudio } from "@/lib/live-call/audio";
-import { LiveCall, type CallStatus, type Posted } from "@/lib/live-call/controller";
+import { LiveCall, MIC_BLOCKED, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { ORDER_EXPIRY_MS } from "../../shared/live-call";
 import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "openSettings", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -31,6 +31,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     privacy: "Free Gemini: Google may use call audio to improve its products.",
     captions: "Captions",
     you: "You",
+    micBlocked: "Microphone is off for Wink.",
+    openSettings: "Open settings",
   },
   ko: {
     starting: "연결 중…",
@@ -49,6 +51,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     privacy: "무료 Gemini: Google이 통화 음성을 제품 개선에 사용할 수 있습니다.",
     captions: "자막",
     you: "나",
+    micBlocked: "Wink에서 마이크가 꺼져 있습니다.",
+    openSettings: "설정 열기",
   },
 };
 
@@ -172,7 +176,9 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [call, configured, snap.status]);
 
   useEffect(() => {
-    if (snap.status === "ended" || (owner !== null && owner !== bot.id)) onEnd();
+    if (snap.status !== "ended" && (owner === null || owner === bot.id)) return;
+    endCall(bot.id);
+    onEnd();
   }, [bot.id, onEnd, owner, snap.status]);
 
   useEffect(() => {
@@ -180,7 +186,8 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.busy, call, messages]);
 
   const [sendBefore, sendAfter] = words.send.split("{order}");
-  const note = snap.status === "needsKey" ? words.needsKey : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
+  const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
+  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
 
   return (
@@ -197,7 +204,14 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
           </div>
         </div>
       </Fold>
-      {note && <p role={snap.status === "failed" ? "alert" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">{note}</p>}
+      {note && (
+        <p role={snap.status === "failed" ? "alert" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
+          {note}
+          {micBlocked && window.ogb?.permOpenSettings && (
+            <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

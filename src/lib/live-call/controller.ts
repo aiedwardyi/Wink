@@ -4,6 +4,8 @@ import type { Message } from "@/state/store-types";
 import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 
+export const MIC_BLOCKED = "Microphone blocked";
+
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "ended" | "failed";
 export type CallState = {
   status: CallStatus;
@@ -149,7 +151,7 @@ export class LiveCall {
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
-      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? "Microphone blocked" : String(error));
+      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? MIC_BLOCKED : String(error));
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });

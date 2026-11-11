@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -114,6 +114,7 @@ const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./deskt
 const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
+const { setMainPermissions } = require("./main-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1829,6 +1830,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
+  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -2006,6 +2008,11 @@ app.whenReady().then(async () => {
   if (!verifyProbe) registerCuaIpc();
   if (!verifyProbe) registerUpdaterIpc();
   if (!verifyProbe) errorReports.start();
+  setMainPermissions(session.defaultSession, {
+    contents: () => mainWindow?.webContents,
+    origin: rendererOrigin,
+    micAllowed: () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone")),
+  });
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
   // The handler binds that request to the same frame/origin, rejects audio,
