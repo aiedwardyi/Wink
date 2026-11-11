@@ -88,3 +88,14 @@ describe("composer stop", () => {
     expect(interrupts()).toHaveLength(2);
   });
 });
+
+describe("composer stop on a call", () => {
+  it("leaves End as the only stop-shaped control while a call is on", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(Composer, { bot, call: () => createElement("button", { "aria-label": "End call" }) })));
+    expect(host.querySelector('button[aria-label="End call"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Stop this turn"]')).toBeNull();
+  });
+});
