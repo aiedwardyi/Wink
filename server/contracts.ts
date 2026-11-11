@@ -267,6 +267,9 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   captured: import("./drivers/warm-pool.ts").Captured;
 };
 
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it. */
+export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval">;
+
 export interface TurnStartResult {
   turnId: TurnId;
 }
@@ -507,7 +510,7 @@ export interface ProviderInstance {
    * from a generic helper that may expose prompts in argv or lack approvals. */
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
-  prepare?(turn?: PrepareTurn): Promise<void>;
+  prepare?(turn?: PrepareTurn, focus?: PrepareFocus): Promise<void>;
   /** The Captured this instance last computed itself (snapshot or capture), only while still current:
    *  same pool generation, non-empty identity, enabled, not disposed; otherwise null.
    *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.

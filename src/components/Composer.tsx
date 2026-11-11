@@ -1243,7 +1243,8 @@ export function Composer({
             className="col-span-full row-start-1 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none [[data-call-caption]~&]:placeholder:text-transparent"
           />
         <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
-          {busy && !locked && (
+          {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
+          {busy && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
               if (group) stopRoom(group.id);

@@ -1,5 +1,8 @@
 import { remotePhoneSetup, type RemotePhoneLink } from "./phone-setup";
 
+/** Relay management answers only on this PC; a phone, browser or device window is elsewhere. */
+export const onThisPc = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+
 export function devicesSetup(status: RemotePhoneLink | null, loginOpened = false) {
   const setup = remotePhoneSetup(status);
   const backend = status?.setup?.backendState;

@@ -495,7 +495,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (typeof instance.prepare !== "function") {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
       }
-      void instance.prepare().catch(() => {});
+      const { model, effort } = bot.modelSelection;
+      void instance.prepare(undefined, { threadId: bot.threadId, model, effort, approval: bot.autoApprove ? "auto" : "ask" }).catch(() => {});
       return json(res, 200, { ok: true, prepared: true });
     },
     interrupt: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
