@@ -12,7 +12,7 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
   /** Every known account identity, scrubbed from the engine's words with any email shape. */
   identities?: readonly (string | undefined)[];
   botId: string;
-  usageLimit: { resetsAt: number | null };
+  usageLimit: { resetsAt: number | null; model?: boolean };
   usageWait?: UsageWaitView;
   onRetry?: () => void;
   retryDisabled?: boolean;
@@ -30,7 +30,7 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
         <div className="flex items-start gap-2">
           <Gauge size={15} className="mt-0.5 shrink-0 text-warning" />
           <span className="min-w-0 break-words">
-            {!usageWait ? <><span className="font-semibold">{t("chat.usageLimit")}</span>{" "}{t("chat.usageLimitBody")}{reset && <> {t(reset.key, reset.vars)}</>}</>
+            {!usageWait ? <><span className="font-semibold">{t("chat.usageLimit")}</span>{" "}{t(usageLimit.model ? "chat.usageLimitModelBody" : "chat.usageLimitBody")}{reset && <> {t(reset.key, reset.vars)}</>}</>
               : waiting ? <span>{t(!time ? "chat.usageWaitUnknown" : usageWait.weekly ? "chat.usageWaitWeekly" : "chat.usageWaitAt", { time })}</span>
                 : usageWait.state === "manual" ? <span>{t("chat.usageWaitManual")}</span> : null}
             {waiting && usageWait.cancelable && <> · <button className="underline" onClick={() => void api(`/api/bots/${botId}/usage-wait/${usageWait.id}/cancel`, { method: "POST" }).catch(() => {})}>{t("chat.cancelQueuedAction")}</button></>}

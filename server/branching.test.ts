@@ -234,16 +234,13 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       expect(midTurn.status).toBe(409);
       expect((await getBot(created.id)).messages.filter((m: Msg) => m.text === "second try")).toHaveLength(0);
 
-      // stop the turn; the queued "sneaky second" auto-runs on settle
-      // (stop-then-steer), so that drained turn must be stopped too before
-      // the thread is truly quiet enough to edit
-      expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
-      await waitFor(async () => {
-        const b = await getBot(created.id);
-        return b.busy === true && b.messages.some((m: Msg) => m.text === "sneaky second" && !m.queued);
-      }, "the queued message to drain into its own turn", 20_000);
-      expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
-      await waitFor(async () => (await getBot(created.id)).busy === false, "the drained turn to settle", 20_000);
+      // stop hands the queued "sneaky second" back instead of running it
+      const stopped = await api("POST", `/api/bots/${created.id}/interrupt`);
+      expect(stopped.status).toBe(200);
+      expect(stopped.body.returned).toEqual([
+        { threadId: parallel.body.threadId, queueId: parallel.body.queueId, text: "sneaky second" },
+      ]);
+      await waitFor(async () => (await getBot(created.id)).busy === false, "the stopped turn to settle", 20_000);
       rmSync(fakeHangDump, { force: true });
       expect((await api("POST", `/api/bots/${created.id}/messages/${first.id}/edit`, { text: "second try" })).status).toBe(202);
 

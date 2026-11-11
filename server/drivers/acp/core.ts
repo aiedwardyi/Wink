@@ -298,12 +298,26 @@ export async function probeCliVersion(
 }
 
 const INIT_TIMEOUT = 20_000;
+const SIGN_IN_CHANGED = "the sign-in changed while the reply was starting";
 // The billing read on a failed turn sits between the user and the error
 // chip, so it gets a far shorter leash than the one on a clean turn.
 const USAGE_PROBE_TIMEOUT = 5_000;
 const SESSION_CONFIG_TIMEOUT = 20_000; // configureSession's per-request default
 const NEW_SESSION_TIMEOUT = 30_000;
 const LOAD_SESSION_TIMEOUT = 120_000; // history replay on a long thread is slow
+
+function agentCancel(meta: any, engine: string) {
+  const category = meta?.cancellationCategory;
+  if (category !== "HookDenied") {
+    return { message: `${engine} stopped this reply on its own${category ? ` (${category})` : ""}`, stopReason: "agent_cancelled" };
+  }
+  const context = meta.cancellationContext ?? {};
+  const hook = String(context.hook_name ?? "").split(":")[0].split("/").pop() || "?";
+  const home = new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const reason = String(context.reason ?? "").replace(home, "~").replace(/\s+/g, " ").trim();
+  const short = reason.length > 200 ? `${reason.slice(0, 199)}…` : reason;
+  return { message: `${engine} hook failed (${hook})${short ? `: ${short}` : ""}`, stopReason: "hook_denied" };
+}
 
 function decodeAcpConfig(defaultCli: string) {
   return (raw: unknown): AcpConfig => {
@@ -414,6 +428,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         stop: () => void;
         steer: (text: string) => Promise<SteerResult>;
         interrupt: () => void;
+        end?: () => void;
         turnId: string;
         asks: Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>;
       }
@@ -727,6 +742,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const controller = new AbortController();
         let canceledBeforePrompt = false;
         const cancelSetup = () => { canceledBeforePrompt = true; controller.abort(); };
+        // The sign-in moving under a starting turn says so: a quiet cancel reads as a Stop nobody pressed.
+        const signInMoved = () => !disposed && (epoch !== pool.generation(keyFor(threadId)) || capture().identity !== captured.identity);
+        const setupEnded = () => {
+          const moved = signInMoved();
+          if (moved) emit({ ...base(threadId, turnId), type: "runtime.error", message: SIGN_IN_CHANGED });
+          emit({ ...base(threadId, turnId), type: "turn.completed", ok: !moved, stopReason: moved ? "sign_in_changed" : "cancelled", cost: null });
+        };
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         let env = childEnv(LOCAL_HOST_KEY_ENVS);
         const spawnArgs = support.spawnArgs(config, turn);
@@ -781,7 +803,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               && capture().identity === captured.identity) throw error;
             emit({ ...base(threadId, turnId), type: "turn.started" });
             turnTimer.finish();
-            emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
+            setupEnded();
             return { early: true as const };
           } finally {
             if (!preludeReady && active.get(threadId)?.turnId === turnId) active.delete(threadId);
@@ -896,7 +918,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           turnTimer.finish();
           if (!cancelled) throw error;
-          emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
+          setupEnded();
           return { turnId };
         }
         turnTimer.mark("spawnOrReuse");
@@ -917,6 +939,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let sessionId: string | null = entry.sessionId;
         let selectedModel: string | null = entry.model;
         let interruptTimer: ReturnType<typeof setTimeout> | null = null;
+        let askCancelled = false;
+        // no_reply_needed asked for this cancel: it settles as a clean finish
+        let quietEnd = false;
         // the system text this turn's prompt carried, and whether the agent
         // compacted its context while the prompt ran
         let systemSent: string | null = null;
@@ -971,6 +996,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const settle = (ok: boolean, stopReason: string | null, readBilling = false) => {
           if (state.settled) return;
           state.settled = true;
+          if (quietEnd && ok) stopReason = null;
           if (sessionId && compacted) systemHeld.forget(sessionId);
           else if (sessionId && systemSent && state.promptAccepted) systemHeld.record(sessionId, systemSent);
           if (interruptTimer) clearTimeout(interruptTimer);
@@ -1084,7 +1110,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           // this app never recorded it and cannot revoke it
           const optionFor = (want: "allow" | "reject") =>
             options.find((o) => o.kind === `${want}_once` && typeof o.optionId === "string")?.optionId ?? null;
-          const cancelled = { outcome: { outcome: "cancelled" } };
+          const cancelled = () => { askCancelled = true; return { outcome: { outcome: "cancelled" } }; };
           const missing = (want: string) =>
             emit({
               ...base(threadId, turnId),
@@ -1099,7 +1125,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             return send({
               jsonrpc: "2.0",
               id: msg.id,
-              result: allow ? { outcome: { outcome: "selected", optionId: allow } } : cancelled,
+              result: allow ? { outcome: { outcome: "selected", optionId: allow } } : cancelled(),
             });
           }
           const kind = String(toolCall.kind ?? "");
@@ -1116,7 +1142,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             send({
               jsonrpc: "2.0",
               id: msg.id,
-              result: optionId ? { outcome: { outcome: "selected", optionId } } : cancelled,
+              result: optionId ? { outcome: { outcome: "selected", optionId } } : cancelled(),
             });
             emit({
               ...base(threadId, turnId),
@@ -1288,7 +1314,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           interruptTimer = setTimeout(() => settle(true, "cancelled"), 5_000);
           interruptTimer.unref?.();
         };
-        active.set(threadId, { stop, steer, interrupt, turnId, asks });
+        const end = () => { quietEnd = true; interrupt(); };
+        active.set(threadId, { stop, steer, interrupt, end, turnId, asks });
         if (canceledBeforePrompt || disposed) {
           stop();
           settle(true, "cancelled");
@@ -1382,11 +1409,17 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             promptReport = support.promptReport?.(result, init?._meta?.modelState, selectedModel ?? cliTurn.model);
             const reason = result?.stopReason;
             if (reason === "end_turn") settle(true, null, true);
-            else if (reason === "cancelled") settle(true, "cancelled", true);
-            else settle(false, reason ?? "failed", true);
+            else if (reason === "cancelled" && (interruptTimer || canceledBeforePrompt || askCancelled)) settle(true, "cancelled", true);
+            else if (reason === "cancelled") {
+              // Nobody pressed Stop: a quiet cancel would leave a Resume card and no reply.
+              const { message, stopReason } = agentCancel(result?._meta, support.displayName);
+              emit({ ...base(threadId, turnId), type: "runtime.error", message });
+              settle(false, stopReason, true);
+            } else settle(false, reason ?? "failed", true);
           } catch (e) {
             if (!state.settled) {
-              const message = e instanceof Error ? e.message : String(e);
+              const moved = e instanceof Error && e.message === "turn setup cancelled" && signInMoved();
+              const message = moved ? SIGN_IN_CHANGED : e instanceof Error ? e.message : String(e);
               const code = support.classifyError?.(e);
               // Authentication setup is a user action, not a retry. The
               // classifier is preferred; loginNote remains a compatibility
@@ -1413,7 +1446,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               };
               if (usageLimit) failure.usageLimit = usageLimit;
               emit(failure);
-              settle(false, needsAuth ? "auth_required" : "rpc_error");
+              settle(false, needsAuth ? "auth_required" : moved ? "sign_in_changed" : "rpc_error");
             }
           }
         })();
@@ -1479,6 +1512,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             : undefined,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
+          endTurn: async (threadId, turnId) => {
+            const turn = active.get(threadId);
+            if (turn?.turnId === turnId) turn.end?.();
+          },
           respondToRequest: async (threadId, requestId, decision) => {
             const turn = active.get(threadId);
             const finish = turn?.asks.get(requestId);

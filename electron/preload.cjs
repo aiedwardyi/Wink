@@ -206,6 +206,9 @@ contextBridge.exposeInMainWorld("ogb", {
    *  the same readable reason as openFile. */
   fileMenu: (filePath, base) =>
     invoke("desktop:file-menu", filePath, base),
+  /** Opens a chat's linked file from the other PC that has it. */
+  openPeerFile: (host, threadId, filePath) =>
+    invoke("desktop:open-peer-file", host, threadId, filePath),
   /** Store a provider credential with OS-backed encryption. */
   setCredential: (name, value) => invoke("credential:set", name, value),
 

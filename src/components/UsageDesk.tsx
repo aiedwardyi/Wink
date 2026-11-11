@@ -4,16 +4,17 @@ import { z } from "zod";
 import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
-import { localeTag, useI18n, type Translate } from "@/lib/i18n";
+import { localeTag, useI18n, type MessageKey, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
-import { refreshUsage, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
@@ -135,6 +136,12 @@ function labelsText(labels: string[], t: Translate) {
   return sorted.length > 3 ? t("usage.desk.labelsMore", { labels: shown, count: sorted.length - 3 }) : shown;
 }
 
+const MAIN_REFUSED: Record<string, MessageKey> = { "main-model": "usage.desk.mainModel", "main-effort": "usage.desk.mainEffort", "main-unavailable": "usage.desk.mainUnavailable" };
+export function mainFailedText(state: UsageBoardState, base: string, t: Translate) {
+  const why = state.refused?.[base];
+  return t(MAIN_REFUSED[why?.code ?? ""] ?? "usage.desk.mainFailed", { bot: why?.bot ?? "" });
+}
+
 /** One grey line per kind, newest only, last 24 h; wording only from the event's own names and labels. */
 function eventLines(engine: UsageBoardEngine, board: UsageBoard, clock: Clock) {
   const { t } = clock;
@@ -204,6 +211,7 @@ const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
+export const ACCOUNT_ROW = "min-w-0 border-hairline/70 [&+&]:border-t";
 
 export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name, settings = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
@@ -233,7 +241,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   );
   return (
     <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: account.name })))}
-      className={cn("min-w-0 border-hairline/70 [&+&]:border-t", !reorder && "outline-none")}>
+      className={cn(ACCOUNT_ROW, !reorder && "outline-none")}>
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
           {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
@@ -415,7 +423,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
         : <>{head()}{group(capped)}</>}
-      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{mainFailedText(state, engine.base, t)}</div>}
     </section>
   );
 }
@@ -435,6 +443,7 @@ export function UsageDesk() {
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();
   const pending = useRefreshPending();
+  const spin = useSpinUntilTurnEnds(pending.size > 0);
   const drag = useUsageDrag(state.board?.engines ?? []);
   const desk = useRef<HTMLDivElement>(null);
   const heads = useRef(new Map<HTMLElement, number>());
@@ -527,6 +536,14 @@ export function UsageDesk() {
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   useEffect(() => { if (!board) waited.current = true; });
+  const refresh = async (board: UsageBoard) => {
+    setRefreshFailed(false);
+    setMuseAuthFailed(false);
+    const outcome = await refreshUsage(store.instances, board, dispatch);
+    setMuseAuthFailed(outcome.museAuthFailed);
+    setRefreshFailed(outcome.failed);
+  };
+  useRefreshKey(board?.engines.some((each) => each.accounts.length) && !pending.size ? () => void refresh(board) : null);
   if (!board) {
     return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   }
@@ -541,13 +558,6 @@ export function UsageDesk() {
     saveFold(base, value);
     setFolds((before) => ({ ...before, [base]: value }));
   };
-  const refresh = async () => {
-    setRefreshFailed(false);
-    setMuseAuthFailed(false);
-    const outcome = await refreshUsage(store.instances, board, dispatch);
-    setMuseAuthFailed(outcome.museAuthFailed);
-    setRefreshFailed(outcome.failed);
-  };
   return (
     <div ref={desk} data-usage-desk="" className={cn("usage-desk min-w-0", waited.current && "animate-fade-in")}>
       <div className="usage-toolbar">
@@ -560,8 +570,8 @@ export function UsageDesk() {
           for (const each of board.engines) fold(each.base, !allFolded);
         }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
         <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
-          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
-          <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
+          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh(board)}>
+          <RefreshCw size={14} aria-hidden="true" className={cn(spin.spinning && "motion-safe:animate-spin")} onAnimationIteration={spin.onAnimationIteration} />
         </button>
       </div>
       {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}

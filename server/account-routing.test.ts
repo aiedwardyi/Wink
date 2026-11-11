@@ -242,6 +242,19 @@ describe("engine default account routing", () => {
     expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
   });
 
+  it("tells the Usage page which bot and which setting blocked a Main switch", async () => {
+    const f = await fixture();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, model: "claudeAgent-retired" } });
+    expect(await f.useDefault(f.added[0].id)).toMatchObject({ status: 400, body: { code: "main-model", bot: "Routing fixture" } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("refused (main-model)"));
+    f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, model: "claudeAgent-1", effort: "max" } });
+    expect((await f.useDefault(f.added[0].id)).body).toMatchObject({ code: "main-effort", bot: "Routing fixture" });
+    await f.accounts.stop(f.added[1].id);
+    expect((await f.useDefault(f.added[1].id)).body.code).toBe("main-unavailable");
+    expect(f.accounts.defaultFor("claude")).toBeUndefined();
+  });
+
   it("validates HTTP model picks against the default catalog and keeps portable ids", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);

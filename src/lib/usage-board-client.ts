@@ -8,11 +8,14 @@ const READ_LIMIT_MS = 10_000;
 
 /** A Main save in flight. The check stays on `from`; `after` is the read count when the POST resolved, null while posting. */
 export type MainPending = { target: string; from: string | null; after: number | null };
+/** The reason the server gave for refusing a Main save, per board group. */
+export type MainRefusal = { code?: string; bot?: string };
 export type UsageBoardState = {
   board: UsageBoard | null;
   status: "loading" | "ready" | "error";
   pending: Readonly<Record<string, MainPending>>;
   failed: ReadonlySet<string>;
+  refused?: Readonly<Record<string, MainRefusal>>;
 };
 
 function upsertSamples(kept: UsageBoardSample[], changed: UsageBoardSample[], cap: number): UsageBoardSample[] {
@@ -174,10 +177,10 @@ export function createUsageBoardClient(
         void Promise.resolve(afterSave?.()).catch(() => {});
         if (inFlight) dirty = true;
         else { wanted = true; load(); }
-      }, () => {
+      }, (error: MainRefusal | undefined) => {
         const pending = { ...state.pending };
         delete pending[engine];
-        set({ pending, failed: new Set(state.failed).add(engine) });
+        set({ pending, failed: new Set(state.failed).add(engine), refused: { ...state.refused, [engine]: { code: error?.code, bot: error?.bot } } });
       });
     },
   };

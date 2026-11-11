@@ -3,6 +3,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { isVoiceLine } from "../shared/live-call.ts";
+import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
@@ -39,9 +41,6 @@ export interface QuickGate {
   accountReady: boolean;
 }
 
-const openAsk = (message: Message) =>
-  message.kind === "options" && Boolean(message.card?.requestId || message.card?.askUser) && !message.card?.answered && !message.card?.dismissed;
-
 /** Gate 0, then the rules. Any doubt goes to the bot. */
 export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
@@ -49,7 +48,7 @@ export function routesQuick(gate: QuickGate): boolean {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  if (gate.messages.some(openAsk)) return false;
+  if (scanQuestion(gate.messages) || gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
 
@@ -241,7 +240,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const path = store.activePath(threadId);
   // the bot's own reply already stands under the ask; a late answer could contradict it
   const asked = path.findIndex((row) => row.id === ask.id);
-  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && row.text?.trim())) {
+  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim())) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;

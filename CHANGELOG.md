@@ -2,6 +2,63 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.250] - 2026-11-11
+
+### Added
+- Devices: one "Connect from my devices" switch per PC, a QR code for your phone right on the page, and a green check on each PC you can reach.
+- Opening Wink in Chrome on a computer now gives you a real terminal: typing, arrow keys, copy and Korean all work.
+
+### Changed
+- Connections uses the same account cards as Usage.
+
+### Fixed
+- The Claude mascot's eyes and feet stay even at 125%, 150% and 175% screen scaling.
+
+## [1.0.249] - 2026-11-11
+
+### Added
+- Voice calls with your bot: tap the phone icon at the top right of a chat. The chat stays quiet during the call, and one call card with a summary and the transcript stays after.
+- Open Wink on your other PCs from Chrome with Google sign-in, no Tailscale needed.
+- Bot Details and Workers share one panel on the right, and the bot list folds while it's open.
+- The bot's avatar in the chat header says it opens Bot Details and memory.
+- Activity squares ripple when you tap them.
+
+### Changed
+- A shorter welcome line on first run: "Give a bot a job. Check in from anywhere."
+- New bots start with an empty name.
+- Softer hover on chat header icons, a violet Muscle Memory icon, a darker Live now and a smoother memory glow.
+
+### Fixed
+- Wink's background checks no longer flash a terminal window on Windows.
+- Bots with nothing to say stay quiet: no stray lines and no status flicker.
+- The What's New card stays put until you close it.
+- Dragging on the Usage page no longer grows the list, and the hand closes when you press.
+- Browser connections to another PC stay alive between requests, and browser setup is clearer.
+- The refresh icon finishes its turn before stopping.
+- Quick answers work again after an ask card you typed past.
+- A message blocked by a Grok hook names the hook.
+- Code that reads a secret is no longer masked as one.
+
+## [1.0.248] - 2026-11-10
+
+### Added
+- Wink keeps a daily backup of your chats, bots and memory in a Wink Backups folder.
+- Document checks in Live Verify replay with one cursor per checker, and short files play long enough to follow.
+- Alt+R refreshes usage again, in the usage popover and in Settings > Usage.
+
+### Changed
+- Live Verify checks only documents the reply or your message names, never a bot's own notes or memory.
+- The bot's Description box is now called Instructions.
+- After a skipped update, What's New shows the newest notes you haven't seen.
+- Bots resend less context on each message, which saves tokens.
+- Hitting one model's limit (like Fable) shows the limit card instead of an error.
+
+### Fixed
+- Quick answers send Korean requests and refusals to the bot, and a quick answer no longer lands after the bot's final reply.
+- Deleting a bot never empties a folder linked inside it, and a damaged bot list, settings or routines file is set aside instead of overwritten. The delete warning says what goes.
+- A link to a file on another PC opens from that PC, or says which PC has it.
+- A failed account switch or a stopped Grok reply now says why.
+
 ## [1.0.247] - 2026-11-10
 
 ### Added
@@ -823,6 +880,9 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.250]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.250
+[1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
+[1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
 [1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
 [1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
 [1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245

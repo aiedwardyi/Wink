@@ -374,6 +374,14 @@ describe("Usage desk", () => {
     expect(mainPosts()[1]).toBe(`POST /api/accounts/${encodeURIComponent(CODEX_2)}/default`);
   });
 
+  it.each([["main-model", "usage.desk.mainModel"], ["main-effort", "usage.desk.mainEffort"], ["main-unavailable", "usage.desk.mainUnavailable"]])("says why the save was refused (%s)", async (code, key) => {
+    server.post = async () => { throw Object.assign(new Error("raw server text"), { code, bot: "Atlas" }); };
+    await mount();
+    await click(useButton(CLAUDE_3));
+    expect(text(q('[role="alert"]'))).toBe(i18n.translate("en", key as never, { bot: "Atlas" }));
+    expect(checkRow()).toBe("claude");
+  });
+
   it.each(["500 Internal Server Error", "409 Conflict"])("keeps Main and shows a safe error when the save fails (%s)", async (status) => {
     server.post = async () => { throw new Error(`${status}: ${canary.address} raw provider text`); };
     await mount();
@@ -915,28 +923,61 @@ describe("Usage desk", () => {
     expect(row("claude")?.querySelector('[data-window="session"] [data-cells]')?.getAttribute("data-cells")).toBe("3");
   });
 
-  it.each(["en", "ko"] as const)("drops Refresh All, Used/Remaining and Alt+R in both languages (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("keeps Refresh All and Used/Remaining gone and refreshes on Alt+R in both languages (%s)", async (locale) => {
     await mount({ locale });
     expect(q("[data-usage-desk]")).not.toBeNull();
     const labels = [...host.querySelectorAll("button")].map((button) => `${text(button)}|${button.getAttribute("aria-label") ?? ""}`);
     for (const key of ["usage.limits.countUp", "usage.limits.countDown"]) {
       expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(true);
     }
-    expect(host.querySelector('[aria-keyshortcuts="Alt+R"]')).toBeNull();
-    const before = server.calls.length;
-    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true })); });
-    expect(server.calls.slice(before).filter((call) => call.startsWith("POST /api/usage/"))).toEqual([]);
+    const button = q("[data-usage-refresh]");
+    expect(button?.getAttribute("aria-keyshortcuts")).toBe("Alt+R");
+    expect(button?.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
+    const gate = deferred<unknown>();
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (!path.startsWith("/api/usage/refresh/")) return api(path, init);
+      server.calls.push(`${init?.method} ${path}`);
+      return gate.promise;
+    };
+    const posts = () => server.calls.filter((call) => call.startsWith("POST /api/usage/"));
+    const altR = async (init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true, cancelable: true, ...init });
+      await act(async () => { window.dispatchEvent(event); await vi.advanceTimersByTimeAsync(0); });
+      return event.defaultPrevented;
+    };
+    const before = posts().length;
+    for (const init of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: false }, { code: "AltRight", key: "Alt" }]) {
+      expect(await altR(init), JSON.stringify(init)).toBe(false);
+    }
+    expect(posts().length, "ignored keys").toBe(before);
+    expect(await altR()).toBe(true);
+    const pressed = posts().slice(before);
+    expect(pressed.length).toBeGreaterThan(0);
+    expect(button?.hasAttribute("disabled")).toBe(true);
+    expect(button?.querySelector("svg")?.classList.contains("motion-safe:animate-spin")).toBe(true);
+    expect(await altR(), "ignored while pending").toBe(false);
+    await act(async () => { gate.reject(new Error("offline")); await vi.advanceTimersByTimeAsync(0); });
+    expect(text(q("[role=alert]"))).toBe(i18n.translate(locale, "usage.desk.refreshFailed"));
+    const clicked = posts().length;
+    h.api = async (path, init) => path.startsWith("/api/usage/refresh/") ? (server.calls.push(`${init?.method} ${path}`), {}) : api(path, init);
+    await click(button);
+    expect(posts().slice(clicked), "same accounts as the button").toEqual(pressed);
+    await unmount();
+    const shut = posts().length;
+    expect(await altR(), "Usage shut").toBe(false);
+    expect(posts().length).toBe(shut);
     const { en, ko } = await import("@/lib/i18n-catalog");
     for (const catalog of [en, ko]) {
-      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll"]) {
-        expect(key in catalog, key).toBe(false);
-      }
+      expect("usage.limits.refreshAll" in catalog).toBe(false);
+      expect("shortcuts.usageRefresh" in catalog).toBe(true);
     }
     const { KeyboardShortcuts } = await import("./KeyboardShortcuts");
     const shortcuts = document.createElement("div");
     const shortcutsRoot = createRoot(shortcuts);
     await act(async () => shortcutsRoot.render(createElement(i18n.I18nProvider, null, createElement(KeyboardShortcuts))));
-    expect(text(shortcuts)).not.toContain(locale === "en" ? "Refresh Usage" : "사용량 새로 고침");
+    expect(text(shortcuts)).toContain(locale === "en" ? "Refresh Usage (in Usage)" : "사용량 새로고침 (사용량 화면에서)");
+    expect(shortcuts.querySelector('[aria-label="Alt + R"]')).not.toBeNull();
     expect(text(shortcuts)).toContain(locale === "en" ? "Toggle Usage" : "사용량 열기");
     await act(async () => shortcutsRoot.unmount());
   });

@@ -1,5 +1,5 @@
 .verify-watch-dock { container: verify-watch / inline-size; }
-.verify-watch { --dock: clamp(380px, 44cqi, 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
+.verify-watch { --dock: clamp(380px, min(44cqi, 100cqi - 960px), 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
 @container verify-watch (max-width: 659px) {
   .verify-watch { --dock: min(380px, calc(100cqi - 56px)); position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
 }
@@ -37,6 +37,10 @@
 .verify-watch-stage[data-pending] { visibility: hidden; }
 .verify-watch-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .verify-watch-frame[data-inline] .verify-watch-stage { flex: none; max-height: min(56vh, 460px); }
+/* The stage canvas's cursor as an element, for a watch whose stage is text. */
+.verify-watch-cursor { position: absolute; top: 0; left: 0; will-change: transform; }
+.verify-watch-cursor svg { display: block; overflow: visible; fill: var(--role); stroke: #f8fafc; stroke-width: 1.2; }
+.verify-watch-cursor span { position: absolute; top: 0; left: 0; height: 14px; padding: 0 4px; background: var(--role); color: #0a0d14; font: 10px/14px "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; }
 .verify-watch-pill, .verify-watch-banner, .verify-watch-caption { position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 6px 14px; border: 1px solid rgb(255 255 255 / .1); border-radius: 999px; background: rgb(10 13 20 / .94); color: #e2e8f0; font: 12px/1.4 "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; box-shadow: 0 8px 28px rgb(0 0 0 / .45); }
 .verify-watch-pill { bottom: 12px; translate: 0 0; transition: bottom var(--motion-large) var(--ease-standard), translate var(--motion-large) var(--ease-standard); }
 .verify-watch-pill[data-top] { bottom: calc(100% - 12px); translate: 0 100%; }

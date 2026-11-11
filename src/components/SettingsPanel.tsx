@@ -29,7 +29,7 @@ import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
@@ -269,12 +269,16 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const [wide, setWide] = useState(false);
   // where the file opens is settled when it opens, so typing never jumps between the map and the fold
   const [inMap, setInMap] = useState(false);
+  const [editing, setEditing] = useState(false);
   const openFile = (next: boolean) => {
     if (next && !expanded) setInMap(wide);
     setOpen(next);
   };
   useEffect(() => {
-    if (conflict) openFile(true);
+    if (!expanded) setEditing(false);
+  }, [expanded]);
+  useEffect(() => {
+    if (conflict) { openFile(true); setEditing(true); }
   }, [conflict]);
   // the map stays up through the pass away, so the page only folds once it is out of sight
   const up = active || warm;
@@ -286,8 +290,14 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     if (active) return () => void flushMemory(botId);
   }, [active]);
   const [toFile, setToFile] = useState(0);
+  const focusFile = useRef(false);
+  const startEdit = (next: boolean) => {
+    focusFile.current = next;
+    setEditing(next);
+  };
   const editFile = (next: boolean) => {
     openFile(next);
+    if (next) startEdit(true);
     if (next && !wide) setToFile((count) => count + 1);
   };
   // waits for the fold: until it has grown the page may be too short to bring the file up
@@ -297,6 +307,12 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     return () => clearTimeout(opened);
   }, [toFile]);
   const fileRow = useRef<HTMLButtonElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  const inFold = expanded && (!inMap || !wide);
+  useEffect(() => {
+    if (editing && focusFile.current) card.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    focusFile.current = false;
+  }, [editing]);
   const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
 
@@ -448,12 +464,20 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
     </>
   );
+  const file = editing || loadFailed ? editor : (
+    <>
+      {/* the same box metrics as the editor, so Edit doesn't move the text */}
+      <div className={cn("whitespace-pre-wrap break-words border border-transparent px-3 py-2 text-[13px] leading-relaxed", text ? "text-ink" : "text-ink-secondary")}>{text || t("bot.memoryPlaceholder")}</div>
+      {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
+    </>
+  );
+  const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
 
   return (
-    <div className="relative flex flex-col gap-3">
+    <div ref={card} className="relative flex flex-col gap-3">
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (!loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={editor} saveState={<SaveState status={status} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -464,12 +488,12 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} save={expanded && (!inMap || !wide) ? status : undefined} open={expanded} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} save={inFold ? status : undefined} open={expanded} editing={editing} onEdit={inFold ? edits : undefined} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
-        <Fold open={expanded && (!inMap || !wide)}>
+        <Fold open={inFold}>
           <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
-            {!loading && editor}
+            {!loading && file}
           </div>
         </Fold>
         {error && <div className="px-4 pb-4 pt-2 text-[12px] text-danger">{error}</div>}

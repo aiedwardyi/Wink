@@ -73,6 +73,33 @@ async function linkedSite(files: Record<string, string>) {
   return { root, server, open };
 }
 
+/** One PC's thread-sync state in its own scratch data folder. */
+function syncedPc(folder: string, deviceId: string) {
+  const dataDir = temp(`linked-pc-${deviceId}-`);
+  const threads = new Map<string, LocalThread>();
+  const host: ThreadSyncHost = {
+    folder,
+    dataDir,
+    deviceId,
+    ledger: loadThreadSyncLedger(dataDir),
+    saveLedger: () => saveThreadSyncLedger(dataDir, host.ledger),
+    local: (threadId) => threads.get(threadId) ?? null,
+    running: () => false,
+    adopt: (_botId, file) => {
+      threads.set(file.task.threadId, {
+        title: file.task.title,
+        createdAt: file.task.createdAt,
+        messages: structuredClone(file.messages),
+        activeLeafId: file.activeLeafId,
+      });
+    },
+    remove: (_botId, threadId) => void threads.delete(threadId),
+    conflicted: () => {},
+    now: () => 1_700_000_000_500,
+  };
+  return { host, dataDir, threads };
+}
+
 describe("linked files", () => {
   it("rejects canonical hidden assets while serving normal and pnpm targets", async () => {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -739,33 +766,8 @@ describe("linked files", () => {
     const folder = temp("linked-react-");
     const filePath = join(folder, "clip.mp4");
     const bot = "sync-bot-1";
-    const pc = (deviceId: string) => {
-      const dataDir = temp(`linked-react-${deviceId}-`);
-      const threads = new Map<string, LocalThread>();
-      const host: ThreadSyncHost = {
-        folder,
-        dataDir,
-        deviceId,
-        ledger: loadThreadSyncLedger(dataDir),
-        saveLedger: () => saveThreadSyncLedger(dataDir, host.ledger),
-        local: (threadId) => threads.get(threadId) ?? null,
-        running: () => false,
-        adopt: (_botId, file) => {
-          threads.set(file.task.threadId, {
-            title: file.task.title,
-            createdAt: file.task.createdAt,
-            messages: structuredClone(file.messages),
-            activeLeafId: file.activeLeafId,
-          });
-        },
-        remove: (_botId, threadId) => void threads.delete(threadId),
-        conflicted: () => {},
-        now: () => 1_700_000_000_500,
-      };
-      return { host, dataDir, threads };
-    };
-    const work = pc("work");
-    const home = pc("home");
+    const work = syncedPc(folder, "work");
+    const home = syncedPc(folder, "home");
     work.threads.set("t1", {
       title: "Clip",
       createdAt: 1_700_000_000_000,
@@ -801,6 +803,114 @@ describe("linked files", () => {
       const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(filePath)}`);
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: "not found", deviceId: "work" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("finds a Korean-named document on the PC whose bot linked it", async () => {
+    const folder = temp("linked-peer-");
+    const bot = join(temp("linked-peer-home-"), "봇 폴더");
+    const docs = join(dirname(bot), "내 문서");
+    const names = ["주간 보고서.docx", "회의 노트.md", "문서 1.hwp", "표 1.xlsx", "요약 1.pdf"];
+    const paths = [bot, docs].flatMap((dir) => names.map((name) => join(dir, name)));
+    const home = syncedPc(folder, "home");
+    const work = syncedPc(folder, "work");
+    home.threads.set("t1", {
+      title: "Report",
+      createdAt: 1_700_000_000_000,
+      activeLeafId: "m1",
+      messages: [{
+        id: "m1",
+        role: "bot",
+        kind: "text",
+        text: paths.map((path) => `[열기](${path.replaceAll("\\", "/").replaceAll(" ", "%20")})`).join("\n"),
+        at: 1_700_000_000_000,
+        parentId: null,
+      }],
+    });
+    expect(uploadThread(home.host, "sync-bot-1", "t1")).toBe("written");
+    expect(pullThread(work.host, "bot", "sync-bot-1", "t1")).toBe("imported");
+    const serve = (pc: ReturnType<typeof syncedPc>) => listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true,
+      remoteKey: undefined,
+      threadId: "t1",
+      messages: pc.threads.get("t1")!.messages.map((message) => ({ id: message.id, role: message.role, text: message.text })),
+      deviceId: pc.host.deviceId,
+      writerDeviceId: (messageId) => messageWriter(pc.dataDir, "t1", messageId),
+      rootsFor: () => [bot],
+    }));
+    const ask = async (url: string, path: string) => {
+      const res = await fetch(`${url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+      return [res.status, res.ok ? await res.text() : await res.json()];
+    };
+    const workPc = await serve(work);
+    try {
+      for (const path of paths) expect(await ask(workPc.url, path), path).toEqual([404, { error: "not found", deviceId: "home" }]);
+    } finally {
+      await workPc.close();
+    }
+    for (const path of paths) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, basename(path));
+    }
+    const homePc = await serve(home);
+    try {
+      for (const name of names) {
+        expect(await ask(homePc.url, join(bot, name)), name).toEqual([200, name]);
+        if (!name.endsWith(".pdf")) expect(await ask(homePc.url, join(docs, name)), name).toEqual([404, { error: "not found", reason: "outside" }]);
+      }
+    } finally {
+      await homePc.close();
+    }
+  });
+
+  it("serves a linked file whose link carries a line fragment", async () => {
+    const root = temp("linked-fragment-");
+    const filePath = join(root, "notes.md");
+    writeFileSync(filePath, "notes");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true,
+      remoteKey: undefined,
+      threadId: "t1",
+      messages: [{ id: "m1", text: `[notes](${filePath.replaceAll("\\", "/")}#L10)` }],
+      deviceId: "home",
+      writerDeviceId: () => null,
+      rootsFor: () => [root],
+    }));
+    try {
+      const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(filePath)}`);
+      expect([res.status, await res.text()]).toEqual([200, "notes"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each([
+    ["darwin", "C:/Users/홍길동/문서/주간 보고서.docx"],
+    ["linux", "C:/Users/홍길동/문서/주간 보고서.docx"],
+    ["win32", "/Users/gildong/문서/주간 보고서.docx"],
+  ] as const)("names the PC that wrote a path a %s PC cannot hold", async (platform, filePath) => {
+    const own = process.platform;
+    const server = await listen((req, res) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        serveLinkedFile(req, res, {
+          bearerOk: true,
+          remoteKey: undefined,
+          threadId: "t1",
+          messages: [{ id: "m1", text: `[주간 보고서](${filePath.replaceAll(" ", "%20")})` }],
+          deviceId: "this-pc",
+          writerDeviceId: () => "other-pc",
+          rootsFor: () => [],
+        });
+      } finally {
+        Object.defineProperty(process, "platform", { value: own });
+      }
+    });
+    try {
+      const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(filePath)}`, { headers: { Range: "bytes=0-0" } });
+      expect([res.status, await res.json()]).toEqual([404, { error: "not found", deviceId: "other-pc" }]);
     } finally {
       await server.close();
     }

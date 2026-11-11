@@ -30,7 +30,8 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
-import { useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -38,6 +39,7 @@ import { altDigitSelectsPane, backquoteTogglesTerminal, workerPaneOrder } from "
 import { workerRuns } from "@/lib/worker-runs";
 import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
+import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { webPushTarget } from "@/lib/web-push";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
@@ -138,6 +140,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
+  const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
@@ -241,6 +244,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     : undefined;
   const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
+  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  useRightSlot(slotPanels, closeSlot);
+  useEffect(() => closeVerifyWatch(), [state.selectedId]);
+  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
       <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
@@ -676,6 +684,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onOverlayChange={setSidebarOverlay}
         onClose={closeDrawer}
         onTerminalAttention={openTerminalAttention}
+        folded={slotShown}
+        onUnfold={() => slotPanels.forEach(closeSlot)}
         rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
       {noEngines ? (
@@ -713,6 +723,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
                   <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
+                ) : webTerminal ? (
+                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} webBridge={webTerminal} />
                 ) : (
                   <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 )}

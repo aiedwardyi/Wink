@@ -7,7 +7,6 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
 import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
-import { isPhone } from "@/lib/phone-swipe";
 
 function engineReady(instance: InstanceInfo): boolean {
   return (
@@ -23,10 +22,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [instances, setInstances] = useState<InstanceInfo[] | null>(null);
   const [instancesError, setInstancesError] = useState<string | null>(null);
   const [signedOut, setSignedOut] = useState(false);
+  const browser = !window.ogb;
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
-  // A phone opens a PC that is already set up, so it only ever needs the sign-in.
-  const phone = !window.ogb && isPhone();
 
   useEffect(() => {
     let active = true;
@@ -36,14 +34,24 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       setInstancesError(null);
       pending = fetch(probe ? "/api/instances?refresh=1" : "/api/instances")
         .then((response) => {
-          // A phone without this PC's cookie, not a broken engine check.
+          // A browser without this PC's cookie, not a broken engine check.
           if (response.status === 401) return null;
           if (!response.ok) throw new Error(`engine check failed with ${response.status}`);
           return response.json();
         })
-        .then((data) => {
+        .then(async (data) => {
           if (!active) return;
-          if (data && phone) return onDone();
+          if (data && browser) {
+            const response = await fetch("/api/bots?messages=0");
+            if (response.status === 401) data = null;
+            else {
+              if (!response.ok) throw new Error(`setup check failed with ${response.status}`);
+              const { bots } = await response.json();
+              if (!active) return;
+              if (bots?.length) return onDone();
+            }
+          }
+          if (!active) return;
           setSignedOut(!data);
           if (data) setInstances(data.instances ?? []);
         })
@@ -93,7 +101,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return () => dialog.removeEventListener("keydown", onKey);
   }, [step, instances, instancesError, signedOut]);
 
-  if (phone && !signedOut && !instancesError) return null;
+  if (browser && instances === null && !signedOut && !instancesError) return null;
 
   const emptyConnect = connectSession || instances !== null && isEmptyEngineLaunch(instances);
 

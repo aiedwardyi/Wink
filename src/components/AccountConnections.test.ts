@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { InstanceInfo } from "@/state/store";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
@@ -96,7 +95,7 @@ it.each([false, true])("shows a long email whole as plain text with phone %s", a
   expect(host.textContent).not.toContain("Main");
 });
 
-it.each([1, 2])("heads the engine above %i account rows, with Add Account only on the engine header row", async (count) => {
+it.each([1, 2])("heads the engine above a card of %i account rows, with Add Account only on the engine header row", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
   const [header] = [...group.children];
@@ -104,10 +103,11 @@ it.each([1, 2])("heads the engine above %i account rows, with Add Account only o
   expect(header!.querySelector("svg")).not.toBeNull();
   expect(header!.textContent).toBe("ClaudeAdd Account");
   expect(header!.textContent).not.toContain("@");
-  expect(group.querySelectorAll("svg")).toHaveLength(count + 1);
+  expect(group.querySelectorAll("svg")).toHaveLength(1);
   expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
   expect(rows).toHaveLength(count);
-  expect(group.lastElementChild!.hasAttribute("data-connection-account")).toBe(true);
+  expect(group.lastElementChild!.getAttribute("role")).toBe("group");
+  expect([...group.lastElementChild!.children]).toEqual(rows);
   for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
@@ -386,20 +386,27 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
   await update();
   expect(buttons("Add Account")).toHaveLength(0);
-  expect(host.textContent).toContain("Sign in on a computer");
+  expect(host.textContent).toContain("Add on computer");
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
 });
 
-it("puts computer-only guidance under the engine name, never beside it, and keeps action words on one line", async () => {
+it.each([
+  ["en", "Add on computer", "Sign in on computer"],
+  ["ko", "컴퓨터에서 추가", "컴퓨터에서 로그인"],
+] as const)("puts a computer-only action in the engine header's slot as a muted label, never a line below, in %s", async (locale, add, signIn) => {
+  persistPreference(locale);
   await render(2);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini" });
   await update();
-  const header = host.querySelector('[data-engine-row="claude"]')!.firstElementChild!;
-  const [line, under] = [...header.children];
-  expect(line!.textContent).toBe("Claude");
-  expect(under!.textContent).toBe("Sign in on a computer");
-  expect(under!.querySelector(".pl-6")?.textContent).toBe("Sign in on a computer");
+  for (const [id, label] of [["claude", add], ["gemini", signIn]] as const) {
+    const group = host.querySelector(`[data-engine-row="${id}"]`)!;
+    const slot = group.querySelector("[data-engine-head] [data-engine-slot]");
+    expect(slot?.textContent, id).toBe(label);
+    expect(slot!.querySelector("button")).toBeNull();
+    expect(group.textContent!.split(label)).toHaveLength(2);
+  }
   for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
 });
 
@@ -438,19 +445,17 @@ it("shows an accepted account as soon as the server pushes its signed-in row", a
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
 });
 
-it("folds the sign-in guidance open and shut, keeping its words while it closes", async () => {
+it("swaps the header slot between the computer-only label and Add Account, with no fold", async () => {
   await render(2);
-  const guidance = (phase: string) => host.querySelector(`[data-engine-row="claude"] [data-fold="${phase}"]`);
-  expect(guidance("opening")).toBeNull();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let phone = true;
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width") }) as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
   await update();
-  expect(guidance("opening")?.textContent).toBe("Sign in on a computer");
+  const slot = () => host.querySelector('[data-engine-row="claude"] [data-engine-slot]');
+  expect(slot()?.textContent).toBe("Add on computer");
+  expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
   phone = false;
   await update();
-  expect(guidance("closing")?.textContent).toBe("Sign in on a computer");
-  await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
+  expect(slot()?.textContent).toBe("Add Account");
   expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
 });

@@ -85,7 +85,7 @@ Every step re-reads the worker's whole context, so long runs cost more.
   each pick with a one-sentence reason.
 - Default workers to high effort. Only when the user turns max mode on, use
   max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
-  audits only.
+  audits only, at xhigh.
 - Save Gemini 4 Argon for big jobs that gain from a second model family's view,
   like a whole-codebase audit or 3D and graphic design. Routine work goes to the
   other engines.

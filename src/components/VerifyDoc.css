@@ -30,8 +30,9 @@
 .verify-doc-page { position: absolute; top: 4px; right: 10px; color: var(--color-ink-secondary); font-size: 10.5px; line-height: 14px; font-variant-numeric: tabular-nums; }
 .verify-doc-line { position: relative; min-height: 1.6em; padding: 0 16px 0 46px; white-space: pre-wrap; overflow-wrap: anywhere; transition: background-color .4s; }
 .verify-doc-line::before { content: attr(data-n); position: absolute; left: 0; width: 34px; text-align: right; color: var(--color-ink-secondary); opacity: .55; font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.verify-doc-line[data-on] { background: color-mix(in oklab, var(--color-accent) 14%, transparent); }
-.verify-doc-line[data-on]::after { content: ""; position: absolute; top: 0; bottom: 0; left: 40px; width: 2px; background: var(--color-accent); }
+.verify-doc-line[data-on] { background: color-mix(in oklab, var(--color-accent) 5%, transparent); }
+.verify-doc-pages { position: relative; overflow: hidden; }
+.verify-doc-cursors { position: absolute; inset: 0; pointer-events: none; }
 .verify-doc-line[data-hit] { background: rgb(240 93 93 / .08); }
 .verify-doc-line mark { border-radius: 2px; background: rgb(240 93 93 / .2); color: inherit; text-decoration: underline wavy #f05d5d; text-decoration-skip-ink: none; text-underline-offset: 3px; }
 .verify-doc-wait { padding: 40px 0; color: var(--color-ink-secondary); text-align: center; }
@@ -39,6 +40,8 @@
 .verify-doc-tally li { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .verify-doc-tally span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .verify-doc-tally b { font-weight: 400; font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.verify-doc-tally b[data-issues] { animation: verify-doc-tick .3s ease-out; }
+@keyframes verify-doc-tick { from { transform: scale(1.7); } }
 @media (max-width: 767px) {
   .verify-doc-findings li, :lang(ko) .verify-doc-findings li { grid-template-columns: auto minmax(0, 1fr); row-gap: 2px; }
   .verify-doc-text { grid-column: 1 / -1; }
@@ -47,9 +50,14 @@
   .verify-doc-stage { padding: 8px; }
   .verify-doc-line { padding-left: 38px; }
   .verify-doc-line::before { width: 28px; }
-  .verify-doc-line[data-on]::after { left: 33px; }
 }
+/* No cursors to follow, so the chunk being checked keeps its strong tint and bar. */
 @media (prefers-reduced-motion: reduce) {
   .verify-doc-kinds li, .verify-doc-bar i, .verify-doc-line { transition: none; }
-  .verify-doc-kinds li[data-state="running"] i { animation: none; }
+  .verify-doc-kinds li[data-state="running"] i, .verify-doc-tally b[data-issues] { animation: none; }
+  .verify-doc-line[data-on]:not([data-hit]) { background: color-mix(in oklab, var(--color-accent) 14%, transparent); }
+  .verify-doc-line[data-on]::after { content: ""; position: absolute; top: 0; bottom: 0; left: 40px; width: 2px; background: var(--color-accent); }
+}
+@media (prefers-reduced-motion: reduce) and (max-width: 767px) {
+  .verify-doc-line[data-on]::after { left: 33px; }
 }

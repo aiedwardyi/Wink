@@ -35,6 +35,7 @@ export interface VerifyAutoTurn {
 interface AutoStart { botId: string; threadId: string; entry: string; episode: string }
 interface VerifyAutoDeps {
   enabled(): boolean;
+  skip?(threadId: string): boolean;
   startAuto(input: AutoStart): Promise<boolean | void>;
   cancelQueued?(threadId: string): void;
   startDocs?(input: { botId: string; threadId: string; roots: string[]; paths: string[]; scanned?: string[]; humanId: string }): void;
@@ -126,7 +127,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
   const latest = new Map<string, object>();
   const key = (threadId: string, turnId?: string) => JSON.stringify([threadId, turnId]);
   const event = (event: RuntimeEvent) => {
-    if (event.type !== "item.started" && event.type !== "item.completed" || event.itemType !== "tool" || !deps.enabled()) return;
+    if (event.type !== "item.started" && event.type !== "item.completed" || event.itemType !== "tool" || !deps.enabled() || deps.skip?.(event.threadId)) return;
     const id = key(event.threadId, event.turnId);
     let turn = turns.get(id);
     if (!turn) { turn = { tools: 0, opaque: false, writes: new Set(), sequence: 0, names: new Map() }; turns.set(id, turn); }
@@ -150,6 +151,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     return () => { if (turn && turns.get(id) === turn) turn.checked = sequence; };
   };
   const settled = async (input: VerifyAutoTurn) => {
+    if (deps.skip?.(input.threadId)) return;
     const id = key(input.threadId, input.turnId), turn = turns.get(id);
     turns.delete(id);
     deps.docTurnEnded?.(input);

@@ -1,10 +1,11 @@
-// Small HTTPS client for enroll and CT lookups: normal certificate
+// Small HTTPS client for enroll, CT lookups and joined team rooms: normal certificate
 // verification, a hard deadline, a response size cap and no cross-origin
 // redirects. `ca` and `lookup` exist so tests can point it at a local server.
 
 import type { OutgoingHttpHeaders } from "node:http";
 import { request } from "node:https";
 import type { LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 
 export interface HttpsDeps {
   /** Extra trust roots; production leaves this unset and uses the system store. */
@@ -17,8 +18,10 @@ export interface HttpsDeps {
 export interface HttpsRequest {
   method: "GET" | "POST";
   url: string;
-  body?: string;
+  /** A stream goes out chunked unless `headers` names its length. */
+  body?: string | Buffer | Readable;
   contentType?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
   /** Same-origin redirects to follow; cross-origin ones always fail. */
@@ -55,10 +58,10 @@ export async function httpsRequest(req: HttpsRequest, deps: HttpsDeps = {}): Pro
 
 function once(url: URL, req: HttpsRequest, deps: HttpsDeps): Promise<HttpsResponse & { location?: string }> {
   return new Promise((resolve, reject) => {
-    const headers: OutgoingHttpHeaders = { accept: "application/json" };
+    const headers: OutgoingHttpHeaders = { accept: "application/json", ...req.headers };
     if (req.body !== undefined) {
       headers["content-type"] = req.contentType ?? "application/json";
-      headers["content-length"] = String(Buffer.byteLength(req.body));
+      if (!(req.body instanceof Readable)) headers["content-length"] = String(Buffer.byteLength(req.body));
     }
     const client = request(
       {
@@ -104,6 +107,8 @@ function once(url: URL, req: HttpsRequest, deps: HttpsDeps): Promise<HttpsRespon
       reject(error instanceof HttpsError ? error : new HttpsError(error.message));
     }
     client.on("error", fail);
-    client.end(req.body);
+    if (!(req.body instanceof Readable)) return void client.end(req.body);
+    req.body.on("error", (error) => client.destroy(new HttpsError(error.message)));
+    req.body.pipe(client);
   });
 }

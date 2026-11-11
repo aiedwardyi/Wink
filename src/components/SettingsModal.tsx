@@ -663,12 +663,10 @@ export function SettingsModal({
             )}
 
             {section === "connections" && (
-              <Card band>
-                <div className="flex flex-col gap-4">
-                  <EnginesSettings />
-                  <SavedKeys />
-                </div>
-              </Card>
+              <div data-settings-connections="" className="flex flex-col gap-4">
+                <EnginesSettings />
+                <SavedKeys />
+              </div>
             )}
 
             {section === "themes" && (

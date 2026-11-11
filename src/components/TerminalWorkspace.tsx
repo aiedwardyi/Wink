@@ -8,6 +8,7 @@ import { api, useStore, visibleMessages } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/lib/terminal-appearance";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
+import { loadWebTerminalFonts, webTerminalFonts, type LiveOutput, type TerminalBridge } from "@/lib/web-terminal-bridge";
 import { workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
@@ -18,7 +19,7 @@ import { WorkerChip, WorkerMark } from "./WorkerRows";
 import "@xterm/xterm/css/xterm.css";
 
 type SessionInfo = { cwd: string; shell: string };
-type OutputEvent = { id: string; data: string; seq: number };
+type OutputEvent = LiveOutput;
 type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string; exitCode: number | null; seq: number; launchProject?: string | null; label?: string; cols?: number; rows?: number; alternate?: boolean; modes?: number[]; resetModes?: number[] };
 type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?: number };
 const TERMINAL_FONT_MIN = 8;
@@ -55,6 +56,7 @@ export function TerminalWorkspace({
   visible,
   paneFocus,
   onPaneOrder,
+  webBridge,
 }: {
   bot: Pick<Bot, "id" | "name" | "busy" | "cwd"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
@@ -62,6 +64,8 @@ export function TerminalWorkspace({
   visible: boolean;
   paneFocus?: { sessionId: string | null } | null;
   onPaneOrder?: (botId: string, order: string[] | null) => void;
+  /** A desktop browser's live bridge; the app uses its preload. */
+  webBridge?: TerminalBridge;
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
@@ -119,7 +123,7 @@ export function TerminalWorkspace({
   panesRef.current = panes;
 
   const projectMismatch = Boolean(session && !samePath(bot.cwd ?? null, launchProject));
-  const showProjectBanner = projectMismatch && !bannerDismissed;
+  const showProjectBanner = projectMismatch && !bannerDismissed && !webBridge;
   const folderLabel = bot.cwd ? folderBasename(bot.cwd) : t("terminal.privateWorkspace");
   const folderTooltip = bot.cwd ?? t("terminal.privateWorkspace");
 
@@ -129,7 +133,7 @@ export function TerminalWorkspace({
 
   // Bot-spawned panes: seeded once, then pushed by the host on open.
   useEffect(() => {
-    const bridge = window.ogb?.terminal;
+    const bridge = webBridge ?? window.ogb?.terminal;
     setPanes([]);
     setPane(null);
     setSeeded(false);
@@ -166,7 +170,7 @@ export function TerminalWorkspace({
   // xterm + bridge listeners for this bot. Shell open waits until visible.
   useEffect(() => {
     const host = hostRef.current;
-    const bridge = window.ogb?.terminal;
+    const bridge = webBridge ?? window.ogb?.terminal;
     if (!host || !bridge) return;
     let alive = true;
     let id: string | null = null;
@@ -225,10 +229,12 @@ export function TerminalWorkspace({
     };
     terminal.open(host);
     const report = (cause: unknown) => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); };
-    const defaultFont = terminal.options.fontFamily;
+    const defaultFont = webBridge ? webTerminalFonts(terminal.options.fontFamily ?? "") : terminal.options.fontFamily;
     const theme = async () => {
       const request = ++appearanceRequest;
       const imported = readTerminalMatch() ? await bridge.appearance?.().catch(() => null) : null;
+      // xterm measures cells when the font option changes, so a web font must be loaded by then.
+      if (webBridge) await loadWebTerminalFonts();
       if (!alive || request !== appearanceRequest) return;
       const css = getComputedStyle(host);
       const color = (name: string) => css.getPropertyValue(`--color-${name}`).trim();
@@ -254,7 +260,8 @@ export function TerminalWorkspace({
         return;
       }
       lastSeq = event.seq;
-      terminal.write(event.data);
+      if (event.done) terminal.write(event.data, event.done);
+      else terminal.write(event.data);
     };
     const offData = bridge.onData((event) => {
       if (replayComplete) {
@@ -708,7 +715,7 @@ export function TerminalWorkspace({
   const closePane = (id: string) => {
     setPanes((list) => list.filter((item) => item.id !== id));
     if (pane === id) setPane(null);
-    void Promise.resolve().then(() => window.ogb?.terminal?.close?.(id)).catch(() => {});
+    void Promise.resolve().then(() => (webBridge ?? window.ogb?.terminal)?.close?.(id)).catch(() => {});
   };
   const requestClosePane = (id: string) => {
     const target = panes.find((item) => item.id === id);
@@ -745,25 +752,32 @@ export function TerminalWorkspace({
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {pane !== null && <WorkerMark compact provider={paneProvider(workers, pane, panes.find((item) => item.id === pane)?.label)} />}{watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void chooseAndPersist()}
-              disabled={choosing || replacing}
-              title={folderTooltip}
-              aria-label={t("terminal.chooseFolder")}
-              className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] disabled:opacity-60 ${HEADER_CONTROL}`}
-            >
-              <FolderOpen size={12} className="shrink-0" />
-              <span className="min-w-0 truncate font-mono">{folderLabel}</span>
-              <ChevronDown size={11} className="shrink-0 opacity-70" />
-            </button>
+            {webBridge ? (
+              <span title={folderTooltip} className="inline-flex min-w-0 max-w-full items-center gap-1 px-1.5 py-0.5 text-[11px] text-ink-secondary">
+                <FolderOpen size={12} className="shrink-0" />
+                <span className="min-w-0 truncate font-mono">{folderLabel}</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void chooseAndPersist()}
+                disabled={choosing || replacing}
+                title={folderTooltip}
+                aria-label={t("terminal.chooseFolder")}
+                className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] disabled:opacity-60 ${HEADER_CONTROL}`}
+              >
+                <FolderOpen size={12} className="shrink-0" />
+                <span className="min-w-0 truncate font-mono">{folderLabel}</span>
+                <ChevronDown size={11} className="shrink-0 opacity-70" />
+              </button>
+            )}
             {projectMismatch && bannerDismissed ? (
               <span className="shrink-0 text-[11px] text-ink-secondary" title={launchProject ?? undefined}>· {t("terminal.differentProject")}</span>
             ) : null}
           </div>
         </div>
         {bot.busy && <span className="shrink-0 text-[11px] text-accent-text" role="status">{t("terminal.agentWorking")}</span>}
-        {pane !== null && (
+        {pane !== null && !webBridge && (
           <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={`flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`}>
             <SquareX size={16} />
           </button>
@@ -837,7 +851,7 @@ export function TerminalWorkspace({
             : t("terminal.exited", { code: exitCode })}
         </span>
         {exitCode !== null ? (
-          <button type="button" onClick={requestRestartHere} disabled={replacing || pane !== null} className="text-accent-text underline disabled:opacity-60">{t("terminal.restart")}</button>
+          !webBridge && <button type="button" onClick={requestRestartHere} disabled={replacing || pane !== null} className="text-accent-text underline disabled:opacity-60">{t("terminal.restart")}</button>
         ) : (
           <span>{t("terminal.lifetime")}</span>
         )}

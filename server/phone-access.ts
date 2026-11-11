@@ -95,6 +95,8 @@ export interface PhoneAccessOptions {
   loadClient?(): Promise<RelayClient>;
   /** Phone sign-in with Google. Without it, or without a Web client id, the Google button stays hidden. */
   google?: PhoneGoogleAccount;
+  /** The team room door. Without it, every /room path is 404. */
+  room?(req: IncomingMessage, res: ServerResponse, relay: { host: string; peer: string | null }): Promise<void>;
 }
 
 /** This PC's Google sign-in, as phone sign-in needs it. */
@@ -374,6 +376,10 @@ export class PhoneAccess {
         return HANDLED;
       case "google":
         await this.googleSignIn(req, res, host);
+        return HANDLED;
+      case "room":
+        if (this.options.room) await this.options.room(req, res, { host, peer: this.client?.peer(req) ?? null });
+        else send(res, 404, { error: "not found" });
         return HANDLED;
     }
     const phone = this.session(req, res);

@@ -1003,6 +1003,32 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("lists one short row per routine and the full record for routine_id", async () => {
+    const routine = (id: string, extra: object) => ({
+      id, name: `Brief ${id}`, instructions: "Summarize today's priorities. ".repeat(40), instructionsTruncated: false, enabled: true, runOn: "local", durationMinutes: 30,
+      schedule: { type: "weekly", time: "09:00", weekdays: ["monday", "friday"] }, nextRunAt: "2026-08-31T03:30:00.000Z", latestRun: null, ...extra,
+    });
+    routinesResponse = {
+      now: "2026-08-28T10:30:00.000Z",
+      timeZone: "Asia/Kolkata",
+      routines: [routine("r1", {}), routine("r2", { enabled: false, nextRunAt: null, schedule: { type: "once", at: "2026-09-01T04:00:00.000Z" } })],
+    };
+    const list = await callTool("list_routines", {});
+    expect(list.result.content[0].text).toBe([
+      "This bot's routines (current time: 2026-08-28T10:30:00.000Z; timezone: Asia/Kolkata), as id | name | schedule | status | next run:",
+      "- r1 | Brief r1 | weekly 09:00 monday,friday | enabled | 2026-08-31T03:30:00.000Z",
+      "- r2 | Brief r2 | once 2026-09-01T04:00:00.000Z | paused | none",
+    ].join("\n"));
+    const one = await callTool("list_routines", { routine_id: "r2" });
+    expect(one.result.content[0].text).toBe(`Routine r2 (current time: 2026-08-28T10:30:00.000Z; timezone: Asia/Kolkata):\n${JSON.stringify(routine("r2", { enabled: false, nextRunAt: null, schedule: { type: "once", at: "2026-09-01T04:00:00.000Z" } }), null, 2)}`);
+    const missing = await callTool("list_routines", { routine_id: "nope" });
+    expect(missing.result.isError).toBe(true);
+    const tools = await rpc("tools/list");
+    const tool = tools.result.tools.find((entry: { name: string }) => entry.name === "list_routines");
+    expect(tool.description).toContain("up to 2,000 characters of its instructions");
+    expect(tool.inputSchema.properties.routine_id.type).toBe("string");
+  });
+
   it("proposes a weekly routine through a confirmation-only request", async () => {
     lastRoutineRequestBody = null;
     const res = await callTool("propose_routine", {

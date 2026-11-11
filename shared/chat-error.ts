@@ -1,7 +1,7 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut"; vars?: Record<string, string | number> }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied"; vars?: Record<string, string | number>; raw?: string }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
@@ -21,6 +21,11 @@ export function classifyChatError(line: string): ChatError {
   if (/^connected apps are unavailable/.test(reason)) return { kind: "known", key: "errors.apps" };
   if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
+  const selfStopped = /^(.+?) stopped this reply on its own(?: \((.+)\))?$/.exec(reason);
+  if (selfStopped) return { kind: "known", key: "errors.engineStopped", vars: { engine: selfStopped[1] }, raw: selfStopped[2] ? reason : undefined };
+  const hook = /^(.+?) hook failed \(([^()]+)\)(?:: (.+))?$/.exec(reason);
+  if (hook) return { kind: "known", key: "errors.hookDenied", vars: { engine: hook[1], hook: hook[2] }, raw: hook[3] };
+  if (reason === "the sign-in changed while the reply was starting") return { kind: "known", key: "errors.signInChanged" };
   if (/^(?:\w+ exited \d+ before result:|stream disconnected before completion|spawn failed:|Internal error$|Resource exhausted\.)/i.test(reason)) return { kind: "known", key: "errors.engine" };
   return { kind: "unknown", raw };
 }

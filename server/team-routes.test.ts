@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -110,6 +110,19 @@ describe("package room imports", () => {
       first.close();
       second.close();
     }
+  });
+
+  it("erases the bots of a rolled back import outright", async () => {
+    const before = store.bots.map((bot) => bot.id);
+    vi.spyOn(store, "createGroup").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    const response = await fetch(`${base}/import`, { method: "POST", body: JSON.stringify(document) });
+
+    expect(response.status).toBe(500);
+    expect(store.bots.map((bot) => bot.id)).toEqual(before);
+    expect(store.trash.entries).toEqual([]);
   });
 
   it("honors the caller's project folder and room name for package imports", async () => {

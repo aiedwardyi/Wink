@@ -78,6 +78,22 @@ export async function refreshUsage(instances: InstanceInfo[], board: UsageBoard,
   return { failed: results.some((each) => each.status === "rejected"), museAuthFailed };
 }
 
+/** Alt+R runs `refresh` while its view is mounted; null (busy or shut) ignores it. */
+export function useRefreshKey(refresh: (() => void) | null) {
+  const latest = useRef(refresh);
+  latest.current = refresh;
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+        || event.code !== "KeyR" || !latest.current) return;
+      event.preventDefault();
+      latest.current();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+}
+
 export function staleAccounts(instances: InstanceInfo[], now = Date.now(), board?: UsageBoard): InstanceInfo[] {
   return instances.filter((instance) => eligible(instance, board)
     && !pending.has(instance.instanceId)

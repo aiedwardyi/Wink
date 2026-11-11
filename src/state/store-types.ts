@@ -90,7 +90,7 @@ export interface Message {
     signIn?: boolean;
     accountId?: string;
     folder?: string;
-    usageLimit?: { resetsAt: number | null };
+    usageLimit?: { resetsAt: number | null; model?: boolean };
     usageWait?: import("../../server/limit-wait-store").UsageWaitView;
   };
   /** user messages sent into a running turn - the model saw it mid-turn */
@@ -99,6 +99,7 @@ export interface Message {
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
   streamWhole?: number;
@@ -356,7 +357,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<

@@ -232,6 +232,8 @@ describe("Usage auto refresh", () => {
       expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
       await act(async () => { settle("/api/usage/refresh/claude", "ok"); });
       expect(button()!.disabled).toBe(false);
+      expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
+      await act(async () => { button()!.querySelector("svg")!.dispatchEvent(new Event("animationiteration", { bubbles: true })); });
       expect(button()!.querySelector("svg[class*='animate-spin']")).toBeNull();
     });
 

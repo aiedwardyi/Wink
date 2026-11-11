@@ -163,7 +163,7 @@ export type RuntimeEvent = RuntimeEventBase &
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
     // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider
@@ -202,6 +202,8 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
+  /** A team room ask: its native session ends with the turn. */
+  hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
@@ -335,6 +337,9 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** End this running turn as a clean finish, through the driver's own
+   * interrupt. Absent = the turn runs on to its natural end. */
+  endTurn?(threadId: ThreadId, turnId: TurnId): Promise<void>;
   /** Answer a pending ask. Resolves with what actually happened — never
    * throws for an ask that is no longer there: `unavailable` means nobody
    * could take the answer (the turn ended, the broker died, the driver
@@ -369,6 +374,8 @@ export interface ProviderAdapter {
   /** True while the thread's live session still runs background work (a
    * backgrounded subagent or command) that would die with it. Absent = false. */
   hasBackgroundWork?(threadId: ThreadId): boolean;
+  /** Ends the thread's native session and resolves once it has exited. Only team room asks call it. */
+  endSession?(threadId: ThreadId): Promise<void>;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
 }

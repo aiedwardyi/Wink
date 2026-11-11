@@ -90,6 +90,11 @@ describe("relay routes", () => {
       "/api/phone-relay",
       "/api/phone-relay/status",
       "/api/phone-relay/enroll",
+      "/api/joined/rooms",
+      "/api/joined/join",
+      "/api/joined/rooms/r1/send",
+      "/api/rooms/r1/files",
+      "/api/rooms/r1/send",
     ];
     for (const path of hidden) {
       for (const method of ["GET", "POST", "PUT", "DELETE"]) {
@@ -122,6 +127,21 @@ describe("relay routes", () => {
       expect(verdict("POST", "/api/phone/google", [["host", HOST], ["origin", origin]])).toMatchObject({ kind: "deny", status: 403 });
     }
     expect(verdict("GET", "/api/phone/google/start", [["host", HOST], ["origin", "https://wink.test"]])).toMatchObject({ kind: "deny", status: 403 });
+  });
+
+  it("hands /room to the team room door, only after the target, Host, Origin and local-only checks", () => {
+    for (const path of ["/room", "/room/", "/room/v1/join", "/room/v1/rooms/r1/stream?after=0", "/room/v9/anything"]) {
+      expect(verdict("GET", path).kind, path).toBe("room");
+      expect(verdict("POST", path, withOrigin).kind, path).toBe("room");
+    }
+    expect(verdict("POST", "/room/v1/join")).toEqual({ kind: "deny", status: 403, error: "forbidden: origin required" });
+    for (const origin of ["https://evil.example", "null", `http://${HOST}`]) {
+      expect(verdict("POST", "/room/v1/join", [["host", HOST], ["origin", origin]])).toEqual({ kind: "deny", status: 403, error: "forbidden: cross-origin request" });
+    }
+    expect(verdict("GET", "/room/v1/join", [["host", "other1234567890a.wink.test"]])).toEqual({ kind: "deny", status: 403, error: "forbidden: relay host required" });
+    expect(verdict("GET", "//room/v1/join")).toMatchObject({ kind: "deny", status: 400 });
+    expect(verdict("GET", "/room\\v1")).toMatchObject({ kind: "deny", status: 400 });
+    for (const path of ["/rooms", "/roomy/v1/join", "/api/room/v1/join"]) expect(verdict("GET", path).kind, path).not.toBe("room");
   });
 
   it("leaves everything else to the app behind the phone session", () => {

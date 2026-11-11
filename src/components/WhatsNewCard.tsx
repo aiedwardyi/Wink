@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
-import { api, useStore } from "@/state/store";
+import { useStore } from "@/state/store";
 import "./WhatsNewCard.css";
 
 /** Animated images keep decoding while mounted, so a preview only mounts while it can be seen. */
@@ -54,12 +54,6 @@ export default function WhatsNewCard({ release, closing, onClose }: { release: s
   const entry = WHATS_NEW[release];
   const card = useRef<HTMLElement>(null);
   const visible = useSeen(card);
-  const marked = useRef(false);
-  useEffect(() => {
-    if (!entry || !visible || marked.current) return;
-    marked.current = true;
-    void api("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release }) }).catch(() => {});
-  }, [entry, visible, release]);
   useEffect(() => {
     if (!visible) return;
     const onKey = (event: KeyboardEvent) => {
@@ -84,10 +78,7 @@ export default function WhatsNewCard({ release, closing, onClose }: { release: s
               key={tile.title.en}
               tile={tile}
               locale={locale}
-              onShow={() => {
-                dispatch({ type: "toggleSettings", open: true, memory: { line: "" } });
-                onClose();
-              }}
+              onShow={() => dispatch({ type: "toggleSettings", open: true, memory: { line: "" } })}
             />
           ))}
         </div>

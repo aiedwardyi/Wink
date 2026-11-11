@@ -5,6 +5,7 @@
 // explicitly queued so a fast second member never cuts off the first.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, PhoneOff, X } from "lucide-react";
+import { isVoiceLine } from "../../shared/live-call";
 
 import { currentCall, deferCallCleanup, endCall, useOnCall } from "@/lib/call";
 import { routeSpokenGroupMessage } from "@/lib/group-call";
@@ -367,7 +368,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
     for (const message of fresh) spokenIds.current.add(message.id);
 
     const replies = fresh.filter(
-      (message) => message.role === "bot" && message.kind === "text" && message.text?.trim(),
+      (message) => message.role === "bot" && message.kind === "text" && !isVoiceLine(message) && message.text?.trim(),
     );
     for (const reply of replies) {
       const member = members.find((candidate) => candidate.id === reply.from?.botId);

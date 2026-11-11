@@ -376,6 +376,41 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   expect(document.querySelector("[data-usage-quick]:not([data-closing])")).toBeNull();
 });
 
+it.each(["en", "ko"] as const)("refreshes the open quick view's accounts on Alt+R and nowhere else (%s)", async (locale) => {
+  persistPreference(locale);
+  const fails: ((error: Error) => void)[] = [];
+  h.api.mockImplementation((path: string) => path.startsWith("/api/usage/refresh/") ? new Promise((_, reject) => { fails.push(reject); }) : Promise.resolve({}));
+  const posts = () => h.api.mock.calls.map(([path]) => path as string).filter((path) => path.startsWith("/api/usage/"));
+  const altR = async (init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true, cancelable: true, ...init });
+    await act(async () => { window.dispatchEvent(event); });
+    return event.defaultPrevented;
+  };
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  expect(await altR(), "view shut").toBe(false);
+  await click("[data-usage-meter]");
+  const button = document.querySelector("[data-usage-quick] [data-usage-refresh]")!;
+  expect(button.getAttribute("aria-keyshortcuts")).toBe("Alt+R");
+  expect(button.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
+  for (const init of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: false }, { code: "AltRight", key: "Alt" }]) {
+    expect(await altR(init), JSON.stringify(init)).toBe(false);
+  }
+  expect(posts()).toEqual([]);
+  expect(await altR()).toBe(true);
+  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}`);
+  expect(posts().sort()).toEqual([...claude].sort());
+  expect(button.hasAttribute("disabled")).toBe(true);
+  expect(await altR(), "ignored while pending").toBe(false);
+  await act(async () => fails.forEach((fail) => fail(new Error("offline"))));
+  expect(document.querySelector("[data-usage-quick] [role=alert]")?.textContent).toBe(locale === "en" ? "Could not refresh usage. Try again." : "사용량을 새로 고치지 못했습니다. 다시 시도하세요.");
+  await click("[data-usage-meter]");
+  expect(await altR(), "closing").toBe(false);
+  await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+  expect(document.querySelector("[data-usage-quick]")).toBeNull();
+  expect(await altR(), "closed").toBe(false);
+  expect(posts()).toHaveLength(claude.length);
+});
+
 it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
   persistPreference(locale);
   h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
@@ -466,6 +501,10 @@ it("watches the list width again once a fold has landed", async () => {
 
 it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
+});
+
+it("closes the hand on press, before the drag starts", () => {
+  expect(usageCss).toMatch(/\[data-usage-reorder\]:active \{ cursor: grabbing; \}/);
 });
 
 it("keeps a 44 px hold band on the 20 px engine head", () => {
@@ -631,6 +670,40 @@ it("reorders the small card by a held touch and by keyboard", async () => {
   await act(async () => quickRows()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })));
   expect(quickIds()).toEqual([before[1], before[0], before[2]]);
   expect(document.activeElement).toBe(quickRows()[1]);
+});
+
+// Chromium counts a translated row in its scroller's scrollHeight.
+const scroller = (box: HTMLElement, rows: HTMLElement[]) => {
+  let top = 0;
+  const height = () => Math.max(240, ...rows.map((row, index) => index * 80 + 80 + (parseFloat(row.style.translate.split(" ")[1] ?? "") || 0)));
+  box.style.overflowY = "auto";
+  Object.defineProperties(box, {
+    clientHeight: { configurable: true, value: 200 },
+    scrollHeight: { configurable: true, get: height },
+    scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height() - 200)); } },
+  });
+  vi.spyOn(box, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 200));
+  return height;
+};
+
+it.each(["mouse", "touch"])("keeps the small card's scroll height while a %s drag is held at its edge", async (pointer) => {
+  await openQuick();
+  const rows = [...quickRows()];
+  stack(rows);
+  const height = scroller(document.querySelector<HTMLElement>("[data-quick-scroll]")!, rows);
+  if (pointer === "mouse") {
+    await act(async () => {
+      rows[0]!.dispatchEvent(mouse("pointerdown", 40, 40));
+      document.dispatchEvent(mouse("pointermove", 40, 190));
+    });
+  } else {
+    await act(async () => void touch(rows[0]!, "touchstart", 40));
+    await held(400);
+    await act(async () => void touch(rows[0]!, "touchmove", 190));
+  }
+  await held(10_000);
+  expect(height()).toBe(240);
+  await act(async () => void (pointer === "mouse" ? document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })) : touch(rows[0]!, "touchcancel")));
 });
 
 it("picks a row up on a long press", async () => {

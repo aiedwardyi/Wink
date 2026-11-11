@@ -72,6 +72,24 @@
   transform-origin: right;
 }
 
+/* A live call's controls rise into the message box on connect and sink out on hang-up. */
+[data-call-box] {
+  animation: call-in var(--motion-large) var(--ease-entrance);
+}
+[data-call-box][data-leaving] {
+  animation: call-out var(--motion-large) var(--ease-exit) forwards;
+  pointer-events: none;
+}
+@keyframes call-in {
+  from { transform: translateY(8px); opacity: 0; }
+}
+@keyframes call-out {
+  to { transform: translateY(8px); opacity: 0; }
+}
+@keyframes call-time-left {
+  to { transform: scaleX(0); }
+}
+
 /* Fold: content opens and closes by its height, with a fade. It is clipped
    only while it moves, so focus rings and popovers inside are never cut. */
 [data-fold] {

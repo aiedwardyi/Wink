@@ -198,7 +198,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
       aria-label={label}
       title={label}
       onClick={() => toggleVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, false) === "live" })}
-      className="relative rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink aria-pressed:text-accent max-md:hidden"
+      className="relative rounded-md p-1.5 text-ink-secondary hover:bg-control hover:text-ink aria-pressed:text-accent max-md:hidden"
     >
       <MousePointerClick size={18} />
       {card.live && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 rounded-full bg-[#f05d5d]" />}

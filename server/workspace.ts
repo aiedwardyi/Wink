@@ -64,9 +64,12 @@ function unlinkLinks(dir: string): void {
   }
 }
 
-/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
 export function removeWorkspace(botId: string): void {
-  const dir = workspaceDir(botId);
+  removeWorkspaceDir(workspaceDir(botId));
+}
+
+/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
+export function removeWorkspaceDir(dir: string): void {
   const stat = lstatSync(dir, { throwIfNoEntry: false });
   if (!stat) return;
   if (stat.isSymbolicLink()) return unlinkSync(dir);
@@ -298,7 +301,8 @@ export function memorySystemPrompt(botId: string): string {
     ? `\n\n[Memory sync set aside a copy of your notes when two PCs changed them at once: ${parked.join(", ")}. Your file is the copy that won. The set-aside one may hold a note missing here, or an old one removed on purpose; its first line says when it was last edited. Copy back only notes that are still true and still wanted, then delete the copy.]`
     : "";
   if (!memory) return `${guidance}${conflicts}`;
-  const size = `MEMORY.md is ${memory.bytes} bytes in ${memory.lines} lines`;
+  // rounded up: a small edit keeps the pinned system text, and over budget never reads as under
+  const size = `MEMORY.md is about ${Math.ceil(memory.bytes / 1_000) * 1_000} bytes in about ${Math.ceil(memory.lines / 10) * 10} lines`;
   const budget = `the ${MEMORY_MAX_LINES}-line/${MEMORY_MAX_BYTES}-byte budget`;
   const trim = "move long notes into memory/<topic>.md files and leave one-line pointers.";
   const near =
