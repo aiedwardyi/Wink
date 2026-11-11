@@ -284,7 +284,7 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["People", "Attach a file"]);
+    expect(labels).toEqual(["Turn off alerts for this room", "People", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
   });
 
@@ -551,7 +551,7 @@ describe("Team rooms for a teammate", () => {
     const main = $('[data-team-room="joined"]')!;
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["Leave", "Attach a file"]);
+    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["Turn off alerts for this room", "Leave", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|People|Settings|Manage members|Find in conversation|approve|model/i);
     expect(calls.some((call) => call.path.startsWith("/api/rooms/"))).toBe(false);
     await act(async () => store.dispatch!({ type: "hydrate", bots: [nova], groups: [], botsUnreadable: false, computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } } as never));

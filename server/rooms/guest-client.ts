@@ -29,6 +29,7 @@ import {
   type JoinedRoom,
   type JoinedState,
 } from "./joined.ts";
+import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { cachedJoinedFile, keepJoinedFile } from "./joined-files.ts";
 import { NAME_MAX } from "./names.ts";
 
@@ -100,9 +101,10 @@ export interface GuestClientDeps {
   /** This PC as the host sees it: its own name and a steady id a Remove can bar. */
   joiner(): { name: string; device: string };
   onChange?(roomId: string): void;
+  alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
-  timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number };
+  timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number; alertMs?: number };
 }
 
 /** The relay host of a strictly well-formed code under one of `bases`, else null. */
@@ -338,6 +340,14 @@ export class GuestClient {
     return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room) };
   }
 
+  private alertLine(roomId: string, entry: JoinedEntry): void {
+    const room = joinedRoom(roomId);
+    if (!room || (entry.author.kind === "person" && entry.author.id === room.me.id)) return;
+    const chat = `joined:${roomId}`;
+    const line = { chat, threadId: chat, room: room.state?.roomName ?? "", name: entry.author.name, text: roomLineText(entry.text, entry.files) };
+    alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs);
+  }
+
   private changed(roomId: string): void {
     this.deps.onChange?.(roomId);
   }
@@ -479,7 +489,10 @@ export class GuestClient {
     }
     if (parsed.kind === "entry") {
       // The cursor holds until a reset's snapshot lands, so a restart meanwhile replays from the start.
-      if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) this.changed(roomId);
+      if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) {
+        this.changed(roomId);
+        this.alertLine(roomId, parsed.entry);
+      }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
     } else if (parsed.kind === "ended") {

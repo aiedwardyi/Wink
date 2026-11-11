@@ -131,6 +131,7 @@ export function openNotificationTarget(
   state: NotificationRoutingState & Pick<AppState, "hydrated">,
   freshState = false,
 ) {
+  if (joinedRoomIdOf(target.threadId)) return dispatch({ type: "select", id: target.threadId });
   const owner = notificationOwner(state, target);
   if (owner) dispatch({ type: "select", id: owner.id });
   if (!state.hydrated) dispatch({ type: "notificationSwitchPending", target });

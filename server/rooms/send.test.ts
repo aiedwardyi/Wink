@@ -137,3 +137,39 @@ describe("hostedSend", () => {
     expect(() => hostedSend(group, { kind: "person", id: "stranger" }, "hi")).toThrow(expect.objectContaining({ status: 404 }));
   });
 });
+
+describe("room alerts on the host", () => {
+  const alert = vi.fn();
+  const line = (name: string, text: string) => [{ chat: group.id, threadId: group.threadId, room: "Team", name, text }];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    alert.mockReset();
+    configureRoomAsks({ ...deps, alert });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("pings 3 s after a teammate's line while the room is still unread", () => {
+    hostedSend(group, person("chat"), "hi");
+    vi.advanceTimersByTime(2_999);
+    expect(alert).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(alert.mock.calls).toEqual([line("Sora", "hi")]);
+  });
+
+  it("never pings the host's own line", () => {
+    hostedSend(group, { kind: "host" }, "sure");
+    store.patchGroup(group.id, { unread: true });
+    hostedSend(group, person("trusted"), "민준 here");
+    vi.advanceTimersByTime(3_000);
+    expect(alert.mock.calls).toEqual([line("Mina", "민준 here")]);
+  });
+
+  it("stays quiet when the room is read on screen within the wait", () => {
+    hostedSend(group, person("chat"), "first");
+    store.patchGroup(group.id, { unread: false });
+    vi.advanceTimersByTime(3_000);
+    hostedSend(group, person("chat"), "second");
+    vi.advanceTimersByTime(3_000);
+    expect(alert.mock.calls).toEqual([line("Sora", "second")]);
+  });
+});

@@ -53,6 +53,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
+import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
@@ -2926,6 +2927,11 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
   if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+}
+
+function roomAlert(alert: RoomAlert) {
+  broadcast({ kind: "notify", notification: roomNotification(alert), at: Date.now() });
+  void sendWebPushToDevices(DATA_DIR, pushPayload(roomPing(alert), { botId: alert.chat, threadId: alert.threadId }, alert.chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -6242,6 +6248,7 @@ configureRoomAsks({
   dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
+  alert: roomAlert,
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
 sweepRoomFiles();
@@ -6249,6 +6256,7 @@ const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  alert: roomAlert,
 });
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.

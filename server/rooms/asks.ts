@@ -9,6 +9,7 @@ import { DATA_DIR } from "../config.ts";
 import { newId, type ProviderInstance } from "../contracts.ts";
 import { cancelQueuedAsk } from "../steer-queue.ts";
 import type { GroupRecord, Store } from "../store.ts";
+import type { RoomAlert } from "./alerts.ts";
 import { appendRoomEntry, roomPeople, RoomError, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
 import { writeRoomEntry } from "./mirror.ts";
@@ -52,6 +53,7 @@ export interface RoomAskDeps {
   /** The per-bot stop: epoch bump, interrupt, close approvals, `ended`, then release. */
   stopTurn(ask: RoomAsk, ended: () => Promise<unknown>): Promise<void>;
   endSession(ask: RoomAsk): Promise<void>;
+  alert?(alert: RoomAlert): void;
 }
 
 /** Words answers plug in here; with none, a words ask fails without a call. */

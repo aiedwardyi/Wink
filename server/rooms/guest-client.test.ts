@@ -370,3 +370,39 @@ describe("races and floods", () => {
     expect(joinedRoom("r1")).toMatchObject({ status: "left" });
   });
 });
+
+describe("room alerts on a teammate", () => {
+  const entry = (seq: number, author: JoinedEntry["author"], text: string) => `data: ${JSON.stringify({ kind: "entry", entry: { seq, id: `e${seq}`, at: seq, author, text } })}\n\n`;
+  const edward = { kind: "host" as const, id: "host", name: "Edward" };
+  const mina = { kind: "person" as const, ...STATE.me };
+  const ping = (text: string) => [{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "Edward", text }];
+  const stream = (frames: Array<[number, string]>) => (req: IncomingMessage, res: ServerResponse) => {
+    if (!req.url?.includes("/stream")) return quietDoor(req, res);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ kind: "state", state: STATE })}\n\n`);
+    for (const [ms, frame] of frames) setTimeout(() => res.write(frame), ms);
+  };
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("pings someone else's line after the wait and never an own line", async () => {
+    route = stream([[0, entry(1, mina, "on my way")], [0, entry(2, edward, "hi")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 50 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 2);
+    await sleep(200);
+    expect(alert.mock.calls).toEqual([ping("hi")]);
+  });
+
+  it("stays quiet when the room is read on screen within the wait", async () => {
+    route = stream([[0, entry(1, edward, "first")], [400, entry(2, edward, "second")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 150 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 1);
+    expect((await joinedRoute("POST", "/api/joined/rooms/r1/read", c, async () => ({ seq: 1 })))?.status).toBe(200);
+    await until(() => c.room("r1")?.entries.length === 2);
+    await sleep(300);
+    expect(alert.mock.calls).toEqual([ping("second")]);
+  });
+});

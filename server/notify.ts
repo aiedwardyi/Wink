@@ -16,7 +16,7 @@ import { redactSecretsInText } from "./redact.ts";
 
 export { summarize };
 
-export type NotifyKind = "approval" | "question" | "done" | "routine-failed" | "takeover";
+export type NotifyKind = "approval" | "question" | "done" | "routine-failed" | "takeover" | "room";
 
 export interface Notification {
   kind: NotifyKind;

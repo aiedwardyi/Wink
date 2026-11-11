@@ -4,6 +4,7 @@
 import { t } from "./i18n";
 import type { Notification } from "../../server/notify.ts";
 import { botNotifyIconPath, type BotAvatarProfileInput } from "../../shared/bot-avatar.ts";
+import { roomAlertsOff } from "./room-alerts";
 
 export type NotifyFrame = Notification & { openTerminal?: boolean; terminalSessionId?: string };
 
@@ -117,6 +118,7 @@ export function showNotification(
   onOpen: (target: NotificationTarget) => void,
   visibleThreadId?: string | null,
 ) {
+  if (roomAlertsOff().includes(frame.botId)) return;
   const native = typeof window !== "undefined" ? window.ogb?.showNotification : undefined;
   if (typeof native === "function") {
     const payload: Parameters<typeof native>[0] = {
