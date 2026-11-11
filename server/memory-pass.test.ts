@@ -712,7 +712,7 @@ describe("memory pass filters", () => {
 
   it("dedupes against MEMORY.md and within the batch", () => {
     const text = "i can't read korean. i'm 38";
-    const notes = "# Memory\n- Can't read Korean; translate for dad\n";
+    const notes = "# Memory\n- Can't read Korean; translate for a parent\n";
     expect(acceptFacts([{ fact: "Unable to read Korean", quote: "i can't read korean" }], text, notes)).toEqual([]);
     expect(acceptFacts([{ fact: "38", quote: "i'm 38" }, { fact: "38", quote: "38" }], text, notes)).toEqual([{ line: "38" }]);
   });
