@@ -45,6 +45,15 @@ main {
   max-width: 360px;
   text-align: center;
 }
+.logo {
+  display: block;
+  margin: 0 auto 16px;
+}
+.links {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
 h1 {
   margin: 0 0 6px;
   font-size: 20px;
