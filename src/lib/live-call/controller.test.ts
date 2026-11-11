@@ -267,7 +267,7 @@ describe("LiveCall", () => {
     call.observe({ busy: false, messages: rows });
     await flush();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Expired sessions cause the login bug."]);
-    expect(engine().contexts).toEqual([]);
+    expect(engine().contexts.filter((t) => t.startsWith("[Wink] Typed"))).toEqual([]);
     expect(call.state().status).toBe("listening");
   });
 
@@ -855,7 +855,7 @@ describe("VOICE-SEND: cards", () => {
   it("routes a spoken answer only after the card notice played", async () => {
     const { call, engine, posts } = await started();
     call.observe({ busy: false, messages: [cardRow("q1")] });
-    expect(engine().texts.at(-1)).toBe("[Wink] Nova needs you in chat: Your bot has a question");
+    expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer.");
     engine().events.heard("Hello?");
     engine().events.answering();
     expect(messagesOf(posts)).toEqual([]);
@@ -889,7 +889,7 @@ describe("VOICE-SEND: cards", () => {
   it("relays a card already open when the call started", async () => {
     const { call, engine } = await started();
     call.observe({ busy: false, messages: [cardRow("q1", 10)] });
-    expect(engine().texts.at(-1)).toBe("[Wink] Nova needs you in chat: Your bot has a question");
+    expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer.");
   });
 
   it("a failed answer rearms the card and says so", async () => {
@@ -918,7 +918,7 @@ describe("VOICE-SEND: cards", () => {
     audio.playing = false;
     engine().events.turnDone();
     audio.onIdle();
-    expect(engine().texts.some((t) => t.includes("needs you"))).toBe(false);
+    expect(engine().texts.some((t) => t.includes("Nova asks"))).toBe(false);
   });
 });
 
@@ -1066,5 +1066,215 @@ describe("VOICE-SEND: reconnect", () => {
     await flush();
     engine().events.ready();
     expect(engine().texts).toEqual(["[Wink] Nova replied: Red."]);
+  });
+});
+
+const notices = (engine: FakeEngine) => engine.texts.filter((t) => t.startsWith("[Wink] Nova asks:"));
+const koCard = (id: string) => ({ id, role: "bot", kind: "options", at: 2_000, card: { title: "질문이 있어요", subtitle: "8시 15분에 재시작할까요?", options: ["네, 8시 15분", "아니요, 새벽 1시"], askUser: true } }) as Message;
+const paneNote = (id: string, report: string) => ({ id, role: "user", kind: "note", at: 2_000, text: `[pane aaaaaaaa] [BUILD | opus | high] from Nova (b1): ${report} branch=x sha=1 dirty=0\nbody` }) as Message;
+const statusLines = (engine: FakeEngine) => engine.contexts.filter((t) => t.startsWith("[Wink] Status now"));
+
+describe("VOICE-KNOWS: cards aloud", () => {
+  it.each([
+    ["en", cardRow("q1"), "[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer."],
+    ["ko", koCard("q1"), "[Wink] Nova asks: 8시 15분에 재시작할까요? Options: 네, 8시 15분; 아니요, 새벽 1시. Read it out with the options, then wait for their answer."],
+  ])("D10 speaks the card's question and options, and routes the answer only after it played (%s)", async (_lang, card, notice) => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine, posts } = await started({}, audio);
+    call.observe({ busy: false, messages: [card] });
+    expect(engine().texts.at(-1)).toBe(notice);
+    audio.onStart();
+    audio.playing = true;
+    engine().events.turnDone();
+    engine().events.heard("Hmm.");
+    engine().events.answering();
+    expect(messagesOf(posts)).toEqual([]);
+    audio.playing = false;
+    audio.onIdle();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body)).toEqual([{ text: "Yes.", sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
+  });
+
+  it("a card with no options still reads its question", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [{ id: "q1", role: "bot", kind: "options", at: 2_000, card: { title: "Your bot has a question", subtitle: "", options: [], askUser: true } } as Message] });
+    expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Your bot has a question Read it out, then wait for their answer.");
+  });
+
+  it("a superseded card is never read; the newer one is, and takes the answer", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine, posts } = await started({}, audio);
+    audio.onStart();
+    audio.playing = true;
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    const newer = { ...koCard("q2"), at: 2_100 } as Message;
+    call.observe({ busy: false, messages: [cardRow("q1"), newer] });
+    audio.playing = false;
+    engine().events.turnDone();
+    audio.onIdle();
+    expect(notices(engine())).toEqual([expect.stringContaining("8시 15분에 재시작할까요?")]);
+    engine().events.turnDone();
+    engine().events.heard("네.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["네."]);
+  });
+
+  it("an interrupted card is read again, and a line said over it is not its answer", async () => {
+    const { call, engine, posts } = await started();
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    engine().events.interrupted();
+    engine().events.heard("Wait, what?");
+    engine().events.answering();
+    engine().events.said("Sorry.");
+    engine().events.turnDone();
+    expect(notices(engine())).toHaveLength(2);
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(linesOf(posts)).toContain("Wait, what?");
+  });
+
+  it("an old card from before the call is read with its question", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [{ ...koCard("q1"), at: 10 } as Message] });
+    expect(notices(engine())).toEqual([expect.stringContaining("8시 15분에 재시작할까요?")]);
+  });
+});
+
+describe("VOICE-KNOWS: status", () => {
+  it("tells a worker report as silent context, never on the first look, newest kept through a 30 s trailing flush", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [paneNote("n0", "BLOCKED BUILD")] });
+    expect(statusLines(engine())).toEqual([]);
+    vi.useFakeTimers();
+    call.observe({ busy: false, messages: [paneNote("n0", "BLOCKED BUILD"), paneNote("n1", "FAIL BUILD")] });
+    expect(statusLines(engine())).toEqual(["[Wink] Status now. Context only, do not read it out.\nNova is idle.\nWorkers, newest first: BUILD reported FAILED."]);
+    call.observe({ busy: true, messages: [paneNote("n1", "FAIL BUILD"), userRow("u1", "Rerun it.")] });
+    call.observe({ busy: false, messages: [paneNote("n1", "FAIL BUILD"), userRow("u1", "Rerun it."), paneNote("n2", "DONE BUILD")] });
+    expect(statusLines(engine())).toHaveLength(1);
+    vi.advanceTimersByTime(30_000);
+    expect(statusLines(engine()).at(-1)).toBe("[Wink] Status now. Context only, do not read it out.\nNova is idle.\nWorkers, newest first: BUILD reported DONE.");
+    expect(statusLines(engine())).toHaveLength(2);
+    vi.advanceTimersByTime(60_000);
+    call.observe({ busy: false, messages: [paneNote("n1", "FAIL BUILD"), userRow("u1", "Rerun it."), paneNote("n2", "DONE BUILD")] });
+    expect(statusLines(engine())).toHaveLength(2);
+    expect(engine().texts.some((t) => t.includes("reported"))).toBe(false);
+  });
+
+  it("a trailing status waits for the voice to be quiet", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [] });
+    engine().events.answering();
+    call.observe({ busy: false, messages: [paneNote("n1", "DONE BUILD")] });
+    expect(statusLines(engine())).toEqual([]);
+    engine().events.turnDone();
+    expect(statusLines(engine())).toHaveLength(1);
+  });
+
+  it("stops the trailing flush when the call ends", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [] });
+    vi.useFakeTimers();
+    call.observe({ busy: false, messages: [paneNote("n1", "FAIL BUILD")] });
+    call.observe({ busy: false, messages: [paneNote("n2", "DONE BUILD")] });
+    call.end();
+    vi.advanceTimersByTime(30_000);
+    expect(statusLines(engine())).toHaveLength(1);
+  });
+});
+
+describe("VOICE-KNOWS: answers and stats", () => {
+  it("D12 a busy bot's quick answer to a spoken ask is spoken and counted answered with its time", async () => {
+    const { call, engine, posts } = await started({ "/messages": { status: 202, data: { ok: true, quick: true } } });
+    engine().events.heard("Does voice use Opus tokens?");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "Does voice use Opus tokens?" } }]);
+    engine().events.turnDone();
+    await flush();
+    const rows = [askRow("a1", "Does voice use Opus tokens?", { sendId: "send-1", quick: { state: "asked" } }), botRow("r1", "No, talking is all Gemini.", { at: 11_000, quick: { state: "answer", askId: "a1" } })];
+    call.observe({ busy: true, messages: rows });
+    call.observe({ busy: true, messages: rows });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("talking is all Gemini"))).toEqual(["[Wink] Nova replied: No, talking is all Gemini."]);
+    call.end();
+    await flush();
+    const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
+    expect(stats.asks).toEqual({ sent: 1, retried: 0, answered: 1, ms: { p50: 9_000, p90: 9_000 } });
+  });
+
+  it("a card answer or a typed ask is not counted as a spoken ask", async () => {
+    const { call, engine, posts } = await started();
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    call.observe({ busy: false, messages: [askRow("a1", "Yes.", { sendId: "send-1" }), botRow("r1", "Set.", { at: 3_000 })] });
+    call.observe({ busy: true, messages: [userRow("t1", "Typed?", { sendId: "send-1", quick: { state: "asked" } }), botRow("r2", "Typed answer.", { quick: { state: "answer", askId: "t1" } })] });
+    await flush();
+    call.end();
+    await flush();
+    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.asks).toEqual({ sent: 0, retried: 0, answered: 0, ms: { p50: null, p90: null } });
+  });
+
+  it("counts guard flags by kind and times the acknowledgement of turns that sent", async () => {
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(fn: (pcm: ArrayBuffer) => void) { frame = fn; } };
+    const { call, engine, posts } = await started({}, audio);
+    const loud = () => frame(new Int16Array([5_000]).buffer);
+    loud();
+    engine().events.heard("Can you check when the eval loops finish?");
+    engine().events.answering();
+    audio.onStart();
+    engine().events.said("I will check that for you right now.");
+    engine().events.turnDone();
+    turn(engine(), "", "Sorry about that.");
+    turn(engine(), "What is the weather in Seoul?", "I'm not sure.");
+    turn(engine(), "", "Okay.");
+    turn(engine(), "Open the Orbit folder.", "폴더를 열 수 없어요.");
+    turn(engine(), "", "Okay.");
+    loud();
+    engine().events.heard("Does voice use Opus tokens?");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "Does voice use Opus tokens?" } }]);
+    audio.onStart();
+    engine().events.said("Let me check.");
+    engine().events.turnDone();
+    await flush();
+    call.end();
+    await flush();
+    const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
+    expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1 });
+    expect(stats.ttfaMs).toEqual({ p50: 0, p90: 0 });
+    expect(stats.ackMs).toEqual({ p50: 0, p90: 0 });
+  });
+
+  it("a call with no sends has no acknowledgement time", async () => {
+    const { call, posts } = await started();
+    call.end();
+    await flush();
+    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.ackMs).toEqual({ p50: null, p90: null });
+  });
+
+  it("a yes waits for the offer's lines to be saved before the order is sent", async () => {
+    const saves: Array<() => void> = [];
+    const save = () => { for (const done of saves.splice(0)) done(); };
+    const { call, engine, posts } = await started({ "/call/lines": () => new Promise((resolve) => { saves.push(() => resolve({ status: 200, data: {} })); }) });
+    turn(engine(), "Can you open the Orbit folder?", "Want me to open it?");
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts)).toEqual([]);
+    save();
+    await flush();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Open the Orbit folder."]);
+    expect(call.state().status).toBe("working");
   });
 });
