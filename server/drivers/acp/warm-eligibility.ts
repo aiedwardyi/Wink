@@ -1,5 +1,5 @@
 /**
- * SPEED-4 warm ACP session eligibility fingerprint.
+ * Warm ACP session eligibility fingerprint.
  * Reuse only when bot/thread identity, provider identity, cwd, tools/MCP
  * (including composio.env), approval scope, model, and effort still match.
  * Prompt/system text is NOT

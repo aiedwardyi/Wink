@@ -96,7 +96,7 @@ export function updateDraftAttachment(id: string, chipId: string, update: (attac
   setDraftAttachments(store, id, attachments.map((a) => (a.id === chipId ? update(a) : a)));
 }
 
-/** One room hold per busy Enter. A single draft slot cannot keep ADV-QUEUE-0..n. */
+/** One room hold per busy Enter. A single draft slot cannot keep a queue. */
 export interface PersistedRoomHold {
   text: string;
   requestText: string;

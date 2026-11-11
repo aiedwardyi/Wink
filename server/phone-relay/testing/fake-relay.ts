@@ -392,7 +392,7 @@ export class FakeRelay extends EventEmitter {
     return signAccountTicket({ label, subHash: googleSubHash(sub), iat, exp: iat + lifetimeSec }, this.operatorKey);
   }
 
-  /** Checks the PC signature and ticket; trusts the ID token's sub, which GP-1's own tests cover. */
+  /** Checks the PC signature and ticket; trusts the ID token's sub, which the account tests cover. */
   private defaultAccount(body: string): EnrollAnswer {
     let parsed: { idToken?: string; ticket?: string; pk?: string; sig?: string };
     try {
