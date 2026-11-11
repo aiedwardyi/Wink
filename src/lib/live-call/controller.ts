@@ -73,8 +73,9 @@ const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /,
 const request = (text: string): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map() });
 
 /** "Sent: X", "Not sent: X (why)": how a result reads aloud and in the chat. */
-function told(result: string, subject: string): string {
-  if (reached(result)) return `${result === "sent" ? "Sent" : "Queued"}: ${subject}`;
+export function told(result: string, subject: string): string {
+  if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
+  if (result.startsWith("already proposed")) return `Waiting for their answer: ${subject}`;
   return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
 }
 
@@ -139,7 +140,7 @@ export class LiveCall {
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
-    asks: { sent: 0 },
+    asks: { sent: 0, retried: 0 },
     guard: { nudges: 0, failLines: 0 },
     hidden: { spans: 0, ms: 0 }, closeCodes: [] as number[], ttfa: [] as number[], usage: 0,
   };
@@ -448,7 +449,7 @@ export class LiveCall {
     let reason = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (attempt) {
-        this.stats.orders.retried += 1;
+        this.stats["order" in tag ? "orders" : "asks"].retried += 1;
         await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
       }
       let sent: Posted;
@@ -617,6 +618,7 @@ export class LiveCall {
           text: `[Wink] ${this.deps.botName} needs you in chat: ${question.card?.title ?? ""}`,
           valid: () => this.card?.id === id,
           played: () => { if (this.card?.id === id) this.card.armed = true; },
+          // re-queues itself: a cut notice was never heard, so it must play again
           cut: () => { if (this.card?.id === id) this.held.push(notice); },
         };
         this.held.push(notice);

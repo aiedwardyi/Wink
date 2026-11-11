@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CallLine } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
-import { LiveCall, spokenText, type CallAudioPort, type Posted } from "./controller";
+import { LiveCall, spokenText, told, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 
 class FakeEngine implements LiveEngine {
@@ -715,6 +715,26 @@ describe("VOICE-SEND: receipts and retries", () => {
       { text: "Check the build.", sendId: "send-1", threadId: "task-1", call: { id: "c-0123456789ab", order: true } },
     ]);
     expect(engine().results).toEqual([{ id: "t1", result: "sent" }]);
+  });
+
+  it("a retried ask counts as an ask retry, not an order retry", async () => {
+    vi.useFakeTimers();
+    let tries = 0;
+    const { call, engine, posts } = await started({ "/messages": async () => { tries += 1; if (tries === 1) throw new Error("network down"); return { status: 202, data: { ok: true } }; } });
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "Does voice use Opus tokens?" } }]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    call.end();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats).toMatchObject({ orders: { retried: 0 }, asks: { sent: 1, retried: 1 } });
+  });
+
+  it.each([
+    ["already sent", "Check the build.", "Sent: Check the build."],
+    ["already sent", "빌드 확인해 줘.", "Sent: 빌드 확인해 줘."],
+    ["already proposed, waiting for their answer", "Check the build.", "Waiting for their answer: Check the build."],
+    ["already proposed, waiting for their answer", "빌드 확인해 줘.", "Waiting for their answer: 빌드 확인해 줘."],
+  ])("a late %s result never reads as not sent: %s", (result, subject, line) => {
+    expect(told(result, subject)).toBe(line);
   });
 
   it("two failed tries say not confirmed, aloud and in a line", async () => {

@@ -55,7 +55,7 @@ const statsSchema = z.object({
   ttfaMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   interrupted: count,
   orders: z.object({ proposed: count, confirmed: count, declined: count, expired: count, replaced: count.optional(), cancelled: count.optional(), dropped: count.optional(), failed: count.optional(), retried: count.optional() }),
-  asks: z.object({ sent: count }),
+  asks: z.object({ sent: count, retried: count.optional() }),
   guard: z.object({ nudges: count, failLines: count }),
   doneGuard: count,
   hidden: z.object({ spans: count, ms }),
