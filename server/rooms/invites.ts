@@ -227,7 +227,7 @@ export function joinRoom(inviteId: string, secret: string, taken: readonly strin
 }
 
 /** The room and person a guest key belongs to, or null once either the key or the person is gone. */
-export function guestByKey(key: string, device?: unknown): { roomId: string; person: RoomPerson } | null {
+export function guestByKey(key: string, device?: string | string[]): { roomId: string; person: RoomPerson } | null {
   if (!key.startsWith(KEY_PREFIX) || key.length > MAX_CREDENTIAL_LENGTH) return null;
   const database = db();
   const row = database.prepare(`

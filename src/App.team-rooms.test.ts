@@ -177,16 +177,18 @@ describe("Team rooms for the host", () => {
 
   it("shows the room's one code to copy with no name step, lists who joined, and removes them", async () => {
     let people: Array<{ id: string; name: string }> = [];
+    let code = CODE;
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     await boot({
       groups: [teamRoom()],
       route: (call) => {
-        if (call.path === "/api/rooms/r1/invites") return reply({ code: CODE });
+        if (call.path === "/api/rooms/r1/invites") return reply({ code });
         if (call.path === "/api/bots?messages=0") return reply({ bots: [], groups: [{ ...teamRoom(people) }] });
         if (call.method === "DELETE" && call.path === "/api/rooms/r1/people/p1") {
           people = people.filter((person) => person.id !== "p1");
+          code = CODE.replace("inv_mina", "inv_next");
           return reply({ ok: true });
         }
         return undefined;
@@ -214,7 +216,10 @@ describe("Team rooms for the host", () => {
     expect(asked("DELETE", "/api/rooms/r1/people/p1")).toHaveLength(1);
     expect(button("Remove Mina")).toBeUndefined();
     expect(button("Remove Joon")).toBeTruthy();
-    expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(1);
+    expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(2);
+    expect($("[data-team-room-code]")!.textContent).toContain(code);
+    await click(button("Copy"));
+    expect(writeText).toHaveBeenLastCalledWith(code);
   });
 
   it("keeps a person listed when Remove fails", async () => {
