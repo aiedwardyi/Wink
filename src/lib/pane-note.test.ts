@@ -104,7 +104,9 @@ describe("team snag notes", () => {
     const note = parsePaneNote(stored({ ...summary, event }));
     expect(noteTitle(note, t)).toContain(en);
     expect(noteTitle(note, t)).toContain("Peter's PC (Studio (upstairs))");
+    expect(noteTitle(note, t)).toContain("RACE-R2, 102 min");
     expect(noteTitle(note, (key, vars) => translate("ko", key, vars))).toContain(ko);
+    expect(noteTitle(note, (key, vars) => translate("ko", key, vars))).toContain("RACE-R2, 102분");
     expect(noteText(note, t)).toContain("raw details\n\n```\ntail\n```");
     expect(noteText(note, t)).not.toContain("untrusted peer data");
   });

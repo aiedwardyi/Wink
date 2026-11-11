@@ -10,7 +10,7 @@ export function noteTitle(note: PaneNote, t: Translate, type?: "team-report"): s
   if (note.snag) {
     const snag = note.snag;
     const pc = t(snag.person ? "chat.teamSnagPersonPc" : "chat.teamSnagPc", { person: snag.person, pc: snag.pc });
-    const summary = t(SNAG_KEY[snag.event], { pc, worker: snag.worker || t("chat.teamSnagWorker"), count: snag.minutes });
+    const summary = t(SNAG_KEY[snag.event], { pc, worker: snag.worker || t("chat.teamSnagWorker"), minutes: snag.minutes });
     return snag.count > 1 ? t("chat.teamSnagMore", { summary, count: snag.count - 1 }) : summary;
   }
   return note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
