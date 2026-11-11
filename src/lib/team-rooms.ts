@@ -160,7 +160,7 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
       if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name);
       fileIds.push(body.file.id);
     }
-    const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, replyToId, ...(fileIds.length ? { fileIds } : {}) }) });
+    const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(replyToId !== undefined ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}) }) });
     return res.ok ? null : { key: "teamRoom.sendFailed" };
   } catch {
     return { key: "teamRoom.sendFailed" };

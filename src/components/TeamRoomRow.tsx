@@ -1,5 +1,5 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -84,6 +84,7 @@ export function TeamRoomRow({ line, mine, named, base, quote, onJump, onMenu }: 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
 export function TeamRoomTranscript({ lines, mine, base, label, onReply }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; onReply: (message: Message) => void }) {
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
@@ -130,7 +131,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, onReply }: { line
             const own = mine(line);
             const before = lines[index - 1];
             const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
-            const quote = line.replyToId ? lines.find((candidate) => candidate.id === line.replyToId) : undefined;
+            const quote = line.replyToId ? byId.get(line.replyToId) : undefined;
             return <TeamRoomRow key={line.id} line={line} mine={own} named={named} base={base} quote={quote} onJump={jump} onMenu={setMenu} />;
           })}
         </div>

@@ -161,6 +161,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await boot({ locale, groups: side === "host" ? [teamRoom([], [original, own, quoted])] : [], route: (call) => {
       if (call.path === "/api/joined/rooms") return reply({ rooms: [joinedView("joined", "live")] });
       if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...joinedView("joined", "live"), entries } });
+      if (call.path.includes("/files?")) return reply({ file: { id: "quoted-file" } });
       if (call.path.endsWith("/send")) return reply({ ok: true });
       return undefined;
     } });
@@ -191,9 +192,14 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     expect(button("Cancel reply")).toBeTruthy();
     expect(document.activeElement).toBe($("main textarea"));
     await type($("main textarea"), "Reply text");
+    const picker = $<HTMLInputElement>('main input[type="file"]')!;
+    await act(async () => {
+      Object.defineProperty(picker, "files", { value: [new File(["notes"], "reply.txt", { type: "text/plain" })], configurable: true });
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     await click(button("Send"));
     const path = side === "host" ? "/api/rooms/r1/send" : "/api/joined/rooms/r9/send";
-    await vi.waitFor(() => expect(asked("POST", path)[0]?.body).toMatchObject({ text: "Reply text", replyToId: side === "host" ? "e-original" : "original" }));
+    await vi.waitFor(() => expect(asked("POST", path)[0]?.body).toMatchObject({ text: "Reply text", replyToId: side === "host" ? "e-original" : "original", fileIds: ["quoted-file"] }));
     expect(button("Cancel reply")).toBeUndefined();
   });
 
