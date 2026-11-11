@@ -964,7 +964,11 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
   const [liveCall, setLiveCall] = useState<{ botId: string; ctx: AudioContext } | null>(null);
-  const endLiveCall = useCallback(() => setLiveCall(null), []);
+  const [callNote, setCallNote] = useState<{ botId: string; text: string } | null>(null);
+  const endLiveCall = useCallback((note?: string) => {
+    setLiveCall(null);
+    if (note) setCallNote({ botId: bot.id, text: note });
+  }, [bot.id]);
   const onLiveCall = liveCall?.botId === bot.id;
   const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
   const elsewhere = routineWorkingElsewhere(
@@ -1589,6 +1593,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
               }
               const ctx = new AudioContext();
               void ctx.resume();
+              setCallNote(null);
               setLiveCall({ botId: bot.id, ctx });
             }}
             className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
@@ -1897,7 +1902,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           selected one. ArrowUp-to-edit stays gated on busy because editing
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {onLiveCall && <Suspense fallback={null}><LiveCallBar bot={bot} ctx={liveCall.ctx} onEnd={endLiveCall} /></Suspense>}
+        {onLiveCall
+          ? <Suspense fallback={null}><LiveCallBar bot={bot} ctx={liveCall.ctx} onEnd={endLiveCall} /></Suspense>
+          : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
         {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
           <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
