@@ -67,7 +67,10 @@ export async function organizeCandidate(input: {
   sources: CleanSource[]; packets: WorkPacket[]; after: Map<CleanFile, string>; entries: ArchiveEntry[]; parsed: Map<CleanFile, ChangeList>;
   topics: Array<{ file: CleanFile; text: string }>; routes: FactRoute[]; user?: readonly SleepLine[];
 }, call: Call, recall: TextCall) {
-  const checks = input.entries.filter((entry) => input.sources.some((source) => source.file === entry.header.file) && (entry.header.at.length || entry.header.op === "learn")).map((entry) => {
+  // a file op is a verbatim move code already proved; answerRoutes then proves it can be found
+  const checked = input.entries.filter((entry) => input.sources.some((source) => source.file === entry.header.file) && entry.header.op !== "file" && (entry.header.at.length || entry.header.op === "learn"));
+  if (!checked.length) return { verdicts: [], corrections: [], checked };
+  const checks = checked.map((entry) => {
     const source = input.sources.find((source) => source.file === entry.header.file)!;
     const change = input.parsed.get(source.file)!.changes.find((change) => change.op === "replace" && change.id === entry.header.at[0]);
     const topic = input.topics.find((topic) => topic.file === entry.header.topic);
@@ -96,7 +99,7 @@ export async function organizeCandidate(input: {
     }))}`,
     `Changes: ${JSON.stringify([...input.parsed.values()])}`,
   ].join("\n\n"))));
-  return reply;
+  return { ...reply, checked };
 }
 
 export async function answerRoutes(routes: FactRoute[], memory: string, topics: Array<{ file: CleanFile; text: string }>, call: Call, recall: TextCall, propose: TextCall) {

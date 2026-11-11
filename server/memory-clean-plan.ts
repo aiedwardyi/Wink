@@ -1,7 +1,7 @@
 import { parseReply } from "./memory-clean-call.ts";
 import { archiveBlock, appendBlock, hashText, historyPointer, HISTORY_FILE, loadedPrefix } from "./memory-clean-format.ts";
 import type { ArchiveEntry, Change, ChangeList, CleanFile, CleanInput, RejectReason, RunHeader, SleepLine, ValidateInput } from "./memory-clean-types.ts";
-import { contentWords, measureChanges, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
+import { contentWords, GROWTH_MAX, measureChanges, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
 
 export type CleanSource = { file: CleanFile; text: string };
 export type WorkPacket = { file: CleanFile; ids: number[] };
@@ -47,7 +47,7 @@ export function workPackets(sources: CleanSource[], typed: ReadonlySet<string>, 
 type Dropped = { reason: RejectReason; change: number; over?: number };
 
 // an op that fails its checks drops alone, with any op sharing its ids; code writes every file pointer
-function keptList(input: ValidateInput) {
+export function keptList(input: ValidateInput) {
   let given = input.list;
   if (typeof given === "string") { try { given = parseReply(given); } catch {} }
   const changes = (given as { changes?: unknown } | null)?.changes;
@@ -121,6 +121,10 @@ export function stagedCandidate(input: CleanInput, sources: CleanSource[], lists
   const chars = budgets.reduce((n, item) => n + item.budget.changedChars, 0);
   if (touched > 40 && !errors.some((error) => error.reason === "cap-lines")) errors.push({ reason: "cap-lines", over: touched - 40 });
   if (chars > 8000 && !errors.some((error) => error.reason === "cap-chars")) errors.push({ reason: "cap-chars", over: chars - 8000 });
+  // filed lines move bytes, so non-history files are capped together and each topic alone
+  const grown = topics.map((topic) => Buffer.byteLength(topic.text) - Buffer.byteLength(topic.before ?? ""));
+  const total = grown.reduce((n, bytes) => n + bytes, 0) + budgets.reduce((n, item) => n + item.budget.finalBytes - item.budget.beforeBytes, 0);
+  if (Math.max(total, ...grown) > GROWTH_MAX) errors.push({ reason: "cap-total", over: Math.max(total, ...grown) - GROWTH_MAX });
   const memory = built.after.get("MEMORY.md")!;
   const prefix = loadedPrefix(memory);
   for (const entry of entries.filter((entry) => entry.header.file === "MEMORY.md" && entry.header.op === "file")) {

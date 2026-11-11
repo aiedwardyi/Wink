@@ -10,7 +10,8 @@ import { isMemoryTopicName } from "./workspace.ts";
 export { pointerLine } from "./memory-clean-format.ts";
 export const FILE_FLOOR = 16000;
 const LEARN_MAX = 8;
-const GROWTH_MAX = 1000;
+export const GROWTH_MAX = 1000;
+const REMEMBER_MAX = 600;
 const FILE_MAX_BYTES = 4096;
 const id = z.number().int().positive();
 const reason = z.string();
@@ -27,7 +28,7 @@ const changeSchema = z.discriminatedUnion("op", [
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
 const lessonsHeading = (line: string) => /^#{1,6}\s+(?:lessons?|교훈)\s*$/i.test(line.replace(/\r$/, ""));
-const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보류/i.test(line);
+export const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보류/i.test(line);
 // "don't forget" asks to remember; it negates nothing
 const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text.replace(/\b(?:don['’]t|do not) forget\b/gi, ""));
 const NOTED = /\s*\(noted (\d{4}-\d{2}-\d{2})\)/gi;
@@ -392,9 +393,11 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
   }
   let text = assemble();
   if (!errors.length && input.file === "MEMORY.md") {
-    for (const line of user.filter((item) => item.kind === "remember")) {
+    for (const line of user.filter((item) => item.kind === "remember").sort((a, b) => b.at - a.at)) {
       if (rememberCovered(line.text, text) || secretLike(line.text)) continue;
       const wrote = [bullet(line.text) + cr];
+      // past tonight's room a remember waits for the next night, newest first; one over the 300 B line cap would void every night until split verbatim
+      if (forced + Buffer.byteLength(wrote[0]!) + 1 > REMEMBER_MAX || Buffer.byteLength(wrote[0]!.replace(/\r$/, "")) > 300) continue;
       insert(slots.plain, wrote[0]!, false);
       forced += Buffer.byteLength(wrote[0]!) + 1;
       entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote, after: slots.plain, quote: line.text, owned: [lineHash(wrote[0]!)] }, reason: "Asked to remember", lines: [] });

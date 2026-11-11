@@ -14,30 +14,34 @@ const CORRECTION = /^(no|nope|wrong|actually|not quite)\b|\b(that's wrong|that i
 /** The user's own lines since `through`, remember and correction lines first; a never-slept bot reads 7 days. */
 export function sleepInput(messages: readonly Message[], through: number | null, now: number): { user: SleepLine[]; through: number } {
   const since = through ?? now - 7 * DAY;
+  // remember requests come from the whole week past the cap; one already written is skipped by coverage
+  const asked = Math.min(since, now - 7 * DAY);
   const lines: SleepLine[] = [];
   let newest = 0;
   messages.forEach((message, i) => {
-    if (message.at <= since || !eligibleRow(message)) return;
-    newest = Math.max(newest, message.at);
+    if (message.at <= asked || !eligibleRow(message)) return;
+    if (message.at > since) newest = Math.max(newest, message.at);
     for (const text of userTyping(message.text).split("\n").map((line) => line.trim()).filter(Boolean)) {
       if (secretLike(text)) continue;
       const kind = REMEMBER.test(text) && !ASKED.test(text) ? "remember" : CORRECTION.test(text) ? "correction" : "said";
+      if (message.at <= since && kind !== "remember") continue;
       const reply = kind === "correction" ? messages.slice(0, i).findLast((row) => row.role === "bot" && row.kind === "text" && row.text?.trim())?.text : undefined;
       lines.push({ text, at: message.at, kind, ...(reply && !secretLike(reply) ? { context: reply.slice(0, CONTEXT_CHARS) } : {}) });
     }
   });
   const groups = new Map<number, SleepLine[]>();
-  for (const line of lines) {
+  const remember = lines.filter((line) => line.kind === "remember");
+  for (const line of lines.filter((line) => line.kind !== "remember")) {
     const group = groups.get(line.at) ?? [];
     group.push(line);
     groups.set(line.at, group);
   }
-  const user: SleepLine[] = [];
+  const user: SleepLine[] = [...remember];
   let bytes = 0;
   let processed = newest || (through ?? now);
   for (const [at, group] of [...groups].sort(([a], [b]) => a - b)) {
     const size = group.reduce((n, line) => n + Buffer.byteLength(line.text) + Buffer.byteLength(line.context ?? ""), 0);
-    if (bytes + size > MAX_BYTES && user.length) { processed = user.at(-1)!.at; break; }
+    if (bytes + size > MAX_BYTES && user.length > remember.length) { processed = user.at(-1)!.at; break; }
     user.push(...group);
     bytes += size;
     if (bytes > MAX_BYTES) { processed = at; break; }

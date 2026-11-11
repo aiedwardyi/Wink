@@ -3,10 +3,11 @@ import { z } from "zod";
 
 import { callMemoryText, parseReply } from "./memory-clean-call.ts";
 import { answerRoutes, organizeCandidate, routeQuestions, type FactRoute } from "./memory-clean-coverage.ts";
+import { fitPlan } from "./memory-clean-fit.ts";
 import { hashText, parseHistory } from "./memory-clean-format.ts";
 import { changeIds, stagedCandidate, workPackets, type CleanSource, type WorkPacket } from "./memory-clean-plan.ts";
 import { afterExcerpt, excerpt, gradeByCode, recallScope } from "./memory-clean-recall.ts";
-import type { ChangeList, CleanBudget, CleanFile, CleanInput, CleanResult, TextCall } from "./memory-clean-types.ts";
+import type { CleanBudget, CleanFile, CleanInput, CleanResult, TextCall } from "./memory-clean-types.ts";
 import { undoText } from "./memory-clean-undo.ts";
 import { protectedLines } from "./memory-clean-validate.ts";
 
@@ -86,13 +87,15 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
       if (source.file !== "MEMORY.md" && !packets.some((packet) => packet.file === source.file)) continue;
       lists.set(source.file, await call(input.propose, asks.get(source.file)!));
     }
+    let plan = fitPlan(input, sources, lists, runId, at);
+    lists.set("MEMORY.md", plan.list);
     let repaired = false;
     let candidate = stagedCandidate(input, sources, lists, runId, at);
     let routes: FactRoute[] = [];
     for (;;) {
       if (candidate.ok) {
         const outside = [...candidate.parsed].find(([file, list]) => {
-          const allowed = new Set(packets.filter((packet) => packet.file === file).flatMap((packet) => packet.ids));
+          const allowed = new Set([...packets.filter((packet) => packet.file === file).flatMap((packet) => packet.ids), ...file === "MEMORY.md" ? plan.ids : []]);
           return list.changes.some((change) => changeIds(change).some((id) => !allowed.has(id)));
         });
         if (outside) candidate = { ok: false, file: outside[0], errors: [{ reason: "packet" }], budgets: candidate.budgets, dropped: candidate.dropped };
@@ -114,27 +117,24 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
         const source = sources.find((source) => source.file === file)!;
         const dropped = candidate.dropped.filter((item) => item.file === file);
         lists.set(source.file, await call(input.propose, `${asks.get(source.file)}\n\nRejected complete candidate: ${JSON.stringify({ errors, dropped, budgets: candidate.budgets })}. One repair remains. Return the WHOLE corrected change list; an operation that fails its checks is dropped alone, with any operation sharing its IDs. Keep all required facts.\n\nRejected: ${JSON.stringify(lists.get(source.file))}`));
+        plan = fitPlan(input, sources, lists, runId, at);
+        lists.set("MEMORY.md", plan.list);
         candidate = stagedCandidate(input, sources, lists, runId, at);
         continue;
       }
       if (!candidate.entries.length) return { ok: false, stage: "nothing", detail: "No changes", tokens };
       stage = "recall";
-      routes = await routeQuestions(candidate.entries, call, input.propose);
-      const organized = await organizeCandidate({ sources, packets, ...candidate, routes, user: input.user }, call, input.recall);
-      if (organized.corrections.length) {
-        if (repaired) return { ok: false, stage: "validate", detail: "source-coverage", tokens };
-        repaired = true;
-        const files = new Set<CleanFile>();
-        for (const correction of organized.corrections) {
-          const file = (correction as ChangeList | undefined)?.file;
-          if (!file || !sources.some((source) => source.file === file) || files.has(file)) return { ok: false, stage: "validate", detail: "shape", tokens };
-          files.add(file);
-          lists.set(file, correction);
-        }
+      const organized = await organizeCandidate({ sources, packets, ...candidate, routes: [], user: input.user }, call, input.recall);
+      const rejected = organized.checked.filter((_, i) => !organized.verdicts[i]);
+      if (rejected.length) {
+        // a model op the judge rejects drops alone; the code plan already fits without it
+        for (const [file, list] of candidate.parsed) lists.set(file, { ...list, changes: list.changes.filter((change) => !rejected.some((entry) => entry.header.file === file &&
+          (change.op === "learn" ? entry.header.op === "learn" && entry.header.quote === change.quote : changeIds(change).some((id) => entry.header.at.includes(id))))) });
         candidate = stagedCandidate(input, sources, lists, runId, at);
-        continue;
+        if (!candidate.ok) return { ok: false, stage: "validate", detail: "source-coverage", tokens };
+        if (!candidate.entries.length) return { ok: false, stage: "nothing", detail: "No changes", tokens };
       }
-      if (organized.verdicts.some((valid) => !valid)) return { ok: false, stage: "validate", detail: "source-coverage", tokens };
+      routes = await routeQuestions(candidate.entries, call, input.propose);
       break;
     }
     const { entries, after, topics, memory, header, block } = candidate;

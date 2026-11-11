@@ -10,7 +10,7 @@ export type Change =
   | { op: "own"; id: number; quote: string; reason: string }
   | { op: "file"; ids: number[]; topic: string; pointer?: string; reason: string };
 export type RejectReason = "shape" | "unknown-id" | "reused-id" | "protected" | "fact-lost" | "too-long" |
-  "not-newer" | "not-verbatim" | "op-not-allowed" | "pointer" | "cap-lines" | "cap-chars" | "budget" | "not-quoted" | "secret" | "cap-learn" | "cap-file" | "cap-growth" | "packet";
+  "not-newer" | "not-verbatim" | "op-not-allowed" | "pointer" | "cap-lines" | "cap-chars" | "budget" | "not-quoted" | "secret" | "cap-learn" | "cap-file" | "cap-growth" | "cap-total" | "packet";
 type FileInfo = { beforeBytes: number; afterBytes: number; beforeHash: string; afterHash: string };
 export type SleepCounts = { kept: number; merged: number; forgot: number; learned: number; filed: number };
 export type RunHeader =
