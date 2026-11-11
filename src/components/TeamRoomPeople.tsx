@@ -5,6 +5,7 @@ import { Check, Copy, X } from "lucide-react";
 import { request } from "@/lib/api-request";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type TeamRoom } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 import type { Group } from "@/state/store-types";
 
@@ -59,6 +60,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
   const dialogRef = useRef<HTMLDivElement>(null);
   const roomId = group.hosted.roomId;
   const people = roomPeople(group);
+  useBackLayer(!closing, onClose);
 
   useEffect(() => {
     if (closing) return;

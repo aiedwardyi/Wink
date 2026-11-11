@@ -13,7 +13,7 @@ export const PHONE_COOKIE_MAX_AGE_S = 34_560_000;
 
 /** Routes that only the PC itself may use. */
 const LOCAL_ONLY_EXACT = new Set(["/api/mailbox", "/remote", "/api/remote-link"]);
-const LOCAL_ONLY_PREFIXES = ["/api/internal/", "/api/phone-relay/", "/api/phone/", "/api/joined/", "/api/rooms/"];
+const LOCAL_ONLY_PREFIXES = ["/api/internal/", "/api/phone-relay/", "/api/phone/"];
 /** Pre-auth phone routes under /api/phone/. */
 const PHONE_PUBLIC = new Set(["/api/phone/pair", "/api/phone/google/start", "/api/phone/google"]);
 
