@@ -37,11 +37,11 @@ it("warms each screen in its own idle slot in a window without the desktop bridg
 
 it("stops before the next slot once cancelled", () => {
   const slots: (() => void)[] = [];
-  vi.stubGlobal("requestIdleCallback", (run: () => void) => slots.push(run));
+  vi.stubGlobal("requestIdleCallback", (run: () => void) => { slots.push(run); return 42; });
   vi.stubGlobal("cancelIdleCallback", vi.fn());
   const load = vi.fn(async () => {});
   warmViews([load], [])();
-  expect(cancelIdleCallback).toHaveBeenCalledWith(1);
+  expect(cancelIdleCallback).toHaveBeenCalledWith(42);
   expect(load).not.toHaveBeenCalled();
 });
 
