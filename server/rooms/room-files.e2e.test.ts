@@ -95,9 +95,10 @@ beforeAll(async () => {
   door = createHttpsServer({ key: keyPem, cert: certPem }, (req, res) => void app(req, res));
   door.on("secureConnection", (socket: TLSSocket) => markRelaySocket(socket));
   const doorPort = await listenLocal(door);
-  hop.server = createTcpServer((inbound) => {
+  // The relay keeps half-closes open while the response tail drains.
+  hop.server = createTcpServer({ allowHalfOpen: true }, (inbound) => {
     if (!hop.up) return inbound.destroy();
-    const outbound = createConnection({ host: "127.0.0.1", port: doorPort });
+    const outbound = createConnection({ host: "127.0.0.1", port: doorPort, allowHalfOpen: true });
     for (const [a, b] of [[inbound, outbound], [outbound, inbound]] as const) {
       hop.pairs.add(a);
       a.on("error", () => {});
@@ -416,9 +417,11 @@ describe("pictures and files in a team room, through the real door", () => {
     await until(() => filesOf(roomId, "from host").length === 2);
     const [picture, doc] = filesOf(roomId, "from host");
     const gotPicture = await call("GET", `/api/joined/rooms/${roomId}/files/${picture!.id}/preview`);
+    expect(gotPicture.status, JSON.stringify(gotPicture.json)).toBe(200);
     expect(gotPicture.headers).toMatchObject({ "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/), "x-content-type-options": "nosniff" });
     expect(sha(gotPicture.body)).toBe(sha(hostPicture));
     const gotDoc = await call("GET", `/api/joined/rooms/${roomId}/files/${doc!.id}`);
+    expect(gotDoc.status, JSON.stringify(gotDoc.json)).toBe(200);
     expect(gotDoc.headers).toMatchObject({ "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
     expect(sha(gotDoc.body)).toBe(sha(hostDoc));
     expect((await call("GET", `/api/joined/rooms/${roomId}/files/${doc!.id}/preview`)).status).toBe(404);

@@ -6,6 +6,9 @@ import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 
 export const MIC_BLOCKED = "Microphone blocked";
+export const MIC_MISSING = "Microphone missing";
+export const MIC_BUSY = "Microphone busy";
+const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "ended" | "failed";
 export type CallState = {
@@ -153,7 +156,7 @@ export class LiveCall {
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
-      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? MIC_BLOCKED : String(error));
+      return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });

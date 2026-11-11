@@ -124,6 +124,6 @@ export function LiveCallBox({ bot, empty, closing }: { bot: Bot; empty: boolean;
   const live = useLive(bot.id);
   const last = useRef(live);
   if (live) last.current = live;
-  const shown = live ?? last.current;
+  const shown = live ?? (closing ? last.current : undefined);
   return shown ? <Controls bot={bot} live={shown} empty={empty} closing={closing || !live} /> : null;
 }

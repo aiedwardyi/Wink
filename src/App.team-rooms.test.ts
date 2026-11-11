@@ -171,7 +171,7 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["People", "Attach a file"]);
+    expect(labels).toEqual(["Files", "People", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
   });
 
