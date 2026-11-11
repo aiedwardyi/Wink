@@ -14,7 +14,7 @@ import type { HostedGroup } from "./asks.ts";
 import { closeRoomsDb, createRoom, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor } from "./door.ts";
 import type { DoorFrame } from "./door-streams.ts";
-import { closeInvitesDb, roomInvites } from "./invites.ts";
+import { closeInvitesDb, createInvite, roomInvites } from "./invites.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { peopleRoute } from "./people-routes.ts";
 
@@ -30,6 +30,7 @@ let localPort = 0;
 let access: PhoneAccess;
 let store: Store;
 let relayHost: string | null = HOST;
+let clock = Date.now();
 const reached: string[] = [];
 
 async function app(req: IncomingMessage, res: ServerResponse) {
@@ -82,6 +83,7 @@ const joinAs = (code: unknown, name: string, device?: string) => call("/room/v1/
 const pcOf = (name: string) => `pc-${name.toLowerCase()}-0123456789abcdef`;
 
 interface Stream {
+  status: number;
   frames: DoorFrame[];
   closed: Promise<void>;
   until(test: (frames: DoorFrame[]) => boolean): Promise<DoorFrame[]>;
@@ -91,6 +93,7 @@ function openStream(roomId: string, key: string): Promise<Stream> {
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port: relayPort, path: `/room/v1/rooms/${roomId}/stream?after=0`, headers: { host: HOST, authorization: `Bearer ${key}` }, agent: false }, (res) => {
       const stream: Stream = {
+        status: res.statusCode ?? 0,
         frames: [],
         closed: new Promise((done) => res.on("close", () => done())),
         until: (test) => new Promise((done, fail) => {
@@ -168,6 +171,9 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  clock = Math.max(clock, Date.now()) + 60_000;
+  vi.setSystemTime(clock);
   close();
   rmSync(DATA_DIR, { recursive: true, force: true });
   relayHost = HOST;
@@ -177,6 +183,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   relayServer.closeAllConnections();
   close();
@@ -226,6 +233,62 @@ describe("invite", () => {
 });
 
 describe("remove", () => {
+  it("keeps a legacy invite join on the same seat when that PC uses the room code", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const first = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
+    expect(first.status).toBe(200);
+    const { body } = await invite(id);
+    const again = await joinAs(body.code, "Mina", pcOf("Mina"));
+    expect(again.body.person).toEqual(first.body.person);
+    expect(roomPeople(id)).toHaveLength(1);
+    expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: first.body.key })).status).toBe(401);
+  });
+
+  it("bars a legacy invite joiner's PC from the room code after Remove", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
+    expect(mina.status).toBe(200);
+    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    const { body } = await invite(id);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+  });
+
+  it("ends old streams on rejoin and leaves room for the replacement stream", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const joon = await joined(group, "Joon");
+    const streams = [await openStream(id, mina.key), await openStream(id, mina.key)];
+    const other = await openStream(id, joon.key);
+    await Promise.all([...streams, other].map((stream) => stream.until((frames) => frames.length >= 1)));
+    const { body } = await invite(id);
+    const again = await joinAs(body.code, "Mina", pcOf("Mina"));
+    expect(again.body.person.id).toBe(mina.personId);
+    expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: mina.key })).status).toBe(401);
+    const replacement = await openStream(id, again.body.key);
+    expect(replacement.status).toBe(200);
+    await replacement.until((frames) => frames.length >= 1);
+    for (const stream of streams) {
+      expect((await stream.until((frames) => frames.at(-1)?.kind === "ended")).map((frame) => frame.kind)).toEqual(["state", "ended"]);
+      await stream.closed;
+    }
+    expect(other.frames.map((frame) => frame.kind)).toEqual(["state"]);
+  });
+
+  it("does not bar a teammate who left when Remove returns 404", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    expect((await call(`/room/v1/rooms/${id}/leave`, { method: "POST", relay: true, key: mina.key, body: {} })).status).toBe(200);
+    expect(await remove(id, mina.personId)).toEqual({ status: 404, body: { error: "not found" } });
+    const { body } = await invite(id);
+    expect((await joinAs(body.code, "Mina", pcOf("Mina"))).status).toBe(200);
+  });
+
   it("ends the person's streams and key, then is 404", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");

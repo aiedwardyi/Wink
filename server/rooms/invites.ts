@@ -195,7 +195,7 @@ const joins = new RateLimiter(JOINS_PER_MINUTE, 60_000, () => Date.now(), 1);
 /** Swaps a live invite, or the room code, for a person and their guest key, in one transaction. */
 export function joinRoom(inviteId: string, secret: string, taken: readonly string[], joiner: Joiner = {}): JoinResult {
   if (!joins.take("join")) return { ok: false, error: "busy" };
-  return transaction((database): JoinResult => {
+  const result = transaction((database): JoinResult => {
     pruneExpired(database);
     const invite = database.prepare("SELECT * FROM invites WHERE id = ?").get(inviteId) as InviteRow | undefined;
     if (!invite) return joinByRoomCode(database, inviteId, secret, taken, joiner);
@@ -217,8 +217,13 @@ export function joinRoom(inviteId: string, secret: string, taken: readonly strin
     database.prepare("DELETE FROM invites WHERE id = ?").run(invite.id);
     database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)")
       .run(sha256(key), invite.room_id, person.id, person.joinedAt);
+    if (typeof joiner.device === "string" && DEVICE.test(joiner.device)) {
+      database.prepare("INSERT OR REPLACE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(invite.room_id, joiner.device, person.id);
+    }
     return { ok: true, roomId: invite.room_id, person, key };
   });
+  if (result.ok) endDoorPerson(result.roomId, result.person.id);
+  return result;
 }
 
 /** The room and person a guest key belongs to, or null once either the key or the person is gone. */

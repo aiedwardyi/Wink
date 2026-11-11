@@ -28,9 +28,10 @@ export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, me
   if (!served || method !== (personId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
   else if (deps.botCaller) json(res, 403, { error: "forbidden" });
   else if (personId) {
-    barRoomPerson(roomId, personId);
-    if (removeRoomPerson(roomId, personId)) json(res, 200, { ok: true });
-    else json(res, 404, { error: "not found" });
+    if (removeRoomPerson(roomId, personId)) {
+      barRoomPerson(roomId, personId);
+      json(res, 200, { ok: true });
+    } else json(res, 404, { error: "not found" });
   } else {
     const relayHost = deps.relayHost();
     if (!relayHost) json(res, 409, { error: "phone access is off" });
