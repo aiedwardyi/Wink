@@ -1,5 +1,5 @@
 // People-only team rooms: one this PC hosts (a hosted group with no bots), or one it joined elsewhere.
-import type { Group, Message } from "@/state/store-types";
+import type { Group, Message, RoomJoin } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
 import type { MessageKey } from "./i18n";
@@ -24,6 +24,11 @@ export type TeamRoom = Group & { hosted: { roomId: string } };
 export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boolean(group?.hosted && group.memberIds.length === 0);
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
+
+const NO_JOINS: RoomJoin[] = [];
+
+// One empty list, so a memoized transcript keeps its props.
+export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
   messages.flatMap((message) => (message.author && message.roomEntryId
@@ -120,6 +125,20 @@ export async function inviteToRoom(roomId: string): Promise<{ code: string } | R
 }
 
 export const inviteErrorKey = (status: number): MessageKey => (status === 409 ? "teamRoom.phoneOff" : "errors.request");
+
+/** Invite in a group: the first press shares it, later ones hand back the same code. */
+export async function shareGroup(groupId: string): Promise<{ code: string; group: Group } | Refused> {
+  try {
+    const res = await fetchResponse(`/api/groups/${groupId}/share`, { method: "POST" });
+    const body = await responseBody(res);
+    return res.ok && typeof body?.code === "string" && body.group ? { code: body.code, group: body.group } : refused(res.status, body);
+  } catch {
+    return { status: 0, error: "" };
+  }
+}
+
+export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
+  error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
 export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });

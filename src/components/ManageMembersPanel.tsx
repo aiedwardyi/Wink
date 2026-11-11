@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
 import { BotPickerList } from "./BotPickerList";
+import { GroupPeople } from "./GroupPeople";
 import { NewBotRow, type NewRow } from "./GroupWizard";
 import { groupResponseHint } from "@/lib/group-routing";
 import { nextMemberIds } from "@/lib/room-members";
@@ -169,6 +170,8 @@ export function ManageMembersPanel({
         >
           <div className="mb-1 text-[15px] font-semibold text-ink first-letter:uppercase">{t("room.manageMembers")}</div>
           <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
+          <GroupPeople group={group} />
+          <div className="mb-1.5 px-2 text-[12.5px] font-medium text-ink-secondary">{t("chrome.bots")}</div>
           <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint={t("chrome.createBotFirst")} />
           {rows.map((row, rowIndex) => (
             <NewBotRow
