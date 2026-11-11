@@ -30,6 +30,9 @@ describe("typed value lines", () => {
     ["an id mixing letters and digits", "the build id is a1b2c3d4e5"],
     ["an email", "mail me at pat@example.com"],
     ["a link", "docs at https://example.com/a/b"],
+    ["a negative number", "temperature is -12 degrees"],
+    ["a negative amount", "budget is -40000"],
+    ["a Korean hour", "회의는 3시야"],
   ])("carries %s", (_name, text) => {
     expect(typedLines(text)).toEqual([`- 11-08 ${text}`]);
   });
@@ -85,6 +88,12 @@ describe("typed value lines", () => {
     ["a Korean password", "비밀번호는 482100"],
     ["a key-shaped string", "use sk-abcdefgh12345678 for 30 days"],
     ["a long mixed string", "the id is Zx9Kq2Lm8Vb4Nc7Tp1Rw5Yh3 from 2026-11-08"],
+    ["a PIN on the line after its label", "My PIN:\n4821"],
+    ["a PIN a paragraph after its label", "My PIN:\n\n4821"],
+    ["a Korean password on the line after its label", "비밀번호:\n482100"],
+    ["an account number on the line after its label", "Account number:\n123456789"],
+    ["an API token in prose", "my API token is abc123def456"],
+    ["a Korean API key in prose", "API 키는 abc123def456 입니다"],
   ])("never carries %s", (_name, secret) => {
     expect(typedLines(`${secret}\nthe budget is 40,000`)).toEqual(["- 11-08 the budget is 40,000"]);
   });
@@ -131,6 +140,15 @@ describe("typed value lines", () => {
     expect(typedValueLines([sent], new Set([sent.id]))).toEqual([]);
   });
 
+  it.each([
+    ["launch on 2026-11-11", "date:2026-11-11"],
+    ["merge PR-1230 first", "code:PR-1230"],
+    ["ship v1.0.250 tonight", "version:1.0.250"],
+    ["3시간 걸렸어", "amount:3시간|걸렸어"],
+  ])("reads no sign or hour into %s", (text, key) => {
+    expect(typedValueLines([user(text)]).map((entry) => [entry.line, entry.keys])).toEqual([[`- 11-08 ${text}`, [key]]]);
+  });
+
   it("records where each line's message sits", () => {
     expect(typedValueLines([user("hello"), bot("hi"), user("the budget is 40,000")]).map((entry) => entry.index)).toEqual([2]);
   });
@@ -156,6 +174,13 @@ describe("typed values block", () => {
     expect(block(12_000, "the budget is 40,000", "the venue holds 250 people", "actually the budget is 40,000 total").split("\n").slice(1)).toEqual([
       "- 11-08 the venue holds 250 people",
       "- 11-08 actually the budget is 40,000 total",
+    ]);
+  });
+
+  it("keeps the sign apart from the same digits", () => {
+    expect(block(12_000, "the balance is 40000", "the balance is -40000").split("\n").slice(1)).toEqual([
+      "- 11-08 the balance is 40000",
+      "- 11-08 the balance is -40000",
     ]);
   });
 

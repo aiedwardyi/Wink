@@ -39,7 +39,8 @@ const MACHINE_LINE = /^\s*(?:\*\*|[-*] \*\*|#{1,6} |\d{4}-\d{2}-\d{2}[T ]\d{2}:\
 const CODE_LINE = /^\s*(?:def \w+\(|class \w+[(:]|import \w|from [\w.]+ import |elif .+:\s*$|else:\s*$|for \w+ in .+:\s*$|while .+:\s*$|print\(|console\.\w+\(|(?:const|let|var|function) \w)/;
 const LIST_MARK = /^\s*(?:[-*•]\s+|\d{1,3}[.)]\s+)/;
 // No \b on the Korean half: it never fires between Hangul syllables.
-const CREDENTIAL = /\b(?:passwords?|passcodes?|passwd|pins?|otp|2fa|mfa|verification codes?|security codes?|cvv|ssn|social security|account numbers?|card numbers?|routing numbers?|private keys?)\b|비밀\s*(?:번호|키)|비번|패스워드|인증\s*(?:번호|코드)|보안\s*코드|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호/i;
+// A bare "token" is a label only with an owner ("my token is") or a value holding a letter ("token: ab12"), not "max tokens: 4000".
+const CREDENTIAL = /\b(?:passwords?|passcodes?|passwd|pins?|otp|2fa|mfa|verification codes?|security codes?|cvv|ssn|social security|account numbers?|card numbers?|routing numbers?|private keys?|credentials?|api[\s_-]?(?:keys?|tokens?|secrets?)|(?:access|auth|bearer|refresh|oauth|client|secret|license)[\s_-]?(?:tokens?|keys?|secrets?))\b|\b(?:my|our|your|the|this)\s+(?:\w+\s+)?(?:secret|token)s?\s*(?:is\b|was\b|[:=])|\bsecrets?\s*[:=]|\btokens?\s*[:=]\s*(?=\S*[A-Za-z])|비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|인증\s*(?:번호|코드|키|토큰)|보안\s*코드|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|(?:api|에이피아이)\s*(?:키|토큰)|(?:액세스|접근|시크릿)\s*(?:키|토큰)|시크릿|토큰\s*(?:값)?\s*(?:은|는|[:=])\s*(?=\S*[A-Za-z])/i;
 const KEY_SHAPED = /«redacted|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xox[abposr])[_-][A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/;
 
 const MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
@@ -68,7 +69,7 @@ const RULES: Rule[] = [
     normal: lower,
     accept: datelike,
   },
-  { kind: "time", pattern: /\b\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?\b|\b\d{1,2}\s?(?:am|pm)\b|(?:오전|오후)\s?\d{1,2}시(?:\s?\d{1,2}분)?/gi, normal: (match) => match.toLowerCase().replace(/\s/g, "") },
+  { kind: "time", pattern: /\b\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?\b|\b\d{1,2}\s?(?:am|pm)\b|(?:(?:오전|오후)\s?)?(?<!\d)\d{1,2}시(?!간)(?:\s?\d{1,2}분)?/gi, normal: (match) => match.toLowerCase().replace(/\s/g, "") },
   { kind: "version", pattern: /\bv?\d+\.\d+\.\d+(?:\.\d+)?\b/g, normal: (match) => match.replace(/^v/, "") },
   { kind: "ref", pattern: /#\d{2,}\b/g },
   { kind: "file", pattern: /\b[\w.-]+\.(?:tsx?|mjs|cjs|jsx?|json|md|ps1|py|css|html|ya?ml|csv|db|txt|png|jpe?g|svg|toml|sh|exe|pdf|docx?|xlsx?|log|zip|mp4|mov|mkv|webm|mp3|wav|gif|webp)\b/gi, context: true },
@@ -76,10 +77,10 @@ const RULES: Rule[] = [
   { kind: "ident", pattern: /\b(?:[a-z]+(?:[A-Z][a-z0-9]+)+|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+|[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+)\b/g, context: true },
   { kind: "money", pattern: /(?:[$₩€£]\s?\d{1,3}(?:,\d{3})+(?:\.\d+)?|[$₩€£]\s?\d+(?:\.\d+)?)(?:\s?(?:k|m|b|bn|million|billion|thousand)\b)?/gi, normal: amount },
   { kind: "quantity", pattern: /\b\d+\s?[x×]\s?\d+\b/g, normal: amount },
-  { kind: "quantity", pattern: new RegExp(`(?<![\\w.\\/\\\\:#@-])(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?\\s?${UNIT}(?![A-Za-z])`, "gi"), normal: amount },
+  { kind: "quantity", pattern: new RegExp(`(?<![\\w.\\/\\\\:#@-])-?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?\\s?${UNIT}(?![A-Za-z])`, "gi"), normal: amount },
   { kind: "id", pattern: /\b(?=[A-Za-z0-9.-]*\d)(?=[A-Za-z0-9.-]*[A-Za-z])[A-Za-z]{1,12}[-.]?\d[A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*\b|\b[0-9a-f]{7,40}\b(?<=[a-f][0-9a-f]*)(?<=\d[0-9a-f]*)/g, normal: lower },
-  // A colon after the digits is a label ("Note 12:"), not a value.
-  { kind: "number", pattern: /(?<![\w./\\:#@-])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w/\\:-]|\.\d)/g, normal: (match) => match.replace(/,/g, "") },
+  // A colon after the digits is a label ("Note 12:"), not a value. A minus is a sign only after no word, so "10-20" stays unsigned.
+  { kind: "number", pattern: /(?<![\w./\\:#@-])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w/\\:-]|\.\d)/g, normal: (match) => match.replace(/,/g, "") },
 ];
 
 const SHORT_KINDS = new Set(["number", "quantity", "money", "time", "date"]);
@@ -89,12 +90,18 @@ const flat = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 const pad = (value: number) => String(value).padStart(2, "0");
 
+/** A credential label with no value of its own ("My PIN:") takes the next sentence with it, even across lines. */
 function sentences(text: string): string[] {
-  return text
-    .split(/\n+/)
-    .flatMap((line) => MACHINE_LINE.test(line) || CODE_LINE.test(line) ? [] : line.replace(LIST_MARK, "").split(/(?<=[.!?。])\s+/))
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
+  const kept: string[] = [];
+  let held = false;
+  for (const line of text.split(/\n+/)) {
+    const noise = MACHINE_LINE.test(line) || CODE_LINE.test(line);
+    for (const sentence of line.replace(LIST_MARK, "").split(/(?<=[.!?。])\s+/).map((part) => part.trim()).filter(Boolean)) {
+      if (!held && !noise) kept.push(sentence);
+      held = CREDENTIAL.test(sentence) && !valuesIn(sentence).length;
+    }
+  }
+  return kept;
 }
 
 function valuesIn(sentence: string): Value[] {
