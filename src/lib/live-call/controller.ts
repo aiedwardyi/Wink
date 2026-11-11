@@ -417,8 +417,8 @@ export class LiveCall {
   }
 
   end() {
-    if (this.ended) return;
-    this.teardown();
+    if (this.snapshot.status === "ended") return;
+    if (this.snapshot.status !== "failed") this.teardown();
     this.set({ status: "ended" });
   }
 

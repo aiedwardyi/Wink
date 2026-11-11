@@ -68,12 +68,12 @@ test("main session keeps every other permission as before", () => {
   assert.deepEqual(request(req, other, "clipboard-sanitized-write", {}), [true]);
 });
 
-test("device windows and verify sessions still refuse the microphone", () => {
+test("device windows and verify sessions still refuse the main window's microphone", () => {
   const handlers = {};
   setDevicePermissions({
     setPermissionCheckHandler: (fn) => { handlers.check = fn; },
     setPermissionRequestHandler: (fn) => { handlers.request = fn; },
-  });
+  }, { origin: () => undefined, micAllowed: () => true });
   assert.equal(handlers.check(main, "media", APP, { mediaType: "audio" }), false);
   assert.deepEqual(request(handlers.request, main, "media", { mediaTypes: ["audio"], requestingUrl: `${APP}/` }), [false]);
   const verify = readFileSync(new URL("./verify-network.mjs", import.meta.url), "utf8");

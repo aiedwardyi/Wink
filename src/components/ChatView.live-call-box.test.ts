@@ -8,7 +8,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "" }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", token: undefined as (() => Response) | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -47,6 +47,7 @@ const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL) => {
   const path = String(input);
   posts.push(path);
+  if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
   if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
   return new Response("{}", { status: 404 });
@@ -94,6 +95,7 @@ afterEach(() => {
   fakes.level = 0;
   fakes.engines.length = 0;
   fakes.micError = "";
+  fakes.token = undefined;
   Reflect.deleteProperty(window, "ogb");
 });
 
@@ -221,4 +223,27 @@ describe("live call in the message box", () => {
       await unmount();
     }
   });
+
+  for (const [name, fail] of [
+    ["the mic is blocked", () => { fakes.micError = "NotAllowedError"; }],
+    ["the network drops", () => { fakes.token = () => { throw new TypeError("Failed to fetch"); }; }],
+    ["the key is missing", () => { fakes.token = () => Response.json({ error: "Add a Gemini key to call." }, { status: 409 }); }],
+  ] as const) {
+    it(`ends the call from the box when ${name}, then calls again`, async () => {
+      fail();
+      const { host, unmount } = await mount();
+      try {
+        await act(async () => button(host, "Call Atlas")!.click());
+        await vi.waitFor(() => expect(host.querySelector("[data-live-call]")?.getAttribute("data-live-call")).toMatch(/failed|needsKey/));
+        await act(async () => button(frame(host), "End")!.click());
+        await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+        await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+        fakes.micError = "";
+        fakes.token = undefined;
+        await connect(host);
+      } finally {
+        await unmount();
+      }
+    });
+  }
 });

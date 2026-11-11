@@ -7,15 +7,20 @@ function originOf(url) {
   }
 }
 
-function setMainPermissions(session, { contents, origin, micAllowed }) {
-  const ours = (webContents, url) => webContents != null && webContents === contents() && originOf(url) === origin();
+// Media is audio only, from the window's own page origin; `others` decides every other permission.
+function setMicPermissions(session, { origin, micAllowed, others }) {
+  const ours = (webContents, url) => webContents != null && originOf(url) === origin(webContents);
   session.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) =>
-    permission !== "media" || (details?.mediaType === "audio" && ours(webContents, requestingOrigin)));
+    permission === "media" ? details?.mediaType === "audio" && ours(webContents, requestingOrigin) : others(permission));
   session.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    if (permission !== "media") return callback(true);
+    if (permission !== "media") return callback(others(permission));
     const types = details?.mediaTypes ?? [];
     callback(types.length > 0 && types.every((type) => type === "audio") && ours(webContents, details?.requestingUrl) && micAllowed());
   });
 }
 
-module.exports = { setMainPermissions };
+function setMainPermissions(session, { contents, origin, micAllowed }) {
+  setMicPermissions(session, { origin: (webContents) => (webContents === contents() ? origin() : undefined), micAllowed, others: () => true });
+}
+
+module.exports = { setMainPermissions, setMicPermissions };
