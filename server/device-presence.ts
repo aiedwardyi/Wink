@@ -14,12 +14,13 @@ export function createDevicePresence(request: typeof fetch = fetch, now: () => n
       void queue.shift()!().finally(() => { active -= 1; drain(); });
     }
   };
-  return (items: DeviceListItem[], localHost: string | undefined): DeviceListItem[] => {
+  return (items: DeviceListItem[], localHost: string | undefined, localChecking = false): DeviceListItem[] => {
     const tailnet = TAILNET_HOST.exec(localHost ?? "")?.[1];
     const hosts = new Set(items.map((item) => item.host));
     for (const host of peers.keys()) if (!hosts.has(host)) peers.delete(host);
     return items.map((item) => {
       if (item.current) return { ...item, offline: false, checking: false };
+      if (!tailnet && localChecking && TAILNET_HOST.test(item.host)) return { ...item, offline: false, checking: true };
       if (!tailnet || TAILNET_HOST.exec(item.host)?.[1] !== tailnet) return item;
       let peer = peers.get(item.host);
       if (!peer) {
