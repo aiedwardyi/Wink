@@ -55,6 +55,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [code, setCode] = useState<string | null>(null);
+  const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const roomId = group.hosted.roomId;
@@ -62,6 +63,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
 
   useEffect(() => {
     if (closing) return;
+    setCode(null);
     let alive = true;
     void inviteToRoom(roomId).then((result) => {
       if (!alive) return;
@@ -71,7 +73,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     return () => {
       alive = false;
     };
-  }, [closing, roomId]);
+  }, [closing, roomId, codeVersion]);
 
   useEffect(() => {
     if (closing) return;
@@ -130,6 +132,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     if (!room) return;
     try {
       await removeFromRoom(roomId, personId);
+      setCodeVersion((version) => version + 1);
       dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== personId) } } });
     } catch {
       setProblem("errors.request");
