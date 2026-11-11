@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.254] - 2026-11-12
+
+### Added
+- Room alerts on phone and desktop, with a bell to mute each room.
+- On a voice call, Wink reads answers, questions and worker updates aloud.
+- Group menu has People and Copy invite code; room rows drag to reorder.
+
+### Changed
+- Questions and orders you say on a call always reach the bot, or the voice says they weren't sent.
+- The model dial moves one model per wheel click at any zoom, and once per trackpad flick.
+- The Claude icon matches the other logos in size.
+- The Team page hides your own card; bar tips float over the page instead of stretching it.
+
+### Fixed
+- Your spoken answer to a question card on a call reaches the bot; "say the question again" repeats it.
+- A teammate's PC waking up gets one alert per room, not dozens.
+- Closing terminal panes no longer crashes the app.
+- Bots no longer get flagged for note edits they didn't make.
+- New worker panes no longer flash an old launch line.
+
 ## [1.0.253] - 2026-11-11
 
 ### Added
