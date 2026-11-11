@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useStore } from "@/state/store";
+
 import { request } from "./api-request";
 import type { LocaleId } from "./i18n";
 
@@ -14,6 +16,7 @@ export function translateLine(base: string, entryId: string, lang: LocaleId): Pr
 }
 
 export function useTranslationAvailable(base: string): boolean {
+  const { state } = useStore();
   const [available, setAvailable] = useState(false);
   useEffect(() => {
     let current = true;
@@ -24,7 +27,7 @@ export function useTranslationAvailable(base: string): boolean {
     check();
     window.addEventListener("focus", check);
     return () => { current = false; window.removeEventListener("focus", check); };
-  }, [base]);
+  }, [base, state.instances, state.config]);
   return available;
 }
 

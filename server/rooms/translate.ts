@@ -5,9 +5,10 @@ import type { ProviderInstance } from "../contracts.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import { json, readBody } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
-import { roomEntry, roomTranslation, saveRoomTranslation } from "./db.ts";
+import { roomEntry, roomPeople, roomTranslation, saveRoomTranslation } from "./db.ts";
 import { joinedEntry, joinedRoom, joinedTranslation, saveJoinedTranslation } from "./joined.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
+import { protectTranslationNames } from "./translation-names.ts";
 
 const ROUTE = /^\/api\/(joined\/)?rooms\/([\w-]{1,64})(?:\/entries\/([\w-]{1,64}))?\/translate$/;
 const TIMEOUT_MS = 30_000;
@@ -25,6 +26,12 @@ export function translationInstances(registry: Pick<ProviderRegistry, "instances
   });
 }
 
+function codexModel(instance: TextEngine): string | undefined {
+  const options = instance.models?.options.filter((option) => !option.custom && !option.id.includes("::")) ?? [];
+  return ["nano", "mini", "luna"].map((name) => options.find((option) => option.id.includes(name))?.id).find(Boolean)
+    ?? options.find((option) => option.id === instance.models?.default)?.id ?? options[0]?.id;
+}
+
 export function translationGenerator(key: string | undefined, instances: readonly TextEngine[], fetchFn: typeof fetch = fetch): Generator | null {
   if (key?.trim()) return async (prompt, signal) => {
     const response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
@@ -39,18 +46,16 @@ export function translationGenerator(key: string | undefined, instances: readonl
     if (candidate?.finishReason && candidate.finishReason !== "STOP") throw new Error("translation failed");
     return (candidate?.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? "").join("");
   };
-  const enabled = instances.filter((instance) => instance.enabled && instance.generateText);
+  const enabled = instances.filter((instance) => instance.enabled && instance.generateText && (instance.driverKind !== "codex" || codexModel(instance)));
   const engine = enabled.find((instance) => instance.driverKind === "claudeAgent")
     ?? enabled.find((instance) => instance.driverKind === "codex") ?? enabled[0];
   if (!engine) return null;
-  const model = engine.driverKind === "codex"
-    ? ["nano", "mini", "luna"].map((name) => engine.models?.options.find((option) => option.id.includes(name))?.id).find(Boolean) ?? engine.models?.default
-    : undefined;
+  const model = engine.driverKind === "codex" ? codexModel(engine) : undefined;
   return (prompt, signal) => engine.generateText!(prompt, { signal, timeoutMs: TIMEOUT_MS, ephemeral: true, lean: true, ...(model ? { model } : {}) });
 }
 
 function promptFor(text: string, lang: "en" | "ko"): string {
-  return `Translate the chat message between the <message> tags into ${lang === "ko" ? "Korean" : "English"}. Reply with only the translation. Keep names, @mentions, code, links, numbers, emoji and line breaks as they are.\n<message>\n${text}\n</message>`;
+  return `Translate the chat message between the <message> tags into ${lang === "ko" ? "Korean" : "English"}. Reply with only the translation. Keep names, @mentions, code, links, numbers, emoji and line breaks as they are. Never translate, transliterate or romanize people's names. Copy each name_ element exactly once with its tags and enclosed name unchanged.\n<message>\n${text}\n</message>`;
 }
 
 const pending = new Map<string, Promise<string>>();
@@ -86,7 +91,7 @@ function generateOnce(key: string, generate: Generator, prompt: string, save: (t
 
 export async function translateRoute(
   req: IncomingMessage, res: ServerResponse, method: string, path: string,
-  deps: { store: Pick<Store, "groups">; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; botCaller: boolean },
+  deps: { store: Pick<Store, "groups">; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; hostName?: string; botCaller: boolean },
 ): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
@@ -106,13 +111,20 @@ export async function translateRoute(
     const lang = body?.lang;
     if (lang !== "en" && lang !== "ko") { json(res, 400, { error: "bad request" }); return true; }
     if (!held() || entry()?.text !== line.text) { json(res, 404, { error: "not found" }); return true; }
-    const cached = (joined ? joinedTranslation : roomTranslation)(roomId, entryId, lang);
+    const room = joined ? joinedRoom(roomId) : null;
+    const names = room ? [room.me.name, room.state?.host ?? "", ...(room.state?.people.map((person) => person.name) ?? [])]
+      : [deps.hostName ?? "", ...roomPeople(roomId).map((person) => person.name)];
+    const protectedNames = protectTranslationNames(line.text, [...names, line.author.name]);
+    // Older cached translations did not enforce exact name spelling.
+    const cacheLang = protectedNames.hasNames ? `${lang}:names-v1:${protectedNames.cacheKey}` : lang;
+    const cached = (joined ? joinedTranslation : roomTranslation)(roomId, entryId, cacheLang);
     if (cached !== undefined) { json(res, 200, { text: cached }); return true; }
     if (!generate) { json(res, 503, { error: "translation unavailable" }); return true; }
-    const text = await generateOnce(`${joined ?? "host/"}${roomId}/${entryId}/${lang}`, generate, promptFor(line.text, lang), (text) => {
-      if (!held() || entry()?.text !== line.text) throw Object.assign(new Error("not found"), { status: 404 });
-      (joined ? saveJoinedTranslation : saveRoomTranslation)(roomId, entryId, lang, text);
-    });
+    const text = await generateOnce(`${joined ?? "host/"}${roomId}/${entryId}/${cacheLang}`,
+      async (prompt, signal) => protectedNames.restore(await generate(prompt, signal)), promptFor(protectedNames.text, lang), (text) => {
+        if (!held() || entry()?.text !== line.text) throw Object.assign(new Error("not found"), { status: 404 });
+        (joined ? saveJoinedTranslation : saveRoomTranslation)(roomId, entryId, cacheLang, text);
+      });
     json(res, 200, { text });
   } catch (error) {
     const status = (error as { status?: number }).status;

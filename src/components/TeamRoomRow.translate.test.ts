@@ -8,6 +8,12 @@ import type { RoomLine } from "@/lib/team-rooms";
 
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
+const readiness = vi.hoisted(() => ({ instances: [] as unknown[], config: null as unknown }));
+vi.mock("@/state/store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/state/store")>(),
+  useStore: () => ({ state: readiness }),
+}));
+
 const lines: RoomLine[] = [
   { id: "mirror-1", entryId: "e1", at: 1, author: { kind: "person", id: "mina", name: "Mina Park" }, text: "자료를 정리했어요.\n함께 확인해 주세요.", files: [] },
   { id: "mirror-2", entryId: "e2", at: 2, author: { kind: "person", id: "daniel", name: "Daniel Cho" }, text: "The checklist is ready.", files: [] },
@@ -45,6 +51,22 @@ async function render() {
 const button = () => host.querySelector<HTMLButtonElement>('button[data-room-translate]');
 
 describe("teammate translation", () => {
+  it.each(["instances", "config"] as const)("refreshes availability after %s changes without focus", async (field) => {
+    available = false;
+    await render();
+    expect(button()).toBeNull();
+    available = true;
+    if (field === "instances") readiness.instances = [{ ready: true }];
+    else readiness.config = { gemini: { configured: true } };
+    await render();
+    expect(button()).not.toBeNull();
+    available = false;
+    if (field === "instances") readiness.instances = [];
+    else readiness.config = { gemini: { configured: false } };
+    await render();
+    expect(button()).toBeNull();
+  });
+
   it("shows only the other-language button and keeps the original through show and hide", async () => {
     await render();
     expect(host.querySelectorAll("button[data-room-translate]")).toHaveLength(1);

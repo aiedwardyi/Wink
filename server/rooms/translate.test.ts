@@ -7,13 +7,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { DATA_DIR } from "../config.ts";
 import { json } from "../http-helpers.ts";
 import { relayVerdict } from "../phone-auth.ts";
-import { appendRoomEntry, closeRoomsDb } from "./db.ts";
-import { addJoinedEntries, closeJoinedDb, resetJoined, saveJoined } from "./joined.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, saveRoomTranslation } from "./db.ts";
+import { addJoinedEntries, closeJoinedDb, resetJoined, saveJoined, saveJoinedTranslation, setJoinedState } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 
 const modulePath = "./translate.ts";
 const translate = existsSync(join(import.meta.dirname, modulePath)) ? await import(modulePath) : null;
-const generateText = vi.fn(async () => "The launch is ready.");
+const generateText = vi.fn(async (..._args: unknown[]) => "The launch is ready.");
 const groups: Array<{ hosted: { roomId: string }; memberIds: string[] }> = [];
 const instances = [{ driverKind: "claudeAgent", enabled: true, generateText }];
 let server: Server;
@@ -25,7 +25,7 @@ beforeAll(async () => {
   mkdirSync(DATA_DIR, { recursive: true });
   server = createServer(async (req, res) => {
     if (await translate?.translateRoute(req, res, req.method!, req.url!, {
-      store: { groups }, instances, key: "", botCaller: req.headers.authorization === "Bearer bot",
+      store: { groups }, instances, key: "", hostName: "Edward", botCaller: req.headers.authorization === "Bearer bot",
     })) return;
     json(res, 404, { error: "not found" });
   });
@@ -60,6 +60,59 @@ function joinRoom() {
 }
 
 describe("room translation", () => {
+  it.each([false, true])("restores romanized member names and replaces legacy cache: joined=%s", async (joined) => {
+    addPerson(roomId, "이서연", "chat", []);
+    addPerson(roomId, "Unmentioned Person", "chat", []);
+    entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Mina" }, text: "이서연님, 준비됐어요." }).id;
+    if (joined) {
+      joinRoom();
+      resetJoined(roomId);
+      setJoinedState(roomId, { version: 1, roomName: "Private title", instructions: "", host: "Host", me: { id: "me", name: "Viewer" }, people: [{ id: "p2", name: "이서연" }, { id: "p3", name: "Unmentioned Person" }] });
+      addJoinedEntries(roomId, [{ seq: 1, id: entryId, at: Date.now(), author: { kind: "host", id: "host", name: "Host" }, text: "이서연님, 준비됐어요." }]);
+    }
+    (joined ? saveJoinedTranslation : saveRoomTranslation)(roomId, entryId, "en", "Lee Seoyeon, ready.");
+    generateText.mockImplementation(async (...args: unknown[]) => {
+      const prompt = String(args[0]);
+      const name = prompt.match(/<name_[a-f0-9]+_\d+>이서연<\/name_[^>]+>/)?.[0] ?? "이서연";
+      return `${name.replace("이서연", "Lee Seoyeon")}, ready.`;
+    });
+    const path = joined ? joinedPath() : hostPath();
+    expect(await call(path)).toEqual({ status: 200, body: { text: "이서연, ready." } });
+    const prompt = String(generateText.mock.calls[0]?.[0]);
+    expect(prompt).toContain("Never translate, transliterate or romanize people's names");
+    expect(prompt).not.toContain("Unmentioned Person");
+    expect(prompt).not.toContain("Private title");
+    closeRoomsDb();
+    closeJoinedDb();
+    expect((await call(path)).body).toEqual({ text: "이서연, ready." });
+    expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects lost name markers and retries without caching altered names", async () => {
+    entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "이서연" }, text: "이서연입니다." }).id;
+    generateText.mockResolvedValue("I am Lee Seoyeon.");
+    expect(await call(hostPath())).toEqual({ status: 502, body: { error: "translation failed" } });
+    generateText.mockImplementation(async (...args: unknown[]) => String(args[0]).match(/<message>\n([\s\S]*)\n<\/message>/)![1]!);
+    expect((await call(hostPath())).body).toEqual({ text: "이서연입니다." });
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores repeated and overlapping names without changing mentions or suffixes", async () => {
+    addPerson(roomId, "서연", "chat", []);
+    addPerson(roomId, "Mina Park", "chat", []);
+    const text = "@이서연님, 서연, Mina Park, 이서연.";
+    entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "이서연" }, text }).id;
+    generateText.mockImplementation(async (...args: unknown[]) => String(args[0]).match(/<message>\n([\s\S]*)\n<\/message>/)![1]!
+      .replaceAll("이서연", "Lee Seoyeon").replaceAll("서연", "Seoyeon").replaceAll("Mina Park", "박민아"));
+    expect((await call(hostPath())).body).toEqual({ text });
+  });
+
+  it("protects the host name supplied by the viewer's profile", async () => {
+    entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Mina" }, text: "Edward, 감사합니다." }).id;
+    generateText.mockImplementation(async (...args: unknown[]) => String(args[0]).match(/<message>\n([\s\S]*)\n<\/message>/)![1]!.replace("Edward", "에드워드"));
+    expect((await call(hostPath())).body).toEqual({ text: "Edward, 감사합니다." });
+  });
+
   it("translates a host's held teammate line", async () => {
     expect(await call(hostPath())).toEqual({ status: 200, body: { text: "The launch is ready." } });
   });
@@ -92,7 +145,7 @@ describe("room translation", () => {
     appendRoomEntry(roomId, { author: { kind: "person", id: "p2", name: "Another name" }, text: "Another private line" });
     expect((await call(hostPath())).status).toBe(200);
     expect(generateText).toHaveBeenCalledWith(
-      "Translate the chat message between the <message> tags into English. Reply with only the translation. Keep names, @mentions, code, links, numbers, emoji and line breaks as they are.\n<message>\n출시 준비 끝났어요.\n</message>",
+      "Translate the chat message between the <message> tags into English. Reply with only the translation. Keep names, @mentions, code, links, numbers, emoji and line breaks as they are. Never translate, transliterate or romanize people's names. Copy each name_ element exactly once with its tags and enclosed name unchanged.\n<message>\n출시 준비 끝났어요.\n</message>",
       expect.objectContaining({ timeoutMs: 30_000, lean: true, ephemeral: true, signal: expect.any(AbortSignal) }),
     );
   });
@@ -196,6 +249,21 @@ describe("room translation", () => {
 });
 
 describe("translation engine", () => {
+  it("uses another engine when Codex has only unsupported custom models", async () => {
+    const codex = { driverKind: "codex", enabled: true, generateText: vi.fn(), models: { default: "local::nano", options: [{ id: "local::nano", custom: true }] } };
+    const other = { driverKind: "other", enabled: true, generateText: vi.fn(async () => "Ready") };
+    expect(await translate?.translationGenerator("", [codex, other])?.("line", new AbortController().signal)).toBe("Ready");
+    expect(codex.generateText).not.toHaveBeenCalled();
+    expect(translate?.translationGenerator("", [codex])).toBeNull();
+  });
+
+  it.each([{ id: "nano-custom", custom: true }, { id: "local::nano" }])("skips unsupported Codex models: %j", async (custom) => {
+    const generateText = vi.fn(async () => "Ready");
+    const codex = { driverKind: "codex", enabled: true, generateText, models: { default: custom.id, options: [custom, { id: "gpt-mini" }] } };
+    await translate?.translationGenerator("", [codex])?.("line", new AbortController().signal);
+    expect(generateText).toHaveBeenCalledWith("line", expect.objectContaining({ model: "gpt-mini" }));
+  });
+
   it("uses the saved Gemini key before an enabled AI login", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "준비됐어요." }] } }] })));
     const generate = translate?.translationGenerator("saved-key", instances, fetch);

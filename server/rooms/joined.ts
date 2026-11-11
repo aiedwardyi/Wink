@@ -83,6 +83,7 @@ function open(): DatabaseSync {
       body TEXT NOT NULL,
       PRIMARY KEY (room_id, seq)
     );
+    CREATE INDEX IF NOT EXISTS entries_id ON entries(room_id, json_extract(body, '$.id'));
     CREATE TABLE IF NOT EXISTS translations (
       room_id TEXT NOT NULL,
       entry_id TEXT NOT NULL,
