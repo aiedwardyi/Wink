@@ -1,10 +1,13 @@
 // Spoken consent, shared by the live call and the Mac call. Only a clear yes counts:
 // a sentence that merely contains "sure" is a reply, not consent.
 
-const YES_EN = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|allow|approve|approved|fine|please do)\b/i;
+const YES_EN = /^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|go ahead|go for it|do it|let'?s do it|sounds good|absolutely|of course|allow|approve|approved|fine|please do)\b/i;
+// "Yes, don't send it": a yes with a no in it keeps waiting.
+const BUT_EN = /\b(no|not|don'?t|do not|wait|hold on|stop|cancel|later)\b/i;
+const FILLER = /^(uh|um|er|hmm|mm)\b[\s,.]*/i;
 const NO_EN = /^(no|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
 // 됐어 and 괜찮아 can mean either, so they keep waiting.
-export const YES_KO = ["응", "어", "네", "넵", "예", "그래", "좋아", "해", "해줘", "보내", "보내줘", "고고", "ㅇㅇ", "네네"];
+export const YES_KO = ["응", "어", "네", "넵", "예", "그래", "좋아", "해", "해줘", "보내", "보내줘", "고고", "ㅇㅇ", "네네", "오케이", "진행해", "부탁해"];
 export const NO_KO = ["아니", "아냐", "하지마", "취소", "잠깐"];
 // Short 응 often transcribes as 은 or 음, so these count as the second word too.
 const STRONG_YES_KO = ["보내", "보내줘", "해줘", "고고"];
@@ -15,10 +18,11 @@ function koWords(text: string): string[] {
 }
 
 export function consentOf(said: string): "yes" | "no" | null {
-  const text = said.trim();
+  const text = said.trim().replace(FILLER, "");
   const [first = "", second = ""] = koWords(text);
   if (NO_EN.test(text) || [first, second].some((word) => NO_KO.some((no) => word.startsWith(no)))) return "no";
-  if (YES_EN.test(text) || YES_KO.includes(first) || STRONG_YES_KO.includes(second)) return "yes";
+  if (YES_EN.test(text)) return BUT_EN.test(text) ? null : "yes";
+  if (YES_KO.includes(first) || STRONG_YES_KO.includes(second)) return "yes";
   return null;
 }
 

@@ -34,6 +34,15 @@ export const LIVE_TOOLS = [
       required: ["order"],
     },
   },
+  {
+    name: "ask",
+    description: "Ask about anything not in YOUR NOTES, RECENT CHAT or [Wink] lines (status, files, results, times). No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
+    parameters: {
+      type: "OBJECT",
+      properties: { question: { type: "STRING", description: "The question in the person's words and language, e.g. \"When do the eval loops finish?\"" } },
+      required: ["question"],
+    },
+  },
 ];
 
 /** Said on the call: never a turn's input, reply or unread. Orders and asks are real sends. */

@@ -3,7 +3,7 @@
 // stored: the state is derived from the transcript, so the sidebar glow, the
 // pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion } from "../../shared/open-question";
+import { answersQuestion, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion } from "../../shared/open-question";
 
 export { isAskUserCard, isSentByPerson };
 
@@ -68,7 +68,7 @@ export function askUserStatus(messages: readonly Message[], message: Message): A
   const index = messages.findIndex((entry) => entry.id === message.id);
   for (let i = index < 0 ? messages.length : index + 1; i < messages.length; i++) {
     const later = messages[i];
-    if (isSentByPerson(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
+    if (answersQuestion(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
     if (isAskUserCard(later)) return { state: "superseded" };
   }
   return { state: "waiting" };
