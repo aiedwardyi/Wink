@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { DATA_DIR } from "../config.ts";
 import { json } from "../http-helpers.ts";
 import { relayVerdict } from "../phone-auth.ts";
-import { addPerson, appendRoomEntry, closeRoomsDb, saveRoomTranslation } from "./db.ts";
+import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, saveRoomTranslation } from "./db.ts";
 import { addJoinedEntries, closeJoinedDb, resetJoined, saveJoined, saveJoinedTranslation, setJoinedState } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 
@@ -139,6 +139,13 @@ describe("room translation", () => {
     addJoinedEntries(roomId, [{ seq: 1, id: entryId, at: Date.now(), author: { kind: "host", id: "host", name: "Private host" }, text: "출시 준비 끝났어요." }]);
     expect((await call(joinedPath())).status).toBe(200);
     expect(generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it("translates a teammate line in a shared bot group", async () => {
+    roomId = createRoom("Shared group").id;
+    groups.push({ hosted: { roomId }, memberIds: ["bot-1"] });
+    entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Mina" }, text: "출시 준비 끝났어요." }).id;
+    expect(await call(hostPath())).toEqual({ status: 200, body: { text: "The launch is ready." } });
   });
 
   it("sends only the selected line and uses an isolated text call", async () => {

@@ -7,7 +7,6 @@ import { json, readBody } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
 import { roomEntry, roomPeople, roomTranslation, saveRoomTranslation } from "./db.ts";
 import { joinedEntry, joinedRoom, joinedTranslation, saveJoinedTranslation } from "./joined.ts";
-import { peopleOnlyRoom } from "./people-only.ts";
 import { protectTranslationNames } from "./translation-names.ts";
 
 const ROUTE = /^\/api\/(joined\/)?rooms\/([\w-]{1,64})(?:\/entries\/([\w-]{1,64}))?\/translate$/;
@@ -98,7 +97,7 @@ export async function translateRoute(
   const [, joined, roomId, entryId] = route as unknown as [string, string | undefined, string, string | undefined];
   if (deps.botCaller) { json(res, 403, { error: "forbidden" }); return true; }
   const held = () => joined ? joinedRoom(roomId) !== null
-    : deps.store.groups.some((group) => group.hosted?.roomId === roomId && group.memberIds.length === 0) && peopleOnlyRoom(roomId);
+    : deps.store.groups.some((group) => group.hosted?.roomId === roomId);
   if (!held() || method !== (entryId ? "POST" : "GET")) { json(res, 404, { error: "not found" }); return true; }
   const generate = translationGenerator(deps.key, deps.key?.trim() ? [] : typeof deps.instances === "function" ? deps.instances() : deps.instances);
   if (!entryId) { json(res, 200, { available: generate !== null }); return true; }

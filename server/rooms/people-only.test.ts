@@ -173,6 +173,15 @@ describe("a host's room picture", () => {
     expect((await call(routes().patch, { picture: null }, [group.id])).body.group.picture).toBeUndefined();
   });
 
+  it("sets a picture on a shared bot group", async () => {
+    const created = await call(routes().create, { name: "Shared", memberIds: [wink], hosted: true });
+    const group = store.group(created.body.group.id) as HostedGroup;
+    const req = Readable.from([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, group.hosted.roomId, { owner: "host", name: "room.png", uploadId: "picture-upload-03" });
+    expect((await call(routes().patch, { picture: file.id }, [group.id])).body.group.picture).toBe(file.id);
+  });
+
   it("refuses missing, cross-room and non-image files", async () => {
     const group = await peopleRoom();
     const other = await peopleRoom();

@@ -331,7 +331,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         patch.cwd = checked.cwd ?? undefined;
       }
       if (body.picture !== undefined) {
-        if (!existing.hosted || !peopleOnlyRoom(existing.hosted.roomId)) return json(res, 400, { error: "not a team room" });
+        if (!existing.hosted) return json(res, 400, { error: "not a team room" });
         const file = typeof body.picture === "string" ? roomFile(existing.hosted.roomId, body.picture) : null;
         if (body.picture !== null && !file?.type.startsWith("image/")) return json(res, 400, { error: "picture must be a room image id" });
         patch.picture = file?.id;
