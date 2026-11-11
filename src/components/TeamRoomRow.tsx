@@ -1,5 +1,5 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 import { cn } from "@/lib/cn";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -59,6 +59,7 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
 export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
   const last = lines.at(-1);
   const lastId = last?.id;
@@ -67,6 +68,18 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
     const el = scrollRef.current;
     if (el && (atEnd.current || lastMine)) el.scrollTop = el.scrollHeight;
   }, [lastId, lastMine]);
+  // pictures loading and a growing composer fire no scroll event; re-pin while following
+  useEffect(() => {
+    const el = scrollRef.current;
+    const log = logRef.current;
+    if (!el || !log || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (atEnd.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(log);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   return (
     <div
       ref={scrollRef}
@@ -77,7 +90,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
         atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
       }}
     >
-      <div role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
+      <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
         {lines.map((line, index) => {
           const own = mine(line);
           const before = lines[index - 1];

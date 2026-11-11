@@ -283,7 +283,7 @@ describe("who reaches them", () => {
 });
 
 describe("wiring", () => {
-  const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8");
+  const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n");
 
   it("index.ts mounts the people routes before the room file routes, owner only", () => {
     const people = index.indexOf("await peopleRoute(req, res, method, path, {");

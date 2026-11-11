@@ -134,9 +134,9 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
   const remove = async (personId: string) => {
     const room = group.room && "people" in group.room ? group.room : null;
     if (!room) return;
-    dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== personId) } } });
     try {
       await removeFromRoom(roomId, personId);
+      dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== personId) } } });
     } catch {
       setProblem("errors.request");
     }

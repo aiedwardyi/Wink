@@ -75,7 +75,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
   );
 }
 
-const INPUT = "w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none";
+const INPUT = "w-full rounded-lg border border-hairline/60 bg-inset px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:border-accent/60 focus:outline-none";
 
 function CreateSheet({ closing, onClose }: { closing: boolean; onClose: () => void }) {
   const { t } = useI18n();

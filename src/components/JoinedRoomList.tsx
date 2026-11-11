@@ -18,7 +18,7 @@ function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDe
   const phase = joinedPhase(room);
   const line = phase === "removed" ? t("teamRoom.removed") : phase === "left" ? t("teamRoom.left") : (room.state?.host ?? "");
   return (
-    <div className="group relative min-h-12 py-0.5" data-joined-room-row title={density === "icons" ? name : undefined}>
+    <div className="group relative min-h-12 py-0.5" data-sidebar-row data-joined-room-row title={density === "icons" ? name : undefined}>
       <button
         type="button"
         onClick={() => dispatch({ type: "select", id })}

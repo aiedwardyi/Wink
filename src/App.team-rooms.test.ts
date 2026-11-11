@@ -230,6 +230,19 @@ describe("Team rooms for the host", () => {
     expect(button("Remove Mina")).toBeUndefined();
   });
 
+  it("keeps a person listed when Remove fails", async () => {
+    await boot({
+      teamRooms: true,
+      groups: [teamRoom([{ id: "p1", name: "Mina" }])],
+      route: (call) => (call.method === "DELETE" ? reply({ error: "room store is busy" }, 500) : undefined),
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("People"));
+    await click(button("Remove Mina"));
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Wink couldn't finish that. Try again."));
+    expect(button("Remove Mina")).toBeTruthy();
+  });
+
   it("says why an invite failed in one line", async () => {
     await boot({
       teamRooms: true,
@@ -288,6 +301,25 @@ describe("Team rooms for the host", () => {
     await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(2));
     expect(calls.find((call) => call.path.startsWith("/api/rooms/r1/files?"))!.path).toContain("name=shot.png");
     expect(asked("POST", "/api/rooms/r1/send")[1]!.body).toMatchObject({ text: "", fileIds: ["U".repeat(24)] });
+  });
+
+  it("keeps the newest line in view when a picture loads after it", async () => {
+    const observers: Array<{ callback: () => void; targets: Element[] }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(public callback: () => void) { observers.push(this); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    await boot({ teamRooms: true, groups: [teamRoom([], [line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning")])] });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const scroller = $('[data-team-room-transcript]')!;
+    const pins = observers.filter((observer) => observer.targets.includes(scroller));
+    expect(pins).not.toHaveLength(0);
+    Object.defineProperty(scroller, "scrollHeight", { value: 900, configurable: true });
+    await act(async () => pins.forEach((observer) => observer.callback()));
+    expect(scroller.scrollTop).toBe(900);
   });
 });
 
