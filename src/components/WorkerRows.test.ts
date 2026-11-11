@@ -286,9 +286,10 @@ describe("WorkerChip", () => {
         gap: true,
         overlap: false,
         stacked: [],
-        phone: "relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex",
+        phone: "relative flex items-center gap-1 md:hidden md:p-1.5 @max-4xl/chathead:!flex",
       });
       expect(klass).toContain("md:flex @max-4xl/chathead:!hidden");
+      expect(phone.querySelector("svg")?.getAttribute("class")).toContain("md:size-[18px]");
     } finally {
       await unmount();
     }
