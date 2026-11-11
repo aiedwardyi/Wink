@@ -10,6 +10,7 @@ export type RoomAuthor = NonNullable<Message["author"]>;
 
 export interface RoomLine {
   id: string;
+  entryId?: string;
   at: number;
   author: RoomAuthor;
   text: string;
@@ -25,7 +26,7 @@ export const roomPeople = (group: Group) => (group.room && "people" in group.roo
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
   messages.flatMap((message) => (message.author && message.roomEntryId
-    ? [{ id: message.id, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [] }]
+    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [] }]
     : []));
 
 export type JoinedLink = "connecting" | "live" | "offline";

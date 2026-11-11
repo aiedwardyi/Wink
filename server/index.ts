@@ -60,6 +60,7 @@ import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
 import { peopleRoute } from "./rooms/people-routes.ts";
+import { translateRoute, translationInstances } from "./rooms/translate.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -8454,6 +8455,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store })) return;

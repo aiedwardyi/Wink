@@ -1638,6 +1638,10 @@ export const en = {
   "teamRoom.tooBig": "{name} is too big to send.",
   "teamRoom.fileType": "This kind of file can't be shared.",
   "teamRoom.sendFailed": "Couldn't send. Try again.",
+  "teamRoom.translate": "Translate",
+  "teamRoom.showOriginal": "Show original",
+  "teamRoom.translating": "Translating…",
+  "teamRoom.translationFailed": "Couldn't translate. Tap to try again.",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -3278,6 +3282,10 @@ export const ko = {
   "teamRoom.tooBig": "{name} 파일은 너무 커서 보낼 수 없어요.",
   "teamRoom.fileType": "이 종류의 파일은 보낼 수 없어요.",
   "teamRoom.sendFailed": "보내지 못했어요. 다시 시도해 주세요.",
+  "teamRoom.translate": "번역",
+  "teamRoom.showOriginal": "원문 보기",
+  "teamRoom.translating": "번역 중…",
+  "teamRoom.translationFailed": "번역하지 못했어요. 탭해서 다시 시도하세요.",
 } satisfies { [K in MessageKey]: string };
 
 export const catalogs = { en, ko } as const;
