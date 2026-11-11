@@ -964,7 +964,7 @@ describe("VOICE-SEND: cards", () => {
     expect(replies()).toEqual(["[Wink] Nova replied: Red.", "[Wink] Nova replied: Green."]);
   });
 
-  it.each(["Sorry, what's the question?", "What did Nova ask?", "질문이 뭐였지?"])("asking for the question again keeps the card waiting for the answer: %s", async (again) => {
+  it.each(["Sorry, what's the question?", "What did Nova ask?", "Could you say the question again?", "질문이 뭐였지?"])("asking for the question again keeps the card waiting for the answer: %s", async (again) => {
     const { call, engine, posts } = await started();
     call.observe({ busy: false, messages: [cardRow("q1")] });
     engine().events.turnDone();
