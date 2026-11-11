@@ -43,6 +43,7 @@ import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
 import { ActivityCard } from "./ActivityCard";
+import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -630,6 +631,7 @@ export function SettingsModal({
                 {!window.ogb && <Card><PhoneNotificationSettings /></Card>}
                 <VibrationRow />
                 <UpdatesRow />
+                <RoomFilesFolderRow />
                 <ErrorReportsRow />
                 {showUsageStats() && <AnalyticsRow />}
                 <button

@@ -8456,7 +8456,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await hostFileRoute(req, res, method, url, { store })) return;
+    if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {

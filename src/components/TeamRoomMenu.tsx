@@ -1,13 +1,24 @@
 // The sidebar's way in: New team room (a name, nothing else) and Join team room (one code box).
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { KeyRound, UsersRound } from "lucide-react";
+import { Files, KeyRound, UsersRound } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { createTeamRoom, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
+
+import { TeamRoomFiles } from "./TeamRoomFiles";
+
+export function TeamRoomFilesMenu({ roomId }: { roomId: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" onClick={() => setOpen(true)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>
+    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
+  </>;
+}
 
 type Sheet = "create" | "join" | null;
 

@@ -754,7 +754,8 @@ describe("files", () => {
     expect(await call(path, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
     expect(await call(`/room/v1/rooms/${b.hosted.roomId}/files/${up.body.file.id}`, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
     expect(await call(path)).toMatchObject({ status: 401, body: { error: "unauthorized" } });
-    for (const method of ["HEAD", "PUT", "DELETE", "POST"]) expect((await call(path, { method, key: mina.key, headers: { origin: ORIGIN } })).status, method).toBe(404);
+    for (const method of ["HEAD", "PUT", "POST"]) expect((await call(path, { method, key: mina.key, headers: { origin: ORIGIN } })).status, method).toBe(404);
+    expect((await call(path, { method: "DELETE", key: mina.key, headers: { origin: ORIGIN } })).status).toBe(403);
     expect((await call(`/room/v1/rooms/${a.hosted.roomId}/files`, { key: mina.key })).status).toBe(404);
     expect((await upload(b.hosted.roomId, mina.key, "wrong room")).status).toBe(404);
     removeRoomPerson(a.hosted.roomId, mina.personId);
@@ -784,7 +785,7 @@ describe("files", () => {
     expect(await post(path, { text: "look", fileIds: [theirs.body.file.id] }, { key: mina.key })).toMatchObject({ status: 404, body: { error: "no such file in this room" } });
     expect(await post(path, { text: " ", fileIds: [] }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "message is empty" } });
     expect(await post(path, { text: "x", fileIds: "nope" }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "bad request" } });
-    expect(await post(path, { text: "x", fileIds: Array.from({ length: 11 }, () => mine.body.file.id) }, { key: mina.key })).toMatchObject({ status: 400 });
+    expect(await post(path, { text: "x", fileIds: Array.from({ length: 51 }, () => mine.body.file.id) }, { key: mina.key })).toMatchObject({ status: 400 });
     expect(recentRoomEntries(roomId, 5).map((entry) => entry.files?.map((file) => file.id))).toEqual([[mine.body.file.id]]);
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ roomFiles: [mine.body.file] });
     const preview = await call(`/room/v1/rooms/${roomId}/files/${mine.body.file.id}/preview`, { key: pat.key });

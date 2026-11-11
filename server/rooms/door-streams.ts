@@ -38,6 +38,7 @@ export interface DoorStream {
   roomId: string;
   personId: string;
   res: ServerResponse;
+  largeFiles?: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
 }
@@ -55,6 +56,13 @@ export const doorEntry = (entry: RoomEntry): DoorEntry => ({
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
   ...(entry.files ? { files: entry.files } : {}),
 });
+
+export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean): DoorEntry {
+  if (largeFiles || !entry.files?.length) return entry;
+  const files = entry.files.filter((file) => !file.deleted && file.bytes <= 25 * 1024 ** 2).slice(0, 10);
+  const omitted = entry.files.filter((file) => !files.includes(file));
+  return { ...entry, files, text: [entry.text, ...omitted.map((file) => file.name)].filter(Boolean).join("\n").slice(0, 20_000) };
+}
 
 /** Remembers which sockets a person used, so Remove can cut keep-alive ones too. */
 export function trackDoorSocket(roomId: string, personId: string, socket: Duplex): void {
@@ -78,12 +86,13 @@ function write(stream: DoorStream, chunk: string): void {
 }
 
 export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
-  write(stream, `data: ${JSON.stringify(frame)}\n\n`);
+  const value = frame.kind === "entry" ? { ...frame, entry: compatibleDoorEntry(frame.entry, stream.largeFiles !== false) } : frame;
+  write(stream, `data: ${JSON.stringify(value)}\n\n`);
 }
 
 /** Registered and buffering: live frames wait until goLive. */
-export function openDoorStream(roomId: string, personId: string, res: ServerResponse): DoorStream {
-  const stream: DoorStream = { roomId, personId, res, buffer: [] };
+export function openDoorStream(roomId: string, personId: string, res: ServerResponse, largeFiles = true): DoorStream {
+  const stream: DoorStream = { roomId, personId, res, buffer: [], largeFiles };
   streams.add(stream);
   const heartbeat = setInterval(() => write(stream, ": ping\n\n"), HEARTBEAT_MS);
   res.once("close", () => {
@@ -108,6 +117,10 @@ function deliver(stream: DoorStream, frame: DoorFrame): void {
 }
 
 const roomStreams = (roomId: string) => [...streams].filter((stream) => stream.roomId === roomId);
+
+export function resetDoorRoom(roomId: string): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "reset" });
+}
 
 export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {
   if (!streams.size) return;

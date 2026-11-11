@@ -8,8 +8,8 @@ import type { Readable } from "node:stream";
 import { z } from "zod";
 
 import { labelFromHost } from "../../shared/relay-protocol.ts";
-import { DOCUMENT_MAX_BYTES } from "../attachments.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
+import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES } from "./files.ts";
 import {
   addJoinedEntries,
   endJoined,
@@ -33,13 +33,13 @@ import { NAME_MAX } from "./names.ts";
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SEND_ID = /^[A-Za-z0-9_-]{16,80}$/;
 const REQUEST_MS = 15_000;
-const REPLY_BYTES = 4 * 1024 * 1024;
+const REPLY_BYTES = 32 * 1024 * 1024;
 const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
 const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 const UPLOAD_MS = 10 * 60_000;
-const MAX_FILES = 10;
+const MAX_FILES = MAX_MESSAGE_FILES;
 
 const id = z.string().regex(/^[\w-]{1,64}$/);
 const name = z.string().max(200);
@@ -50,7 +50,8 @@ const fileSchema = z.object({
   type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
   bytes: z.number().int().positive().max(DOCUMENT_MAX_BYTES),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
-});
+  deleted: z.boolean().optional(),
+}).refine((file) => !file.type.startsWith("image/") || file.bytes <= IMAGE_MAX_BYTES);
 const entrySchema = z.object({
   seq: z.number().int().positive(),
   id,
@@ -302,7 +303,7 @@ export class GuestClient {
   private async call(
     relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
   ): Promise<GuestResult<unknown>> {
-    const headers: Record<string, string> = { host: relayHost, ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
+    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) headers.authorization = `Bearer ${key}`;
     if (length) headers["content-length"] = length;
     const contentType = typeof body === "string" ? undefined : "application/octet-stream";
@@ -405,7 +406,7 @@ export class GuestClient {
       servername: creds.relayHost,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}` },
+      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-orbit-room-files": "1" },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,

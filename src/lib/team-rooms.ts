@@ -2,7 +2,6 @@
 import type { Group, Message } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
-import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./composer-attachments";
 import type { MessageKey } from "./i18n";
 
 export type RoomFile = NonNullable<Message["roomFiles"]>[number];
@@ -87,7 +86,9 @@ const PICTURE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/we
 
 export const isRoomPicture = (file: Pick<RoomFile, "type">) => PICTURE_TYPES.has(file.type);
 
-export const MAX_ROOM_FILES = 10;
+export const ROOM_IMAGE_MAX_BYTES = 100 * 1024 ** 2;
+export const ROOM_DOCUMENT_MAX_BYTES = 1024 ** 3;
+export const MAX_ROOM_FILES = 50;
 
 export function createTeamRoom(name: string): Promise<{ group: Group }> {
   return request("/api/groups", { method: "POST", body: JSON.stringify({ name, hosted: true, peopleOnly: true, memberIds: [] }) });
@@ -129,13 +130,15 @@ export type RoomProblem = { key: MessageKey; vars?: Record<string, string> };
 /** Size and count checks before any byte leaves this PC; the server checks again. */
 export function filesProblem(files: readonly Pick<File, "name" | "size" | "type">[]): RoomProblem | null {
   if (files.length > MAX_ROOM_FILES) return { key: "teamRoom.tooMany" };
-  const big = files.find((file) => file.size > (PICTURE_TYPES.has(file.type) ? IMAGE_MAX_BYTES : DOCUMENT_MAX_BYTES));
+  const big = files.find((file) => file.size > (PICTURE_TYPES.has(file.type) ? ROOM_IMAGE_MAX_BYTES : ROOM_DOCUMENT_MAX_BYTES));
   return big ? { key: "teamRoom.tooBig", vars: { name: big.name } } : null;
 }
 
-function uploadProblem(status: number, name: string): RoomProblem {
+function uploadProblem(status: number, name: string, error?: string): RoomProblem {
   if (status === 413) return { key: "teamRoom.tooBig", vars: { name } };
   if (status === 415) return { key: "teamRoom.fileType" };
+  if (status === 507) return { key: "teamRoom.outOfSpace" };
+  if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };
   return { key: "teamRoom.sendFailed" };
 }
 
@@ -149,7 +152,7 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
       const query = new URLSearchParams({ name: file.name, uploadId: crypto.randomUUID() });
       const res = await fetchResponse(`${base}/files?${query}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } });
       const body = await responseBody(res);
-      if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name);
+      if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name, body?.error);
       fileIds.push(body.file.id);
     }
     const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(fileIds.length ? { fileIds } : {}) }) });

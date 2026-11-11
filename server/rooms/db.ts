@@ -39,6 +39,7 @@ export interface RoomFile {
   type: string;
   bytes: number;
   sha256: string;
+  deleted?: boolean;
 }
 
 export interface RoomEntry {
@@ -110,6 +111,11 @@ function open(): DatabaseSync {
       clean INTEGER,
       files TEXT,
       PRIMARY KEY (room_id, seq)
+    );
+    CREATE TABLE IF NOT EXISTS room_file_deletions (
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      PRIMARY KEY (room_id, id)
     );
     CREATE TRIGGER IF NOT EXISTS log_append_only BEFORE UPDATE ON log
     BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
@@ -195,7 +201,10 @@ const rowToEntry = (row: LogRow): RoomEntry => ({
   ...(row.ask_id ? { askId: row.ask_id } : {}),
   ...(row.grant_kind ? { grant: row.grant_kind } : {}),
   ...(row.clean === null ? {} : { clean: row.clean === 1 }),
-  ...(row.files ? { files: JSON.parse(row.files) as RoomFile[] } : {}),
+  ...(row.files ? { files: (JSON.parse(row.files) as RoomFile[]).map((file) => ({
+    ...file,
+    ...(db().prepare("SELECT 1 FROM room_file_deletions WHERE id = ? AND room_id = (SELECT room_id FROM log WHERE id = ?)").get(file.id, row.id) ? { deleted: true } : {}),
+  })) } : {}),
 });
 
 export function roomEntry(roomId: string, id: string): RoomEntry | null {

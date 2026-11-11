@@ -13,6 +13,7 @@ import { Presence } from "@/lib/use-presence";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
+import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
@@ -32,6 +33,8 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
         {!missing && (
+          <div className="flex shrink-0 items-center gap-1">
+          <TeamRoomFilesMenu roomId={group.hosted.roomId} />
           <button
             ref={peopleButton}
             type="button"
@@ -43,6 +46,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
             <Users size={18} />
             {count > 0 && <span className="text-[12.5px] tabular-nums">{count}</span>}
           </button>
+          </div>
         )}
       </div>
       <ReconnectingCue />
