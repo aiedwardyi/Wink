@@ -1,46 +1,67 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUp, File as FileIcon, Image as ImageIcon, Paperclip, X } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
+import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerEnterIntent } from "@/lib/composer-enter";
+import { draftRevision } from "@/lib/drafts";
+import { composerNeedsTap } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
+import { useRoomDraft } from "@/lib/room-drafts";
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { useFileDrop } from "@/lib/use-file-drop";
 
-/** Text, pictures and files for one team room. Nothing here talks to a bot. */
-export function TeamRoomComposer({ name, base }: { name: string; base: string }) {
+import { FileDropOverlay } from "./FileDropOverlay";
+
+export function TeamRoomComposer({ name, base, draftId }: { name: string; base: string; draftId: string }) {
   const { t } = useI18n();
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const { text, setText, files, keepFiles, removeFile, clear } = useRoomDraft(draftId);
   const [problem, setProblem] = useState<RoomProblem | null>(null);
   const [sending, setSending] = useState(false);
   const sendId = useRef(crypto.randomUUID());
   const fileInput = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const repick = useRef<string | undefined>(undefined);
   const composing = useRef(false);
   const composeEnded = useRef(0);
   const ready = Boolean(text.trim() || files.length);
+  const needsFile = files.some((file) => !file.file);
 
-  const add = (picked: File[]) => {
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el) fitComposerHeight(el, parseFloat(getComputedStyle(el).lineHeight) || 24);
+  }, [text]);
+
+  useEffect(() => {
+    if (composerNeedsTap()) return;
+    if (document.activeElement?.closest('[role="dialog"][aria-modal="true"]')) return;
+    inputRef.current?.focus();
+  }, []);
+
+  const add = (picked: File[], replace?: string) => {
     if (!picked.length) return;
-    const next = [...files, ...picked];
+    const next = [...files.filter((file) => file.id !== replace), ...picked];
     const ahead = filesProblem(next);
     setProblem(ahead);
-    if (!ahead) setFiles(next);
+    if (!ahead) keepFiles(picked, replace);
   };
+  const dragging = useFileDrop((picked) => add(picked));
 
   const send = async () => {
-    if (!ready || sending) return;
+    if (!ready || sending || needsFile) return;
+    const revision = draftRevision(draftId);
     setSending(true);
-    const failed = await sendToRoom(base, text.trim(), files, sendId.current);
+    const failed = await sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId.current);
     setSending(false);
     setProblem(failed);
     if (failed) return;
     sendId.current = crypto.randomUUID();
-    setText("");
-    setFiles([]);
+    if (draftRevision(draftId) === revision) clear();
   };
 
   return (
     <div className="relative px-5 pb-3">
+      {dragging && <FileDropOverlay label={t("teamRoom.dropToAttach")} />}
       {problem && (
         <div role="alert" className="mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
           <span className="min-w-0 flex-1">{t(problem.key, problem.vars)}</span>
@@ -57,15 +78,24 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
       )}
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
-          {files.map((file, index) => (
-            <div key={`${file.name}:${index}`} className="flex max-w-[220px] items-center gap-2 rounded-xl border border-hairline/40 bg-raised px-2.5 py-1.5">
+          {files.map((file) => (
+            <div key={file.id} className="flex max-w-[220px] items-center gap-2 rounded-xl border border-hairline/40 bg-raised px-2.5 py-1.5">
               {isRoomPicture(file) ? <ImageIcon size={14} className="shrink-0 text-ink-secondary" /> : <FileIcon size={14} className="shrink-0 text-ink-secondary" />}
               <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{file.name}</span>
               <span className="shrink-0 text-[10.5px] text-ink-secondary/70">{formatSize(file.size)}</span>
+              {!file.file && (
+                <button
+                  type="button"
+                  onClick={() => { repick.current = file.id; fileInput.current?.click(); }}
+                  className="text-[10.5px] text-accent hover:underline"
+                >
+                  {t("composer.uploadRepick")}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={sending}
-                onClick={() => setFiles((list) => list.filter((_, at) => at !== index))}
+                onClick={() => removeFile(file.id)}
                 aria-label={t("teamRoom.dropFile", { name: file.name })}
                 title={t("teamRoom.dropFile", { name: file.name })}
                 className="flex size-5 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:text-ink"
@@ -83,11 +113,13 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
           multiple
           className="hidden"
           onChange={(e) => {
-            add(Array.from(e.target.files ?? []));
+            add(Array.from(e.target.files ?? []), repick.current);
+            repick.current = undefined;
             e.target.value = "";
           }}
         />
         <textarea
+          ref={inputRef}
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -126,7 +158,7 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
         <div className="col-start-1 row-start-2 mt-1 flex items-center gap-1">
           <button
             type="button"
-            onClick={() => fileInput.current?.click()}
+            onClick={() => { repick.current = undefined; fileInput.current?.click(); }}
             aria-label={t("composer.attach")}
             title={t("composer.attach")}
             className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
@@ -139,7 +171,7 @@ export function TeamRoomComposer({ name, base }: { name: string; base: string })
             <button
               type="button"
               onClick={() => void send()}
-              disabled={sending}
+              disabled={sending || needsFile}
               aria-label={t("composer.send")}
               title={t("composer.send")}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 disabled:opacity-40"
