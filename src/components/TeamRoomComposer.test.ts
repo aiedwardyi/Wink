@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { uploadAttachment } from "@/lib/composer-attachments";
 import { getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
+import { focusComposerOnActivation } from "@/lib/focus-composer";
 import type { JoinedView, TeamRoom } from "@/lib/team-rooms";
 
 import { JoinedRoomView } from "./JoinedRoomView";
@@ -246,8 +247,19 @@ describe("room drafts", () => {
 });
 
 describe("room focus", () => {
+  it("lets the sidebar refocus an already open room through the shared rule", async () => {
+    await render();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const row = host.querySelector("button")!;
+    row.focus();
+    focusComposerOnActivation({ activatedElement: row });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(box());
+  });
+
   it.each(["host", "joined"])("focuses the %s composer on desktop", async (side) => {
     await render(side);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     expect(document.activeElement).toBe(box());
   });
 

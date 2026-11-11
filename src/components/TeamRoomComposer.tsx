@@ -5,7 +5,7 @@ import { formatSize } from "@/lib/composer-attachments";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { draftRevision } from "@/lib/drafts";
-import { composerNeedsTap } from "@/lib/focus-composer";
+import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
 import { useRoomDraft } from "@/lib/room-drafts";
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
@@ -33,9 +33,7 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
   }, [text]);
 
   useEffect(() => {
-    if (composerNeedsTap()) return;
-    if (document.activeElement?.closest('[role="dialog"][aria-modal="true"]')) return;
-    inputRef.current?.focus();
+    focusComposerOnActivation({ composer: inputRef.current });
   }, []);
 
   const add = (picked: File[], replace?: string) => {
