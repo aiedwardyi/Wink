@@ -251,6 +251,29 @@ afterEach(() => {
 });
 
 describe("door routes", () => {
+  it("shares only the picture id and pushes replacement and removal to both guests", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const daniel = await joined(group, "Daniel");
+    const first = await openStream(group.hosted.roomId, mina.key, 0);
+    const second = await openStream(group.hosted.roomId, daniel.key, 0);
+    try {
+      store.patchGroup(group.id, { picture: "P".repeat(24) } as never);
+      const snapshot = await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key });
+      expect(snapshot.body.state.picture).toBe("P".repeat(24));
+      for (const stream of [first, second]) {
+        await stream.until((frames) => frames.some((frame) => frame.kind === "state" && (frame.state as any).picture === "P".repeat(24)));
+        expect(Buffer.byteLength(JSON.stringify(stream.frames))).toBeLessThan(256 * 1024);
+      }
+      store.patchGroup(group.id, { picture: undefined } as never);
+      for (const stream of [first, second]) await stream.until((frames) => frames.filter((frame) => frame.kind === "state").length >= 3);
+      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key })).body.state).not.toHaveProperty("picture");
+    } finally {
+      await shut(first);
+      await shut(second);
+    }
+  });
+
   it("answers 404 for every path it does not list, before reading a key", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;

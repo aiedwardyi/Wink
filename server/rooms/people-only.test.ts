@@ -14,6 +14,7 @@ import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries
 import { hostedRoomView } from "./guards.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
+import { saveRoomFile } from "./files.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -157,6 +158,31 @@ describe("people-only room create", () => {
     expect(hostedRoomView(restored.hosted)).toEqual({ missing: true });
     expect(() => hostedSend(restored, { kind: "host" }, "hello")).toThrow(expect.objectContaining({ status: 404 }));
     noWork();
+  });
+});
+
+describe("a host's room picture", () => {
+  it("persists a room image id and clears it without changing the file", async () => {
+    const group = await peopleRoom();
+    const req = Readable.from([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0])]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, group.hosted.roomId, { owner: "host", name: "room.png", uploadId: "picture-upload-01" });
+    expect((await call(routes().patch, { picture: file.id }, [group.id])).body.group.picture).toBe(file.id);
+    store = new Store(() => ({ instanceId: "fake", model: "m" }));
+    expect(store.group(group.id)?.picture).toBe(file.id);
+    expect((await call(routes().patch, { picture: null }, [group.id])).body.group.picture).toBeUndefined();
+  });
+
+  it("refuses missing, cross-room and non-image files", async () => {
+    const group = await peopleRoom();
+    const other = await peopleRoom();
+    const req = Readable.from([Buffer.from("a text file")]) as IncomingMessage;
+    req.headers = {};
+    const file = await saveRoomFile(req, other.hosted.roomId, { owner: "host", name: "note.txt", uploadId: "picture-upload-02" });
+    for (const [roomId, picture] of [[group.id, file.id], [other.id, file.id], [group.id, "P".repeat(24)], [group.id, "https://example.com/a.png"]]) {
+      expect((await call(routes().patch, { picture }, [roomId!])).status).toBe(400);
+    }
+    expect(group).not.toHaveProperty("picture");
   });
 });
 

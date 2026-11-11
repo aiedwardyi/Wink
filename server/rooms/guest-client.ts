@@ -17,11 +17,13 @@ import {
   joinedCursor,
   joinedEntries,
   joinedFile,
+  joinedPictureFile,
   joinedKey,
   joinedRoom,
   joinedRooms,
   joinedSentName,
   joinedSummary,
+  keepJoinedPicture,
   readJoined,
   resetJoined,
   removeJoined,
@@ -70,6 +72,7 @@ const entrySchema = z.object({
 });
 const stateSchema = z.object({
   version: z.number().int().nonnegative(),
+  picture: fileSchema.shape.id.optional(),
   roomName: z.string().max(200),
   instructions: z.string().max(20_000),
   host: name,
@@ -335,7 +338,25 @@ export class GuestClient {
     return fetching;
   }
 
-  private async fetchFile(roomId: string, file: JoinedFile): Promise<GuestResult<{ file: JoinedFile; path: string }>> {
+  async picture(roomId: string): Promise<GuestResult<{ file: JoinedFile; path: string }>> {
+    const id = joinedRoom(roomId)?.state?.picture;
+    if (!id) return failed(404, "not found");
+    const file = joinedPictureFile(roomId);
+    const path = file && cachedJoinedFile(roomId, file);
+    if (file && path) return { ok: true, value: { file, path } };
+    const key = `${roomId}\n${id}`;
+    let fetching = this.fetching.get(key);
+    if (!fetching) {
+      fetching = this.fetchFile(roomId, file ?? undefined, id).finally(() => this.fetching.delete(key));
+      this.fetching.set(key, fetching);
+    }
+    const result = await fetching;
+    if (joinedRoom(roomId)?.state?.picture !== id) return failed(404, "not found");
+    if (result.ok) keepJoinedPicture(roomId, result.value.file);
+    return result;
+  }
+
+  private async fetchFile(roomId: string, file?: JoinedFile, pictureId?: string): Promise<GuestResult<{ file: JoinedFile; path: string }>> {
     const creds = joinedKey(roomId);
     if (!creds) return failed(409, "this room is read-only");
     const https = this.deps.https ?? {};
@@ -346,7 +367,7 @@ export class GuestClient {
         hostname: creds.relayHost,
         servername: creds.relayHost,
         port: https.port ?? 443,
-        path: `/room/v1/rooms/${roomId}/files/${file.id}`,
+        path: `/room/v1/rooms/${roomId}/files/${file?.id ?? pictureId}${pictureId ? "/preview" : ""}`,
         headers: { host: creds.relayHost, authorization: `Bearer ${creds.key}` },
         ca: https.ca,
         lookup: https.lookup,
@@ -362,6 +383,14 @@ export class GuestClient {
       res.resume();
       if (res.statusCode === 401) this.end(roomId, creds.key);
       return res.statusCode === 404 ? failed(404, "not found") : unavailable();
+    }
+    if (!file) {
+      const parsed = fileSchema.safeParse({ id: pictureId, name: "picture", type: res.headers["content-type"], bytes: Number(res.headers["content-length"]), sha256: res.headers["x-content-sha256"] });
+      if (!parsed.success || !parsed.data.type.startsWith("image/")) {
+        res.destroy();
+        return unavailable();
+      }
+      file = parsed.data;
     }
     if (!(await keepJoinedFile(roomId, file, res))) return unavailable();
     return { ok: true, value: { file, path: cachedJoinedFile(roomId, file)! } };

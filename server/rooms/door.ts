@@ -114,7 +114,7 @@ function sharedState(group: HostedGroup) {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
   });
-  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots };
+  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, ...(group.picture ? { picture: group.picture } : {}) };
 }
 
 /** Full state for one viewer. The version moves only when what everyone sees changed. */

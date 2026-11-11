@@ -28,6 +28,7 @@ export interface JoinedFile {
 
 export interface JoinedState {
   version: number;
+  picture?: string;
   roomName: string;
   instructions: string;
   host: string;
@@ -107,6 +108,12 @@ function open(): DatabaseSync {
     );
     CREATE TRIGGER IF NOT EXISTS joined_translations_delete AFTER DELETE ON joined
     BEGIN DELETE FROM translations WHERE room_id = OLD.room_id; END;
+    CREATE TABLE IF NOT EXISTS pictures (
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      PRIMARY KEY (room_id, id)
+    );
   `);
   return db;
 }
@@ -262,6 +269,17 @@ export function joinedFile(roomId: string, fileId: string): JoinedFile | null {
   `).get(roomId, fileId) as { file: string } | undefined;
   const file = row ? (JSON.parse(row.file) as JoinedFile) : null;
   return file?.deleted ? null : file;
+}
+
+export function joinedPictureFile(roomId: string): JoinedFile | null {
+  const id = joinedRoom(roomId)?.state?.picture;
+  if (!id) return null;
+  const row = db().prepare("SELECT body FROM pictures WHERE room_id = ? AND id = ?").get(roomId, id) as { body: string } | undefined;
+  return row ? JSON.parse(row.body) as JoinedFile : null;
+}
+
+export function keepJoinedPicture(roomId: string, file: JoinedFile): void {
+  db().prepare("INSERT OR REPLACE INTO pictures (room_id, id, body) VALUES (?, ?, ?)").run(roomId, file.id, JSON.stringify(file));
 }
 
 /** The seq the stream resumes after. */

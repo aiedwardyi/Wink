@@ -40,7 +40,7 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[] } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
 }
@@ -172,4 +172,9 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
   } catch {
     return { key: "teamRoom.sendFailed" };
   }
+}
+
+export function roomPictureUrl(base: string, picture?: string | null): string | undefined {
+  if (!picture) return undefined;
+  return base.startsWith("/api/joined/") ? `${base}/picture?id=${encodeURIComponent(picture)}` : `${base}/files/${encodeURIComponent(picture)}/preview`;
 }

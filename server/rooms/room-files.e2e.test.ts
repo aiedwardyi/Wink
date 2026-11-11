@@ -405,6 +405,27 @@ describe("pictures and files in a team room, through the real door", () => {
     expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "fifty-one", fileIds: [...ids, ids[0]] })))).status).toBe(400);
   });
 
+  it("fetches a room picture once per id, persists it and refuses removed or unrelated pictures", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    const bytes = png(128);
+    const file = await hostUpload(roomId, bytes, "room.png");
+    store.patchGroup(group.id, { picture: file.id } as never);
+    await until(() => (c.room(roomId)?.state as any)?.picture === file.id);
+    const first = await call("GET", `/api/joined/rooms/${roomId}/picture`);
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual(bytes);
+    expect((await call("GET", `/api/joined/rooms/${roomId}/files/${file.id}/preview`)).status).toBe(404);
+    hop.up = false;
+    hop.drop();
+    closeJoinedDb();
+    expect((await call("GET", `/api/joined/rooms/${roomId}/picture`)).body).toEqual(bytes);
+    hop.up = true;
+    await until(() => c.rooms()[0]?.link === "live");
+    store.patchGroup(group.id, { picture: undefined } as never);
+    await until(() => !(c.room(roomId)?.state as any)?.picture);
+    expect((await call("GET", `/api/joined/rooms/${roomId}/picture`)).status).toBe(404);
+  });
+
   it("go both ways, and every byte matches by SHA-256", async () => {
     const { c, group, roomId } = await joinedTeam();
     const hostPicture = png(300 * 1024);

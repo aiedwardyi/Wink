@@ -6253,7 +6253,7 @@ configureRoomAsks({
   alert: roomAlert,
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
-sweepRoomFiles();
+sweepRoomFiles(store.groups);
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),

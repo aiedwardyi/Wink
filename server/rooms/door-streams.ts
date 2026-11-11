@@ -23,6 +23,7 @@ export interface DoorEntry {
 
 export interface DoorState {
   version: number;
+  picture?: string;
   roomName: string;
   instructions: string;
   host: string;

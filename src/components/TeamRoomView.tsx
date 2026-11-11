@@ -14,6 +14,7 @@ import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
 import { RoomAlertsBell } from "./RoomAlertsBell";
+import { TeamRoomPicture } from "./RoomPicture";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomFilesMenu } from "./TeamRoomMenu";
@@ -36,7 +37,10 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         {(closing) => <TeamRoomPeople group={group} closing={closing} onClose={() => setPeopleOpen(false)} triggerRef={peopleButton} />}
       </Presence>
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
-        <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!missing && <TeamRoomPicture key={group.id} group={group} />}
+          <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
+        </div>
         {!missing && (
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
