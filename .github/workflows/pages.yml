@@ -35,7 +35,7 @@ jobs:
           WINK_RELAY_BASE: ${{ vars.WINK_RELAY_BASE }}
         run: |
           node --input-type=module <<'EOF'
-          import { readFileSync, writeFileSync } from "node:fs";
+          import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 
           const clientId = (process.env.WINK_GOOGLE_WEB_CLIENT_ID ?? "").trim();
           const requested = (process.env.WINK_RELAY_BASE ?? "").trim();
@@ -51,7 +51,8 @@ jobs:
             process.exit(1);
           }
           const relay = `https://relay.${base}`;
-          const page = readFileSync("site/signin/index.html", "utf8").replaceAll("https://relay.wink.edwardyi.dev", relay);
+          const page = readFileSync("site/signin/index.html", "utf8").replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", `https://*.${base}`);
+          copyFileSync("public/app-icon.svg", "site/app-icon.svg");
           writeFileSync("site/signin/config.js", `globalThis.WINK_SIGNIN = ${JSON.stringify({ clientId, base })};\n`);
           writeFileSync("site/CNAME", "wink.edwardyi.dev\n");
           writeFileSync("site/signin/index.html", page);

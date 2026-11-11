@@ -97,7 +97,6 @@ type Refused = { status: number; error: string };
 
 const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
 
-/** The room's one code; the same every time it's asked for. */
 export async function inviteToRoom(roomId: string): Promise<{ code: string } | Refused> {
   try {
     const res = await fetchResponse(`${hostRoomBase(roomId)}/invites`, { method: "POST" });

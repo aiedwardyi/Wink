@@ -227,12 +227,16 @@ export function joinRoom(inviteId: string, secret: string, taken: readonly strin
 }
 
 /** The room and person a guest key belongs to, or null once either the key or the person is gone. */
-export function guestByKey(key: string): { roomId: string; person: RoomPerson } | null {
+export function guestByKey(key: string, device?: string | string[]): { roomId: string; person: RoomPerson } | null {
   if (!key.startsWith(KEY_PREFIX) || key.length > MAX_CREDENTIAL_LENGTH) return null;
-  const row = db().prepare(`
+  const database = db();
+  const row = database.prepare(`
     SELECT p.room_id, p.id, p.name, p.level, p.joined_at FROM guest_keys k
     JOIN people p ON p.room_id = k.room_id AND p.id = k.person_id WHERE k.hash = ?
   `).get(sha256(key)) as { room_id: string; id: string; name: string; level: RoomLevel; joined_at: number } | undefined;
+  if (row && typeof device === "string" && DEVICE.test(device)) {
+    database.prepare("INSERT OR IGNORE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(row.room_id, device, row.id);
+  }
   return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at } } : null;
 }
 
@@ -245,7 +249,10 @@ export function inviteRoomId(inviteId: string): string | null {
 
 /** Host Remove: that person's PC can't come back with the room code. Leave never calls this. */
 export function barRoomPerson(roomId: string, personId: string): void {
-  db().prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
+  transaction((database) => {
+    const barred = database.prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
+    if (!barred.changes) database.prepare("DELETE FROM room_codes WHERE room_id = ?").run(roomId);
+  });
 }
 
 export function revokeGuestKeys(roomId: string, personId: string): boolean {
