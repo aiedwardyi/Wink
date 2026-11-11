@@ -20,19 +20,33 @@ diff --git a/src/win/conpty.cc b/src/win/conpty.cc
  #include <string>
  #include <thread>
  #include <vector>
-@@ -51,8 +52,11 @@ struct pty_baton {
+@@ -46,23 +47,29 @@ struct pty_baton {
  
- static std::vector<std::unique_ptr<pty_baton>> ptyHandles;
+   HANDLE hShell;
+ 
+-  pty_baton(int _id, HANDLE _hIn, HANDLE _hOut, HPCON _hpc) : id(_id), hIn(_hIn), hOut(_hOut), hpc(_hpc) {};
++  pty_baton(int _id, HANDLE _hIn, HANDLE _hOut, HPCON _hpc) : id(_id), hIn(_hIn), hOut(_hOut), hpc(_hpc), hShell(nullptr) {};
++  // Closed with the last reference, so a kill racing the exit thread never sees a stale handle.
++  ~pty_baton() { if (hShell) CloseHandle(hShell); }
+ };
+ 
+-static std::vector<std::unique_ptr<pty_baton>> ptyHandles;
++static std::vector<std::shared_ptr<pty_baton>> ptyHandles;
  static volatile LONG ptyCounter;
 +// Shared by every worker thread and each pty's exit thread.
 +static std::mutex ptyHandlesMutex;
  
- static pty_baton* get_pty_baton(int id) {
+-static pty_baton* get_pty_baton(int id) {
++static std::shared_ptr<pty_baton> get_pty_baton(int id) {
 +  std::lock_guard<std::mutex> lock(ptyHandlesMutex);
    auto it = std::find_if(ptyHandles.begin(), ptyHandles.end(), [id](const auto& ptyHandle) {
      return ptyHandle->id == id;
    });
-@@ -63,6 +67,7 @@ static pty_baton* get_pty_baton(int id) {
+   if (it != ptyHandles.end()) {
+-    return it->get();
++    return *it;
+   }
+   return nullptr;
  }
  
  static bool remove_pty_baton(int id) {
@@ -40,11 +54,68 @@ diff --git a/src/win/conpty.cc b/src/win/conpty.cc
    auto it = std::remove_if(ptyHandles.begin(), ptyHandles.end(), [id](const auto& ptyHandle) {
      return ptyHandle->id == id;
    });
-@@ -301,6 +306,7 @@ static Napi::Value PtyStartProcess(const Napi::CallbackInfo& info) {
+@@ -101,8 +108,6 @@ void SetupExitCallback(Napi::Env env, Napi::Function cb, pty_baton* baton) {
+     WaitForSingleObject(baton->hShell, INFINITE);
+     // Get process exit code.
+     GetExitCodeProcess(baton->hShell, (LPDWORD)(&exit_event->exit_code));
+-    // Clean up handles
+-    CloseHandle(baton->hShell);
+     assert(remove_pty_baton(baton->id));
+ 
+     auto status = tsfn.BlockingCall(exit_event, callback); // In main thread
+@@ -301,8 +306,9 @@ static Napi::Value PtyStartProcess(const Napi::CallbackInfo& info) {
      // We were able to instantiate a conpty
      const int ptyId = InterlockedIncrement(&ptyCounter);
      marshal.Set("pty", Napi::Number::New(env, ptyId));
 +    std::lock_guard<std::mutex> lock(ptyHandlesMutex);
      ptyHandles.emplace_back(
-         std::make_unique<pty_baton>(ptyId, hIn, hOut, hpc));
+-        std::make_unique<pty_baton>(ptyId, hIn, hOut, hpc));
++        std::make_shared<pty_baton>(ptyId, hIn, hOut, hpc));
    } else {
+     throw Napi::Error::New(env, "Cannot launch conpty");
+   }
+@@ -351,7 +357,7 @@ static Napi::Value PtyConnect(const Napi::CallbackInfo& info) {
+   Napi::Function exitCallback = info[5].As<Napi::Function>();
+ 
+   // Fetch pty handle from ID and start process
+-  pty_baton* handle = get_pty_baton(id);
++  auto handle = get_pty_baton(id);
+   if (!handle) {
+     throw Napi::Error::New(env, "Invalid pty handle");
+   }
+@@ -447,7 +453,7 @@ static Napi::Value PtyConnect(const Napi::CallbackInfo& info) {
+   CloseHandle(handle->hIn);
+   CloseHandle(handle->hOut);
+ 
+-  SetupExitCallback(env, exitCallback, handle);
++  SetupExitCallback(env, exitCallback, handle.get());
+ 
+   // Return
+   auto marshal = Napi::Object::New(env);
+@@ -472,7 +478,7 @@ static Napi::Value PtyResize(const Napi::CallbackInfo& info) {
+   SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
+   const bool useConptyDll = info[3].As<Napi::Boolean>().Value();
+ 
+-  const pty_baton* handle = get_pty_baton(id);
++  auto handle = get_pty_baton(id);
+ 
+   if (handle != nullptr) {
+     HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+@@ -513,7 +519,7 @@ static Napi::Value PtyClear(const Napi::CallbackInfo& info) {
+     return env.Undefined();
+   }
+ 
+-  const pty_baton* handle = get_pty_baton(id);
++  auto handle = get_pty_baton(id);
+ 
+   if (handle != nullptr) {
+     HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+@@ -544,7 +550,7 @@ static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
+   int id = info[0].As<Napi::Number>().Int32Value();
+   const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+ 
+-  const pty_baton* handle = get_pty_baton(id);
++  auto handle = get_pty_baton(id);
+ 
+   if (handle != nullptr) {
+     HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
