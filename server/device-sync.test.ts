@@ -233,6 +233,47 @@ describe("relay presence", () => {
     ]);
   });
 
+  it.each([false, true])("keeps the first desktop pick on Tailscale before local host discovery (mirror known %s)", async (known) => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW - DEVICE_STALE_MS - 1);
+    let answer!: (response: Response) => void;
+    const request = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const presence = createDevicePresence(request);
+    const listed = listDevices(folder, "home", NOW, undefined, () => known);
+    const pick = (host: string | undefined) => pickerDevices(presence(listed, host, true), null, BASE, NOW);
+    expect(pick(undefined).find((item) => item.deviceId === "work")).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: true });
+    expect(request).not.toHaveBeenCalled();
+    expect(pick("home.tail1234.ts.net").find((item) => item.deviceId === "work")).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: true });
+    answer(Response.json({ app: "openmausbot" }));
+    await vi.waitFor(() => expect(pick("home.tail1234.ts.net").find((item) => item.deviceId === "work")).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: false }));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to relay after a failed Tailscale probe following local host discovery", async () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW);
+    const request = vi.fn().mockRejectedValue(new Error("offline"));
+    const presence = createDevicePresence(request);
+    const listed = listDevices(folder, "home", NOW);
+    const pick = (host: string | undefined) => pickerDevices(presence(listed, host, true), null, BASE, NOW)[0];
+    expect(pick(undefined)).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: true });
+    expect(request).not.toHaveBeenCalled();
+    expect(pick("home.tail1234.ts.net")).toMatchObject({ host: "work.tail1234.ts.net", offline: false, checking: true });
+    await vi.waitFor(() => expect(pick("home.tail1234.ts.net")).toMatchObject({ host: relay("work"), offline: false, checking: false }));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps relay fallback when local Tailscale discovery settles without a host", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, { ...rec("work"), relayHost: relay("work") }, NOW - DEVICE_STALE_MS - 1);
+    const request = vi.fn();
+    const presence = createDevicePresence(request);
+    const listed = listDevices(folder, "home", NOW);
+    expect(pickerDevices(presence(listed, undefined, false), null, BASE, NOW)[0]).toMatchObject({ host: relay("work"), offline: true, checking: false });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("keeps a PC whose tailnet host answers exactly as today", () => {
     const folder = freshDir();
     writeDeviceRecord(folder, { ...rec("home"), relayHost: relay("home") }, NOW);
