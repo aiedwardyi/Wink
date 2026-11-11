@@ -44,7 +44,6 @@ export type HostedGroup = GroupRecord & { hosted: { roomId: string } };
 
 export interface RoomAskDeps {
   store: Pick<Store, "group" | "groupByThread" | "bot" | "appendMessage" | "messagesFor" | "patchGroup">;
-  teamRooms(): boolean;
   hostName(): string;
   driverKind(botId: string): string | undefined;
   instance(botId: string, threadId: string): ProviderInstance | null;

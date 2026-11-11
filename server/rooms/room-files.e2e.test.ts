@@ -83,8 +83,8 @@ async function app(req: IncomingMessage, res: ServerResponse) {
 async function localApp(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
-  if (client && (await joinedFileRoute(req, res, method, url, client, true))) return;
-  if (await hostFileRoute(req, res, method, url, { store, teamRooms: true })) return;
+  if (client && (await joinedFileRoute(req, res, method, url, client))) return;
+  if (await hostFileRoute(req, res, method, url, { store })) return;
   res.writeHead(404).end();
 }
 
@@ -152,7 +152,6 @@ function hostUp() {
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   configureRoomAsks({
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
@@ -160,7 +159,7 @@ function hostUp() {
     stopTurn: vi.fn(async () => {}),
     endSession: vi.fn(async () => {}),
   });
-  configureRoomDoor({ store, teamRooms: () => true, hostName: () => "Edward" });
+  configureRoomDoor({ store, hostName: () => "Edward" });
 }
 
 beforeEach(() => {
@@ -333,7 +332,7 @@ describe("pictures and files in a team room, through the real door", () => {
   it("the local send route carries the uploaded files", async () => {
     const { c, roomId } = await joinedTeam();
     const file = (await guestUpload(roomId, png(2048), "photo.png")).json.file;
-    const reply = await joinedRoute("POST", `/api/joined/rooms/${roomId}/send`, c, true, async () => ({ text: "", fileIds: [file.id] }));
+    const reply = await joinedRoute("POST", `/api/joined/rooms/${roomId}/send`, c, async () => ({ text: "", fileIds: [file.id] }));
     expect(reply).toMatchObject({ status: 200, body: { entry: { files: [file] } } });
   });
 

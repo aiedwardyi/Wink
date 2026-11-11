@@ -131,7 +131,6 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
       config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" },
     });
     writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
-      ...(hosted ? { features: { teamRooms: true } } : {}),
       instances: {
         claude: instance({}),
         claudeTask: instance({ FAKE_CLAUDE_MODE: "background-task", FAKE_CLAUDE_TASK_GATE: gate }),

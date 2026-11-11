@@ -51,12 +51,12 @@ const HOST_ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(send|files(?:\/[A-Za-z0-9_-]{
 
 /** The host's side: upload, download, preview, and a send that carries files. False when the path isn't ours. */
 export async function hostFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor">; teamRooms: boolean },
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor"> },
 ): Promise<boolean> {
   if (!url.pathname.startsWith("/api/rooms/")) return false;
   const route = HOST_ROUTE.exec(url.pathname);
   const roomId = route?.[1];
-  const group = roomId && deps.teamRooms && peopleOnlyRoom(roomId) ? deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) : undefined;
+  const group = roomId && peopleOnlyRoom(roomId) ? deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) : undefined;
   const file = route?.[2] === "send" ? null : FILE_PATH.exec(url.pathname.slice("/api".length));
   const action = file ? fileAction(file) : "send";
   if (!route || !group || method !== (action === "upload" || action === "send" ? "POST" : "GET")) {

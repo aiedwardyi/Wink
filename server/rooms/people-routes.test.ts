@@ -29,7 +29,6 @@ let relayPort = 0;
 let localPort = 0;
 let access: PhoneAccess;
 let store: Store;
-let flag = true;
 let relayHost: string | null = HOST;
 const reached: string[] = [];
 
@@ -37,7 +36,7 @@ async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req) && (await access.gate(req, res)).handled) return;
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
   reached.push(path);
-  const deps = { store, teamRooms: flag, hostName: () => "Edward", relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
+  const deps = { store, hostName: () => "Edward", relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
   if (await peopleRoute(req, res, req.method ?? "GET", path, deps)) return;
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
@@ -169,11 +168,10 @@ afterAll(async () => {
 beforeEach(() => {
   close();
   rmSync(DATA_DIR, { recursive: true, force: true });
-  flag = true;
   relayHost = HOST;
   reached.length = 0;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
-  configureRoomDoor({ store, teamRooms: () => flag, hostName: () => "Edward" });
+  configureRoomDoor({ store, hostName: () => "Edward" });
 });
 
 afterEach(() => {
@@ -250,9 +248,6 @@ describe("who reaches them", () => {
       ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${botRoom.hosted.roomId}/invites`], ["POST", "/api/rooms/nope/invites"],
     ];
     for (const [method, path] of misses) expect([method, path, (await call(path, { method, body: { name: "Joon" } })).status]).toEqual([method, path, 404]);
-    flag = false;
-    expect(await invite(id, "Joon")).toEqual({ status: 404, body: { error: "not found" } });
-    expect((await remove(id, mina.personId)).status).toBe(404);
     expect(roomInvites(id)).toEqual([]);
     expect(roomInvites(botRoom.hosted.roomId)).toEqual([]);
     expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
@@ -292,11 +287,5 @@ describe("wiring", () => {
     const line = index.slice(people, index.indexOf("\n", people));
     expect(line).toContain("botCaller: Boolean(commsCallers.resolve(req.headers.authorization))");
     expect(line).toContain("relayHost: () => phoneAccess.presenceHost()");
-  });
-
-  it("the client config says whether team rooms are on", () => {
-    const start = index.indexOf("    features: {\n      showToolCalls: showToolCallsEnabled(cfg),");
-    expect(start).toBeGreaterThan(0);
-    expect(index.slice(start, index.indexOf("\n    },", start))).toContain("teamRooms: cfg.features?.teamRooms === true,");
   });
 });

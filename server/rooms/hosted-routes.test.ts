@@ -9,13 +9,11 @@ import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { addPerson, closeRoomsDb, roomById } from "./db.ts";
 
 let store: Store;
-let flag: boolean;
 const engines = new Map<string, string>();
 
 function routes() {
   return createGroupRoutes({
     store,
-    teamRooms: () => flag,
     instanceForBot: (bot: BotRecord) => ({ driverKind: engines.get(bot.id) }),
     checkedMemberIds: (value: unknown) => ({ ok: true, memberIds: value as string[] }),
     checkedGroupResponder: () => ({ kind: "everyone" }),
@@ -44,17 +42,12 @@ beforeEach(() => {
   closeRoomsDb();
   rmSync(DATA_DIR, { recursive: true, force: true });
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
-  flag = true;
 });
 afterEach(closeRoomsDb);
 
 describe("hosted group routes", () => {
-  it("creates a team room only with teamRooms on", async () => {
+  it("creates a team room", async () => {
     const wink = bot("Wink", "claudeAgent");
-    flag = false;
-    expect(await call(routes().create, { name: "Team", memberIds: [wink], hosted: true })).toEqual({ status: 409, body: { error: "team rooms are off" } });
-    expect(store.groups).toHaveLength(0);
-    flag = true;
     const created = await call(routes().create, { name: "Team", memberIds: [wink], hosted: true });
     expect(created.status).toBe(201);
     const group = store.group(created.body.group.id)!;

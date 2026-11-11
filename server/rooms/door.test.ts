@@ -38,7 +38,6 @@ interface Reply {
 let relayServer: Server;
 let localServer: Server;
 let access: PhoneAccess;
-let flag = true;
 let store: Store;
 let deps: RoomAskDeps;
 let engine: Record<"sendTurn" | "generateText" | "generateReview" | "answerWords", ReturnType<typeof vi.fn>>;
@@ -225,13 +224,11 @@ beforeEach(() => {
   clock = Math.max(clock, Date.now()) + 5 * MINUTE;
   vi.setSystemTime(clock);
   rmSync(DATA_DIR, { recursive: true, force: true });
-  flag = true;
   reached.length = 0;
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   deps = {
     store,
-    teamRooms: () => flag,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
@@ -241,7 +238,7 @@ beforeEach(() => {
   };
   roomAskHooks.words = vi.fn();
   configureRoomAsks(deps);
-  configureRoomDoor({ store, teamRooms: () => flag, hostName: () => "Edward" });
+  configureRoomDoor({ store, hostName: () => "Edward" });
 });
 
 afterEach(() => {
@@ -267,14 +264,10 @@ describe("door routes", () => {
     expect(reached).toEqual([]);
   });
 
-  it("is 404 everywhere with team rooms off", async () => {
+  it("lets a guest join with no team rooms switch in config", async () => {
     const group = peopleRoom();
     const { key } = await joined(group, "Mina");
-    flag = false;
-    expect((await post("/room/v1/join", { code: code(group, "Joon").code })).status).toBe(404);
-    expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(404);
-    expect((await post(`/room/v1/rooms/${group.hosted.roomId}/send`, { text: "hi" }, { key })).status).toBe(404);
-    expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
+    expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(200);
   });
 
   it("is 404 on loopback", async () => {
@@ -769,8 +762,6 @@ describe("files", () => {
     expect((await upload(a.hosted.roomId, mina.key, "after remove")).status).toBe(401);
     revokeGuestKeys(a.hosted.roomId, pat.personId);
     expect((await call(path, { key: pat.key })).status).toBe(401);
-    flag = false;
-    expect((await call(path, { key: joe.key })).status).toBe(404);
   });
 
   it("ride on a send to every reader; someone else's file, an empty line and a reused sendId are refused", async () => {

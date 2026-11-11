@@ -1,5 +1,4 @@
-// Where team rooms fence off today's paths. Every guard reads `group.hosted`,
-// never the teamRooms flag, so a hosted room stays closed with the flag off.
+// Where team rooms fence off today's paths. Every guard reads `group.hosted`.
 import type { GroupRecord, Store } from "../store.ts";
 import { roomById, roomPeople, type RoomPerson } from "./db.ts";
 import { nameClash } from "./names.ts";

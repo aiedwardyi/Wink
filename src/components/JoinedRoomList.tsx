@@ -2,7 +2,6 @@
 import { Users } from "lucide-react";
 
 import { cn } from "@/lib/cn";
-import { teamRoomsEnabled } from "@/lib/feature-flags";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
@@ -43,8 +42,7 @@ function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDe
 }
 
 export function JoinedRoomList({ density }: { density: SidebarDensity }) {
-  const { state } = useStore();
-  const rooms = useJoinedRooms(teamRoomsEnabled(state.config));
+  const rooms = useJoinedRooms();
   if (!rooms.length) return null;
   return (
     <div data-joined-rooms>
