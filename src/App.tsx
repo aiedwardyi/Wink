@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -36,6 +36,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
+import { closeShow, useAutoShow, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -65,7 +66,7 @@ const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
-const VerifyWatchPanel = lazyView(() => import("@/components/VerifyWatch").then((m) => ({ default: m.VerifyWatchPanel })));
+const ShowPane = lazyView(() => import("@/components/ShowPane").then((m) => ({ default: m.ShowPane })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
 
@@ -250,20 +251,25 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.pluginsOpen ||
     state.createBotOpen;
   const watch = useVerifyWatch();
+  const show = useShowItem();
   const watchChat = group ?? bot;
+  const showChat = group && isTeamRoom(group) ? undefined : watchChat;
+  const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
   const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
-    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner, watch.messageId)
+    ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined;
-  const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
+  const showing = show && showChat && show.threadId === showChat.threadId ? show : undefined;
+  const watchShown = usePresence(watch && watchChat && watchCard ? { watch: { card: watchCard, threadId: watchChat.threadId, live: watch.live } } : showing ? { item: showing } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
-  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : panel === "show" ? closeShow() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
-  useEffect(() => closeVerifyWatch(), [state.selectedId]);
+  useEffect(() => { closeVerifyWatch(); closeShow(); }, [state.selectedId]);
+  useAutoShow(showChat?.threadId, chatMessages, !phoneMenuVisible && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
-      <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
+      <ShowPane {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
     </LazyView>
   );
 
