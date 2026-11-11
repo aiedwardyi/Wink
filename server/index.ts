@@ -8790,6 +8790,7 @@ startTeamSnagOwner({
   email: () => googleAccount.owner()?.email ?? null,
   tokens: googleAccount,
   file: join(DATA_DIR, "team-snags.jsonl"),
+  ownDevices: () => [{ host: phoneAccess.presenceHost() ?? "" }, ...(profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [])],
   post: (text, ids) => postChiefNote(store, profileSyncSettings.deviceId, text, ids),
   postedIds: () => chiefSnagIds(store),
   warn: (line) => console.warn(line),

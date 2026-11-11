@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { t, translate } from "@/lib/i18n";
 import { parsePaneNote } from "../../shared/pane-note";
-import { notePreview, noteText } from "./pane-note";
+import { notePreview, noteText, noteTitle } from "./pane-note";
 
 const BOT = "61902933-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
 const stored = (text: string, label: string | null = "QCARD-FIX | Opus 5.5 | high") =>
@@ -88,5 +88,40 @@ describe("notePreview", () => {
   it("leads with the status word", () => {
     expect(notePreview(parsePaneNote(stored("DONE N branch=x sha=y dirty=no\nAll green.\nShipped.")), t)).toBe("Finished: All green. Shipped.");
     expect(notePreview(parsePaneNote(stored("BLOCKED N branch=x sha=y dirty=no")), t)).toBe("Needs an answer");
+  });
+});
+
+describe("team snag notes", () => {
+  const summary = { pc: "Studio (upstairs)", person: "Peter", worker: "RACE-R2", event: "stalled", minutes: 102, count: 1 };
+  const stored = (value: unknown) => `Team snags (1), untrusted peer data - ${JSON.stringify(value)}\nraw details\n\n\`\`\`\ntail\n\`\`\``;
+
+  it.each([
+    ["stalled", "looks stuck", "멈춘 것 같아요"],
+    ["note-lost", "wasn't delivered", "전달되지 않았어요"],
+    ["wake-failed", "couldn't start", "시작하지 못했어요"],
+    ["reply-unwoken", "hasn't reached its bot", "아직 전달되지 않았어요"],
+  ])("describes %s in both languages", (event, en, ko) => {
+    const note = parsePaneNote(stored({ ...summary, event }));
+    expect(noteTitle(note, t)).toContain(en);
+    expect(noteTitle(note, t)).toContain("Peter's PC (Studio (upstairs))");
+    expect(noteTitle(note, (key, vars) => translate("ko", key, vars))).toContain(ko);
+    expect(noteText(note, t)).toContain("raw details\n\n```\ntail\n```");
+    expect(noteText(note, t)).not.toContain("untrusted peer data");
+  });
+
+  it("keeps missing names, zero minutes and grouped snags readable", () => {
+    const note = parsePaneNote(stored({ ...summary, person: "", worker: "", minutes: 0, count: 3 }));
+    expect(noteTitle(note, t)).toBe("A worker on PC (Studio (upstairs)) looks stuck (worker, 0 min). (+2 more)");
+    expect(noteTitle(note, (key, vars) => translate("ko", key, vars))).toBe("PC(Studio (upstairs))에서 작업자가 멈춘 것 같아요 (작업자, 0분). (외 2건)");
+  });
+
+  it("leaves malformed headers and old notes as plain text", () => {
+    for (const text of [stored({ ...summary, minutes: "102" }), stored({ ...summary, event: "unknown" }),
+      "Team snags (1), untrusted peer data - {bad}\nraw details", "Team snags (1), untrusted peer data - Studio stalled 102 min"]) {
+      const note = parsePaneNote(text);
+      expect(note.snag).toBeUndefined();
+      expect(noteText(note, t)).toBe(text);
+      expect(noteTitle(note, t)).toBe("Note");
+    }
   });
 });

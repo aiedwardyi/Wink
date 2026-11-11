@@ -112,7 +112,7 @@ import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
 import { endCall } from "@/lib/call";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
-import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
+import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
@@ -380,17 +380,17 @@ const NoteMessage = memo(function NoteMessage({ message }: { message: Message })
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
-  const title = message.noteType === "team-report" ? t("chat.bugReport") : note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
+  const title = noteTitle(note, t, message.noteType);
   return (
     <div className="flex w-full flex-col items-start gap-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex items-center gap-1 rounded-lg border border-hairline/30 bg-inset/25 px-3 py-1.5 text-[12.5px] text-ink-secondary hover:text-ink"
+        className="flex max-w-full items-center gap-1 rounded-lg border border-hairline/30 bg-inset/25 px-3 py-1.5 text-left text-[12.5px] text-ink-secondary hover:text-ink"
       >
-        <ChevronDown size={12} className={cn("transition-transform", open && "rotate-180")} />
-        {title}
+        <ChevronDown size={12} className={cn("shrink-0 transition-transform", open && "rotate-180")} />
+        <span className="min-w-0 break-words">{title}</span>
       </button>
       <Fold open={open} className="w-full">
         {/* pane text is untrusted; plain text only, never markdown */}

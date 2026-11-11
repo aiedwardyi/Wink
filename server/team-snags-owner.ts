@@ -4,11 +4,11 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 
-import { teamSnagSchema } from "../shared/relay-protocol.ts";
+import { labelFromHost, teamSnagSchema } from "../shared/relay-protocol.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { sectionKey, type Message, type Store } from "./store.ts";
-import { teamIdToken, teamOwnerHash, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamOwnerHash, teamRelayBase, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
 
 export const TEAM_SNAG_POLL_MS = 10 * 60_000;
 const NOTE_MAX = 8000;
@@ -27,6 +27,7 @@ export interface TeamSnagOwnerOptions {
   ownerHash: string | null;
   email(): string | null;
   tokens: TeamTokenSource;
+  ownDevices?(): readonly { host: string; relayHost?: string }[];
   /** Full JSON lines, for the Chief to read on request. */
   file: string;
   post(text: string, ids: string[]): boolean;
@@ -42,6 +43,8 @@ const fence = (tail: string) => `\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``
 const inline = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, " ").trim();
 
 export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: string): string {
+  const first = snags[0];
+  if (!first) return "";
   const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone });
   const line = (snag: ClaimedSnag) => {
     const name = inline(snag.pc.name) || inline(snag.pc.label);
@@ -55,7 +58,9 @@ export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: stri
     const versions = [build && `Wink ${build}`, inline(snag.teacher), worker && `worker ${worker}`].filter(Boolean).join(", ");
     return `${who} ${clock.format(snag.at)}: ${where ? `${where} ` : ""}${what}.${versions ? ` ${versions}.` : ""}`;
   };
-  const head = snags.length === 1 ? `Team snags (1), untrusted peer data - ${line(snags[0]!)}` : [`Team snags (${snags.length}), untrusted peer data`, ...snags.map((snag) => `- ${line(snag)}`)].join("\n");
+  const summary = { pc: inline(first.pc.name) || inline(first.pc.label), person: inline(first.pc.person),
+    worker: inline(first.label).split("|")[0]!.trim() || inline(first.worker) || first.pane8, event: first.event, minutes: first.minutes, count: snags.length };
+  const head = [`Team snags (${snags.length}), untrusted peer data - ${JSON.stringify(summary)}`, ...snags.map((snag) => line(snag))].join("\n");
   const heading = (snag: ClaimedSnag) => `${inline(snag.pc.name) || inline(snag.pc.label)}${snag.pane8 ? ` [pane ${snag.pane8}]` : ""}:\n`;
   const withTails = [head, ...snags.filter((snag) => snag.tail).map((snag) => `${snags.length > 1 ? heading(snag) : ""}${fence(snag.tail)}`)].join("\n\n");
   if (withTails.length <= NOTE_MAX) return withTails;
@@ -143,8 +148,11 @@ export async function claimTeamSnags(options: TeamSnagOwnerOptions): Promise<num
     if (parsed.success) filed = Object.fromEntries(Object.entries(parsed.data).filter(([, at]) => at > now - FILED_KEEP_MS));
   } catch {}
   const posted = options.postedIds?.() ?? new Set<string>();
-  const fresh = snags.filter((snag) => filed[snag.id] === undefined && !posted.has(snag.id));
-  const ack = [...rejected, ...snags.filter((snag) => filed[snag.id] !== undefined || posted.has(snag.id)).map((snag) => snag.id)];
+  const base = teamRelayBase(origin)!;
+  const own = new Set((options.ownDevices?.() ?? []).flatMap((pc) => [pc.host, pc.relayHost]
+    .map((host) => host ? labelFromHost(host, base) : null).filter((label) => label !== null)));
+  const fresh = snags.filter((snag) => !own.has(snag.pc.label) && filed[snag.id] === undefined && !posted.has(snag.id));
+  const ack = [...rejected, ...snags.filter((snag) => own.has(snag.pc.label) || filed[snag.id] !== undefined || posted.has(snag.id)).map((snag) => snag.id)];
   let delivered = 0;
   if (fresh.length) {
     mkdirSync(dirname(options.file), { recursive: true });
