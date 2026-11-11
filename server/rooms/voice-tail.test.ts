@@ -11,6 +11,23 @@ beforeAll(() => mkdirSync(DATA_DIR, { recursive: true }));
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); });
 
 describe("room voice tail", () => {
+  it.each(["host", "joined"] as const)("keeps partial Korean context when the newest %s entry exceeds the budget", (kind) => {
+    const room = createRoom(`Long ${kind}`);
+    const text = "가나다라".repeat(1_000);
+    const author = { kind: "host" as const, id: "host", name: "Edward" };
+    if (kind === "host") appendRoomEntry(room.id, { author, text });
+    else {
+      const me = { id: "minji", name: "민지" };
+      saveJoined(room.id, "fixture.invalid", me, "fixture-key");
+      setJoinedState(room.id, { version: 1, roomName: room.name, instructions: "", host: "Edward", me, people: [me] });
+      addJoinedEntries(room.id, [{ seq: 1, id: "long", at: Date.now(), author, text }]);
+    }
+    const tail = roomTail({ id: room.id, kind }, "Edward")!.tail;
+    expect(tail).toMatch(/^Edward: 가나다라/);
+    expect(text.startsWith(tail.slice("Edward: ".length))).toBe(true);
+    expect(estimateContextTokens([{ text: tail }])).toBeLessThanOrEqual(2_000);
+  });
+
   it("reads the host room newest first with people and file names only", () => {
     const room = createRoom("Launch");
     addPerson(room.id, "Minji", "chat", ["Edward"]);

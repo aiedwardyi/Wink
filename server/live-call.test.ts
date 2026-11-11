@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -12,6 +13,7 @@ import { Store } from "./store.ts";
 import { workspaceDir } from "./workspace.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
+import { markRelaySocket } from "./phone-relay/via.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
@@ -25,11 +27,13 @@ function harness(opts: { key?: string; reply?: () => Response; roomTail?: (...ar
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const routes = createLiveCallRoutes({ cfg: { gemini: { apiKey: "key" in opts ? opts.key : KEY } }, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, ...{ roomTail: opts.roomTail } });
-  async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
+  async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
     let status = 0;
     let raw = "";
     const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
-    await routes(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", botId, route] as unknown as RegExpMatchArray);
+    const req = Readable.from([JSON.stringify(body)]) as IncomingMessage;
+    if (relay) { req.socket = new Socket(); markRelaySocket(req.socket); }
+    await routes(req, res, ["", botId, route] as unknown as RegExpMatchArray);
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
@@ -37,6 +41,29 @@ function harness(opts: { key?: string; reply?: () => Response; roomTail?: (...ar
 }
 
 describe("call token", () => {
+  it("uses one room snapshot for validation and the brief", async () => {
+    const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
+    const h = harness({ roomTail });
+    expect((await h.post("token", { room: { id: "launch", kind: "host" } })).status).toBe(200);
+    expect(roomTail).toHaveBeenCalledTimes(1);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Minji: Safari broke");
+  });
+
+  it.each([KEY, undefined])("refuses relay room calls before reading the room or writing a key card (key=%s)", async (key) => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: [], tail: "private" }));
+    const h = harness({ key, roomTail });
+    expect((await h.post("token", { room: { id: "launch", kind: "host" } }, h.bot.id, true)).status).toBe(404);
+    expect(roomTail).not.toHaveBeenCalled();
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(h.store.activePath(h.bot.threadId).some((row) => row.kind === "secret")).toBe(false);
+  });
+
+  it("still mints ordinary bot calls from relay sockets", async () => {
+    const h = harness();
+    expect((await h.post("token", {}, h.bot.id, true)).status).toBe(200);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("locks the ROOM block with teammate lines into the brief and keys it by room", async () => {
     const roomTail = vi.fn((room: { id: string }) => ({ name: room.id, caller: "Edward", people: ["Edward", "Minji", "Joon"], tail: "Joon: Check before 4pm\nMinji: Login breaks on Safari" }));
     const h = harness({ roomTail });

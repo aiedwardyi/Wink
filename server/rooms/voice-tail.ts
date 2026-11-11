@@ -16,8 +16,20 @@ export function roomTail(room: CallRoom, host: string): RoomVoiceTail | undefine
   for (const entry of entries.reverse()) {
     const text = [entry.text, ...(entry.files ?? []).map((file) => file.name)].filter(Boolean).join(" ");
     const line = `${entry.author.name}: ${text}`;
-    used += estimateContextTokens([{ text: line }]);
-    if (used > ROOM_TOKENS) break;
+    const tokens = estimateContextTokens([{ text: line }]);
+    if (used + tokens > ROOM_TOKENS) {
+      const points = Array.from(line);
+      let low = 0;
+      let high = points.length;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (used + estimateContextTokens([{ text: points.slice(0, middle).join("") }]) <= ROOM_TOKENS) low = middle;
+        else high = middle - 1;
+      }
+      if (low) lines.push(points.slice(0, low).join(""));
+      break;
+    }
+    used += tokens;
     lines.push(line);
   }
   return {

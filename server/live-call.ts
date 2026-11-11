@@ -11,6 +11,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { isRelayRequest } from "./phone-relay/via.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
 import { loadMemory } from "./workspace.ts";
 import type { RoomVoiceTail } from "./rooms/voice-tail.ts";
@@ -195,12 +196,12 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const fetchFn = deps.fetch ?? fetch;
   const briefs = new Map<string, { botId: string; roomKey: string; brief: string; at: number }>();
 
-  const briefFor = async (bot: BotRecord, callId: string, locale: unknown, room?: CallRoom) => {
+  const briefFor = async (bot: BotRecord, callId: string, locale: unknown, room?: CallRoom, tail?: RoomVoiceTail) => {
     const roomKey = room ? `${room.kind}:${room.id}` : "";
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && cached.roomKey === roomKey && now() - cached.at < BRIEF_TTL_MS) return cached.brief;
     const user = cfg.profile?.name?.trim() || "User";
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), user, now(), typeof locale === "string" ? locale : undefined, room ? deps.roomTail?.(room, user) : undefined);
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), user, now(), typeof locale === "string" ? locale : undefined, tail);
     briefs.delete(callId);
     briefs.set(callId, { botId: bot.id, roomKey, brief, at: now() });
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -226,14 +227,16 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   };
 
   const token = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {
+    const body = (await readBody(req)) ?? {};
+    if (body.room !== undefined && isRelayRequest(req)) return json(res, 404, { error: "no such room" });
     const key = cfg.gemini?.apiKey?.trim();
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
-    const body = (await readBody(req)) ?? {};
     const parsedRoom = z.object({ id: z.string().min(1).max(128), kind: z.enum(["host", "joined"]) }).safeParse(body.room);
     if (body.room !== undefined && !parsedRoom.success) return json(res, 400, { error: "invalid room" });
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    if (parsedRoom.success && !deps.roomTail?.(parsedRoom.data, cfg.profile?.name?.trim() || "User")) return json(res, 404, { error: "no such room" });
-    const brief = await briefFor(bot, callId, body.locale, parsedRoom.success ? parsedRoom.data : undefined);
+    const tail = parsedRoom.success ? deps.roomTail?.(parsedRoom.data, cfg.profile?.name?.trim() || "User") : undefined;
+    if (parsedRoom.success && !tail) return json(res, 404, { error: "no such room" });
+    const brief = await briefFor(bot, callId, body.locale, parsedRoom.success ? parsedRoom.data : undefined, tail);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;

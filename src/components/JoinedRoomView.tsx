@@ -64,7 +64,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {call.bar}
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} call={call.box} /> : <TeamRoomStatus text={status} />}
+        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} call={call.box} /> : <TeamRoomStatus text={status} />}
       </div>
       <Presence open={leaving}>
         {(closing) => (

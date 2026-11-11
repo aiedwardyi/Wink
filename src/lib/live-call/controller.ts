@@ -98,6 +98,7 @@ export class LiveCall {
   private awaiting = 0;
   private busy = false;
   private reported = new Set<string>();
+  private settled = new Set<string>();
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
   private turnHadAudio = false;
@@ -373,18 +374,24 @@ export class LiveCall {
     const startedAt = this.snapshot.startedAt;
     if (!this.connected || startedAt === undefined || this.ended) return this.refresh();
     if (!input.busy) {
-      const replies = new Map<Message | undefined, Message>();
+      const replies = new Map<Message | undefined, { reply: Message; orders: string[] }>();
       let asked: Message | undefined;
+      let orders: string[] = [];
       for (const row of input.messages) {
-        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) asked = row;
-        else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
+        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) {
+          if (!row.steered || !orders.length) {
+            asked = row;
+            orders = [];
+          }
+          if (row.call?.order && row.call.id === this.callId) orders.push(row.id);
+        } else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
           this.reported.add(row.id);
-          replies.set(asked, row);
+          replies.set(asked, { reply: row, orders: [...orders] });
         }
       }
       // A reply to a typed message is already on screen, so only this call's orders are read aloud.
-      for (const [order, reply] of replies) {
-        if (order?.call?.order && order.call.id === this.callId) void this.report(reply.text!);
+      for (const [order, { reply, orders: replyOrders }] of replies) {
+        if (replyOrders.length) void this.report(reply.text!, replyOrders);
         else this.remember(order, reply.text!);
       }
     }
@@ -419,16 +426,21 @@ export class LiveCall {
     try {
       const sent = await this.deps.post(`/api/${room.kind === "joined" ? "joined/" : ""}rooms/${encodeURIComponent(room.id)}/send`, { text: offer.text, sendId: offer.sendId });
       if (sent.status >= 400) throw new Error("room send failed");
-      this.set({ postOffer: undefined });
+      if (this.snapshot.postOffer?.sendId === offer.sendId) this.set({ postOffer: undefined });
     } catch {
-      this.set({ postFailed: true });
+      if (this.snapshot.postOffer?.sendId === offer.sendId) this.set({ postFailed: true });
     } finally {
       this.set({ posting: false });
     }
   }
 
-  private async report(text: string) {
-    this.awaiting = Math.max(0, this.awaiting - 1);
+  private async report(text: string, orders: string[]) {
+    for (const id of orders) {
+      if (this.settled.has(id)) continue;
+      this.settled.add(id);
+      this.awaiting = Math.max(0, this.awaiting - 1);
+    }
+    // Later replies still speak after their orders have settled.
     let speakable = text.slice(0, REPORT_CHARS);
     try {
       const prepared = await this.deps.post("/api/tts/prepare", { text: speakable });

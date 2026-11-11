@@ -9,7 +9,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 import type { TeamRoom } from "@/lib/team-rooms";
 import { TeamRoomView } from "./TeamRoomView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; contexts: string[] }>, capture: vi.fn() }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; contexts: string[] }>, capture: vi.fn(), micError: "" }));
 vi.mock("@/lib/live-call/gemini", () => ({ GeminiLive: class {
   events!: LiveEvents;
   contexts: string[] = [];
@@ -25,7 +25,7 @@ vi.mock("@/lib/live-call/audio", () => ({ CallAudio: class {
   playing = false;
   onIdle = () => {};
   onStart = () => {};
-  async capture() { fakes.capture(); }
+  async capture() { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("No mic"), { name: fakes.micError }); }
   play() {}
   flush() {}
   close() {}
@@ -73,10 +73,23 @@ afterEach(async () => {
   posts.length = 0;
   fakes.engines.length = 0;
   fakes.capture.mockClear();
+  fakes.micError = "";
   vi.unstubAllGlobals();
 });
 
 describe("room call", () => {
+  it.each([
+    ["NotFoundError", "No microphone found. Plug one in, or type in the chat instead."],
+    ["NotReadableError", "Your microphone is in use by another app."],
+  ])("keeps the %s explanation after the call bar unmounts", async (error, note) => {
+    const host = await mount();
+    fakes.micError = error!;
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Call Wink"]')!.click());
+    await vi.waitFor(() => expect(fakes.capture).toHaveBeenCalled());
+    expect(host.querySelector("[data-live-call]")).toBeNull();
+    expect(host.textContent).toContain(note);
+  });
+
   it("calls the lead bot and folds its private reply into the room post offer", async () => {
     const host = await mount();
     const call = host.querySelector<HTMLButtonElement>('[aria-label="Call Wink"]')!;

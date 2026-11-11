@@ -15,7 +15,7 @@ export function useRoomCall(room: CallRoom & { name: string }, lines: RoomLine[]
   const { t } = useI18n();
   const [live, setLive] = useState<{ botId: string; roomId: string; ctx: AudioContext } | null>(null);
   const [note, setNote] = useState<string>();
-  const onEnd = useCallback((text?: string) => { setLive(null); setNote(text); }, []);
+  const onEnd = useCallback((text?: string) => { setLive(null); setNote((before) => text ?? before); }, []);
   const bot = live ? state.bots.find((bot) => bot.id === live.botId && !bot.hidden) : state.bots.find((bot) => bot.chiefOfStaff && !bot.hidden) ?? state.bots.find((bot) => !bot.hidden);
   const active = enabled && live?.roomId === room.id && Boolean(bot);
 

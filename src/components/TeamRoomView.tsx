@@ -54,7 +54,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {call.bar}
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} call={call.box} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} call={call.box} />}
       </div>
     </main>
   );
