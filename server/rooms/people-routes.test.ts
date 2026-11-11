@@ -53,10 +53,11 @@ interface Reply {
   body: any;
 }
 
-function call(path: string, init: { method?: string; body?: unknown; relay?: boolean; key?: string; authorization?: string } = {}): Promise<Reply> {
+function call(path: string, init: { method?: string; body?: unknown; relay?: boolean; key?: string; authorization?: string; device?: string } = {}): Promise<Reply> {
   const method = init.method ?? "GET";
   const headers: Record<string, string> = init.relay ? { host: HOST, ...(method === "GET" ? {} : { origin: ORIGIN }) } : { host: "127.0.0.1" };
   if (init.key) headers.authorization = `Bearer ${init.key}`;
+  if (init.device) headers["x-wink-device"] = init.device;
   if (init.authorization) headers.authorization = init.authorization;
   if (init.body !== undefined) headers["content-type"] = "application/json";
   return new Promise((resolve, reject) => {
@@ -89,9 +90,10 @@ interface Stream {
   until(test: (frames: DoorFrame[]) => boolean): Promise<DoorFrame[]>;
 }
 
-function openStream(roomId: string, key: string): Promise<Stream> {
+function openStream(roomId: string, key: string, device?: string): Promise<Stream> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port: relayPort, path: `/room/v1/rooms/${roomId}/stream?after=0`, headers: { host: HOST, authorization: `Bearer ${key}` }, agent: false }, (res) => {
+    const headers = { host: HOST, authorization: `Bearer ${key}`, ...(device ? { "x-wink-device": device } : {}) };
+    const req = request({ host: "127.0.0.1", port: relayPort, path: `/room/v1/rooms/${roomId}/stream?after=0`, headers, agent: false }, (res) => {
       const stream: Stream = {
         status: res.statusCode ?? 0,
         frames: [],
@@ -233,6 +235,67 @@ describe("invite", () => {
 });
 
 describe("remove", () => {
+  it("binds a pre-upgrade member's resumed stream to the same seat and removal ban", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
+    expect(mina.status).toBe(200);
+    const stream = await openStream(id, mina.body.key, pcOf("Mina"));
+    await stream.until((frames) => frames.length >= 1);
+    closeInvitesDb();
+    const { body } = await invite(id);
+    const again = await joinAs(body.code, "Mina", pcOf("Mina"));
+    expect(again.body.person).toEqual(mina.body.person);
+    expect(roomPeople(id)).toHaveLength(1);
+    await stream.closed;
+    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+  });
+
+  it("never replaces an existing seat or removal ban when binding an authenticated guest", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const legacy = createInvite(id, "Joon", "chat", ["Edward"]);
+    const joon = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Joon");
+    const { body } = await invite(id);
+    const snapshot = () => call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: joon.body.key, device: pcOf("Mina") });
+    expect((await snapshot()).status).toBe(200);
+    expect((await joinAs(body.code, "Mina", pcOf("Mina"))).body.person.id).toBe(mina.personId);
+    expect((await remove(id, mina.personId)).status).toBe(200);
+    expect((await snapshot()).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+  });
+
+  it("does not bind a device without a live guest key", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
+    expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: "wkg_wrong", device: pcOf("Mina") })).status).toBe(401);
+    const { body } = await invite(id);
+    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect((await joinAs(body.code, "Mina", pcOf("Mina"))).status).toBe(404);
+  });
+
+  it("retires the shared code when removing a member who joined before device tracking", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const mina = await call("/room/v1/join", { method: "POST", relay: true, body: { code: `wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}` } });
+    expect(mina.status).toBe(200);
+    const { body } = await invite(id);
+    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
+    expect(roomPeople(id)).toEqual([]);
+    expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: mina.body.key })).status).toBe(401);
+    const fresh = await invite(id);
+    expect(fresh.body.code).not.toBe(body.code);
+    expect((await joinAs(fresh.body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+  });
+
   it("keeps a legacy invite join on the same seat when that PC uses the room code", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;

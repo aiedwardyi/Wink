@@ -303,7 +303,10 @@ export class GuestClient {
     relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
   ): Promise<GuestResult<unknown>> {
     const headers: Record<string, string> = { host: relayHost, ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
-    if (key) headers.authorization = `Bearer ${key}`;
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+      headers["x-wink-device"] = this.deps.joiner().device;
+    }
     if (length) headers["content-length"] = length;
     const contentType = typeof body === "string" ? undefined : "application/octet-stream";
     try {
@@ -405,7 +408,7 @@ export class GuestClient {
       servername: creds.relayHost,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}` },
+      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,

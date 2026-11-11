@@ -104,6 +104,10 @@ self.addEventListener("push", (event) => {
       icon: data.icon || "/app-icon-192.png?v=2",
       badge: "/app-icon-192.png?v=2",
       data: { url: data.url || "/", chat: data.chat, at: data.at },
+    }).then(async () => {
+      for (const client of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
+        client.postMessage({ type: "orbit-push" });
+      }
     }),
   );
 });
