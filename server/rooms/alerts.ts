@@ -9,10 +9,16 @@ export const ROOM_ALERT_MS = 3_000;
 /** `chat` is the group id of a hosted room or `joined:<roomId>`; it doubles as the alert's tag. */
 export type RoomAlert = { chat: string; threadId: string; room: string; name: string; text: string };
 
-export function alertWhenUnread(alert: RoomAlert, unread: () => boolean, send: ((alert: RoomAlert) => void) | undefined, waitMs = ROOM_ALERT_MS): void {
+/** With `waiting`, lines inside one wait share a single alert per chat that carries the latest. */
+export function alertWhenUnread(alert: RoomAlert, unread: () => boolean, send: ((alert: RoomAlert) => void) | undefined, waitMs = ROOM_ALERT_MS, waiting?: Map<string, RoomAlert>): void {
   if (!send) return;
+  const queued = waiting?.has(alert.chat);
+  waiting?.set(alert.chat, alert);
+  if (queued) return;
   setTimeout(() => {
-    if (unread()) send(alert);
+    const latest = waiting?.get(alert.chat) ?? alert;
+    waiting?.delete(alert.chat);
+    if (unread()) send(latest);
   }, waitMs).unref?.();
 }
 
