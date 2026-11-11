@@ -2558,8 +2558,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await instance.prepare!(undefined, focus);
       const first = spawn.mock.results[2]!.value.pid!;
       await instance.prepare!(undefined, { ...focus, threadId: "t-prep-b" });
-      expect(spawn).toHaveBeenCalledTimes(4);
       expect(await exited(first)).toBe(true);
+      await vi.waitFor(() => expect(warmPool.stats().closing).toBe(0));
+      await instance.prepare!(undefined, { ...focus, threadId: "t-prep-b" });
+      expect(spawn).toHaveBeenCalledTimes(4);
     });
 
     it("closes a prepared process the warm pool drops", async () => {
