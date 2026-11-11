@@ -5,6 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { sendStaticFile } from "./compression.ts";
+import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { startupTiming } from "./startup-timing.ts";
 
@@ -159,6 +160,7 @@ export function startEarlyListen(options: { port?: number; staticDir?: string | 
     req.once("close", onClose);
     queued.push({ req, res });
   });
+  keepRoomUploads(early.server);
 
   (globalThis as EarlyListenSlot)[EARLY_LISTEN_SLOT] = early;
   early.server.on("error", (error: NodeJS.ErrnoException) => {

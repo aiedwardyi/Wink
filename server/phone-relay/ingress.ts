@@ -13,6 +13,7 @@ import { TLSSocket, createSecureContext, type SecureContext } from "node:tls";
 import type { HarnessHandler } from "../early-listen.ts";
 import { ALPN_ACME } from "../../shared/relay-protocol.ts";
 import { parseClientHello, type ClientHelloInfo } from "../../shared/tls-client-hello.ts";
+import { isRoomUpload } from "../rooms/upload-timeouts.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { markRelaySocket } from "./via.ts";
 
@@ -332,7 +333,7 @@ export class RelayIngress {
         stopRequest?.();
         stopRequest = null;
       };
-      if (req.complete) received();
+      if (req.complete || isRoomUpload(req)) received();
       else {
         req.once("end", received);
         process.nextTick(() => {

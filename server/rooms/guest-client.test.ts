@@ -7,7 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
-import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
+import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
 import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
@@ -467,6 +467,14 @@ describe("room alerts on a teammate", () => {
     await until(() => c.room("r1")?.entries.length === 2);
     await sleep(300);
     expect(alert.mock.calls).toEqual([ping("second")]);
+  });
+});
+
+describe("upload deadline", () => {
+  it("grows with size so a 1 GB file on a 10 Mbps uplink is not cut", () => {
+    expect(uploadDeadline("1000")).toBe(10 * 60_000 + 8);
+    expect(uploadDeadline(String(1024 ** 3))).toBeGreaterThan((1024 ** 3 * 8) / 10_000);
+    expect(uploadDeadline(undefined)).toBe(uploadDeadline(String(1024 ** 3)));
   });
 });
 

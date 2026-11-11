@@ -48,7 +48,12 @@ const SEND_TRIES = 2;
 const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 const UPLOAD_MS = 10 * 60_000;
+/** About 1 Mbps, the slowest uplink an upload may average before it is cut. */
+const UPLOAD_BYTES_PER_MS = 125;
 const MAX_FILES = MAX_MESSAGE_FILES;
+
+/** An unknown length gets the largest file's time. */
+export const uploadDeadline = (length?: string) => UPLOAD_MS + Math.ceil((Number(length) || DOCUMENT_MAX_BYTES) / UPLOAD_BYTES_PER_MS);
 
 const id = z.string().regex(/^[\w-]{1,64}$/);
 const name = z.string().max(200);
@@ -314,7 +319,7 @@ export class GuestClient {
     if (!creds) return failed(409, "this room is read-only");
     if (!SEND_ID.test(uploadId)) return failed(400, "bad uploadId");
     const query = new URLSearchParams({ uploadId, name: name.slice(0, 200) });
-    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/files?${query}`, creds.key, body, length, UPLOAD_MS);
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/files?${query}`, creds.key, body, length, uploadDeadline(length));
     if (!reply.ok) {
       if (reply.status === 401) this.end(roomId, creds.key);
       return { ...reply, uploadId };
