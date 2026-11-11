@@ -4,18 +4,27 @@ import { closeReadAlerts } from "./read-alerts";
 
 afterEach(() => vi.unstubAllGlobals());
 
+function installAlerts(alerts: Array<{ chat?: string; at?: number }>) {
+  const shown = alerts.map((data) => ({ data, close: vi.fn() }));
+  vi.stubGlobal("navigator", { serviceWorker: { getRegistration: async () => ({ getNotifications: async () => shown }) } });
+  return shown;
+}
+
 describe("closeReadAlerts", () => {
-  it("closes the alerts of chats that just went read", async () => {
-    const alerts = ["b1", "b2", "g1", undefined].map((chat) => ({ data: chat ? { chat } : { url: "/" }, close: vi.fn() }));
-    vi.stubGlobal("navigator", { serviceWorker: { getRegistration: async () => ({ getNotifications: async () => alerts }) } });
-    await closeReadAlerts(new Set(["b1", "b2", "g1"]), new Set(["b2"]));
-    expect(alerts.map((alert) => alert.close.mock.calls.length)).toEqual([1, 0, 1, 0]);
+  it("closes alerts that arrived before their chat was read", async () => {
+    const shown = installAlerts([{ chat: "b1", at: 5 }, { chat: "b1", at: 20 }, { chat: "b2", at: 5 }, { chat: "g1", at: 5 }, { chat: "g1" }, {}]);
+    await closeReadAlerts(() => [
+      { id: "b1", readAt: 10 },
+      { id: "b2", unread: true, readAt: 10 },
+      { id: "g1", readAt: 10 },
+    ]);
+    expect(shown.map((alert) => alert.close.mock.calls.length)).toEqual([1, 0, 0, 1, 1, 0]);
   });
 
-  it("skips the worker when nothing went read", async () => {
-    const getRegistration = vi.fn();
-    vi.stubGlobal("navigator", { serviceWorker: { getRegistration } });
-    await closeReadAlerts(new Set(["b1"]), new Set(["b1", "b2"]));
-    expect(getRegistration).not.toHaveBeenCalled();
+  it("skips the read state when no alert is shown", async () => {
+    installAlerts([]);
+    const chats = vi.fn(async () => []);
+    await closeReadAlerts(chats);
+    expect(chats).not.toHaveBeenCalled();
   });
 });

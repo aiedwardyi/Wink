@@ -451,13 +451,24 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
-  const unreadChats = [...state.bots, ...state.groups].filter((record) => record.unread).map((record) => record.id).join(" ");
-  const unreadBefore = useRef(unreadChats);
+  const readChats = [...state.bots, ...state.groups].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
   useEffect(() => {
-    const before = new Set(unreadBefore.current.split(" ").filter(Boolean));
-    unreadBefore.current = unreadChats;
-    if (webPushSupported()) void closeReadAlerts(before, new Set(unreadChats.split(" ").filter(Boolean))).catch(() => {});
-  }, [unreadChats]);
+    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+  }, [readChats]);
+  // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
+  useEffect(() => {
+    if (!webPushSupported()) return;
+    const sweep = () => {
+      if (document.visibilityState !== "visible") return;
+      void closeReadAlerts(async () => {
+        const { bots, groups } = await api("/api/bots?messages=0");
+        return [...bots, ...groups];
+      }).catch(() => {});
+    };
+    sweep();
+    document.addEventListener("visibilitychange", sweep);
+    return () => document.removeEventListener("visibilitychange", sweep);
+  }, []);
   const shown = group ?? bot;
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.

@@ -29,7 +29,6 @@ export const pushTestSchema = pushEndpointSchema.extend({ botId: z.string().opti
 export type VapidKeys = z.infer<typeof vapidKeysSchema>;
 export type PushSubscriptionRecord = z.infer<typeof pushSubscriptionSchema>;
 export type PushPayload = { title: string; body: string; tag: string; url: string; icon: string; chat?: string; at?: number };
-export type ReadPayload = { read: string; at: number };
 export type PushTarget = { botId: string; threadId: string };
 export type WebPushResult = { ok: true } | { ok: false; gone: boolean; error: string };
 
@@ -95,7 +94,7 @@ export function encryptPushPayload(
   return Buffer.concat([salt, rs, Buffer.from([asPublic.length]), asPublic, body]);
 }
 
-/** The tag matches desktop toasts so one bot stacks as one; `chat` is the bot or room whose read closes it. */
+/** The tag matches desktop toasts so one bot stacks as one; `chat` and `at` let a later read close it. */
 export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.botId, at = Date.now()): PushPayload {
   const query = new URLSearchParams({ bot: target.botId, thread: target.threadId });
   return {
@@ -109,31 +108,10 @@ export function pushPayload(ping: PhonePing, target: PushTarget, chat = target.b
   };
 }
 
-/** Chats a phone alert went out for; one that then goes from unread to read gets one silent read push. */
-export function createReadPushes(send: (chat: string) => void) {
-  const alerted = new Map<string, boolean>();
-  return {
-    alerted(chat: string, unread: boolean) {
-      alerted.set(chat, unread || alerted.get(chat) === true);
-    },
-    settled(chat: string, unread: boolean | undefined) {
-      if (!alerted.has(chat)) return;
-      if (unread) alerted.set(chat, true);
-      else if (alerted.get(chat)) {
-        alerted.delete(chat);
-        send(chat);
-      }
-    },
-  };
-}
-
-// iOS revokes a subscription whose push shows nothing.
-const refusesSilentPush = (sub: PushSubscriptionRecord) => new URL(sub.endpoint).hostname.endsWith(".push.apple.com");
-
 /** Never throws. 404/410 mean the browser dropped the subscription. */
 export async function sendWebPush(
   subscription: PushSubscriptionRecord,
-  payload: PushPayload | ReadPayload,
+  payload: PushPayload,
   keys: VapidKeys,
   subject: string,
   fetchImpl: typeof fetch = fetch,
@@ -197,15 +175,13 @@ export function removePushSubscription(dataDir: string, endpoint: string): void 
 /** Sends to one device (by endpoint) or all; drops every subscription the push service says is gone. */
 export async function sendWebPushToDevices(
   dataDir: string,
-  payload: PushPayload | ReadPayload,
+  payload: PushPayload,
   subject: string,
   only?: string,
   fetchImpl: typeof fetch = fetch,
   warn?: (line: string) => void,
 ): Promise<WebPushResult[]> {
-  const subscriptions = loadPushSubscriptions(dataDir).filter(
-    (sub) => (only === undefined || sub.endpoint === only) && !("read" in payload && refusesSilentPush(sub)),
-  );
+  const subscriptions = loadPushSubscriptions(dataDir).filter((sub) => only === undefined || sub.endpoint === only);
   if (!subscriptions.length) return [];
   const keys = loadOrCreateVapidKeys(dataDir);
   const results = await Promise.all(subscriptions.map((sub) => sendWebPush(sub, payload, keys, subject, fetchImpl, warn)));

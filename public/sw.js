@@ -95,10 +95,6 @@ self.addEventListener("push", (event) => {
   } catch {
     // Malformed payloads still owe the user a visible notification.
   }
-  if (data.read) {
-    event.waitUntil(closeChat(data.read, data.at));
-    return;
-  }
   event.waitUntil(
     self.registration.showNotification(data.title || "Wink", {
       body: data.body || "",
@@ -111,13 +107,6 @@ self.addEventListener("push", (event) => {
     }),
   );
 });
-
-// Server clock on both sides, so a reply that lands after the read keeps its alert.
-async function closeChat(chat, at) {
-  for (const alert of await self.registration.getNotifications()) {
-    if (alert.data?.chat === chat && (alert.data.at ?? 0) <= at) alert.close();
-  }
-}
 
 // The tap's time rides along so the page can time its open from the tap itself.
 function withClickTime(url, t0) {
