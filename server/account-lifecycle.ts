@@ -26,7 +26,7 @@ export class AccountLifecycle {
   private drainTimer?: ReturnType<typeof setTimeout>;
   private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
   private disposed = false;
-  private results = new Map<string, { state: "failed" | "cancelled"; error?: "device_cap" }>();
+  private results = new Map<string, { state: "failed" | "cancelled"; error?: "device_cap" } | { state: "duplicate"; existingId: string }>();
   readonly accounts: AccountService;
   private readonly registry: ProviderRegistry;
   private readonly hooks: Hooks;
@@ -44,7 +44,10 @@ export class AccountLifecycle {
 
   get busy() { return this.mutations > 0 || this.jobs.size > 0 || Object.values(this.accounts.drains).some((row) => row.phase !== "failed"); }
   settled(id: string) { return this.pending.get(id) ?? Promise.resolve(); }
-  signInResult(id: string) { return this.results.get(id); }
+  signInResult(id: string) {
+    return this.results.get(id) ?? (this.pending.has(id) ? { ...this.registry.logins.capture(id), state: "pending" as const }
+      : this.accounts.get(id)?.state === "ready" ? { state: "complete" as const } : undefined);
+  }
 
   async restore() {
     for (const [id, drain] of Object.entries(this.accounts.drains)) {
@@ -329,6 +332,7 @@ export class AccountLifecycle {
 
   private async begin(account: AccountRecord, device: boolean) {
     const token = {};
+    this.results.delete(account.id);
     this.jobs.set(account.id, token);
     let capture;
     try {
@@ -350,6 +354,13 @@ export class AccountLifecycle {
         return;
       }
       if (state === "complete" && snapshot?.authenticated === true && snapshot.accountIdentity) {
+        const existingId = account.state === "pending" && await this.duplicate(account, snapshot);
+        if (existingId) {
+          this.results.set(account.id, { state: "duplicate", existingId });
+          if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
+          await this.discard(account.id);
+          return;
+        }
         await this.accept(this.accounts.get(account.id)!, snapshot, true);
         this.registry.logins.acknowledge(account.id, true);
       } else {
@@ -368,6 +379,19 @@ export class AccountLifecycle {
     }, false)).finally(() => { if (this.pending.get(account.id) === finished) this.pending.delete(account.id); });
     this.pending.set(account.id, finished);
     return capture;
+  }
+
+  private async duplicate(account: AccountRecord, snapshot: ProviderSnapshot) {
+    const driver = this.registry.get(account.id)?.driverKind;
+    const email = snapshot.account?.trim().toLowerCase();
+    for (const row of this.accounts.list()) {
+      if (row.id === account.id || row.driverKind !== driver || row.state !== "ready" || this.accounts.drains[row.id]) continue;
+      if (snapshot.accountIdentity && this.accounts.get(row.id)?.identity === snapshot.accountIdentity) return row.id;
+      const other = await this.registry.get(row.id)?.snapshot({ refresh: true }).catch(() => undefined);
+      if (other?.authenticated !== true) continue;
+      const identity = other.accountIdentity ?? this.accounts.get(row.id)?.identity;
+      if ((snapshot.accountIdentity && identity === snapshot.accountIdentity) || (email && other.account?.trim().toLowerCase() === email)) return row.id;
+    }
   }
 
   private async accept(account: AccountRecord, snapshot: ProviderSnapshot, force = false) {

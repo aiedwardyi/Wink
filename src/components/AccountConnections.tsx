@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
-import { api, type InstanceInfo } from "@/state/store";
+import { api, useStore, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
@@ -146,7 +146,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
   const control = draining ? <span role="status">{t("accounts.removing")}</span> : signInRow ? phone && canName && more : phone ? more : controls;
   return (
-    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
+    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
       {(name || !signInRow) && <AccountHead control={control} email={!signInRow && label} name={<>
         {tile}
         {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
@@ -167,10 +167,34 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
 
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
   const { t } = useI18n();
+  const { state } = useStore();
   const { board } = useUsageBoard();
   const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
+  useEffect(() => {
+    if (!adding) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const result = await api(`/api/accounts/${encodeURIComponent(adding)}/sign-in`);
+        if (cancelled) return;
+        if (result.state === "duplicate") {
+          setExistingId(result.existingId);
+          setAdding(null);
+          void reload();
+          return;
+        }
+        if (["complete", "failed", "cancelled"].includes(result.state)) { setAdding(null); return; }
+      } catch { if (cancelled) return; }
+      timer = setTimeout(() => void poll(), 1000);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [adding, reload]);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
       && signInPending(account))) setError(null);
@@ -184,9 +208,11 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
     setBusy(true);
     setError(null);
+    setExistingId(null);
     try {
       if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
-      await api(path, { method: "POST", body: JSON.stringify(body) });
+      const result = await api(path, { method: "POST", body: JSON.stringify(body) });
+      if (path === "/api/accounts" && typeof result.id === "string") setAdding(result.id);
       await reload();
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -197,6 +223,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     finally { setBusy(false); }
   };
   const addable = accounts.length < 8 && accounts.some(accountReady);
+  const existing = state.instances.find((account) => account.instanceId === existingId);
+  const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
+    ?? existing?.snapshot.account ?? existing?.displayName;
   const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
     : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
@@ -216,6 +245,15 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           );
         })}
       </AccountGroup>
+      {existing && <div role="status" className="mt-2 text-[12px] text-ink-secondary">
+        <button type="button" data-existing-account="" className="max-w-full break-words text-left underline" onClick={(event) => {
+          const list = event.currentTarget.closest("[data-settings-connections]") ?? event.currentTarget.closest("[data-engine-row]")?.parentElement;
+          const row = [...list?.querySelectorAll<HTMLElement>("[data-connection-account]") ?? []]
+            .find((row) => row.dataset.connectionAccount === existingId);
+          row?.scrollIntoView?.({ block: "nearest" });
+          row?.focus();
+        }}>{t("accounts.alreadyAdded", { account: existingName ?? "" })}</button>
+      </div>}
       {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error.message}</div>}
     </div>
   );

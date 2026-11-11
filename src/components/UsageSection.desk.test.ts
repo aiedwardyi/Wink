@@ -229,6 +229,16 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it.each(["en", "ko"] as const)("omits the OpenAI credit row from Usage in %s", async (locale) => {
+  const codex = engineOf(server.board, "codex");
+  codex.accounts.push({ ...codex.accounts[0]!, id: "codex-credit", name: "OpenAI credit", number: 3,
+    main: false, credit: true, windows: [], bots: [], workers: [] });
+  await mount({ locale });
+  expect(row("codex-credit")).toBeNull();
+  expect(host.textContent).not.toContain("OpenAI credit");
+  expect(row("codex")).not.toBeNull();
+});
+
 // Points every 5 minutes ending at `end`, used % climbing by `rate` per minute.
 function trail(end: number, count: number, endUsed: number, rate: number, step = 5): UsageBoardSample[] {
   return Array.from({ length: count }, (_, i) => {
