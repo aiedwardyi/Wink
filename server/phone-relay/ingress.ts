@@ -13,7 +13,7 @@ import { TLSSocket, createSecureContext, type SecureContext } from "node:tls";
 import type { HarnessHandler } from "../early-listen.ts";
 import { ALPN_ACME } from "../../shared/relay-protocol.ts";
 import { parseClientHello, type ClientHelloInfo } from "../../shared/tls-client-hello.ts";
-import { isRoomUpload } from "../rooms/upload-timeouts.ts";
+import { isRoomUpload, roomUploadMs } from "../rooms/upload-timeouts.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { markRelaySocket } from "./via.ts";
 
@@ -326,6 +326,10 @@ export class RelayIngress {
       stopHeaders = null;
       // A handler that never reads its request (an event stream) gets "end" only
       // after its response finishes, so a parsed message counts as received too.
+      if (!req.complete && isRoomUpload(req)) {
+        stopRequest?.();
+        stopRequest = deadline(roomUploadMs(req, server.requestTimeout));
+      }
       // Only this request's deadline is cleared, never one armed for the next.
       const mine = stopRequest;
       const received = () => {
@@ -333,7 +337,7 @@ export class RelayIngress {
         stopRequest?.();
         stopRequest = null;
       };
-      if (req.complete || isRoomUpload(req)) received();
+      if (req.complete) received();
       else {
         req.once("end", received);
         process.nextTick(() => {

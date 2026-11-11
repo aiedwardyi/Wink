@@ -542,6 +542,21 @@ describe("own name", () => {
     expect(seen.filter((row) => row.url.endsWith("/name")).map((row) => row.url).sort()).toEqual(["/room/v1/rooms/r1/name", "/room/v1/rooms/r2/name"]);
   });
 
+  it("sends name updates again after rejoining a room that answered 404", async () => {
+    route = (req, res) => quietDoor(req, res);
+    let name = "Mina Park";
+    const c = guest({ joiner: () => ({ name, device: PC }) });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    name = "민아";
+    await c.nameChanged();
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    name = "이서연";
+    await c.nameChanged();
+    expect(seen.filter((row) => row.url.endsWith("/name"))).toHaveLength(2);
+  });
+
   it("keeps 404 quiet until the next start across later profile edits", async () => {
     let stream: ServerResponse | null = null;
     route = (req, res) => {

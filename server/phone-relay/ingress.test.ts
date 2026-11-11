@@ -386,13 +386,15 @@ describe("relay ingress", () => {
     tls.destroy();
   });
 
-  it("lets a room upload body stream past requestTimeout", async () => {
+  it("lets a room upload body stream past requestTimeout until its size-scaled deadline", async () => {
     const clock = new FakeClock();
     const { pcEnd, tls } = await streaming(clock);
-    tls.write(`POST /room/v1/rooms/r1/files?uploadId=u HTTP/1.1\r\nhost: ${HOST}\r\ncontent-length: 10\r\n\r\nabc`);
+    tls.write(`POST /room/v1/rooms/r1/files?uploadId=u HTTP/1.1\r\nhost: ${HOST}\r\ncontent-length: 1000000\r\n\r\nabc`);
     await once(tls, "data");
     clock.advance(301_000);
     expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(7_000);
+    expect(await closesSoon(pcEnd)).toBe(true);
     tls.destroy();
   });
 

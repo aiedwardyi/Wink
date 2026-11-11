@@ -40,6 +40,8 @@ export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }:
   const repick = useRef<string | undefined>(undefined);
   const composing = useRef(false);
   const composeEnded = useRef(0);
+  const reply = useRef(replyTo);
+  reply.current = replyTo;
   const ready = Boolean(text.trim() || files.length);
   const needsFile = files.some((file) => !file.file);
 
@@ -68,6 +70,7 @@ export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }:
   const send = async () => {
     if (!ready || sending || needsFile) return;
     const revision = draftRevision(draftId);
+    const sentReply = replyTo;
     const request = startSend((sendId) => sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId, replyTo?.roomEntryId ?? replyTo?.id));
     if (!request) return;
     const failed = await request;
@@ -75,7 +78,7 @@ export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }:
     if (failed) return;
     if (draftRevision(draftId) === revision) {
       clear();
-      onClearReply();
+      if (reply.current === sentReply) onClearReply();
     }
   };
 

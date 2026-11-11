@@ -226,6 +226,7 @@ export class GuestClient {
     this.unfollow(roomId);
     saveJoined(roomId, relayHost, person, key, pasted);
     setJoinedSentName(roomId, name);
+    this.oldNames.delete(roomId);
     this.follow(roomId);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };

@@ -14,7 +14,7 @@ import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRow } from "./FileAttachmentRow";
-import { contextClickKind, holdToOpen, isTouchPrimary, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
+import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReplyQuote } from "./ReplyQuote";
 
 export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false, quote, onJump, onMenu }: {
@@ -44,6 +44,13 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
           event.stopPropagation();
           const point = { x: event.clientX, y: event.clientY, opener: event.currentTarget };
           onMenu(kind === "selection" ? { kind, ...point, text: window.getSelection()?.toString() ?? "" } : { kind, ...point, target });
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+          if (event.target instanceof Element && keepsNativeMenu(event.target)) return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          onMenu({ kind: "message", x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, opener: event.currentTarget, target });
         }}
       >
         <div className={cn("relative w-fit max-w-[min(42rem,78%)]", !mine && "ml-8")}>

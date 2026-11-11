@@ -13,7 +13,7 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-async function trickle(path: string): Promise<string> {
+async function trickle(path: string, length = 6, chunk = 1): Promise<string> {
   server = createServer({ requestTimeout: 200, connectionsCheckingInterval: 20 }, (req, res) => {
     let bytes = 0;
     req.on("data", (chunk: Buffer) => { bytes += chunk.length; });
@@ -26,10 +26,10 @@ async function trickle(path: string): Promise<string> {
   let reply = "";
   socket.on("data", (chunk: Buffer) => { reply += chunk.toString("latin1"); });
   socket.on("error", () => {});
-  socket.write(`POST ${path} HTTP/1.1\r\nhost: localhost\r\ncontent-length: 6\r\nconnection: close\r\n\r\n`);
-  for (const byte of "abcdef") {
+  socket.write(`POST ${path} HTTP/1.1\r\nhost: localhost\r\ncontent-length: ${length}\r\nconnection: close\r\n\r\n`);
+  for (let sent = 0; sent < length && !socket.destroyed; sent += chunk) {
     await new Promise((resolve) => setTimeout(resolve, 100));
-    if (!socket.destroyed) socket.write(byte);
+    if (!socket.destroyed) socket.write("x".repeat(Math.min(chunk, length - sent)));
   }
   if (!socket.destroyed) await once(socket, "close");
   return reply;
@@ -37,9 +37,13 @@ async function trickle(path: string): Promise<string> {
 
 describe("room upload timeouts", () => {
   it("lets a room upload run past requestTimeout", async () => {
-    const reply = await trickle("/api/joined/rooms/r1/files?name=a.pdf&uploadId=u");
+    const reply = await trickle("/api/joined/rooms/r1/files?name=a.pdf&uploadId=u", 120_000, 20_000);
     expect(reply).toMatch(/^HTTP\/1\.1 200/);
-    expect(reply).toContain("got 6");
+    expect(reply).toContain("got 120000");
+  });
+
+  it("cuts a room upload that outlasts its size-scaled deadline", async () => {
+    expect(await trickle("/api/rooms/r1/files?name=a.pdf", 12_000, 100)).not.toContain("got");
   });
 
   it("still cuts any other slow request at requestTimeout", async () => {

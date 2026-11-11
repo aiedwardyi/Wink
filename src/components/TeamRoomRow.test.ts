@@ -101,3 +101,13 @@ it("labels old lines by current author id and keeps departed names", async () =>
     await act(async () => root.unmount());
   }
 });
+
+it("opens the message menu from the keyboard", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  const lines: RoomLine[] = [{ id: "m1", at: 1, author: { kind: "person", id: "p1", name: "Mina" }, text: "hello", files: [] }];
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {}, lines, mine: () => false, base: "", label: "Room" }))));
+  const row = host.querySelector<HTMLElement>('[data-mid="m1"]')!;
+  await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })));
+  expect(document.querySelector("[data-message-menu]")).not.toBeNull();
+});

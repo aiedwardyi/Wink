@@ -8,8 +8,10 @@ import { uploadAttachment } from "@/lib/composer-attachments";
 import { getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import type { JoinedView, TeamRoom } from "@/lib/team-rooms";
+import type { Message } from "@/state/store-types";
 
 import { JoinedRoomView } from "./JoinedRoomView";
+import { TeamRoomComposer } from "./TeamRoomComposer";
 import { TeamRoomView } from "./TeamRoomView";
 
 const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
@@ -283,6 +285,21 @@ describe("room drafts", () => {
     await act(async () => finish(reply({ ok: true })));
     expect(box().value).toBe(edited ? "New draft" : "");
     expect(getDraft(localStorage, "g1")).toBe(edited ? "New draft" : "");
+  });
+
+  it("keeps a reply picked while an earlier send is pending", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    const first = { id: "a", at: 1, role: "user", kind: "text", text: "first" } as Message;
+    const clear = vi.fn();
+    const composer = (replyTo: Message) => createElement(TeamRoomComposer, { name: "Design team", base: "/api/rooms/r1", draftId: "g1", replyTo, onClearReply: clear });
+    await act(async () => root.render(composer(first)));
+    await type("Sent text");
+    await send();
+    await act(async () => root.render(composer({ ...first, id: "b", text: "second" })));
+    await act(async () => finish(reply({ ok: true })));
+    expect(box().value).toBe("");
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it.each(["host", "joined"])("restores the %s draft and files after a bot switch, isolates room B, and clears on send", async (side) => {

@@ -358,6 +358,11 @@ describe("Team rooms for the host", () => {
     scroll.mockRestore();
   });
 
+  it("keeps a room's picture on its sidebar row after a bot joins", async () => {
+    await boot({ groups: [{ ...teamRoom(), memberIds: ["nova"], picture: "P".repeat(24) } as Group] });
+    expect($('aside [data-room-picture] img')).not.toBeNull();
+  });
+
   it("creates a zero-bot room from a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });

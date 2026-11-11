@@ -596,7 +596,7 @@ googleAccount.onSession(() => {
     if (!fill || googleAccount.owner()?.sub !== sub) return;
     saveConfig({ profile: fill.avatarUrl ? { ...fill, googleAvatarUrl: fill.avatarUrl } : fill });
     Object.assign(cfg, loadConfig());
-    if (fill.name) phoneAccess.nameChanged();
+    if (fill.name) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
     broadcast({ kind: "config", ...configStatus() });
   }).catch((error) => console.warn(`[google] profile fill failed: ${error instanceof Error ? error.message : String(error)}`));
 });
