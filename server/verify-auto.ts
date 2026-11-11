@@ -168,6 +168,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       const paths = [...turn.writes], scanned = turn.opaque ? (await (deps.scan ?? scanVerifyWrites)(input.roots[0], input.startedAt)).filter(path => !turn.writes.has(path)) : [];
       paths.push(...scanned);
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
+      if (latest.get(input.threadId) !== token) return;
       const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
       const asked = DOC_ASK.test(input.humanText);
       const made = async (path: string) => asked || ((await stat(resolve(input.roots[0]!, path)).catch(() => null))?.birthtimeMs ?? 0) >= input.startedAt - 2_000;
