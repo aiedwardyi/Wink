@@ -2936,7 +2936,8 @@ const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:o
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
-  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  const chat = store.groupByThread(open.threadId)?.id;
+  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine

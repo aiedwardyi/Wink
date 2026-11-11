@@ -44,7 +44,8 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushTarget } from "@/lib/web-push";
+import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { closeReadAlerts } from "@/lib/read-alerts";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -450,6 +451,24 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
+  const readChats = [...state.bots, ...state.groups].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
+  useEffect(() => {
+    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+  }, [readChats]);
+  // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
+  useEffect(() => {
+    if (!webPushSupported()) return;
+    const sweep = () => {
+      if (document.visibilityState !== "visible") return;
+      void closeReadAlerts(async () => {
+        const { bots, groups } = await api("/api/bots?messages=0");
+        return [...bots, ...groups];
+      }).catch(() => {});
+    };
+    sweep();
+    document.addEventListener("visibilitychange", sweep);
+    return () => document.removeEventListener("visibilitychange", sweep);
+  }, []);
   const shown = group ?? bot;
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.
