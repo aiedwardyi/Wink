@@ -552,7 +552,7 @@ export function Composer({
   // queue), but stay off the transcript until drain — the chips here are
   // the pending rows so they cannot become the active leaf mid-turn.
   // Persist the full FIFO (not one draft slot) so unmount cannot drop
-  // ADV-QUEUE-1..n after a mid-queue peel.
+  // the later queued lines after a mid-queue peel.
   const [queued, setQueued] = useState<QueuedGroupSend[]>(() =>
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );

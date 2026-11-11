@@ -1,4 +1,4 @@
-// Registers this PC under its Google account in the relay directory (GP-1),
+// Registers this PC under its Google account in the relay directory,
 // so a phone signed in to the same account can find it. The relay only
 // lists PCs; this PC still decides which phones get in.
 
