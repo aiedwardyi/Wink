@@ -136,6 +136,7 @@ import {
 } from "./phone-ping.ts";
 import {
   addPushSubscription,
+  createReadPushes,
   loadOrCreateVapidKeys,
   loadPushSubscriptions,
   pushEndpointSchema,
@@ -2934,9 +2935,19 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
 const phonePingAllowed = createPingLimiter();
 const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:orbit@localhost");
 
+const readPushes = createReadPushes((chat) => {
+  void sendWebPushToDevices(DATA_DIR, { read: chat }, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+});
+store.onChange((change) => {
+  if (change.type === "bot") readPushes.settled(change.botId, store.bot(change.botId)?.unread);
+  else if (change.type === "group") readPushes.settled(change.groupId, store.group(change.groupId)?.unread);
+});
+
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
-  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  const chat = store.groupByThread(open.threadId) ?? store.bot(botId);
+  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat?.id), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  if (chat) readPushes.alerted(chat.id, Boolean(chat.unread));
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine

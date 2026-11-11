@@ -44,7 +44,8 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushTarget } from "@/lib/web-push";
+import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { closeReadAlerts } from "@/lib/read-alerts";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -450,6 +451,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
+  const unreadChats = [...state.bots, ...state.groups].filter((record) => record.unread).map((record) => record.id).join(" ");
+  const unreadBefore = useRef(unreadChats);
+  useEffect(() => {
+    const before = new Set(unreadBefore.current.split(" "));
+    unreadBefore.current = unreadChats;
+    if (webPushSupported()) void closeReadAlerts(before, new Set(unreadChats.split(" "))).catch(() => {});
+  }, [unreadChats]);
   const shown = group ?? bot;
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.

@@ -20,7 +20,10 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     addEventListener: (type, listener) => {
       listeners[type] = listener;
     },
-    registration: { showNotification: async (title, options) => shown.push({ title, options }) },
+    registration: {
+      showNotification: async (title, options) => shown.push({ title, options, closed: false }),
+      getNotifications: async () => shown.filter((alert) => !alert.closed).map((alert) => ({ data: alert.options.data, close: () => (alert.closed = true) })),
+    },
     clients: { matchAll: async () => windows, openWindow: async (url) => opened.push(url) },
   };
   const caches = {
@@ -96,6 +99,14 @@ describe("service worker", () => {
     await push(listeners, { title: "Wink", body: "older server" });
     expect(shown.map(({ options }) => options.icon)).toEqual(["/notify-icons/pill-orange.png", "/app-icon-192.png?v=2"]);
     expect(shown.map(({ options }) => options.badge)).toEqual(["/app-icon-192.png?v=2", "/app-icon-192.png?v=2"]);
+  });
+
+  it("closes a read chat's alerts without showing anything", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    await push(listeners, { title: "Scout finished", body: "done", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", chat: "b1" });
+    await push(listeners, { title: "Room", body: "hi", tag: "openmausbot:b2", url: "/?bot=b2&thread=t2", chat: "g1" });
+    await push(listeners, { read: "b1" });
+    expect(shown.map(({ title, closed }) => [title, closed])).toEqual([["Scout finished", true], ["Room", false]]);
   });
 
   it("adds the tap time to the url when it opens a window", async () => {

@@ -12,6 +12,7 @@ import {
   WEB_PUSH_KEYS_FILE,
   WEB_PUSH_SUBS_FILE,
   addPushSubscription,
+  createReadPushes,
   encryptPushPayload,
   loadOrCreateVapidKeys,
   loadPushSubscriptions,
@@ -168,6 +169,40 @@ describe("subscription store", () => {
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/b"]);
     expect(await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", "https://push.example/none", fetchImpl)).toEqual([]);
   });
+
+  it("skips Apple devices for a silent read push", async () => {
+    addPushSubscription(dir, sub("a"));
+    addPushSubscription(dir, { ...sub("x"), endpoint: "https://web.push.apple.com/x" });
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 201 }));
+    await sendWebPushToDevices(dir, { read: "g1" }, "https://pc.tail.ts.net", undefined, fetchImpl);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["https://push.example/a"]);
+    await sendWebPushToDevices(dir, payload, "https://pc.tail.ts.net", undefined, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("createReadPushes", () => {
+  it("sends one read push when an alerted chat goes from unread to read", () => {
+    const send = vi.fn();
+    const reads = createReadPushes(send);
+    reads.settled("b1", false);
+    reads.alerted("b1", true);
+    reads.settled("b1", true);
+    reads.settled("b1", false);
+    reads.settled("b1", false);
+    reads.alerted("g1", false);
+    reads.settled("g1", true);
+    reads.settled("g1", false);
+    expect(send.mock.calls).toEqual([["b1"], ["g1"]]);
+  });
+
+  it("leaves an alert for a chat that never went unread", () => {
+    const send = vi.fn();
+    const reads = createReadPushes(send);
+    reads.alerted("b1", false);
+    reads.settled("b1", false);
+    expect(send).not.toHaveBeenCalled();
+  });
 });
 
 describe("pushPayload", () => {
@@ -183,6 +218,7 @@ describe("pushPayload", () => {
       tag: "openmausbot:bot-1",
       url: "/?bot=bot-1&thread=thread-1",
       icon: "/notify-icons/peach-white.png",
+      chat: "bot-1",
     });
     expect(pushPayload(pingForMailbox("Scout", "FAIL CARD branch=x\ndetail", "/app-icon-192.png?v=2")!, target)).toMatchObject({
       title: "Scout: worker failed",
@@ -219,6 +255,10 @@ describe("pushPayload", () => {
     expect(payload).toMatchObject({ title: "Builder: worker failed", tag: "openmausbot:teacher", icon: "/notify-icons/pill-orange.png" });
   });
 
+  it("names a room alert by its room", () => {
+    expect(pushPayload(pingForNotification(buildNotification("done", bot, "thread-g", "hi")!, 60_000)!, { botId: "bot-1", threadId: "thread-g" }, "group-1").chat).toBe("group-1");
+  });
+
   it("wires the icon into the mailbox ping and the test push", () => {
     const index = readFileSync(join(import.meta.dirname, "index.ts"), "utf8");
     expect(index).toContain("pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source))");
@@ -237,7 +277,7 @@ describe("pushPayload", () => {
       pingForMailbox(korean.name, `BLOCKED ${"닉".repeat(40)} branch=x\n${detail}`, botNotifyIconPath(korean))!,
     ];
     for (const ping of pings) {
-      const payload = pushPayload(ping, { botId: id, threadId: id });
+      const payload = pushPayload(ping, { botId: id, threadId: id }, id);
       expect(payload.icon).toBe(korean.avatarUrl);
       expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(3993);
     }

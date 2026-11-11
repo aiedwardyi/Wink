@@ -95,6 +95,10 @@ self.addEventListener("push", (event) => {
   } catch {
     // Malformed payloads still owe the user a visible notification.
   }
+  if (data.read) {
+    event.waitUntil(closeChat(data.read));
+    return;
+  }
   event.waitUntil(
     self.registration.showNotification(data.title || "Wink", {
       body: data.body || "",
@@ -103,10 +107,14 @@ self.addEventListener("push", (event) => {
       vibrate: [200, 100, 200],
       icon: data.icon || "/app-icon-192.png?v=2",
       badge: "/app-icon-192.png?v=2",
-      data: { url: data.url || "/" },
+      data: { url: data.url || "/", chat: data.chat },
     }),
   );
 });
+
+async function closeChat(chat) {
+  for (const alert of await self.registration.getNotifications()) if (alert.data?.chat === chat) alert.close();
+}
 
 // The tap's time rides along so the page can time its open from the tap itself.
 function withClickTime(url, t0) {
