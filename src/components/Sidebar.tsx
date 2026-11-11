@@ -106,6 +106,7 @@ import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { DeviceSwitcher } from "./DeviceSwitcher";
+import { ChoosePcLink } from "./ChoosePcLink";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
@@ -1800,6 +1801,7 @@ export function Sidebar({
 
       {/* Footer */}
       <div className={cn("min-w-0 overflow-x-hidden pb-3 pt-2", density === "icons" ? "px-2" : "px-3")} data-sidebar-footer>
+        <ChoosePcLink iconOnly={density === "icons"} />
         {density === "icons" && (
           <div className="flex min-h-10 items-center justify-center" data-sidebar-update>
             <UpdateButton />

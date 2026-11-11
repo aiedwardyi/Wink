@@ -8,7 +8,7 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
-import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
 
 const BASE = "wink.test";
@@ -211,6 +211,18 @@ describe("join", () => {
 });
 
 describe("sync", () => {
+  it.each([false, true])("identifies this PC when resuming an existing membership with cached state %s", async (cached) => {
+    route = quietDoor;
+    saveJoined("r1", HOST, STATE.me, KEY);
+    if (cached) setJoinedState("r1", STATE);
+    closeJoinedDb();
+    guest().start();
+    await until(() => seen.some((row) => row.url.includes("/stream")));
+    expect(seen.some((row) => row.url === "/room/v1/join")).toBe(false);
+    expect(seen.filter((row) => row.url.endsWith("/snapshot"))).toHaveLength(cached ? 0 : 1);
+    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC });
+  });
+
   it("reconnects from the newest seq when the heartbeat stops", async () => {
     route = quietDoor;
     const c = guest({ timing: { silenceMs: 200, retryMs: 20 } });

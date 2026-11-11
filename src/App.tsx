@@ -448,6 +448,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
     const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "orbit-push") {
+        void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+        return;
+      }
       if (event.data?.type !== "orbit-open" || typeof event.data.url !== "string") return;
       const target = webPushTarget(new URL(event.data.url, window.location.origin).search);
       if (!target) return;

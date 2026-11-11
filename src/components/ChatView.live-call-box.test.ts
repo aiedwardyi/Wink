@@ -125,7 +125,7 @@ describe("live call in the message box", () => {
     try {
       await connect(host);
       const box = frame(host).querySelector<HTMLElement>("[data-call-box]")!;
-      expect(box.className).toContain("row-start-2");
+      expect(box.className).toContain("row-start-3");
       for (const label of ["Captions", "Mute", "End"]) expect(button(box, label)).not.toBeNull();
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
       const header = button(host, "Hang up on Atlas")!;
@@ -143,7 +143,7 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("captions only when turned on, remembers it, and gives way to typing", async () => {
+  it("keeps captions above typing and remembers the toggle", async () => {
     const first = await mount();
     try {
       const engine = await connect(first.host);
@@ -158,7 +158,8 @@ describe("live call in the message box", () => {
       await act(async () => engine.events.said("The one where sign-in loops back?"));
       expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
       await type(first.host, "also check the reset email");
-      expect(first.host.querySelector("[data-call-caption]")).toBeNull();
+      expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
+      expect(first.host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")?.value).toBe("also check the reset email");
     } finally {
       await first.unmount();
     }
@@ -183,6 +184,23 @@ describe("live call in the message box", () => {
       expect(order.textContent).toContain("Send: Fix the login page bug?");
       await act(async () => [...order.querySelectorAll("button")].find((b) => b.textContent === "Yes")!.click());
       await vi.waitFor(() => expect(posts.some((path) => path.endsWith("/api/bots/atlas/messages"))).toBe(true));
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("keeps the newest wrapped caption at the bottom", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      await act(async () => button(frame(host), "Captions")!.click());
+      await act(async () => engine.events.said("I am ready to help"));
+      const text = frame(host).querySelector("[data-call-caption]")!.children[1] as HTMLElement;
+      Object.defineProperty(text, "scrollHeight", { value: 144 });
+      Object.defineProperty(text, "clientHeight", { value: 72 });
+      await act(async () => engine.events.said(" with any questions you have about the volume issue."));
+      expect(text.scrollTop).toBe(144);
+      expect(text.scrollLeft).toBe(0);
     } finally {
       await unmount();
     }

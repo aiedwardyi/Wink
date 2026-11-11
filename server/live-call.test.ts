@@ -35,6 +35,20 @@ function harness(opts: { key?: string; reply?: () => Response } = {}) {
 }
 
 describe("call token", () => {
+  it.each(["en", "ko", "unknown", undefined])("hints input transcription with the call language: %s", async (locale) => {
+    const h = harness();
+    await h.post("token", { locale });
+    expect(h.sent().bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: [locale === "ko" ? "ko" : "en"] });
+  });
+
+  it("keeps transcription language with the brief on reconnect", async () => {
+    const h = harness();
+    const first = await h.post("token", { locale: "ko" });
+    await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
+    expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Speak Korean");
+  });
+
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
