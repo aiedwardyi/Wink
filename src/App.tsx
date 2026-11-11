@@ -27,6 +27,7 @@ import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
 import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
 import { LazyView } from "@/components/LazyView";
@@ -51,6 +52,7 @@ import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
+import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
@@ -99,8 +101,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useLayoutEffect(() => {
     latestState.current = state;
   }, [state]);
-  const unreadCount = unreadConversationCount(state.bots, state.groups) + terminalAttentionCount(state.terminalAttention);
-  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId));
+  const joinedRooms = useJoinedRooms();
+  const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
+  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
   const menuExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
   const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId);
@@ -377,6 +380,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, []);
 
   useEffect(() => {
+    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload]);
+  }, [state.hydrated]);
+
+  useEffect(() => {
     const offAttention = window.ogb?.terminal?.onAttention?.(({ id: sessionId, botId, reason }) => {
       const current = latestState.current;
       const bot = current.bots.find((candidate) => candidate.id === botId);
@@ -441,6 +448,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
     const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "orbit-push") {
+        void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+        return;
+      }
       if (event.data?.type !== "orbit-open" || typeof event.data.url !== "string") return;
       const target = webPushTarget(new URL(event.data.url, window.location.origin).search);
       if (!target) return;

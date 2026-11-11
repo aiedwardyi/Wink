@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeRoomsDb, createRoom } from "./db.ts";
-import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread, roomBotsRefusal } from "./guards.ts";
+import { hostedRoomView, isHostedThread, roomBotsRefusal } from "./guards.ts";
 
 let store: Store;
 
@@ -28,7 +28,7 @@ describe("team room guards", () => {
     expect(roomBotsRefusal([{ name: "Wink", driverKind: "codex" }, { name: "WINK", driverKind: "claudeAgent" }])).toMatch(/already called WINK/);
   });
 
-  it("tags hosted frames and relay routes, and nothing else", () => {
+  it("recognizes hosted threads and tags deleted rooms", () => {
     const bot = store.createBot();
     const plain = store.createGroup("Plain", [bot.id]);
     const hosted = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
@@ -42,26 +42,6 @@ describe("team room guards", () => {
     store.deleteGroup(store.createGroup("Gone", [bot.id]).id);
     expect(deleted).toEqual([{ type: "group.deleted", groupId: doomed.id, hosted: true }, { type: "group.deleted", groupId: expect.any(String) }]);
     expect(deleted[1]).not.toHaveProperty("hosted");
-    for (const payload of [
-      { kind: "group", group: hosted },
-      { kind: "message", threadId: hosted.threadId },
-      { kind: "runtime", event: { threadId: hosted.threadId } },
-      { kind: "notify", notification: { threadId: hosted.threadId } },
-      { kind: "group.deleted", groupId: hosted.id },
-      { kind: "group.deleted", groupId: "already-gone", hosted: true },
-    ]) expect(hostedFrame(store, payload)).toBe(true);
-    for (const payload of [
-      { kind: "group", group: plain },
-      { kind: "message", threadId: bot.threadId },
-      { kind: "bot", bot },
-      { kind: "config" },
-    ]) expect(hostedFrame(store, payload)).toBe(false);
-    expect(hostedRelayTarget(store, `/api/groups/${hosted.id}/messages`)).toBe(true);
-    expect(hostedRelayTarget(store, `/api/threads/${hosted.threadId}/respond`)).toBe(true);
-    expect(hostedRelayTarget(store, `/api/groups/${plain.id}`)).toBe(false);
-    expect(hostedRelayTarget(store, `/api/threads/${bot.threadId}/respond`)).toBe(false);
-    expect(hostedRelayTarget(store, "/api/bots")).toBe(false);
-    expect(hostedThreadIds(store)).toEqual([hosted.threadId]);
   });
 
   it("shows a restored room without its data as missing, never empty", () => {

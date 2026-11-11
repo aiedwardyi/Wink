@@ -87,6 +87,10 @@ function open(): DatabaseSync {
       room_id TEXT PRIMARY KEY,
       code TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS room_reads (
+      room_id TEXT PRIMARY KEY,
+      seq INTEGER NOT NULL
+    );
   `);
   return db;
 }
@@ -138,6 +142,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
   const joinedAt = Date.now();
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -189,6 +194,23 @@ export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
   return rows.reverse().map((row) => JSON.parse(row.body) as JoinedEntry);
 }
 
+export function joinedSummary(room: JoinedRoom): { unread: number; lastEntry?: JoinedEntry } {
+  const { unread } = db().prepare(`
+    SELECT COUNT(*) AS unread FROM entries
+    WHERE room_id = ? AND seq > COALESCE((SELECT seq FROM room_reads WHERE room_id = ?), 0)
+      AND NOT (json_extract(body, '$.author.kind') = 'person' AND json_extract(body, '$.author.id') = ?)
+  `).get(room.roomId, room.roomId, room.me.id) as { unread: number };
+  const lastEntry = joinedEntries(room.roomId, 1)[0];
+  return { unread, ...(lastEntry ? { lastEntry } : {}) };
+}
+
+export function readJoined(roomId: string, seq: number): boolean {
+  return db().prepare(`
+    INSERT INTO room_reads (room_id, seq) VALUES (?, ?)
+    ON CONFLICT(room_id) DO UPDATE SET seq = excluded.seq WHERE excluded.seq > room_reads.seq
+  `).run(roomId, seq).changes > 0;
+}
+
 /** A file some held entry of this room carries; nothing else can be fetched. */
 export function joinedFile(roomId: string, fileId: string): JoinedFile | null {
   const row = db().prepare(`
@@ -223,6 +245,7 @@ export function removeJoined(roomId: string): boolean {
     const removed = database.prepare("DELETE FROM joined WHERE room_id = ? AND status != 'joined'").run(roomId).changes > 0;
     if (removed) {
       database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(roomId);
     }
     return removed;

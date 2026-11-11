@@ -7,6 +7,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
 import { createTeamRoom, inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
@@ -130,6 +131,7 @@ export function TeamRoomMenuItems({ onPick }: { onPick: () => void }) {
 }
 
 function Shell({ label, closing, onClose, children }: { label: string; closing: boolean; onClose: () => void; children: React.ReactNode }) {
+  useBackLayer(!closing, onClose);
   return createPortal(
     <div
       data-closing={closing || undefined}

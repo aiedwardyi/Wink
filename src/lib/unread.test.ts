@@ -18,6 +18,14 @@ describe("unreadConversationCount", () => {
 });
 
 describe("collapsedUnreadCount", () => {
+  it("counts hosted and joined lines and excludes the open joined room", () => {
+    const groups = [{ id: "hosted", hosted: { roomId: "r1" }, unread: true, readAt: 1, messages: [2, 3, 4].map((at) => ({ id: `m${at}`, role: "user" as const, kind: "text" as const, at, author: { kind: "person" as const, id: "mina", name: "Mina" } })) }];
+    const joined = [{ roomId: "r9", unread: 3 }];
+    expect(collapsedUnreadCount([], groups, "none", joined)).toBe(6);
+    expect(collapsedUnreadCount([], groups, "joined:r9", joined)).toBe(3);
+    expect(collapsedUnreadCount([], groups, "hosted", joined)).toBe(3);
+  });
+
   it("excludes the currently open bot or room from the count", () => {
     const bots = [
       { id: "a", unread: true },
@@ -53,6 +61,13 @@ describe("formatCollapsedUnreadBadge", () => {
 describe("unreadReplyCount", () => {
   const reply = (at: number) => ({ role: "bot", kind: "text", at });
   const mine = (at: number) => ({ role: "user", kind: "text", at });
+
+  it("counts teammate lines past own lines without a read marker", () => {
+    const teammate = (at: number) => ({ ...mine(at), author: { kind: "person", id: "mina", name: "Mina" } });
+    expect(unreadReplyCount(true, undefined, [mine(1), teammate(2), teammate(3), teammate(4)])).toBe(3);
+    expect(unreadReplyCount(true, 1, [teammate(2), mine(3), teammate(4), teammate(5)])).toBe(3);
+    expect(markUnreadReadAt([mine(1), teammate(2), teammate(3)])).toBe(2);
+  });
 
   it("counts shown text replies since the chat was last read", () => {
     const read = [mine(5), reply(10), reply(11), reply(12)];

@@ -14,7 +14,7 @@ const joined = vi.hoisted(() => ({ needsCode: false, rooms: [{
   roomId: "r9", status: "joined", link: "live", me: { id: "me", name: "Mina" },
   state: { roomName: "함께 만드는 아주 긴 디자인 프로젝트 대화방", host: "Studio", people: [] },
 }] }));
-vi.mock("@/lib/joined-rooms", () => ({ useJoinedRooms: () => joined.rooms, noteJoinedRoom: vi.fn(), forgetJoinedRoom: vi.fn() }));
+vi.mock("@/lib/joined-rooms", () => ({ useJoinedRooms: () => joined.rooms, useLoadedJoinedRooms: () => joined.rooms, noteJoinedRoom: vi.fn(), forgetJoinedRoom: vi.fn() }));
 vi.mock("@/lib/updater", () => ({ useUpdaterState: () => null, useManualCheck: () => ({ acknowledged: true, check: vi.fn() }) }));
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: window.localStorage });
 

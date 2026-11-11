@@ -1,11 +1,15 @@
 // One live call: the voice talks, the bot works. Lines become chat rows, orders wait for a yes, replies come back as [Wink] lines.
 import { isVoiceLine, ORDER_EXPIRY_MS, type CallLine } from "../../../shared/live-call";
 import { activeLocale } from "@/lib/i18n";
+import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 
 export const MIC_BLOCKED = "Microphone blocked";
+export const MIC_MISSING = "Microphone missing";
+export const MIC_BUSY = "Microphone busy";
+const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "ended" | "failed";
 export type CallState = {
@@ -53,6 +57,8 @@ const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
 const REPORT_CHARS = 1_500;
 
+const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
 /** Transcript text without the model's markers ("<no speech>", "{pause}"); empty if nothing speakable is left. */
 export function spokenText(text: string): string {
   const clean = text.replace(/<[^>]*>|\{[^}]*\}/g, " ").replace(/\s+/g, " ").trim();
@@ -88,9 +94,14 @@ export class LiveCall {
   private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
   private guarded = false;
   private pending?: { order: string; toolId: string; timer: ReturnType<typeof setTimeout> };
+  private sent = new Set<string>();
+  private ask?: string;
+  private askAnswered = new Set<string>();
+  private justAnswered = false;
   private awaiting = 0;
   private busy = false;
   private reported = new Set<string>();
+  private settled = new Set<string>();
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
   private turnHadAudio = false;
@@ -153,7 +164,7 @@ export class LiveCall {
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
-      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? MIC_BLOCKED : String(error));
+      return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });
@@ -268,6 +279,11 @@ export class LiveCall {
 
   propose(order: string, toolId: string) {
     if (!order) return this.engine?.sendToolResult(toolId, "propose_work", "declined");
+    // The bot's own question already takes the spoken answer; an order would ask twice.
+    if (this.ask || this.justAnswered) return this.engine?.sendToolResult(toolId, "propose_work", `not needed: this is ${this.deps.botName}'s open question, and the person's spoken reply goes to ${this.deps.botName} as the answer`);
+    const key = orderKey(order);
+    if (this.sent.has(key)) return this.engine?.sendToolResult(toolId, "propose_work", "already sent");
+    if (this.pending && orderKey(this.pending.order) === key) return this.engine?.sendToolResult(toolId, "propose_work", "already proposed, waiting for their answer");
     if (this.pending) this.answerTool("declined");
     this.stats.orders.proposed += 1;
     const expiresAt = this.now() + ORDER_EXPIRY_MS;
@@ -303,21 +319,27 @@ export class LiveCall {
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
-    let result: string;
+    const key = orderKey(pending.order);
+    this.sent.add(key);
+    const result = await this.send(pending.order, { order: true });
+    if (result.startsWith("failed")) this.sent.delete(key);
+    this.engine?.sendToolResult(pending.toolId, "propose_work", result);
+  }
+
+  private async send(text: string, tag: { order: true } | { ask: true }): Promise<string> {
     try {
       const sent = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/messages`, {
-        text: pending.order,
+        text,
         sendId: crypto.randomUUID(),
-        call: { id: this.callId, order: true },
+        call: { id: this.callId, ...tag },
       });
       if (sent.status >= 400) throw new Error(String(sent.data.error ?? sent.status));
-      result = sent.data.queued ? "queued" : "sent";
       this.awaiting += 1;
       this.refresh();
+      return sent.data.queued ? "queued" : "sent";
     } catch (error) {
-      result = `failed: ${error instanceof Error ? error.message : String(error)}`;
+      return `failed: ${error instanceof Error ? error.message : String(error)}`;
     }
-    this.engine?.sendToolResult(pending.toolId, "propose_work", result);
   }
 
   private caption(who: CallLine["who"], buf: string) {
@@ -335,6 +357,20 @@ export class LiveCall {
     this.stats.userLines += 1;
     this.letters.hangul += text.match(HANGUL)?.length ?? 0;
     this.letters.all += text.match(LETTER)?.length ?? 0;
+    this.justAnswered = false;
+    // The first line after the bot's question is its answer on screen, so it goes to the bot as one.
+    if (!this.pending && this.ask) {
+      this.askAnswered.add(this.ask);
+      this.ask = undefined;
+      this.justAnswered = true;
+      const at = this.now();
+      void this.send(text, { ask: true }).then((result) => {
+        if (!result.startsWith("failed")) return;
+        this.justAnswered = false;
+        this.postLines([{ who: "user", text, at }]);
+      });
+      return;
+    }
     this.postLines([{ who: "user", text, at: this.now() }]);
     if (!this.pending) return;
     const consent = consentOf(text);
@@ -365,21 +401,30 @@ export class LiveCall {
     const startedAt = this.snapshot.startedAt;
     if (!this.connected || startedAt === undefined || this.ended) return this.refresh();
     if (!input.busy) {
-      const replies = new Map<Message | undefined, Message>();
+      const replies = new Map<Message | undefined, { reply: Message; orders: string[] }>();
       let asked: Message | undefined;
+      let orders: string[] = [];
       for (const row of input.messages) {
-        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) asked = row;
-        else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
+        if (row.role === "user" && row.kind === "text" && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) {
+          if (!row.steered || !orders.length) {
+            asked = row;
+            orders = [];
+          }
+          if ((row.call?.order || row.call?.ask) && row.call.id === this.callId) orders.push(row.id);
+        } else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.at >= startedAt && row.text?.trim() && !this.reported.has(row.id)) {
           this.reported.add(row.id);
-          replies.set(asked, row);
+          this.justAnswered = false;
+          replies.set(asked, { reply: row, orders: [...orders] });
         }
       }
       // A reply to a typed message is already on screen, so only this call's orders are read aloud.
-      for (const [order, reply] of replies) {
-        if (order?.call?.order && order.call.id === this.callId) void this.report(reply.text!);
+      for (const [order, { reply, orders: replyOrders }] of replies) {
+        if (replyOrders.length) void this.report(reply.text!, replyOrders);
         else this.remember(order, reply.text!);
       }
     }
+    const question = openQuestion(input.messages);
+    this.ask = question && question.at >= startedAt && !this.askAnswered.has(question.id) ? question.id : undefined;
     if (input.needs && !this.toldNeeds.has(input.needs.id)) {
       this.toldNeeds.add(input.needs.id);
       this.engine?.sendText(`[Wink] ${this.deps.botName} needs you in chat: ${input.needs.short}`);
@@ -387,8 +432,13 @@ export class LiveCall {
     this.refresh();
   }
 
-  private async report(text: string) {
-    this.awaiting = Math.max(0, this.awaiting - 1);
+  private async report(text: string, orders: string[]) {
+    for (const id of orders) {
+      if (this.settled.has(id)) continue;
+      this.settled.add(id);
+      this.awaiting = Math.max(0, this.awaiting - 1);
+    }
+    // Later replies still speak after their orders have settled.
     let speakable = text.slice(0, REPORT_CHARS);
     try {
       const prepared = await this.deps.post("/api/tts/prepare", { text: speakable });

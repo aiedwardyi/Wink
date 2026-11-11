@@ -219,7 +219,7 @@ export function Composer({
   locked?: boolean;
   focusBlocked?: boolean;
   /** A live call's controls and caption, placed in the frame's grid. */
-  call?: (box: { empty: boolean; closing: boolean }) => ReactNode;
+  call?: (box: { closing: boolean }) => ReactNode;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -1116,7 +1116,7 @@ export function Composer({
             }}
           />
           {!sendBlocked && (
-            <div className="col-start-1 row-start-2 mt-1 flex items-center gap-1">
+            <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -1128,7 +1128,7 @@ export function Composer({
               </button>
             </div>
           )}
-          {callSlot.mounted && callSlot.value?.({ empty: !text, closing: callSlot.closing })}
+          {callSlot.mounted && callSlot.value?.({ closing: callSlot.closing })}
           <textarea
           ref={setComposerRef}
           data-orbit-composer=""
@@ -1240,9 +1240,9 @@ export function Composer({
               : busyChrome.placeholder
           }
           aria-label={t("composer.messageAria", { name: group ? group.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-1 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none [[data-call-caption]~&]:placeholder:text-transparent"
+            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
-        <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
+        <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
           {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
           {busy && !locked && !callSlot.mounted && (
           <button

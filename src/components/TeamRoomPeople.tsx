@@ -5,6 +5,7 @@ import { Check, Copy, X } from "lucide-react";
 import { request } from "@/lib/api-request";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type TeamRoom } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 import type { Group } from "@/state/store-types";
 
@@ -55,13 +56,16 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [code, setCode] = useState<string | null>(null);
+  const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const roomId = group.hosted.roomId;
   const people = roomPeople(group);
+  useBackLayer(!closing, onClose);
 
   useEffect(() => {
     if (closing) return;
+    setCode(null);
     let alive = true;
     void inviteToRoom(roomId).then((result) => {
       if (!alive) return;
@@ -71,7 +75,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     return () => {
       alive = false;
     };
-  }, [closing, roomId]);
+  }, [closing, roomId, codeVersion]);
 
   useEffect(() => {
     if (closing) return;
@@ -130,6 +134,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     if (!room) return;
     try {
       await removeFromRoom(roomId, personId);
+      setCodeVersion((version) => version + 1);
       dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== personId) } } });
     } catch {
       setProblem("errors.request");

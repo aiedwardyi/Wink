@@ -26,7 +26,7 @@ export function compactSidebarModelLabel(label: string): string {
   return label.replace(/\s+Contributor$/i, " Cont.");
 }
 
-function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
+export function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
   const { t } = useI18n();
   const shown = formatCollapsedUnreadBadge(count);
   if (!shown) return null;
@@ -98,6 +98,8 @@ function GroupListItem({
   onReselect,
   joined = false,
   preview,
+  unread,
+  at,
 }: {
   group: Group;
   density: SidebarDensity;
@@ -106,6 +108,8 @@ function GroupListItem({
   onReselect?: () => void;
   joined?: boolean;
   preview?: string;
+  unread?: number;
+  at?: number;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -117,7 +121,8 @@ function GroupListItem({
   const last = group.messages.filter(isShownMessage).at(-1);
   const question = chatNeedsYou(group.messages);
   const asking = question || routineRinging(state.routineRuns, group.threadId, group.tasks);
-  const unreadCount = useMemo(() => unreadReplyCount(group.unread, group.readAt, group.messages), [group.unread, group.readAt, group.messages]);
+  const unreadCount = useMemo(() => unread ?? unreadReplyCount(group.unread, group.readAt, group.messages), [unread, group.unread, group.readAt, group.messages]);
+  const lastAt = at ?? last?.at;
   const iconLabel = [asking ? t(question ? "ask.rowHasQuestion" : "routine.rowRang", { name: group.name }) : group.name, unreadCount ? t("chrome.unreadReplies", { count: unreadCount }) : null].filter(Boolean).join(" · ");
   const select = () => {
     if (selected) onReselect?.();
@@ -238,14 +243,15 @@ function GroupListItem({
               {group.name}
               <span className="sr-only" aria-live="polite">{asking ? t(question ? "ask.hasQuestionSuffix" : "routine.rangSuffix") : ""}</span>
             </span>
-            {last && (
+            {lastAt !== undefined && (
               <span
                 className={cn(
-                  "shrink-0 text-xs text-ink-secondary @max-[10rem]/rowtext:hidden!",
-                  !selected && "hidden group-hover:inline group-focus-within:inline",
+                  "shrink-0 text-xs text-ink-secondary",
+                  !group.hosted && !joined && "@max-[10rem]/rowtext:hidden!",
+                  !selected && !group.hosted && !joined && "hidden group-hover:inline group-focus-within:inline",
                 )}
               >
-                {formatTime(last.at, localeTag(locale))}
+                {formatTime(lastAt, localeTag(locale))}
               </span>
             )}
           </div>

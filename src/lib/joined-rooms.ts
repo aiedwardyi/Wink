@@ -79,6 +79,11 @@ export function useJoinedRooms(): JoinedView[] {
     void loadRooms();
     return follow(() => void loadRooms());
   }, []);
+  return useLoadedJoinedRooms();
+}
+
+/** The list as last loaded; never starts a load. */
+export function useLoadedJoinedRooms(): JoinedView[] {
   return useSyncExternalStore(watch, () => rooms);
 }
 

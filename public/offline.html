@@ -76,6 +76,15 @@
         font: inherit;
         font-weight: 600;
       }
+      a {
+        display: inline-block;
+        margin-top: 16px;
+        color: var(--ink-secondary);
+        font-size: 13px;
+      }
+      a[hidden] {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -89,6 +98,7 @@
         <h1 id="title"></h1>
         <p id="detail" role="status" aria-live="polite"></p>
         <button id="retry" type="button"></button>
+        <a id="pick" hidden></a>
       </div>
     </main>
     <script>
@@ -106,6 +116,7 @@
             asleepSince: "Your PC is asleep or Wink is closed (since {time}).",
             online: "Your PC is online, but this page did not load. If this keeps happening, open Wink on the PC and check Phone access; its security certificate may need attention.",
             retry: "Try again",
+            pick: "Choose another PC",
           },
           ko: {
             title: "이 PC에 연결할 수 없습니다",
@@ -115,6 +126,7 @@
             asleepSince: "PC가 절전 상태이거나 Wink가 닫혀 있습니다 ({time}부터).",
             online: "PC는 켜져 있지만 이 페이지를 불러오지 못했습니다. 계속되면 PC의 Wink에서 휴대폰 접속을 확인하세요. 보안 인증서에 문제가 있을 수 있습니다.",
             retry: "다시 시도",
+            pick: "다른 PC 선택",
           },
         };
         let lang = "en";
@@ -134,6 +146,10 @@
         const dot = location.hostname.indexOf(".");
         const label = location.hostname.slice(0, dot);
         const base = location.hostname.slice(dot + 1);
+        const pick = document.getElementById("pick");
+        pick.textContent = t("pick");
+        pick.href = `https://${base}/?pick=1`;
+        pick.hidden = false;
         const statusUrl = `https://relay.${base}/v1/status/${label}`;
         let down = false;
 

@@ -1,9 +1,9 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import { cn } from "@/lib/cn";
+import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
-import { shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { isRoomPicture, roomFileUrl, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
@@ -49,7 +49,7 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
             )}
           </div>
         </div>
-        <span className="mt-0.5 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <span className="mt-0.5 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
           {formatTime(line.at, localeTag(locale))}
         </span>
       </div>
@@ -58,13 +58,23 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
 }
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string }) {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
   const previousTop = useRef(0);
   const previousSize = useRef({ height: 0, viewport: 0 });
   const touchY = useRef(0);
+  const beforePage = useRef<TranscriptScroll | null>(null);
+  const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
+  const fill = useCallback(() => {
+    const el = scrollRef.current;
+    if (hasMore && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) loadPage();
+  }, [hasMore, loadPage]);
+  useLayoutEffect(() => {
+    if (beforePage.current && scrollRef.current) restoreTranscriptScroll(scrollRef.current, beforePage.current);
+    beforePage.current = null;
+  }, [lines]);
   const last = lines.at(-1);
   const lastId = last?.id;
   const lastMine = last ? mine(last) : false;
@@ -77,6 +87,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
       previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
     }
   }, [lastId, lastMine]);
+  useEffect(fill, [fill, lines]);
   // Layout scrolls must not disarm follow before pictures finish growing.
   useEffect(() => {
     const el = scrollRef.current;
@@ -88,11 +99,12 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
         previousTop.current = el.scrollTop;
       }
       previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
+      fill();
     });
     observer.observe(log);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [fill]);
   return (
     <div
       ref={scrollRef}
@@ -116,6 +128,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
         if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
         previousTop.current = el.scrollTop;
         previousSize.current = size;
+        if (el.scrollTop < 80) loadPage();
       }}
     >
       <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>

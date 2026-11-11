@@ -232,6 +232,16 @@ it("reply naming an edited notes file does not check it", async () => {
   expect(docs).not.toHaveBeenCalled();
 });
 
+it("reply naming a notes file edited from the shell does not check it", async () => {
+  await writeFile(join(root, "built.md"), "- 포키팡");
+  const startedAt = (await stat(join(root, "built.md"))).birthtimeMs + 5_000;
+  await utimes(join(root, "index.html"), new Date(startedAt - 3_600_000), new Date(startedAt - 3_600_000));
+  await utimes(join(root, "built.md"), new Date(startedAt), new Date(startedAt));
+  shell();
+  await auto.settled({ ...turn, startedAt, humanText: "What's the release status?", reply: "Updated built.md." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
 it("new document named in reply is checked", async () => {
   await writeFile(join(root, "report.md"), "# Report");
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "report.md")] }));

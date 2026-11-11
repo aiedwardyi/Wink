@@ -119,6 +119,67 @@ afterEach(() => {
 });
 
 describe("useOlderMessages", () => {
+  it("keeps an inactive thread's page without measuring the visible thread", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let release!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
+    const dispatch = vi.fn();
+    let load: ReturnType<typeof useOlderMessages> = () => {};
+    function Probe({ threadId }: { threadId: string }) {
+      load = useOlderMessages(dispatch, threadId, "m2", true);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    const measure = vi.fn();
+    const failed = vi.fn();
+    try {
+      await act(async () => root.render(createElement(Probe, { threadId: "thread-a" })));
+      await act(async () => load(measure, failed));
+      await act(async () => root.render(createElement(Probe, { threadId: "thread-b" })));
+      await act(async () => release(Response.json({ messages: rows(0, 2), hasMore: false })));
+      expect(measure).not.toHaveBeenCalled();
+      expect(failed).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "olderMessages", threadId: "thread-a", before: "m2", messages: rows(0, 2), hasMore: false });
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("separates new cursors and skips stale page measurements", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const replies: Array<(response: Response) => void> = [];
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { replies.push(resolve); })));
+    const dispatch = vi.fn();
+    let head = "m2";
+    let load: ReturnType<typeof useOlderMessages> = () => {};
+    function Probe() {
+      load = useOlderMessages(dispatch, "thread-a", head, true);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    const first = vi.fn();
+    const joined = vi.fn();
+    const fresh = vi.fn();
+    const freshFailed = vi.fn();
+    const failed = vi.fn();
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => load(first, failed));
+    await act(async () => load(joined, failed));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    head = "m0";
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => load(fresh, freshFailed));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => replies[0](new Response(JSON.stringify({ messages: [], hasMore: false }))));
+    expect(first).not.toHaveBeenCalled();
+    expect(joined).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledTimes(2);
+    await act(async () => replies[1](new Response(JSON.stringify({ messages: [], hasMore: false }))));
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(freshFailed).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
   it("tells a caller that joined a failing page about the failure", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));

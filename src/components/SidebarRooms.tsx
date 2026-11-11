@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { useJoinedRooms } from "@/lib/joined-rooms";
+import { useJoinedRooms, useLoadedJoinedRooms } from "@/lib/joined-rooms";
 import { loadJoinedRoomLayout, ROOM_LAYOUT_EVENT, saveJoinedRoomLayout, type JoinedRoomLayout } from "@/lib/sidebar-order";
 import { joinedPhase, joinedRoomIdOf, joinedSelection } from "@/lib/team-rooms";
 import { useStore, type Group } from "@/state/store";
@@ -21,7 +21,10 @@ export function useSidebarRooms() {
   // Sidebar models only; joined rooms never enter the application store.
   const groups = useMemo<Group[]>(() => rooms.map((room) => {
     const phase = joinedPhase(room);
-    const preview = phase === "removed" ? t("teamRoom.removed") : phase === "left" ? t("teamRoom.left") : room.state?.host ?? "";
+    const last = room.lastEntry;
+    const preview = phase === "removed" ? t("teamRoom.removed") : phase === "left" ? t("teamRoom.left") : last ? t(last.author.kind === "person" && last.author.id === room.me.id ? "chrome.youPrefix" : "chrome.speakerPrefix", {
+      name: last.author.name, text: last.text || last.files?.map((file) => file.name).join(", ") || "",
+    }) : (room.state?.host ?? "");
     return {
       id: joinedSelection(room.roomId), threadId: joinedSelection(room.roomId),
       name: room.state?.roomName ?? "", memberIds: [], messages: [], bulletin: preview, createdAt: 0, unread: false,
@@ -41,6 +44,8 @@ export function useSidebarRooms() {
 }
 
 export function SidebarGroupListItem(props: ComponentProps<typeof GroupListItem>) {
-  const joined = joinedRoomIdOf(props.group.id) !== null;
-  return <GroupListItem {...props} joined={joined} preview={joined ? props.group.bulletin : undefined} />;
+  const roomId = joinedRoomIdOf(props.group.id);
+  const room = useLoadedJoinedRooms().find((each) => each.roomId === roomId);
+  if (roomId === null) return <GroupListItem {...props} />;
+  return <GroupListItem {...props} joined preview={props.group.bulletin} unread={room?.unread ?? 0} at={room?.lastEntry?.at} />;
 }

@@ -193,7 +193,7 @@ const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.heade
 function guestFor(req: IncomingMessage, res: ServerResponse, peer: string | null): Guest | null {
   const { unauthenticated, badKeys } = door!;
   const bearer = bearerOf(req);
-  const guest = bearer ? guestByKey(bearer) : null;
+  const guest = bearer ? guestByKey(bearer, req.headers["x-wink-device"]) : null;
   if (guest) return guest;
   const limited = !unauthenticated.take("door") || (bearer !== undefined && !badKeys.take(rateKey(peer)));
   send(res, limited ? 429 : 401, { error: limited ? "rate-limited" : "unauthorized" });

@@ -6,9 +6,11 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
+import { useOlderMessages } from "@/lib/message-pages";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { hostLines, hostRoomBase, roomPeople, type TeamRoom } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
+import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
@@ -17,6 +19,8 @@ import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
   const { t } = useI18n();
+  const { dispatch } = useStore();
+  const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
@@ -46,9 +50,9 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} />
+      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} />}
       </div>
     </main>
   );

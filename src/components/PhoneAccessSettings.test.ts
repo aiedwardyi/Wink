@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import type { api } from "@/state/store";
-import { PhoneAccessSettings, type RelayStatus } from "./PhoneAccessSettings";
+import { PhoneAccessSettings, resetRelay, warmRelay, type RelayStatus } from "./PhoneAccessSettings";
 
 const request = vi.fn<typeof api>();
 const HOST = "abcdefghijklmnop.wink.test";
@@ -35,7 +35,9 @@ function serve(routes: Record<string, Route>) {
 afterEach(() => {
   request.mockReset();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   localStorage.clear();
+  resetRelay();
   document.body.innerHTML = "";
 });
 
@@ -330,6 +332,42 @@ describe("This PC", () => {
     expect(put).toHaveBeenLastCalledWith({ method: "PUT", body: JSON.stringify({ enabled: false }) });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     await act(async () => root.unmount());
+  });
+
+  it("paints the switch row before the status answers", async () => {
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": signedIn });
+    const { host, root } = await renderView();
+    expect(host.querySelector("[data-this-pc]")?.textContent).toContain("Connect from my devices");
+    expect(host.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
+    expect(host.textContent).not.toContain("Not available on this PC yet.");
+    await act(async () => root.unmount());
+  });
+
+  it("paints the last status at once after a restart", async () => {
+    localStorage.setItem("omb-phone-relay", JSON.stringify({ status: status() }));
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
+    const { host, root } = await renderView();
+    expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
+    await act(async () => root.unmount());
+  });
+
+  it("paints the warmed state on the first open with nothing saved", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.includes("google") ? signedIn() : status()))));
+    await warmRelay();
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": () => new Promise(() => {}), "GET /api/phone/devices": () => ({ phones: [] }) });
+    const { host, root } = await renderView();
+    expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.textContent).toContain(EMAIL);
+    await act(async () => root.unmount());
+  });
+
+  it("skips the warm-up off this PC", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("location", { hostname: "pc.fixture.ts.net" });
+    await warmRelay();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("not available offers tailscale", async () => {
