@@ -49,6 +49,8 @@ function open(): DatabaseSync {
       PRIMARY KEY (thread_id, id)
     );
     CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
+    CREATE INDEX IF NOT EXISTS messages_thread_at ON messages(thread_id, at);
+    CREATE INDEX IF NOT EXISTS messages_options ON messages(thread_id) WHERE kind = 'options';
     CREATE INDEX IF NOT EXISTS messages_parent ON messages(thread_id, json_extract(json, '$.parentId'));
     CREATE INDEX IF NOT EXISTS messages_bot_text_at ON messages(at) WHERE role = 'bot' AND kind = 'text';
     CREATE TABLE IF NOT EXISTS thread_state (
@@ -253,6 +255,13 @@ export function applySyncedRows(
     ).run(threadId, activeLeafId).changes);
   }
   return touched;
+}
+
+/** Peer-approval cards on disk, found without loading their threads. */
+export function peerCardRows(): Array<{ threadId: string; id: string }> {
+  return db().prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
+    AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`)
+    .all() as Array<{ threadId: string; id: string }>;
 }
 
 /** Newest message time without loading the transcript. */
