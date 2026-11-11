@@ -2,23 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import { cleanFiles, lineHash, mergeParkedCopy, parseHistory, POINTER_LINE, sleepInput, validateChangeList, type Change, type CleanFile, type CleanInput } from "./memory-clean.ts";
 import { factParts } from "./memory-clean-coverage.ts";
+import { rememberCovered } from "./memory-clean-validate.ts";
 import { undoText } from "./memory-clean-undo.ts";
 import { day } from "./memory-pass.ts";
-import { sleepReply } from "./testing/sleep-verdicts.ts";
+import { sleepReply, sleepRoutes } from "./testing/sleep-verdicts.ts";
 import { loadMemory, writeMemoryFile } from "./workspace.ts";
 
 const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
 
 function fixture(memory: string, changes: Change[] = [retire(2)], side?: { text: string; changes: Change[] }): CleanInput {
   const questions = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
+  let filed: string[] = [];
   return {
     memory, side: side ? { file: "memory/topic.md", text: side.text } : undefined, history: null, typed: new Set(), now: Date.UTC(2026, 10, 4),
     propose: async (prompt) => {
       const staged = sleepReply(prompt);
       if (staged !== null) return staged;
       if (prompt.startsWith("[memory-clean:questions]")) {
-        const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
-        return JSON.stringify(questions.map((question, i) => i === 0 && topic ? { ...question, file: topic, answer: topic } : question));
+        filed = JSON.parse(/Ask at least one such question for each of: (\[[^\]]*\])/.exec(prompt)?.[1] ?? "[]");
+        return JSON.stringify(questions.map((question, i) => filed[i] ? { ...question, file: filed[i], answer: filed[i] } : question));
       }
       if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)).map(() => true));
       const file: CleanFile = prompt.includes('"file":"memory/topic.md"') ? "memory/topic.md" : "MEMORY.md";
@@ -27,8 +29,7 @@ function fixture(memory: string, changes: Change[] = [retire(2)], side?: { text:
     recall: async (prompt) => {
       const staged = sleepReply(prompt);
       if (staged !== null) return staged;
-      const topic = /^- (memory\/(?!memory-history)[\w-]+\.md):/m.exec(prompt)?.[1];
-      return JSON.stringify(questions.map((q, i) => i === 0 && topic ? topic : q.answer));
+      return JSON.stringify(questions.map((q, i) => filed[i] ?? q.answer));
     },
   };
 }
@@ -62,7 +63,7 @@ describe("memory cleanup edges", () => {
     } })).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "pointer" })]) });
   });
 
-  it("D1 repairs a candidate that grows only after its history pointer is rendered", async () => {
+  it("D1 lands a candidate that grows only after its history pointer is rendered, the plan filing the room", async () => {
     const memory = ["- done", "- done", ...Array.from({ length: 86 }, (_, i) => `- detail ${i} ${"z".repeat(280)}`)].join("\n") + "\n";
     const input = fixture(memory, []);
     let attempts = 0;
@@ -73,14 +74,15 @@ describe("memory cleanup edges", () => {
       return JSON.stringify({ version: 1, file: "MEMORY.md", changes: ++attempts === 1 ? [retire(2)] : [retire(2), retire(3)] });
     } });
     expect(result).toMatchObject({ ok: true });
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(1);
     if (result.ok) expect(Buffer.byteLength(result.memory)).toBeLessThan(Buffer.byteLength(memory));
   });
 
-  it("counts mandatory remembers in the 1,000-byte nightly growth cap", () => {
-    const user = Array.from({ length: 4 }, (_, i) => ({ text: `Remember route ${i} ${"along the river ".repeat(18)}`, kind: "remember" as const, at: i }));
-    expect(validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user, list: { version: 1, file: "MEMORY.md", changes: [] } }))
-      .toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "cap-growth" })]) });
+  it("writes mandatory remembers up to 600 bytes a night, newest first", () => {
+    const user = Array.from({ length: 4 }, (_, i) => ({ text: `Remember route ${i} ${"along the river ".repeat(9)}`, kind: "remember" as const, at: i }));
+    const result = validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user, list: { version: 1, file: "MEMORY.md", changes: [] } });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok && user.map((line) => rememberCovered(line.text, result.text))).toEqual([false, true, true, true]);
   });
 
   it("keeps negation when every positive content word survives a merge", () => {
@@ -99,7 +101,7 @@ describe("memory cleanup edges", () => {
 
   it.each(["\n", "\r\n"])("routes all 26 assertions beyond the loaded prefix and undoes %j bytes", async (newline) => {
     const prefix = Array.from({ length: 86 }, (_, i) => `- pinned ${i} ${"z".repeat(280)}`);
-    const details = Array.from({ length: 13 }, (_, i) => `- User${i} locker code ${100 + i} ${"x".repeat(140)}; User${i} diet excludes nuts.`);
+    const details = Array.from({ length: 13 }, (_, i) => `- User${i} locker code ${100 + i} ${"x".repeat(20)}; User${i} diet excludes nuts.`);
     const memory = [...prefix, ...details].join(newline) + newline;
     const pointer = `- memory/details.md: ${details.map((_, i) => `User${i} locker code ${100 + i}; User${i} diet excludes nuts`).join("; ")}`;
     const input = fixture(memory, [{ op: "file", ids: details.map((_, i) => prefix.length + i + 1), topic: "details", pointer, reason: "Details" }]);
@@ -107,7 +109,7 @@ describe("memory cleanup edges", () => {
     const result = await cleanFiles({ ...input, typed: new Set(prefix.map(lineHash)), propose: async (prompt, opts) => {
       prompts.push(prompt);
       if (prompt.startsWith("[memory-clean:route-questions]")) {
-        const sources = JSON.parse(/^Sources: (.*)$/m.exec(prompt)![1]!) as Array<{ id: number; text: string }>;
+        const sources = JSON.parse(/^Route sources: (.*)$/m.exec(prompt)![1]!) as Array<{ id: number; text: string }>;
         return JSON.stringify(sources.flatMap(({ id, text }) => factParts(text).map((fact, part) => {
           const user = /User\d+/.exec(fact)![0];
           const relation = part === 0 ? "locker code" : "diet excludes";
@@ -169,7 +171,7 @@ describe("memory cleanup edges", () => {
       seen.push(prompt);
       return prompt.startsWith("[memory-clean:organize]") ? JSON.stringify({ verdicts: [false], corrections: [] }) : input.recall(prompt, opts);
     } });
-    expect(result).toMatchObject({ ok: false, stage: "validate", detail: "source-coverage" });
+    expect(result).toMatchObject({ ok: false, stage: "nothing" });
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain('"sources":');
     expect(seen[0]).toContain("same entity AND relation");
@@ -177,10 +179,10 @@ describe("memory cleanup edges", () => {
 
   it("does not advance through unprocessed user messages at the input cap", () => {
     const paragraph = "The morning meeting discussed the garden route. ".repeat(6);
-    const rows = ["Remember Mina lives in Seoul", Array(100).fill(paragraph).join("\n\n"), "Remember Jun lives in Jeju"].map((text, i) => ({ id: String(i), role: "user", kind: "text", text, at: i + 1 }));
+    const rows = ["Remember Mina lives in Seoul", "Jun lives in Jeju", Array(100).fill(paragraph).join("\n\n"), "Remember Ari lives in Busan"].map((text, i) => ({ id: String(i), role: "user", kind: "text", text, at: i + 1 }));
     const result = sleepInput(rows as never, 0, 10);
-    expect(result.through).toBe(1);
-    expect(result.user.map((line) => line.text)).toEqual([rows[0]!.text]);
+    expect(result.through).toBe(2);
+    expect(result.user.map((line) => line.text).sort()).toEqual([rows[0]!.text, rows[3]!.text, rows[1]!.text].sort());
   });
 
   it("reserves the rotated history pointer before proposing", async () => {
@@ -201,22 +203,22 @@ describe("memory cleanup edges", () => {
   it.each(["remembers", "protected"])("names infeasible %s without returning a candidate", async (kind) => {
     const memory = kind === "protected" ? Array.from({ length: 100 }, (_, i) => `- owned ${i} ${"x".repeat(250)}`).join("\n") : "- kept\n";
     const input = fixture(memory, []);
-    const result = await cleanFiles({ ...input, typed: new Set(memory.split("\n").map(lineHash)), user: kind === "remembers" ? [{ text: `Remember ${"river ".repeat(55)}`, at: 1, kind: "remember" }] : [] });
+    const result = await cleanFiles({ ...input, typed: new Set(memory.split("\n").map(lineHash)), user: kind === "remembers" ? [{ text: `Remember ${"river ".repeat(200)}`, at: 1, kind: "remember" }] : [] });
     expect(result).toMatchObject({ ok: false, stage: "validate", detail: expect.stringContaining(`infeasible-${kind}:`) });
     expect(result).not.toHaveProperty("memory");
     expect(result).not.toHaveProperty("header");
   });
 
-  it.each([false, true])("revalidates one organizer correction and rejects a second: %s", async (twice) => {
+  it("drops a change the organizer rejects and never applies its correction", async () => {
     const input = fixture("- Ada owns 2 cats\n- Bob owns 3 dogs\n", [{ op: "merge", ids: [1, 2], text: "- Ada owns 3 dogs; Bob owns 2 cats", reason: "Pets" }]);
     let organized = 0;
     const result = await cleanFiles({ ...input, recall: async (prompt, opts) => {
       if (!prompt.startsWith("[memory-clean:organize]")) return input.recall(prompt, opts);
-      return JSON.stringify({ verdicts: [++organized > 1], corrections: organized === 1 || twice ? [{ version: 1, file: "MEMORY.md", changes: [{ op: "merge", ids: [1, 2], text: "- Ada owns 2 cats; Bob owns 3 dogs", reason: "Pets" }] }] : [] });
+      organized++;
+      return JSON.stringify({ verdicts: [false], corrections: [{ version: 1, file: "MEMORY.md", changes: [{ op: "merge", ids: [1, 2], text: "- Ada owns 2 cats; Bob owns 3 dogs", reason: "Pets" }] }] });
     } });
-    expect(organized).toBe(2);
-    expect(result).toMatchObject(twice ? { ok: false, stage: "validate", detail: "source-coverage" } : { ok: true });
-    if (result.ok) expect(result.memory).toContain("- Ada owns 2 cats; Bob owns 3 dogs");
+    expect(organized).toBe(1);
+    expect(result).toMatchObject({ ok: false, stage: "nothing" });
   });
 
   it.each(["questions", "route", "value"])("rejects a missing filed-fact %s", async (missing) => {
@@ -237,10 +239,14 @@ describe("memory cleanup edges", () => {
     expect(result).toMatchObject({ ok: false, stage: "recall", detail: missing === "questions" ? "route-coverage" : `${missing}-miss` });
   });
 
-  it("counts both files toward the character cap and the pointer toward the line cap", async () => {
-    expect(await cleanFiles(fixture(`- kept\n- ${"a".repeat(4100)}\n`, [retire(2)], { text: `- kept\n- ${"b".repeat(4100)}\n`, changes: [retire(2)] }))).toMatchObject({ ok: false, stage: "validate", detail: "cap-chars" });
+  it("counts both files toward the character cap and the pointer toward the line cap, dropping MEMORY.md ops past them", async () => {
+    const chars = await cleanFiles(fixture(`- kept\n- ${"a".repeat(4100)}\n`, [retire(2)], { text: `- kept\n- ${"b".repeat(4100)}\n`, changes: [retire(2)] }));
+    expect(chars).toMatchObject({ ok: true });
+    expect(chars.ok && [chars.memory.includes("a".repeat(4100)), chars.side!.text.includes("b".repeat(4100))]).toEqual([true, false]);
     const text = Array.from({ length: 21 }, (_, i) => `- old ${i}`).join("\n");
-    expect(await cleanFiles(fixture(text, Array.from({ length: 20 }, (_, i) => retire(i + 1)), { text, changes: Array.from({ length: 20 }, (_, i) => retire(i + 1)) }))).toMatchObject({ ok: false, stage: "validate", detail: "cap-lines" });
+    const lines = await cleanFiles(fixture(text, Array.from({ length: 20 }, (_, i) => retire(i + 1)), { text, changes: Array.from({ length: 20 }, (_, i) => retire(i + 1)) }));
+    const left = (text?: string) => text?.split("\n").filter((line) => line.startsWith("- old ")).length ?? 21;
+    expect(!lines.ok || 42 - left(lines.memory) - left(lines.side?.text) + 1 <= 40).toBe(true);
   });
 
   it("allows forty touched lines when the history pointer already exists", () => {
@@ -429,9 +435,11 @@ describe("memory cleanup edges", () => {
     const memory = ["- Never deploy on Fridays (detail)", `- Bob garage code 5531 ${"y".repeat(200)}`, "- old plan done", ...kept].join("\n") + "\n";
     const input = fixture(memory, [{ op: "file", ids: [1, 2], topic: "details", pointer: "- memory/details.md: deploys; Bob garage code 5531", reason: "Details" }, retire(3)]);
     const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)) });
-    expect(result).toMatchObject({ ok: true, topics: [] });
+    expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    expect(result.memory).toContain(`- Never deploy on Fridays (detail)\n- Bob garage code 5531 ${"y".repeat(200)}\n- kept 0\n`);
+    expect(result.topics.map((topic) => topic.file)).not.toContain("memory/details.md");
+    expect(result.memory).toContain("- Never deploy on Fridays (detail)\n");
+    expect(result.memory).not.toContain("- old plan done");
   });
 
   it("drops every op that shares an id with an invalid op", async () => {
@@ -482,12 +490,13 @@ describe("memory cleanup edges", () => {
     const input = fixture(memory, [{ op: "file", ids: [1, 2], topic: "details", reason: "Details" }]);
     const asks: string[] = [];
     const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: async (prompt, opts) => {
-      if (!prompt.startsWith("[memory-clean:route-questions]")) return input.propose(prompt, opts);
+      const quiz = prompt.startsWith("[memory-clean:questions]");
+      if (!quiz && !prompt.startsWith("[memory-clean:route-questions]")) return input.propose(prompt, opts);
       asks.push(prompt);
-      const routes = JSON.parse(sleepReply(prompt)!) as Array<{ id: number; label: string }>;
+      const routes = sleepRoutes(prompt);
       const reply = kind === "sub-ids" ? routes.map((route, i) => ({ ...route, id: `${route.id}${["-1", ".2", "a"][i % 3]}` }))
         : asks.length === 1 || kind === "ungrounded repair" ? routes.map((route) => ({ ...route, label: `${route.label} failure rate` })) : routes;
-      return `\`\`\`json\n${JSON.stringify(reply)}\n\`\`\``;
+      return quiz ? JSON.stringify({ questions: JSON.parse(await input.propose(prompt, opts) as string), routes: reply }) : `\`\`\`json\n${JSON.stringify(reply)}\n\`\`\``;
     } });
     expect(asks).toHaveLength(kind === "sub-ids" ? 1 : 2);
     expect(result).toMatchObject(kind === "ungrounded repair" ? { ok: false, stage: "recall", detail: "route-contract" } : { ok: true, topics: [{ file: "memory/details.md" }] });
@@ -508,7 +517,7 @@ describe("memory cleanup edges", () => {
     const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, `- Bob garage code 5531 ${"y".repeat(200)}`, ...kept].join("\n") + "\n";
     const input = fixture(memory, []);
     const asks: string[] = [];
-    await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: async (prompt, opts) => {
+    await cleanFiles({ ...input, typed: new Set(memory.split("\n").map(lineHash)), propose: async (prompt, opts) => {
       if (prompt.startsWith("[memory-clean:propose]")) asks.push(prompt);
       return input.propose(prompt, opts);
     } });

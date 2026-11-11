@@ -68,7 +68,33 @@ export function quotedLine(quote: string, user: readonly SleepLine[], kind?: Sle
 
 export function rememberCovered(line: string, text: string): boolean {
   const body = line.replace(/^(?:(?:please|also|and|fyi|oh|ok|okay)\s+)*(?:remember|don't forget|do not forget|keep in mind|make a note|기억해|기억하세요)\s*[:,-]?\s*/i, "").replace(/^(?:that|the)\s+/i, "");
-  return text.split("\n").some((row) => squash(row).includes(squash(body)) && negated(body) === negated(row));
+  const rows = text.split("\n");
+  // a long remember is written split across consecutive bullets
+  return rows.some((_, i) => {
+    let joined = "";
+    for (const row of rows.slice(i, i + 8)) {
+      joined = `${joined} ${row.replace(/^\s*[-*+]\s+/, "")}`.trim();
+      if (squash(joined).includes(squash(body))) return negated(body) === negated(joined);
+      if (joined.length > body.length + 300) break;
+    }
+    return false;
+  });
+}
+
+/** A remember as bullets of at most 300 bytes, split verbatim at sentence ends, else at spaces. */
+export function rememberRows(text: string): string[] | null {
+  const line = bullet(text);
+  if (Buffer.byteLength(line) <= 300) return [line];
+  const rows: string[] = [];
+  for (const sentence of line.slice(2).split(/(?<=[.!?])\s+/)) {
+    for (const word of Buffer.byteLength(`- ${sentence}`) > 300 ? sentence.split(" ") : [sentence]) {
+      const last = rows.at(-1);
+      if (last !== undefined && Buffer.byteLength(`${last} ${word}`) <= 300) rows[rows.length - 1] = `${last} ${word}`;
+      else if (Buffer.byteLength(`- ${word}`) <= 300) rows.push(`- ${word}`);
+      else return null;
+    }
+  }
+  return rows;
 }
 
 export const forcedEntry = (entry: ArchiveEntry) => entry.header.op === "own" && !entry.header.at.length && entry.reason === "Asked to remember";
@@ -166,10 +192,14 @@ export function protectedLines(text: string, typed: ReadonlySet<string>, include
   return protectedIds;
 }
 
+// one base is scanned per night, and the scan is quadratic in its length
+let midCache = { base: "", tokens: new Set<string>() };
+
 export function factTokens(text: string, base = text): string[] {
   const pattern = /"[^"\n]+"|“[^”\n]+”|(?<![\p{L}\p{N}])'[^'\n]+'(?![\p{L}\p{N}])|`[^`\n]+`|(?:[A-Za-z]:[\\/]|\.{0,2}\/|https?:\/\/)[^\s,;<>"`]+|\d{4}-\d{2}-\d{2}|\d+(?:[.,:/%-]\d+)*(?:%|[A-Za-z]+)?|[\p{L}\p{N}_-]+\.(?:md|ts|json|py|txt|com|org)\b|(?<![\p{L}\p{N}_-])[\p{L}_]*[\p{Lu}][\p{L}\p{N}_-]*/gu;
   const initial = (source: string, at: number) => /(?:^|\n|[.!?]\s+)[ \t>*#+\-\d.)]*$/u.test(source.slice(0, at));
-  const midSentence = new Set([...base.matchAll(pattern)].filter((match) => !initial(base, match.index)).map((match) => match[0]));
+  if (midCache.base !== base) midCache = { base, tokens: new Set([...base.matchAll(pattern)].filter((match) => !initial(base, match.index)).map((match) => match[0])) };
+  const midSentence = midCache.tokens;
   const matches = [...text.matchAll(pattern)].filter((match) => {
     const token = match[0];
     return !/^[\p{Lu}][\p{Ll}_-]+$/u.test(token) || !initial(text, match.index) || midSentence.has(token);
@@ -268,12 +298,27 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     inserts.set(after, slot);
     (lesson ? slot.lessons : slot.plain).push(line);
   };
+  const prevHash = (n: number) => {
+    for (let i = n - 2; i >= 0; i--) if (lines[i]!.trim()) return lineHash(lines[i]!);
+    return "";
+  };
   const changedIds = (op: ChangeList["changes"][number]) => op.op === "merge" || op.op === "file" ? op.ids : op.op === "learn" || op.op === "own" ? [] : [op.id];
   list.changes.forEach((change, index) => {
     const ids = changedIds(change);
     const refs = change.op === "replace" ? [...ids, change.newer] : change.op === "own" ? [change.id] : ids;
     if (refs.some((n) => !lines[n - 1]?.trim())) { fail("unknown-id", index); return; }
-    const pointer = change.op === "file" ? change.pointer ?? filedPointer(input.text, ids, `memory/${change.topic}.md`) : "";
+    let pointer = "";
+    let extend: { row: number; text: string } | undefined;
+    // a topic's pointer row grows up to 300 bytes once a night, then filing moves on to topic-b, topic-c
+    while (change.op === "file") {
+      const prefix = `- memory/${change.topic}.md: `;
+      pointer = change.pointer ?? filedPointer(input.text, ids, prefix.slice(2, -2));
+      const row = lines.findLastIndex((line) => line.startsWith(prefix)) + 1;
+      const text = row ? `${lines[row - 1]!.replace(/\r$/, "")}; ${pointer.slice(prefix.length)}` : "";
+      if (!row || !pointer.startsWith(prefix)) break;
+      if (!used.has(row) && Buffer.byteLength(text) <= 300) { extend = { row, text }; used.add(row); break; }
+      change.topic = /-[b-y]$/.test(change.topic) ? change.topic.slice(0, -1) + String.fromCharCode(change.topic.charCodeAt(change.topic.length - 1) + 1) : `${change.topic}-b`;
+    }
     if (change.op === "merge") change.text = dated(change.text, ids.map((n) => lines[n - 1]!));
     if (change.op === "learn") change.text = undated(change.text);
     if (refs.some((n, i) => used.has(n) || refs.indexOf(n) !== i)) fail("reused-id", index);
@@ -373,16 +418,17 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     else if (change.op === "file") wrote = (filePointers(pointer, `memory/${change.topic}.md`) ?? []).map((line) => line + cr);
     else counts.moved++;
     for (const n of ids) removed.add(n);
-    if (change.op === "file") {
+    if (extend) {
+      edits.set(extend.row, [extend.text + cr]);
+      entries.push({ header: { file: input.file, op: "file", at: [extend.row], prev: [prevHash(extend.row)], wrote: [extend.text + cr] }, reason: change.reason, lines: [lines[extend.row - 1]!] });
+      wrote = [];
+    } else if (change.op === "file") {
       wrote.forEach((line) => insert(0, line, false));
       entries.push({ header: { file: input.file, op: "file", at: [], prev: [], wrote, after: 0 }, reason: change.reason, lines: [] });
       wrote = [];
     }
     edits.set(ids[0]!, wrote);
-    entries.push({ header: { file: input.file, op: change.op, at: ids, prev: ids.map((n) => {
-      for (let i = n - 2; i >= 0; i--) if (lines[i]!.trim()) return lineHash(lines[i]!);
-      return "";
-    }), wrote, ...(change.op === "file" ? { topic: `memory/${change.topic}.md` as CleanFile } : {}) }, reason: change.reason, lines: ids.map((n) => lines[n - 1]!) });
+    entries.push({ header: { file: input.file, op: change.op, at: ids, prev: ids.map(prevHash), wrote, ...(change.op === "file" ? { topic: `memory/${change.topic}.md` as CleanFile } : {}) }, reason: change.reason, lines: ids.map((n) => lines[n - 1]!) });
   });
   const assemble = () => [...(inserts.get(0)?.plain ?? []), ...(inserts.get(0)?.lessons ?? []), ...lines.flatMap((line, i) => [
     ...(edits.get(i + 1) ?? (removed.has(i + 1) ? [] : [line])), ...(inserts.get(i + 1)?.plain ?? []), ...(inserts.get(i + 1)?.lessons ?? []),
@@ -393,14 +439,15 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
   }
   let text = assemble();
   if (!errors.length && input.file === "MEMORY.md") {
-    for (const line of user.filter((item) => item.kind === "remember").sort((a, b) => b.at - a.at)) {
+    for (const line of user.filter((item) => item.kind === "remember").reverse().sort((a, b) => b.at - a.at)) {
       if (rememberCovered(line.text, text) || secretLike(line.text)) continue;
-      const wrote = [bullet(line.text) + cr];
-      // past tonight's room a remember waits for the next night, newest first; one over the 300 B line cap would void every night until split verbatim
-      if (forced + Buffer.byteLength(wrote[0]!) + 1 > REMEMBER_MAX || Buffer.byteLength(wrote[0]!.replace(/\r$/, "")) > 300) continue;
-      insert(slots.plain, wrote[0]!, false);
-      forced += Buffer.byteLength(wrote[0]!) + 1;
-      entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote, after: slots.plain, quote: line.text, owned: [lineHash(wrote[0]!)] }, reason: "Asked to remember", lines: [] });
+      const wrote = rememberRows(line.text)?.map((row) => row + cr);
+      const bytes = wrote?.reduce((n, row) => n + Buffer.byteLength(row) + 1, 0) ?? 0;
+      // past tonight's room a remember waits for the next night, newest first
+      if (!wrote || forced && forced + bytes > REMEMBER_MAX) continue;
+      wrote.forEach((row) => insert(slots.plain, row, false));
+      forced += bytes;
+      entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote, after: slots.plain, quote: line.text, owned: wrote.map(lineHash) }, reason: "Asked to remember", lines: [] });
       text = assemble();
     }
   }

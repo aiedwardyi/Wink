@@ -170,7 +170,7 @@ describe("memory cleanup service", () => {
   let home: HomeInput;
   let engineKey: string;
   const state = () => JSON.parse(readFileSync(join(dataDir, "memory-clean.json"), "utf8")).bots[bot.id];
-  const original = "- Never delete\r\n- completed\r\n" + Array.from({ length: 158 }, (_, i) => `- kept ${i}\r\n`).join("");
+  const original = "- Never delete\r\n- completed\r\n" + Array.from({ length: 136 }, (_, i) => `- kept ${i}\r\n`).join("");
   const run = async () => { clock += QUIET; await service.run(bot.id); };
   const row = () => store.messagesFor(bot.threadId).find((message) => message.tool?.tidy);
 
@@ -198,15 +198,14 @@ describe("memory cleanup service", () => {
     expect(existsSync(join(workspaceDir(bot.id), "memory/memory-history.md"))).toBe(false);
   });
 
-  it("keeps files and through unchanged when mandatory remembers cannot fit", async () => {
+  it("writes the newest remembers that fit tonight and leaves the rest for the next night", async () => {
     engine = calls([]);
+    writeMemoryFile(bot.id, "- kept\r\n");
     for (let i = 0; i < 5; i++) store.appendMessage(bot.threadId, { role: "user", kind: "text", text: `Remember route ${i} ${"along the river ".repeat(17)}` });
     await run();
-    expect(engine.propose).toHaveBeenCalledTimes(2);
-    expect(memoryFileRaw(bot.id)).toBe(original);
-    expect(existsSync(join(dataDir, "memory-clean.json"))).toBe(false);
-    expect(row()).toBeUndefined();
-    expect(existsSync(join(workspaceDir(bot.id), "memory/memory-history.md"))).toBe(false);
+    expect([0, 1, 2, 3, 4].map((i) => memoryFileRaw(bot.id).includes(`- Remember route ${i} `))).toEqual([false, false, false, true, true]);
+    await run();
+    expect([0, 1, 2, 3, 4].map((i) => memoryFileRaw(bot.id).includes(`- Remember route ${i} `))).toEqual([false, true, true, true, true]);
   });
 
   it.each(["abort", "timeout"])("discards a late signal-ignoring call after %s", async (kind) => {

@@ -8,12 +8,13 @@ import { sleepReply } from "./testing/sleep-verdicts.ts";
 
 const FLOOR = 16000;
 const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
+let topics: string[] = [];
 const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) => {
   const staged = sleepReply(prompt);
   if (staged !== null) return staged;
   if (prompt.startsWith("[memory-clean:questions]")) {
-    const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
-    return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? { ...q, file: topic, answer: topic } : q));
+    topics = JSON.parse(/Ask at least one such question for each of: (\[[^\]]*\])/.exec(prompt)?.[1] ?? "[]");
+    return JSON.stringify(quiz.map((q, i) => topics[i] ? { ...q, file: topics[i], answer: topics[i] } : q));
   }
   if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)).map(() => true));
   return JSON.stringify({ version: 1, file: "MEMORY.md", changes: changes() });
@@ -21,8 +22,7 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
   const staged = sleepReply(prompt);
   if (staged !== null) return staged;
-  const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
+  return JSON.stringify(quiz.map((q, i) => topics[i] ?? q.answer));
 });
 const detail = (i: number) => `- detail ${i} ${"y".repeat(260)}`;
 const filed = (text: string, ids: number[]) => ({ op: "file", ids, topic: "details", reason: "Detail",
@@ -80,7 +80,7 @@ describe("sleep soak", () => {
       history = nextHistory;
     }
     expect(Buffer.byteLength(memory)).toBeLessThanOrEqual(FLOOR);
-    const details = [...memory.split("\n"), ...(topics.get("memory/details.md") ?? "").split("\n")].filter((line) => line.startsWith("- detail "));
+    const details = [memory, ...topics.values()].flatMap((text) => text.split("\n")).filter((line) => line.startsWith("- detail "));
     expect(details.sort()).toEqual(Array.from({ length: 60 }, (_, i) => detail(i)).sort());
     expect(Math.max(...tokens)).toBeLessThan(150_000);
     console.info(`[soak] tokens per night ${tokens.join(" ")}`);
@@ -91,11 +91,11 @@ describe("sleep soak", () => {
     expect(Buffer.byteLength(memory)).toBeGreaterThan(22_000);
     const user = Array.from({ length: 40 }, (_, i): SleepLine => ({ text: `I moved the standup to slot ${i} this week`, at: i, kind: "said" }));
     const result = await cleanFiles({ memory, history: null, typed: new Set(), user, propose: proposer(() => [
-      filed(memory, [10, 11, 12, 13]),
+      filed(memory, [10, 11, 12]),
     ]), recall: answerer() });
     expect(result).toMatchObject({ ok: true });
     expect(result.tokens).toBeLessThan(150_000);
-    expect(result.ok && result.routeReads).toHaveLength(4);
+    expect(result.ok && result.routeReads).toHaveLength(6);
     console.info(`[heavy] tokens ${result.tokens}`);
   });
 });
@@ -123,7 +123,6 @@ describe("sleep sabotage", () => {
     ["a rule merge that drops its rule word", { op: "merge", ids: [7, 8], text: `- deploy on Fridays; ${detail(0).slice(2)}`, reason: "Deploys" }, [], "protected"],
     ["filing a pointer line behind a pointer that drops its path", { op: "file", ids: [69], topic: "index", pointer: "- memory/index.md: Harbor0 trips", reason: "Index" }, [], "pointer"],
     ["a merge that drops a date", { op: "merge", ids: [70, 71], text: "- Dentist: Dr. Kasquilick", reason: "Same booking" }, [], "fact-lost"],
-    ["a night that grows the file past 1 KB", long.map((line) => ({ op: "learn", text: `- ${line}`, quote: line, lesson: false, reason: "User said it" })), long.map((text) => ({ text, at: 1, kind: "said" })), "cap-growth"],
   ])("rejects %s after one repair retry and writes nothing", async (_, change, user, reason) => {
     const propose = proposer(() => [change].flat());
     const result = await cleanFiles({ memory, history: null, typed, user: user as SleepLine[], propose, recall: answerer() });
@@ -131,5 +130,12 @@ describe("sleep sabotage", () => {
     expect(!result.ok && result.detail).toContain(reason);
     expect(propose).toHaveBeenCalledTimes(2);
     expect(propose.mock.calls[1]![0]).toContain(`"reason":"${reason}"`);
+  });
+  it("lands the learns that fit the size rule and drops the rest alone", async () => {
+    const propose = proposer(() => long.map((line) => ({ op: "learn", text: `- ${line}`, quote: line, lesson: false, reason: "User said it" })));
+    const result = await cleanFiles({ memory, history: null, typed, user: long.map((text) => ({ text, at: 1, kind: "said" })), propose, recall: answerer() });
+    if (!result.ok) throw new Error(`${result.stage} ${result.detail}`);
+    expect(long.filter((line) => result.memory.includes(`- ${line}`))).toHaveLength(1);
+    expect(Buffer.byteLength(result.memory)).toBeLessThanOrEqual(Math.max(Buffer.byteLength(memory), FLOOR));
   });
 });

@@ -121,10 +121,10 @@ export function archiveBlock(header: RunHeader, entries: ArchiveEntry[]): string
   ].join("\n");
 }
 
-// the topic side of a file move repeats the MEMORY.md entry, so items skip it
+// the topic side and pointer rows of a file move repeat the MEMORY.md entry, so items skip them
 export function runItems(run: HistoryRun): SleepItem[] {
   const plain = (line: string) => line.replace(/\r$/, "");
-  return run.entries.filter((entry) => !(entry.header.op === "file" && !entry.header.at.length)).map(({ header, reason, lines }) => {
+  return run.entries.filter((entry) => !(entry.header.op === "file" && !entry.header.topic)).map(({ header, reason, lines }) => {
     const wrote = header.wrote.map(plain).filter((line) => line.trim() && !/^#{1,6}\s/.test(line));
     return { op: header.op, file: header.file, old: lines.map(plain), new: wrote.at(-1) ?? null, reason, ...(header.quote ? { quote: header.quote } : {}) };
   });

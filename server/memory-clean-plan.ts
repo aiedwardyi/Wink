@@ -97,7 +97,7 @@ export function stagedCandidate(input: CleanInput, sources: CleanSource[], lists
     return { file, before, text };
   });
   const sum = (...ops: string[]) => entries.filter((entry) => ops.includes(entry.header.op)).reduce((n, entry) => n + entry.header.at.length, 0);
-  const counts = { merged: sum("merge"), forgot: sum("retire", "replace"), learned: entries.filter((entry) => entry.header.op === "learn" || (entry.header.op === "own" && entry.header.after !== undefined)).length, filed: sum("file") };
+  const counts = { merged: sum("merge"), forgot: sum("retire", "replace"), learned: entries.filter((entry) => entry.header.op === "learn" || (entry.header.op === "own" && entry.header.after !== undefined)).length, filed: entries.filter((entry) => entry.header.topic).reduce((n, entry) => n + entry.header.at.length, 0) };
   const old = sources.reduce((n, source) => n + source.text.split("\n").filter((line) => line.trim()).length, 0);
   let target = /memory\/memory-history(?:-\d+)?\.md/.exec(input.memory)?.[0] ?? HISTORY_FILE;
   const build = () => {

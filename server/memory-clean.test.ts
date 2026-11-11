@@ -125,12 +125,13 @@ describe("change list validation", () => {
 });
 
 const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
+let filed: string[] = [];
 const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) => {
   const staged = sleepReply(prompt);
   if (staged !== null) return staged;
   if (prompt.startsWith("[memory-clean:questions]")) {
-    const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
-    return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? { ...q, file: topic, answer: topic } : q));
+    filed = JSON.parse(/Ask at least one such question for each of: (\[[^\]]*\])/.exec(prompt)?.[1] ?? "[]");
+    return JSON.stringify(quiz.map((q, i) => filed[i] ? { ...q, file: filed[i], answer: filed[i] } : q));
   }
   if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)).map(() => true));
   return JSON.stringify(list(changes()));
@@ -138,8 +139,7 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
   const staged = sleepReply(prompt);
   if (staged !== null) return staged;
-  const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
+  return JSON.stringify(quiz.map((q, i) => filed[i] ?? q.answer));
 });
 const night = (memory: string, changes: unknown[], extra: Partial<CleanInput> = {}): CleanInput =>
   ({ memory, history: null, typed: new Set(), now: Date.UTC(2026, 10, 7), propose: proposer(() => changes), recall: answerer(), ...extra });
@@ -213,12 +213,13 @@ describe("sleep", () => {
       expect(await check("- kept\n", [learn("커피를 안 마셔", "- 커피를 안 마심")], [said("요즘 커피를 안 마셔")])).toMatchObject({ ok: true });
     });
 
-    it("fails the night unless the answerer finds each removed line superseded and each learned line supported", async () => {
+    it("drops each change the answerer cannot confirm and lands the rest", async () => {
       const { cleanFiles } = await load();
-      for (const [verdicts, ok] of [[[true, true], true], [[false, true], false], [[true, false], false]] as const) {
+      for (const verdicts of [[true, true], [false, true], [true, false]] as const) {
         const recall = vi.fn<TextCall>(async (prompt) => prompt.startsWith("[memory-clean:organize]") ? JSON.stringify({ verdicts, corrections: [] }) : JSON.stringify(quiz.map((q) => q.answer)));
         const result = await cleanFiles(night("- kept\n- old plan done\n", [retire(2), learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user: [said("Jun moved to Jeju in May")], recall }));
-        expect(result).toMatchObject(ok ? { ok: true } : { ok: false, stage: "validate", detail: "source-coverage" });
+        expect(result).toMatchObject({ ok: true });
+        expect(result.ok && [result.memory.includes("- old plan done"), result.memory.includes("- Jun moved to Jeju in May")]).toEqual([!verdicts[0], verdicts[1]]);
         expect(recall.mock.calls[0]![0]).toContain('"sources":["- old plan done"]');
         expect(recall.mock.calls[0]![0]).toContain('"quote":"Jun moved to Jeju in May"');
       }
