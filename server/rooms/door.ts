@@ -33,7 +33,7 @@ const SNAPSHOT_ENTRIES = 200;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const JOIN_STATUS = {
   busy: 429,

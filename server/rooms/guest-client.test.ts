@@ -155,6 +155,17 @@ describe("join", () => {
 });
 
 describe("sync", () => {
+  it("keeps the live stream when started after joining", async () => {
+    route = quietDoor;
+    const c = guest();
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    c.start();
+    expect(c.room("r1")?.link).toBe("live");
+    await c.nameChanged();
+    expect(seen.filter((row) => row.url.includes("/stream"))).toHaveLength(1);
+  });
+
   it("reconnects from the newest seq when the heartbeat stops", async () => {
     route = quietDoor;
     const c = guest({ timing: { silenceMs: 200, retryMs: 20 } });
@@ -305,6 +316,30 @@ describe("races and floods", () => {
 
 
 describe("own name", () => {
+  it("retries a pending name only when that room reconnects", async () => {
+    let name = "Mina Park";
+    let online = false;
+    let stream: ServerResponse | null = null;
+    route = (req, res) => {
+      if (req.url?.endsWith("/name")) return reply(res, online ? 200 : 503, online ? { name } : { error: "unavailable" });
+      if (req.url?.includes("/stream")) stream = res;
+      quietDoor(req, res);
+    };
+    const c = guest({ joiner: () => ({ name, device: PC }), timing: { retryMs: 20 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    name = "민아";
+    await c.nameChanged();
+    expect(seen.filter((row) => row.url.endsWith("/name"))).toHaveLength(1);
+    saveJoined("r2", HOST, { id: "p2", name: "Mina" }, KEY);
+    online = true;
+    stream!.destroy();
+    await until(() => seen.filter((row) => row.url.includes("/stream")).length === 2);
+    await vi.waitFor(() => expect(seen.filter((row) => row.url.endsWith("/name")).map((row) => row.url)).toEqual(["/room/v1/rooms/r1/name", "/room/v1/rooms/r1/name"]));
+    await c.nameChanged("r1");
+    expect(seen.filter((row) => row.url.endsWith("/name"))).toHaveLength(2);
+  });
+
   it("sends to every joined room, persists the sent name, and follows the current own name", async () => {
     let name = "Mina Park";
     const state = { ...STATE, version: 2, me: { id: "p1", name: "민아 2" }, people: [{ id: "p1", name: "민아 2" }] };
@@ -334,14 +369,22 @@ describe("own name", () => {
   });
 
   it("keeps 404 quiet until the next start across later profile edits", async () => {
-    route = quietDoor;
+    let stream: ServerResponse | null = null;
+    route = (req, res) => {
+      if (req.url?.includes("/stream")) stream = res;
+      quietDoor(req, res);
+    };
     let name = "Mina Park";
-    const c = guest({ joiner: () => ({ name, device: PC }) });
+    const c = guest({ joiner: () => ({ name, device: PC }), timing: { retryMs: 20 } });
     await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
     expect(typeof c.nameChanged).toBe("function");
     name = "민아";
     await c.nameChanged();
     name = "이서연";
+    await c.nameChanged();
+    stream!.destroy();
+    await until(() => seen.filter((row) => row.url.includes("/stream")).length === 2 && c.room("r1")?.link === "live");
     await c.nameChanged();
     expect(seen.filter((row) => row.url.endsWith("/name"))).toHaveLength(1);
     expect(c.room("r1")?.me.name).toBe("Mina");

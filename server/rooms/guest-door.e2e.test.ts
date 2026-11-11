@@ -348,4 +348,18 @@ describe("teammate and the real door", () => {
     await until(() => c.room(roomId)?.state?.host === hostName);
     expect(joinedEntries(roomId, 10).find((entry) => entry.text === "before rename")?.author.name).toBe("Mina");
   });
+
+  it("delivers an offline name change when the relay reconnects", async () => {
+    const { c, roomId } = await joinedTeam();
+    await live(c, roomId);
+    hop.up = false;
+    hop.drop();
+    ownName = "민아";
+    await c.nameChanged();
+    expect(roomPeople(roomId)[0]?.name).toBe("Mina");
+    hop.up = true;
+    await until(() => c.room(roomId)?.me.name === ownName);
+    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
+    expect(await c.send(roomId, "after reconnect")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
+  });
 });

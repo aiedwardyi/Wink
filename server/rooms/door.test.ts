@@ -862,7 +862,7 @@ describe("own name", () => {
     const mina = await joined(group, "Mina");
     const other = await joined(group, "민아");
     const path = `/room/v1/rooms/${group.hosted.roomId}/name`;
-    const rename = (name: unknown) => post(path, { name, personId: other.personId }, { key: mina.key });
+    const rename = (name: unknown) => post(path, { name }, { key: mina.key });
     expect((await rename("@민아")).body).toEqual({ name: "민아 2" });
     expect((await rename("민아 2")).body).toEqual({ name: "민아 2" });
     expect((await rename("")).body).toEqual({ name: "Guest" });

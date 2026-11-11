@@ -152,7 +152,7 @@ export class GuestClient {
     if (this.started) return;
     this.started = true;
     this.oldNames.clear();
-    for (const room of joinedRooms()) if (room.status === "joined") this.follow(room.roomId);
+    for (const room of joinedRooms()) if (room.status === "joined" && !this.syncs.has(room.roomId)) this.follow(room.roomId);
     void this.nameChanged();
   }
 
@@ -190,8 +190,8 @@ export class GuestClient {
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
-  async nameChanged(): Promise<void> {
-    await Promise.all(joinedRooms().filter((room) => room.status === "joined").map((room) => {
+  async nameChanged(onlyRoomId?: string): Promise<void> {
+    await Promise.all(joinedRooms().filter((room) => room.status === "joined" && (onlyRoomId === undefined || room.roomId === onlyRoomId)).map((room) => {
       const roomId = room.roomId;
       const next = (this.renaming.get(roomId) ?? Promise.resolve()).then(async () => {
         const creds = joinedKey(roomId);
@@ -454,6 +454,7 @@ export class GuestClient {
       }
       sync.tries = 0;
       this.setLink(roomId, sync, "live");
+      if (!sync.stopped) void this.nameChanged(roomId);
       let text = "";
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => {

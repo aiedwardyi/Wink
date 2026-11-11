@@ -46,9 +46,24 @@ function keepActivity(activity: ReplyActivity) {
   }
 }
 
+let pending: Promise<ReplyActivity | null> | null = null;
+
+/** Fetches and keeps the newest result; the app calls it at idle so Settings opens painted. */
+export function warmActivity(): Promise<ReplyActivity | null> {
+  pending ??= api("/api/activity")
+    .then((body: Partial<ReplyActivity> | null) => {
+      if (!isActivity(body)) return null;
+      keepActivity(body);
+      return body;
+    })
+    .finally(() => { pending = null; });
+  return pending;
+}
+
 /** Tests only: forget the last result. */
 export function resetActivity(): void {
   last = null;
+  pending = null;
 }
 
 const dayDate = (iso: string, offset = 0) => {
@@ -75,10 +90,9 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
   const pointer = useRef("");
   useEffect(() => {
     let gone = false;
-    void api("/api/activity").then((body: Partial<ReplyActivity> | null) => {
+    void warmActivity().then((body) => {
       if (gone) return;
-      if (!isActivity(body)) return setFailed(true);
-      keepActivity(body);
+      if (!body) return setFailed(true);
       setFetched(body);
     }).catch(() => { if (!gone) setFailed(true); });
     return () => { gone = true; };
