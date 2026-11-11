@@ -10,17 +10,20 @@ const UNSURE = /\b(?:not (?:entirely |quite |really |completely )?sure|i (?:don'
 // An offer, question or condition promises nothing yet.
 const HYPOTHETICAL = /\?\s*$|\b(?:if you|let me know|whenever|once you|when you|would you like|do you want|want me to|shall i|should i)\b|시면|으면|할까요|드릴까요|볼까요/i;
 const CLARIFY = /\b(?:heard|hear you|catch that|repeat|say that again|what you mean)\b|다시 말씀|다시 한 ?번|못 들었|잘 안 들/i;
+// What a recap reports as done; only what is left after it can still be a promise.
+const DONE = /\bi(?:'?ve| have| just| already)?\s+(?:just\s+|already\s+)?(?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran)\b|확인했|알아봤|찾았|열었|추가했|보냈/gi;
 const FAILED = /\b(?:nothing (?:was|has been|got) sent|(?:wasn'?t|was not|isn'?t|is not|hasn'?t been|has not been|couldn'?t be|could not be) sent|not sent|nothing is running)\b|아무것도 (?:안 )?보내지 않|보내지 (?:않았|못했)|안 보냈|전송되지 않/i;
 
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
 
 /** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. */
-export function claimOf(said: string): { claim: Claim; sentence: string } | null {
+export function claimOf(said: string, recap = false): { claim: Claim; sentence: string } | null {
   if (FAILED.test(said)) return { claim: "failed", sentence: said };
   const clarifies = CLARIFY.test(said);
   for (const sentence of sentences(said)) {
     if (HYPOTHETICAL.test(sentence)) continue;
-    if (ACTION_EN.test(sentence) || ON_IT.test(sentence) || ACTION_KO.test(sentence)) return { claim: "promise", sentence };
+    const ahead = recap ? sentence.replace(DONE, " ") : sentence;
+    if (ACTION_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
     if (CANT.test(sentence)) return { claim: "cant", sentence };
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
   }
@@ -34,4 +37,18 @@ const CHANGE_KO = /(?:열어|실행해|재시작해|재부팅해|고쳐|수정�
 /** A request to change something, even phrased as a question: it needs propose_work and a yes. */
 export function asksForChange(question: string): boolean {
   return CHANGE_EN.test(question) || CHANGE_KO.test(question);
+}
+
+const RECAP = /^\s*(?:(?:so|and|okay|ok|hey)[,\s]+)?(?:did|have|has|had)\s+(?:you|we|they|it|he|she)\b|\bwhat\b[^.!?]*\b(?:did|have|has|had|got|was|were)\b|\b(?:recap|so far|summary|summarize)\b|뭐 했|한 일|했어\s*\??\s*$|했나요|했니|됐어\s*\?|됐나요/i;
+
+/** A question about work already done, so its answer recounts the past. */
+export function asksAboutDone(request: string): boolean {
+  return RECAP.test(request);
+}
+
+const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question\b|\bwhat (?:did|does) (?:\w+ )?(?:ask|want)\b|\b(?:say|read) (?:that|it|the question) again\b|\brepeat (?:that|it|the question)\b|\bcome again\b|^\s*(?:sorry|pardon|what|huh)\s*[?!.]*\s*$|질문이?\s*뭐|뭐라고|뭘 물어|뭐 물어|다시 (?:말해|말씀|읽어|한 ?번)|못 들었/i;
+
+/** The person asking to hear the question again, which is not its answer. */
+export function asksToRepeat(heard: string): boolean {
+  return AGAIN.test(heard);
 }
