@@ -61,6 +61,8 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
   const [code, setCode] = useState<string | null>(null);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const roomId = group?.hosted.roomId;
   const people = group ? roomPeople(group) : joined?.state?.people ?? [];
   useBackLayer(!closing, onClose);
@@ -107,7 +109,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        closeRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -128,7 +130,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
       dialog.removeEventListener("keydown", onKey);
       triggerRef.current?.focus();
     };
-  }, [closing, onClose, triggerRef]);
+  }, [closing, triggerRef]);
 
   const remove = async (personId: string) => {
     const room = group?.room && "people" in group.room ? group.room : null;
