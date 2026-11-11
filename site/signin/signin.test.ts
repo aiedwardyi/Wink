@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HTML = readFileSync(join(ROOT, "site/signin/index.html"), "utf8");
 const SCRIPT = readFileSync(join(ROOT, "site/signin/signin.js"), "utf8");
+const CSS = readFileSync(join(ROOT, "site/signin/signin.css"), "utf8");
 const MARKUP = HTML.slice(HTML.indexOf("<main>"), HTML.indexOf("</main>") + "</main>".length);
 
 const CLIENT = "test-client.apps.googleusercontent.com";
@@ -127,6 +128,21 @@ afterEach(() => {
 });
 
 describe("phone sign-in page", () => {
+  it.each([["light", "wink-day"], ["dark", "precision"]])("uses Wink's %s colors for the OS preference", (scheme, skin) => {
+    const styles = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+    const tokens = styles.match(new RegExp(`\\[data-skin="${skin}"\\] \\{([^}]+)\\}`))![1]!;
+    const match = scheme === "light" ? CSS.match(/:root \{([^}]+)\}/) : CSS.match(/@media \(prefers-color-scheme: dark\) \{\s*:root \{([^}]+)\}/);
+    expect(match).not.toBeNull();
+    const page = match![1]!;
+    expect(page).toContain(`color-scheme: ${scheme};`);
+    for (const name of ["app", "inset", "hairline", "ink", "ink-secondary", "accent", "danger"]) {
+      const color = tokens.match(new RegExp(`--color-${name}: ([^;]+);`))![1]!;
+      expect(page).toContain(`--${name}: ${color};`);
+    }
+    const app = tokens.match(/--color-app: ([^;]+);/)![1]!;
+    expect(HTML).toContain(`<meta name="theme-color" content="${app}" media="(prefers-color-scheme: ${scheme})" />`);
+  });
+
   it("ships a strict page with no inline script", () => {
     expect(HTML).toContain("script-src 'self' https://accounts.google.com/gsi/client");
     expect(HTML).toContain("connect-src https://relay.wink.edwardyi.dev");
@@ -201,19 +217,20 @@ describe("phone sign-in page", () => {
     expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
   });
 
-  it("skips the list when the remembered PC is still signed in", async () => {
+  it("returns to the remembered PC without asking Google or loading the directory", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },
     ]);
-    inits[0]?.callback({ credential: DIR_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(inits).toHaveLength(0);
+    expect(calls).toHaveLength(0);
     expect(document.querySelectorAll("#list button")).toHaveLength(0);
   });
 
-  it("asks again when the remembered PC is gone", async () => {
-    localStorage.setItem(LAST_PC, "cccccccccccccccc");
+  it.each(["", "short", "aaaaaaaaaaaaaaaa.evil", "AAAAAAAAAAAAAAAA"])("discovers PCs when the remembered label is invalid (%s)", async (label) => {
+    localStorage.setItem(LAST_PC, label);
     open("/signin", [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },

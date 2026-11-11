@@ -212,6 +212,11 @@
   }
 
   async function coldStart() {
+    const last = remembered();
+    if (LABEL_RE.test(last)) {
+      go(last, "?g=1");
+      return;
+    }
     const token = await requestToken(randomNonce(), false);
     const listed = await loadPcs(token);
     if (!listed) {
