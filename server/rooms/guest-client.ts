@@ -20,12 +20,14 @@ import {
   joinedKey,
   joinedRoom,
   joinedRooms,
+  joinedSentName,
   joinedSummary,
   readJoined,
   resetJoined,
   removeJoined,
   saveJoined,
   setJoinedState,
+  setJoinedSentName,
   type JoinedEntry,
   type JoinedFile,
   type JoinedRoom,
@@ -138,6 +140,8 @@ interface Sync {
 }
 
 export class GuestClient {
+  private readonly renaming = new Map<string, Promise<void>>();
+  private readonly oldNames = new Set<string>();
   private readonly syncs = new Map<string, Sync>();
   private readonly sending = new Map<string, Promise<unknown>>();
   private readonly pending = new Map<string, number>();
@@ -157,7 +161,9 @@ export class GuestClient {
   start(): void {
     if (this.started) return;
     this.started = true;
-    for (const room of joinedRooms()) if (room.status === "joined") this.follow(room.roomId);
+    this.oldNames.clear();
+    for (const room of joinedRooms()) if (room.status === "joined" && !this.syncs.has(room.roomId)) this.follow(room.roomId);
+    void this.nameChanged();
   }
 
   stop(): void {
@@ -209,9 +215,30 @@ export class GuestClient {
     if (expectedRoomId && roomId !== expectedRoomId) return failed(400, "bad-code");
     this.unfollow(roomId);
     saveJoined(roomId, relayHost, person, key, pasted);
+    setJoinedSentName(roomId, name);
     this.follow(roomId);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
+  }
+
+  async nameChanged(onlyRoomId?: string): Promise<void> {
+    await Promise.all(joinedRooms().filter((room) => room.status === "joined" && (onlyRoomId === undefined || room.roomId === onlyRoomId)).map((room) => {
+      const roomId = room.roomId;
+      const next = (this.renaming.get(roomId) ?? Promise.resolve()).then(async () => {
+        const creds = joinedKey(roomId);
+        const name = this.deps.joiner().name;
+        if (!creds || this.oldNames.has(roomId) || joinedSentName(roomId) === name) return;
+        const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/name`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join("") }));
+        if (joinedKey(roomId)?.key !== creds.key) return;
+        if (reply.ok) setJoinedSentName(roomId, name);
+        else if (reply.status === 404) this.oldNames.add(roomId);
+        else if (reply.status === 401) this.end(roomId, creds.key);
+      }).finally(() => {
+        if (this.renaming.get(roomId) === next) this.renaming.delete(roomId);
+      });
+      this.renaming.set(roomId, next);
+      return next;
+    }));
   }
 
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
@@ -502,6 +529,7 @@ export class GuestClient {
       }
       sync.tries = 0;
       this.setLink(roomId, sync, "live");
+      if (!sync.stopped) void this.nameChanged(roomId);
       let text = "";
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => {

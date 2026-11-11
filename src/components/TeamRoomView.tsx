@@ -20,7 +20,7 @@ import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -54,7 +54,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} />
+      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} />}
       </div>

@@ -5,19 +5,19 @@ import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
-import { isRoomPicture, roomFileUrl, type RoomLine } from "@/lib/team-rooms";
+import { isRoomPicture, roomFileUrl, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 
-export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine: boolean; named: boolean; base: string }) {
+export function TeamRoomRow({ line, mine, named, base, authorName }: { line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string }) {
   const { t, locale } = useI18n();
   const pictures = line.files.filter(isRoomPicture).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !isRoomPicture(file));
   return (
     <div className="contents" data-mid={line.id} data-team-room-line={mine ? "mine" : "theirs"}>
-      {named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{line.author.name}</div>}
+      {named && <div className="mt-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
       <div className={cn("group flex w-full flex-col", mine ? "items-end" : "items-start")}>
         <div className="relative w-fit max-w-[min(42rem,78%)]">
           <div
@@ -58,7 +58,7 @@ export function TeamRoomRow({ line, mine, named, base }: { line: RoomLine; mine:
 }
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void }) {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
@@ -136,7 +136,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
           const own = mine(line);
           const before = lines[index - 1];
           const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
-          return <TeamRoomRow key={line.id} line={line} mine={own} named={named} base={base} />;
+          const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
+          return <TeamRoomRow key={line.id} line={line} mine={own} named={named} base={base} authorName={authorName} />;
         })}
       </div>
     </div>

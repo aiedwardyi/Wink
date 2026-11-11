@@ -54,7 +54,7 @@ import { hostedRoomView, isHostedThread } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
-import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
+import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -6250,7 +6250,7 @@ configureRoomAsks({
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
   alert: roomAlert,
 });
-configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
+configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
 sweepRoomFiles();
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
@@ -8587,7 +8587,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
       }
-      if ((cfg.profile?.name ?? "").trim() !== previousPerson) phoneAccess.nameChanged();
+      if ((cfg.profile?.name ?? "").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
       memoryPass.onConfigChanged();
       if (patch.imageGen?.key !== undefined) {
         usageBoard.touch();

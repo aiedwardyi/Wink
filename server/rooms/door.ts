@@ -8,7 +8,7 @@ import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
-import { committedRoomText, recentRoomEntries, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
+import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
   doorEntry,
@@ -32,8 +32,8 @@ const JOIN_BODY_BYTES = 1024;
 const SNAPSHOT_ENTRIES = 200;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|asks\/[\w-]{1,64}\/cancel)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const JOIN_STATUS = {
   busy: 429,
@@ -49,6 +49,7 @@ const JOIN_STATUS = {
 export interface RoomDoorDeps {
   store: Pick<Store, "groups" | "messagesFor" | "onChange">;
   hostName(): string;
+  onPeopleChanged?(group: HostedGroup): void;
 }
 
 type Guest = { roomId: string; person: RoomPerson };
@@ -59,6 +60,7 @@ let door: {
   badKeys: RateLimiter;
   snapshots: RateLimiter;
   connects: RateLimiter;
+  names: RateLimiter;
   versions: Map<string, { version: number; shared: string }>;
   /** Group id to room id, for rooms that had a stream. */
   watched: Map<string, string>;
@@ -76,6 +78,7 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
     badKeys: new RateLimiter(20, MINUTE, now),
     snapshots: new RateLimiter(30, MINUTE, now),
     connects: new RateLimiter(10, MINUTE, now),
+    names: new RateLimiter(10, MINUTE, now),
     versions: new Map(),
     watched: new Map(),
     unsubscribe: deps.store.onChange((change) => {
@@ -128,6 +131,25 @@ function pushRoomState(roomId: string): void {
     const person = people.find((candidate) => candidate.id === personId);
     return person ? doorState(group, person) : null;
   });
+}
+
+export function hostNameChanged(): void {
+  for (const group of door?.deps.store.groups ?? []) if (group.hosted) pushRoomState(group.hosted.roomId);
+}
+
+async function rename(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.names.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const body = await readJson(req, JOIN_BODY_BYTES);
+  if (!body.ok) return bodyError(res, body.status);
+  const group = doorGroup(roomId);
+  const still = guestByKey(bearerOf(req) ?? "");
+  if (!group || still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const value = record(body.value)?.name;
+  if (typeof value !== "string") return send(res, 400, { error: "bad request" });
+  const name = renameRoomPerson(roomId, person.id, value, [door!.deps.hostName()]);
+  pushRoomState(roomId);
+  door!.deps.onPeopleChanged?.(group);
+  send(res, 200, { name });
 }
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
@@ -293,6 +315,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (action === "snapshot") return snapshot(res, group, guest.person);
   if (action === "stream") return stream(res, url, group, guest.person);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
+  if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

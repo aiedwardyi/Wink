@@ -147,6 +147,6 @@ describe("team route", () => {
     expect(index).toContain('path === "/api/team"');
     expect(index).toContain("teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount)");
     expect(index).toContain('person: () => (cfg.profile?.name ?? "").trim()');
-    expect(index).toContain("if ((cfg.profile?.name ?? \"\").trim() !== previousPerson) phoneAccess.nameChanged()");
+    expect(index).toContain("if ((cfg.profile?.name ?? \"\").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }");
   });
 });
