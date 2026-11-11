@@ -1,5 +1,6 @@
 // Phone sign-in at the one registered Google origin. The PC-bound token
-// leaves this page only in the fragment of the PC it was bound to.
+// leaves this page only for the relay's PC list and the fragment of the PC
+// it was bound to; it works at that PC only with this browser's cookie.
 (() => {
   // 16 chars, lowercase base32, same alphabet as relay labels.
   const LABEL_RE = /^[a-z2-7]{16}$/;
@@ -221,8 +222,9 @@
   }
 
   async function returnLeg(pc, m) {
-    const directoryToken = await requestToken(randomNonce(), true);
-    const listed = await loadPcs(directoryToken);
+    // One prompt: Google stays quiet on a second auto_select within minutes and asks for the account again.
+    const pcToken = await requestToken(await boundNonce(pc, m), true);
+    const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
       return;
@@ -231,7 +233,6 @@
       say(NOT_YOURS, "error");
       return;
     }
-    const pcToken = await requestToken(await boundNonce(pc, m), true);
     go(pc, `#g=${encodeURIComponent(pcToken)}`);
   }
 

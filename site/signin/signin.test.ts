@@ -117,10 +117,6 @@ function hiddenMoment(): GisMoment {
   };
 }
 
-function fetchSaw(token: string): boolean {
-  return calls.some((call) => `${call.url} ${call.authorization} ${call.body}`.includes(token));
-}
-
 const pair = (label: string, suffix: string) => `https://${label}.${BASE}/pair${suffix}`;
 
 afterEach(() => {
@@ -227,47 +223,45 @@ describe("phone sign-in page", () => {
     expect(location.href).not.toContain("/pair");
   });
 
-  it("forwards the return leg only to a listed label, and never fetches the PC token", async () => {
+  it("asks Google once on the return leg and forwards that token only to a listed label", async () => {
     const expected = createHash("sha256").update(`wink-gpair/1\0${LABEL_B}\0${M}`).digest("base64url");
     expect(expected).toBe(NONCE);
     open(`/signin?pc=${LABEL_B}&m=${M}`, [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },
     ]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.nonce).toBe(NONCE);
     expect(inits[0]?.auto_select).toBe(true);
     expect(prompts).toHaveLength(1);
     expect(renders).toBe(0);
-    inits[0]?.callback({ credential: DIR_TOKEN });
-    await vi.waitFor(() => expect(inits).toHaveLength(2));
-    expect(inits[1]?.nonce).toBe(NONCE);
-    expect(inits[1]?.auto_select).toBe(true);
-    expect(renders).toBe(0);
-    inits[1]?.callback({ credential: PC_TOKEN });
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, `#g=${PC_TOKEN}`)));
+    expect(inits).toHaveLength(1);
+    expect(prompts).toHaveLength(1);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.authorization).toBe(`Bearer ${DIR_TOKEN}`);
-    expect(fetchSaw(PC_TOKEN)).toBe(false);
-    expect(location.href).not.toContain(DIR_TOKEN);
+    expect(calls[0]?.authorization).toBe(`Bearer ${PC_TOKEN}`);
   });
 
   it("shows the button when auto_select does not fire", async () => {
     open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
     prompts[0]?.(hiddenMoment());
     expect(renders).toBe(1);
-    inits[0]?.callback({ credential: DIR_TOKEN });
-    await vi.waitFor(() => expect(prompts).toHaveLength(2));
-    prompts[1]?.(hiddenMoment());
-    expect(renders).toBe(2);
-    inits[1]?.callback({ credential: PC_TOKEN });
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, `#g=${PC_TOKEN}`)));
-    expect(fetchSaw(PC_TOKEN)).toBe(false);
+    expect(prompts).toHaveLength(1);
+    expect(renders).toBe(1);
   });
 
   it("does not forward a return leg to a PC that is not listed", async () => {
     open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
-    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe("That PC is not signed in to this Google account."));
+    expect(document.getElementById("status")?.className).toBe("status error");
     expect(inits).toHaveLength(1);
+    expect(prompts).toHaveLength(1);
     expect(location.href).not.toContain("/pair");
     expect(calls).toHaveLength(1);
   });
