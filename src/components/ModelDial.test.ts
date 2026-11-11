@@ -862,6 +862,17 @@ describe("ModelDial", () => {
       expect(selected()).toBe("grok-4.7");
     });
 
+    it.each([[0, 100], [1, 3]])("repeats a mouse notch at 130 ms, not 129, in delta mode %i", async (mode, delta) => {
+      await wheel(delta, mode);
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await wait(129);
+      await wheel(delta, mode);
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await wait(1);
+      await wheel(delta, mode);
+      expect(selected()).toBe("gpt-6.1-sol");
+    });
+
     it("keeps a trackpad flick starting on a big delta to one step", async () => {
       await burst([60, 34, 20, 11, 6, 3, 2, 1].map((delta) => delta * 1.5));
       expect(selected()).toBe("claude-sonnet-5-5");

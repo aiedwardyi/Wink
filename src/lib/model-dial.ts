@@ -62,7 +62,7 @@ export function dialWheel(burst: WheelBurst, event: WheelEvent): boolean {
   const live = now - burst.at < WHEEL_IDLE_MS && dir === burst.dir;
   const before = live ? burst.sum : 0;
   const fine = (live && burst.fine) || !isNotch(event);
-  const due = !live || now - burst.step! >= WHEEL_NOTCH_MS;
+  const due = !live || now - (burst.step ?? -Infinity) >= WHEEL_NOTCH_MS;
   Object.assign(burst, { at: now, dir, sum: before + Math.abs(event.deltaY) * [1, 16, window.innerHeight][event.deltaMode]!, fine });
   if (fine) return before < WHEEL_PX && burst.sum >= WHEEL_PX;
   if (due) burst.step = now;
