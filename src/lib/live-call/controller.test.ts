@@ -255,6 +255,80 @@ describe("LiveCall", () => {
     expect(engine().contexts[0]).toContain("Nova: Noon.");
   });
 
+  it("speaks the final voice-order report after typed steering", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Find the login bug." } }]);
+    await call.answer(true);
+    const rows = [orderRow("o", "Find the login bug."), botRow("c", "Checking the login flow.")];
+    call.observe({ busy: true, messages: rows });
+    rows.push(userRow("u", "Focus on expired sessions.", { steered: true }), botRow("r", "Expired sessions cause the login bug."));
+    call.observe({ busy: false, messages: rows });
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Expired sessions cause the login bug."]);
+    expect(engine().contexts).toEqual([]);
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("settles two voice orders sharing one completed turn", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Inspect package.json" } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Also inspect README" } }]);
+    await call.answer(true);
+    const rows = [orderRow("o1", "Inspect package.json"), { ...orderRow("o2", "Also inspect README"), steered: true }];
+    call.observe({ busy: true, messages: rows });
+    rows.push(botRow("r", "Both files are consistent."));
+    call.observe({ busy: false, messages: rows });
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Both files are consistent."]);
+    expect(call.state().status).toBe("listening");
+    engine().events.turnDone();
+    engine().events.said("All done.");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toEqual([]);
+  });
+
+  it("keeps a later queued order pending after a shared turn settles", async () => {
+    const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true } } });
+    for (const order of ["Do A.", "Do B.", "Do C."]) {
+      engine().events.toolCall([{ id: order, name: "propose_work", args: { order } }]);
+      await call.answer(true);
+    }
+    const rows = [orderRow("o1", "Do A."), { ...orderRow("o2", "Do B."), steered: true }, botRow("ab", "A and B done.")];
+    call.observe({ busy: false, messages: rows });
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(call.state().status).toBe("working");
+    engine().events.turnDone();
+    engine().events.said("All done.");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not done yet"))).toHaveLength(1);
+    rows.push(orderRow("o3", "Do C."), botRow("c", "C done."));
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(call.state().status).toBe("listening");
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A and B done.", "[Wink] Nova replied: C done."]);
+  });
+
+  it("settles an order only once when another reply arrives", async () => {
+    const { call, engine } = await started();
+    for (const order of ["Do A.", "Do B."]) {
+      engine().events.toolCall([{ id: order, name: "propose_work", args: { order } }]);
+      await call.answer(true);
+    }
+    const rows = [orderRow("o1", "Do A."), botRow("a", "A done.")];
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    rows.push(botRow("a2", "A verified."));
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(call.state().status).toBe("working");
+    rows.push(orderRow("o2", "Do B."), botRow("b", "B done."));
+    call.observe({ busy: false, messages: rows });
+    await flush();
+    expect(call.state().status).toBe("listening");
+  });
+
   it("a quick ask during a voice order keeps the order reply spoken", async () => {
     const { call, engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
