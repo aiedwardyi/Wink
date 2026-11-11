@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { File as FileIcon, X } from "lucide-react";
+import { Download, File as FileIcon, X } from "lucide-react";
 import { z } from "zod";
 
 import { formatSize } from "@/lib/composer-attachments";
@@ -19,7 +19,7 @@ type Listing = z.infer<typeof listingSchema>;
 const FOCUSABLE = 'a[href], button:not([disabled])';
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const IN_TAB = /\.(html?|pdf|mp4|webm|mov|m4v|mp3|m4a|wav|ogg|aac|flac)$/i;
-const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
+const ROW = "flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 
 function folderName(folderPath: string): string {
   return folderPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folderPath;
@@ -53,6 +53,8 @@ function LinkedFolderSheet({ name, listing, fileSrc, onClose }: { name: string; 
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [image, setImage] = useState<PreviewImage | null>(null);
+  const images = listing.files.filter((file) => IMAGE.test(file.name));
+  const others = listing.files.filter((file) => !IMAGE.test(file.name));
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -116,31 +118,37 @@ function LinkedFolderSheet({ name, listing, fileSrc, onClose }: { name: string; 
         </div>
         <div className="-mx-1 min-h-0 overflow-y-auto px-1">
           {listing.files.length === 0 && <p className="px-2 py-3 text-[13px] text-ink-secondary">{t("chat.folder.empty")}</p>}
-          {listing.files.map((file) => {
+          {images.length > 0 && (
+            <div data-folder-grid className="grid grid-cols-3 gap-1.5 px-1 pb-2 pt-1 sm:grid-cols-4">
+              {images.map((file) => {
+                const src = fileSrc(file.path);
+                return (
+                  <button key={file.path} type="button" title={file.name} aria-label={t("viewer.open", { name: file.name })}
+                    onClick={() => setImage(markdownImage(src, file.name))}
+                    className="aspect-square overflow-hidden rounded-lg bg-raised focus-visible:outline-2 focus-visible:outline-accent">
+                    <img src={src} alt="" loading="lazy" className="size-full object-cover" />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {others.map((file) => {
             const src = fileSrc(file.path);
             const size = formatSize(file.size);
-            const row = (
-              <>
-                <FileIcon size={14} aria-hidden="true" className="shrink-0 text-ink-secondary" />
-                <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{file.name}</span>
-                <span className="shrink-0 text-[11.5px] text-ink-secondary">{size}</span>
-              </>
-            );
-            const label = t("chat.fileRow", { name: file.name, size });
-            if (IMAGE.test(file.name)) {
-              return (
-                <button key={file.path} type="button" data-folder-file title={file.name} aria-label={label} className={ROW}
-                  onClick={() => setImage(markdownImage(src, file.name))}>
-                  {row}
-                </button>
-              );
-            }
             const inTab = IN_TAB.test(file.name);
             return (
-              <a key={file.path} href={src} data-folder-file title={file.name} aria-label={label} className={ROW}
-                target={inTab ? "_blank" : undefined} download={inTab ? undefined : true} rel="noreferrer">
-                {row}
-              </a>
+              <div key={file.path} className="flex min-w-0 items-center">
+                <a href={src} data-folder-file title={file.name} aria-label={t("chat.fileRow", { name: file.name, size })} className={ROW}
+                  target={inTab ? "_blank" : undefined} download={inTab ? undefined : true} rel="noreferrer">
+                  <FileIcon size={14} aria-hidden="true" className="shrink-0 text-ink-secondary" />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{file.name}</span>
+                  <span className="shrink-0 text-[11.5px] text-ink-secondary">{size}</span>
+                </a>
+                <a href={src} download={file.name} data-folder-download aria-label={t("viewer.download", { name: file.name })} title={t("viewer.downloadTitle")}
+                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
+                  <Download size={16} />
+                </a>
+              </div>
             );
           })}
           {listing.more > 0 && <p className="px-2 pb-1 pt-2 text-[12px] text-ink-secondary">{t("chat.folder.more", { count: listing.more })}</p>}

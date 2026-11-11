@@ -963,18 +963,19 @@ describe("relative file links", () => {
       { name: "hero-shot.png", path: `${folder}/hero-shot.png`, size: 1_532_001 },
       { name: "notes.txt", path: `${folder}/notes.txt`, size: 812 },
     ];
-    const mount = async (locale: "en" | "ko" = "en") => {
+    const mount = async (locale: "en" | "ko" = "en", listed = files, link = folder) => {
       applyLocale(locale);
       vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
-        ? new Response(JSON.stringify({ files, more: 7 }), { headers: { "content-type": "application/json" } })
+        ? new Response(JSON.stringify({ files: listed, more: 7 }), { headers: { "content-type": "application/json" } })
         : new Response(JSON.stringify({ error: "not found" }), { status: 404 })));
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
-      await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${folder})`, threadId: "t1" })));
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${link})`, threadId: "t1" })));
       await act(async () => host.querySelector("button")!.click());
       return { host, root };
     };
+    const src = (path: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`;
     afterEach(() => {
       document.body.replaceChildren();
       applyLocale("en");
@@ -989,15 +990,62 @@ describe("relative file links", () => {
         const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
         expect(sheet.querySelector("h2")!.textContent).toBe("showcase-1111");
         expect([...sheet.querySelectorAll("[data-folder-file]")].map((row) => row.textContent)).toEqual([
-          `${files[0]!.name}47.1 KB`, `${files[1]!.name}1.5 MB`, `${files[2]!.name}812 B`,
+          `${files[0]!.name}47.1 KB`, `${files[2]!.name}812 B`,
         ]);
         expect(sheet.textContent).toContain("7 more files");
-        const src = (path: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`;
-        const [page, image, notes] = [...sheet.querySelectorAll<HTMLElement>("[data-folder-file]")];
+        const [page, notes] = [...sheet.querySelectorAll<HTMLElement>("[data-folder-file]")];
         expect([page!.getAttribute("href"), page!.getAttribute("target")]).toEqual([src(files[0]!.path), "_blank"]);
         expect([notes!.getAttribute("href"), notes!.hasAttribute("download")]).toEqual([src(files[2]!.path), true]);
-        await act(async () => image!.click());
-        expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(src(files[1]!.path));
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("images show as a grid", async () => {
+      const photos = ["IMG_20261111_093012.jpg", "DSC04417.png", "sunset-over-han-river.webp"].map((name) => ({ name, path: `${folder}/${name}`, size: 2_000_000 }));
+      const { root } = await mount("en", [files[0]!, photos[0]!, files[2]!, photos[1]!, photos[2]!]);
+      try {
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        const grid = sheet.querySelector("[data-folder-grid]")!;
+        expect(grid.compareDocumentPosition(sheet.querySelector("[data-folder-file]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        const tiles = [...grid.querySelectorAll("button")];
+        expect(tiles.map((tile) => [tile.title, tile.querySelector("img")?.getAttribute("src"), tile.querySelector("img")?.getAttribute("loading")]))
+          .toEqual(photos.map((photo) => [photo.name, src(photo.path), "lazy"]));
+        expect(tiles[0]!.textContent).toBe("");
+        expect(tiles[0]!.getAttribute("aria-label")).toBe(`Open Image ${photos[0]!.name}`);
+        expect(sheet.querySelectorAll("[data-folder-file]")).toHaveLength(2);
+        await act(async () => tiles[1]!.click());
+        expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toBe(src(photos[1]!.path));
+      } finally {
+        await act(async () => root.unmount());
+      }
+      const plain = await mount("en", [files[0]!, files[2]!]);
+      try {
+        expect(document.querySelector("[data-folder-grid]")).toBeNull();
+      } finally {
+        await act(async () => plain.root.unmount());
+      }
+    });
+
+    it.each([["en", "Download notes.txt"], ["ko", "notes.txt 다운로드"]] as const)("file rows have a download button in %s", async (locale, label) => {
+      const { root } = await mount(locale);
+      try {
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        const saves = [...sheet.querySelectorAll<HTMLAnchorElement>("a[data-folder-download]")];
+        expect(saves.map((save) => [save.getAttribute("href"), save.getAttribute("download")])).toEqual([files[0]!, files[2]!].map((file) => [src(file.path), file.name]));
+        expect(saves[1]!.getAttribute("aria-label")).toBe(label);
+        expect(saves[1]!.querySelector("svg")).not.toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("a backslash folder link in angle brackets opens too", async () => {
+      const windows = String.raw`C:\Users\mredw\Desktop\Orbit-extras\showcase-1111`;
+      const { root } = await mount("en", files, `<${windows}>`);
+      try {
+        expect(fetch).toHaveBeenCalledWith(`/api/threads/t1/linked-folder?path=${encodeURIComponent(windows)}`);
+        expect(document.querySelector("[data-linked-folder] h2")?.textContent).toBe("showcase-1111");
       } finally {
         await act(async () => root.unmount());
       }
