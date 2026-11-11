@@ -109,12 +109,16 @@ describe("team rooms stay off the iPhone", () => {
 });
 
 describe("hosted thread seams", () => {
-  it("serves no linked file from a hosted thread", async () => {
+  it("serves no linked file or folder from a hosted thread", async () => {
     const serveLinkedFile = vi.fn();
-    const invoke = routeBlock("serveLinkedFile(", { store, json, serveLinkedFile, credentials: {} });
-    const path = `/api/threads/${hosted.threadId}/linked-file`;
-    expect(await invoke({}, {}, path, "GET", new URL(`http://x${path}`), ["", hosted.threadId])).toEqual({ status: 404, body: { error: "no such conversation" } });
+    const serveLinkedFolder = vi.fn();
+    const invoke = routeBlock(": serveLinkedFile)(", { store, json, serveLinkedFile, serveLinkedFolder, credentials: {} });
+    for (const kind of ["file", "folder"]) {
+      const path = `/api/threads/${hosted.threadId}/linked-${kind}`;
+      expect(await invoke({}, {}, path, "GET", new URL(`http://x${path}`), ["", hosted.threadId, kind])).toEqual({ status: 404, body: { error: "no such conversation" } });
+    }
     expect(serveLinkedFile).not.toHaveBeenCalled();
+    expect(serveLinkedFolder).not.toHaveBeenCalled();
   });
 
   it("never starts a card continuation in a hosted room", () => {

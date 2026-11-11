@@ -397,7 +397,7 @@ import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from 
 import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
-import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -7943,7 +7943,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/uploads") && (await uploads.handle(req, res, method, path, url))) return;
 
-    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-file(?:\/.*)?$/);
+    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-(file(?:\/.*)?|folder)$/);
     if (m && method === "GET") {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
@@ -7955,7 +7955,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         text: message.text,
         fromBotId: message.from?.botId,
       }));
-      return serveLinkedFile(req, res, {
+      return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         threadId,
         messages,
