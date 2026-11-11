@@ -151,7 +151,7 @@ export class LiveCall {
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
-      return this.fail(error instanceof Error && (error.name === "NotAllowedError" || error.name === "NotReadableError") ? MIC_BLOCKED : String(error));
+      return this.fail(error instanceof Error && error.name === "NotAllowedError" ? MIC_BLOCKED : String(error));
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });

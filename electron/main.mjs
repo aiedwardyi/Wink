@@ -2011,7 +2011,7 @@ app.whenReady().then(async () => {
   setMainPermissions(session.defaultSession, {
     contents: () => mainWindow?.webContents,
     origin: rendererOrigin,
-    micAllowed: () => process.platform !== "win32" || systemPreferences.getMediaAccessStatus("microphone") !== "denied",
+    micAllowed: () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone")),
   });
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.

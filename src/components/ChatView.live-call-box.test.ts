@@ -206,10 +206,10 @@ describe("live call in the message box", () => {
     }
   });
 
-  it.each(["NotAllowedError", "NotReadableError"])("says the mic is off with an Open settings action in the desktop app on %s", async (name) => {
+  it("says the mic is off with an Open settings action in the desktop app", async () => {
     const permOpenSettings = vi.fn();
     Object.assign(window, { ogb: { permOpenSettings, speechStop: vi.fn() } });
-    fakes.micError = name;
+    fakes.micError = "NotAllowedError";
     const { host, unmount } = await mount();
     try {
       await act(async () => button(host, "Call Atlas")!.click());
