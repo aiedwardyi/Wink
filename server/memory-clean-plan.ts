@@ -1,3 +1,4 @@
+import { parseReply } from "./memory-clean-call.ts";
 import { archiveBlock, appendBlock, hashText, historyPointer, HISTORY_FILE, loadedPrefix } from "./memory-clean-format.ts";
 import type { ArchiveEntry, Change, ChangeList, CleanFile, CleanInput, RejectReason, RunHeader, SleepLine, ValidateInput } from "./memory-clean-types.ts";
 import { contentWords, measureChanges, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
@@ -48,7 +49,7 @@ type Dropped = { reason: RejectReason; change: number; over?: number };
 // an op that fails its checks drops alone, with any op sharing its ids; code writes every file pointer
 function keptList(input: ValidateInput) {
   let given = input.list;
-  if (typeof given === "string") { try { given = JSON.parse(given); } catch {} }
+  if (typeof given === "string") { try { given = parseReply(given); } catch {} }
   const changes = (given as { changes?: unknown } | null)?.changes;
   if (!Array.isArray(changes)) return { result: prepareChangeList(input), list: given as ChangeList, dropped: [] };
   let kept = changes.map((change, index) => ({ index, change: change?.op === "file" ? { ...change, pointer: undefined } : change }));
@@ -129,6 +130,8 @@ export function stagedCandidate(input: CleanInput, sources: CleanSource[], lists
       if (!topic || entry.lines.some((line) => !topic.text.split("\n").some((row) => row.replace(/\r$/, "") === line.replace(/\r$/, "")))) errors.push({ reason: "pointer" });
     }
   }
+  // a rejected empty candidate is measured as the reserve, so repair sees the history pointer any real change adds
+  if (errors.length && !entries.length && !reserve) return stagedCandidate(input, sources, lists, runId, at, true);
   if (errors.length) return { ok: false as const, file: budgets.find((item) => item.errors.length)?.file ?? sources.at(-1)!.file, errors, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })), dropped };
   return { ok: true as const, memory, ...built, entries, topics, parsed, budgets: budgets.map(({ file, budget }) => ({ file, ...budget })), dropped };
 }

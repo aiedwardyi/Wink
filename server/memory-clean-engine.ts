@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { callMemoryText } from "./memory-clean-call.ts";
+import { callMemoryText, parseReply } from "./memory-clean-call.ts";
 import { answerRoutes, organizeCandidate, routeQuestions, type FactRoute } from "./memory-clean-coverage.ts";
 import { hashText, parseHistory } from "./memory-clean-format.ts";
 import { changeIds, stagedCandidate, workPackets, type CleanSource, type WorkPacket } from "./memory-clean-plan.ts";
@@ -18,18 +18,6 @@ const questionsSchema = z.array(z.object({
   kind: z.enum(["changed", "protected", "absent"]), question: z.string().min(1), answer: z.string().nullable(), file: z.string().optional(),
 })).length(18);
 const answersSchema = z.array(z.union([z.array(z.string()).transform((items) => items.join(", ")), z.union([z.string(), z.number(), z.boolean()]).transform(String)]).nullable()).length(18);
-
-function parseReply(text: string): unknown {
-  try { return JSON.parse(text); } catch (error) {
-    const ends = [...text.matchAll(/[\]}]/g)].map((match) => match.index).reverse();
-    for (const { index } of text.matchAll(/[\[{]/g)) {
-      for (const end of ends.filter((at) => at > index)) {
-        try { return JSON.parse(text.slice(index, end + 1)); } catch {}
-      }
-    }
-    throw error;
-  }
-}
 
 function prompt(source: CleanSource, input: CleanInput, packets: WorkPacket[], reserved?: CleanBudget): string {
   const memory = source.file === "MEMORY.md";

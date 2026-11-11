@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { parseReply } from "./memory-clean-call.ts";
 import { cleanFileSchema, filePointers, historyPointer, isHistory, lineHash, pointerLine } from "./memory-clean-format.ts";
 import type { ArchiveEntry, ChangeList, CleanBudget, CleanFile, RejectReason, SleepLine, ValidateInput, ValidateResult } from "./memory-clean-types.ts";
 import { day, secretLike } from "./memory-pass.ts";
@@ -231,7 +232,7 @@ export function filedPointer(text: string, ids: number[], topic: string, k = 3):
 
 export function prepareChangeList(input: ValidateInput): ValidateResult {
   let raw = input.list;
-  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return { ok: false, errors: [{ reason: "shape" }] }; } }
+  if (typeof raw === "string") { try { raw = parseReply(raw); } catch { return { ok: false, errors: [{ reason: "shape" }] }; } }
   const parsed = listSchema.safeParse(raw);
   if (!parsed.success || parsed.data.file !== input.file) return { ok: false, errors: [{ reason: "shape" }] };
   const list = parsed.data as ChangeList;

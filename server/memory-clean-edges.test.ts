@@ -459,4 +459,36 @@ describe("memory cleanup edges", () => {
     expect(await rows([1], "gates")).toEqual(["- memory/gates.md: gates miss max-of-3 fails; Gate p95 dropped frames 240 Hz"]);
     expect(await rows([2, 3, 4], "rules")).toHaveLength(1);
   });
+
+  it.each(["propose", "route-questions", "organize", "routes", "values", "grade"].flatMap((stage) => [
+    [stage, (reply: string) => `\`\`\`json\n${reply}\n\`\`\``],
+    [stage, (reply: string) => `\`\`\`json\n${reply}\n\`\`\`\n\nI skipped the dated stamps \`(10-19)\` and \`(my miss 10-26)\` as noted stamps.`],
+  ] as const))("reads a fenced %s reply", async (stage, fence) => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, `- Bob garage code 5531 ${"y".repeat(200)}`, ...kept].join("\n") + "\n";
+    const input = fixture(memory, [{ op: "file", ids: [1, 2], topic: "details", reason: "Details" }]);
+    const wrap = (call: CleanInput["propose"]): CleanInput["propose"] => async (prompt, opts) => {
+      const reply = await call(prompt, opts);
+      const text = typeof reply === "string" ? reply : reply.text;
+      return prompt.startsWith(`[memory-clean:${stage}]`) ? fence(text) : text;
+    };
+    const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: wrap(input.propose), recall: wrap(input.recall) });
+    expect(result).toMatchObject({ ok: true, topics: [{ file: "memory/details.md" }] });
+  });
+
+  it("gives a repair of an empty list the reserved floor, history pointer included", async () => {
+    const kept = Array.from({ length: 198 }, (_, i) => `- kept ${i} ${"k".repeat(120)}`);
+    const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, `- Bob garage code 5531 ${"y".repeat(200)}`, ...kept].join("\n") + "\n";
+    const input = fixture(memory, []);
+    const asks: string[] = [];
+    await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: async (prompt, opts) => {
+      if (prompt.startsWith("[memory-clean:propose]")) asks.push(prompt);
+      return input.propose(prompt, opts);
+    } });
+    const reserved = JSON.parse(/Reserved complete candidate: (\{.*?\})\./.exec(asks[0]!)![1]!);
+    const rejected = JSON.parse(/Rejected complete candidate: (\{.*?\})\. One repair/.exec(asks[1]!)![1]!);
+    expect(reserved).toMatchObject({ finalLines: 202, maxLines: 201 });
+    expect(rejected.budgets).toEqual([reserved]);
+    expect(rejected.errors).toEqual([{ reason: "budget", over: reserved.excessBytes }]);
+  });
 });
