@@ -34,10 +34,20 @@ describe("Your PCs", () => {
     const open = vi.fn().mockResolvedValue(true);
     vi.stubGlobal("ogb", { deviceWindow: { open } });
     const { host, root } = await renderView();
-    expect(rows(host).map((row) => row.textContent)).toEqual([`${DEVICES[0]!.name}This PC`, "HomeOnlineOpen", "LaptopOffline", "DenChecking"]);
     expect(rows(host).map((row) => row.querySelector('[aria-label="Online"]') !== null)).toEqual([true, true, false, false]);
     await act(async () => rows(host)[1]!.querySelector("button")!.click());
     expect(open).toHaveBeenCalledWith("home.wink.test", "Home");
+    await act(async () => root.unmount());
+  });
+
+  it("green check sits after the name", async () => {
+    const { host, root } = await renderView();
+    expect(rows(host).map((row) => row.textContent)).toEqual([`${DEVICES[0]!.name}This PC`, "HomeOpen", "LaptopOffline", "DenChecking"]);
+    for (const row of rows(host).slice(0, 2)) {
+      const check = row.querySelector('[aria-label="Online"]')!;
+      expect(check.closest(".usage-control")).toBeNull();
+      expect(check.closest("[data-device-name]")?.textContent).toBe(row.querySelector("[data-device-name]")?.textContent);
+    }
     await act(async () => root.unmount());
   });
 
@@ -45,7 +55,7 @@ describe("Your PCs", () => {
     localStorage.setItem("omb-locale", "ko");
     const { host, root } = await renderView();
     expect(host.textContent).toContain("내 PC");
-    expect(rows(host)[1]?.textContent).toBe("Home온라인열기");
+    expect(rows(host)[1]?.textContent).toBe("Home열기");
     await act(async () => root.unmount());
   });
 });

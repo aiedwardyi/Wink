@@ -60,13 +60,13 @@ describe("PhoneAccessSettings", () => {
   it("says not available without a relay this PC can set up, or when the PC refuses the status", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();
-    expect(off.host.textContent).toContain("Not available for this account yet.");
+    expect(off.host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
     expect(off.host.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
     await act(async () => off.root.unmount());
 
     request.mockRejectedValue(new Error("not found"));
     const refused = await renderView();
-    expect(refused.host.textContent).toContain("Not available for this account yet.");
+    expect(refused.host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
     await act(async () => refused.root.unmount());
   });
 
@@ -101,7 +101,7 @@ describe("PhoneAccessSettings", () => {
 
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();
-    expect(off.host.textContent).toContain("Not available for this account yet.");
+    expect(off.host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
     await act(async () => off.root.unmount());
   });
 
@@ -332,6 +332,30 @@ describe("This PC", () => {
     await act(async () => root.unmount());
   });
 
+  it("not available offers tailscale", async () => {
+    serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }), "GET /api/google-account": signedIn });
+    const { host, root } = await renderView();
+    expect(host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
+    expect(host.textContent).not.toContain("for this account");
+    await act(async () => root.unmount());
+  });
+
+  it.each([
+    ["abcdefghijklmnop.wink.edwardyi.dev", "wink.edwardyi.dev", "https://wink.edwardyi.dev/"],
+    [HOST, "abcd….wink.test", `https://${HOST}/`],
+  ])("shows and copies the front door when it can open %s", async (host, shown, copied) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    serve({ "GET /api/phone-relay/status": () => status({ host }), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
+    const view = await renderView();
+    expect(view.host.textContent).toContain("Open on any device");
+    expect(view.host.querySelector("[data-relay-link]")?.textContent).toBe(shown);
+    expect(view.host.textContent).toContain("Paste it in any browser or scan with a phone. Continue with Google.");
+    await act(async () => click(button(view.host, "Copy Link")));
+    expect(writeText).toHaveBeenCalledWith(copied);
+    await act(async () => view.root.unmount());
+  });
+
   it("signed out shows Sign In in the switch's place", async () => {
     const signIn = vi.fn(async () => ({ ok: true as const, email: EMAIL }));
     vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
@@ -348,7 +372,7 @@ describe("This PC", () => {
   it("keeps the switch off for an account the relay does not take", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }), "GET /api/google-account": signedIn });
     const { host, root } = await renderView();
-    expect(host.textContent).toContain("Not available for this account yet.");
+    expect(host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
     const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
     expect(toggle.disabled).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -419,7 +443,7 @@ describe("This PC", () => {
     up = false;
     phones = [{ id: "p1", name: "iPhone", createdAt: Date.UTC(2026, 10, 8), lastSeenAt: Date.UTC(2026, 10, 10) }];
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-    expect(host.textContent).not.toContain("Not available for this account yet.");
+    expect(host.textContent).not.toContain("Not available on this PC yet.");
     expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector("[data-signed-in]")?.textContent).toContain("iPhone");
     await act(async () => root.unmount());
@@ -451,7 +475,7 @@ describe("This PC", () => {
     });
     const { host, root } = await renderView();
     expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
-    expect(host.textContent).toContain("Open on your phone");
+    expect(host.textContent).toContain("Open on any device");
     expect(button(host, "Copy Link")).toBeDefined();
     expect(host.textContent).toContain("Signed in to this PC");
     expect(button(host, "Remove iPhone")).toBeDefined();
@@ -459,8 +483,8 @@ describe("This PC", () => {
   });
 
   it.each([
-    ["en", ["This PC", "Connect from my devices", "Open on your phone", "Signed in to this PC"]],
-    ["ko", ["이 PC", "내 기기에서 연결", "휴대폰에서 열기", "이 PC에 로그인한 기기"]],
+    ["en", ["This PC", "Connect from my devices", "Open on any device", "Paste it in any browser or scan with a phone. Continue with Google.", "Signed in to this PC"]],
+    ["ko", ["이 PC", "내 기기에서 연결", "다른 기기에서 열기", "아무 브라우저에 붙여넣거나 휴대폰으로 스캔하세요. Google로 계속하세요.", "이 PC에 로그인한 기기"]],
   ])("labels the page in %s", async (locale, labels) => {
     localStorage.setItem("omb-locale", locale);
     serve({ "GET /api/phone-relay/status": () => status(), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
