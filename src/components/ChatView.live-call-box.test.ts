@@ -4,11 +4,12 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
+import { LiveCall } from "@/lib/live-call/controller";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", token: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -27,7 +28,7 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture() { if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
+    async capture() { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
     play() {}
     flush() {}
     close() {}
@@ -47,6 +48,7 @@ const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL) => {
   const path = String(input);
   posts.push(path);
+  if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false } });
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
   if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
@@ -54,11 +56,11 @@ const fetchImpl = async (input: RequestInfo | URL) => {
   return new Response("{}", { status: 404 });
 };
 
-async function saveKey() {
+async function saveKey(configured = true) {
   fakes.key = true;
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
   await vi.waitFor(() => expect(posts.some((path) => path.startsWith("/api/bots?"))).toBe(true));
-  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true } }), lastEventId: "qa:2" }));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured } }), lastEventId: "qa:2" }));
 }
 
 async function mount(key = false) {
@@ -71,7 +73,7 @@ async function mount(key = false) {
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }))));
-  if (key) await saveKey();
+  if (!fakes.config) await saveKey(key);
   return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
@@ -108,6 +110,8 @@ afterEach(() => {
   fakes.level = 0;
   fakes.engines.length = 0;
   fakes.micError = "";
+  fakes.capture.mockClear();
+  fakes.config = undefined;
   fakes.token = undefined;
   fakes.key = false;
   fakes.sse = undefined;
@@ -254,6 +258,63 @@ describe("live call in the message box", () => {
       await act(async () => pick(intro()!, "Start call").click());
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
     } finally {
+      await unmount();
+    }
+  });
+
+  it("waits for config and Start call before the first mic or token request", async () => {
+    const start = vi.spyOn(LiveCall.prototype, "start");
+    let finish!: (response: Response) => void;
+    const config = new Promise<Response>((resolve) => { finish = resolve; });
+    fakes.config = () => config;
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[data-live-call]")).not.toBeNull());
+      expect(start).not.toHaveBeenCalled();
+      expect(tokens()).toBe(0);
+      expect(fakes.capture).not.toHaveBeenCalled();
+      fakes.key = true;
+      await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
+      await vi.waitFor(() => expect(posts).toContain("/api/config"));
+      await act(async () => finish(Response.json({ gemini: { configured: true } })));
+      await vi.waitFor(() => expect(intro()).not.toBeNull());
+      expect(start).not.toHaveBeenCalled();
+      expect(tokens()).toBe(0);
+      expect(fakes.capture).not.toHaveBeenCalled();
+      await act(async () => pick(intro()!, "Start call").click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(tokens()).toBe(1);
+      expect(fakes.capture).toHaveBeenCalledTimes(1);
+    } finally {
+      finish(Response.json({ gemini: { configured: true } }));
+      await unmount();
+    }
+  });
+
+  it("starts once when Start call is clicked twice after saving a key", async () => {
+    fakes.token = () => Response.json({ error: "Add a Gemini key to call." }, { status: 409 });
+    const { host, unmount } = await mount();
+    let finish!: (response: Response) => void;
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[data-live-call]")?.getAttribute("data-live-call")).toBe("needsKey"));
+      await saveKey();
+      const token = new Promise<Response>((resolve) => { finish = resolve; });
+      fakes.token = () => token;
+      const start = vi.spyOn(LiveCall.prototype, "start");
+      const confirm = pick(intro()!, "Start call");
+      await act(async () => { confirm.click(); confirm.click(); });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(confirm.disabled).toBe(true);
+      expect(tokens()).toBe(2);
+      expect(fakes.capture).not.toHaveBeenCalled();
+      await act(async () => finish(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" })));
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      expect(fakes.capture).toHaveBeenCalledTimes(1);
+    } finally {
+      finish?.(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" }));
       await unmount();
     }
   });

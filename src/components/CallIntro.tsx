@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { useRef, useState, type ComponentType } from "react";
 import { AudioLines, MessageSquareText } from "lucide-react";
 
 import { useI18n, type LocaleId } from "@/lib/i18n";
@@ -36,7 +36,12 @@ export function CallIntro({ closing, onStart, onLater }: { closing: boolean; onS
   const { locale } = useI18n();
   const words = COPY[locale] ?? COPY.en;
   const buttons = BUTTONS[locale] ?? BUTTONS.en;
+  const started = useRef(false);
+  const [starting, setStarting] = useState(false);
   const start = () => {
+    if (started.current) return;
+    started.current = true;
+    setStarting(true);
     try {
       localStorage.setItem(INTRO_SEEN, "1");
     } catch {
@@ -45,7 +50,7 @@ export function CallIntro({ closing, onStart, onLater }: { closing: boolean; onS
     onStart();
   };
   return (
-    <ConfirmDialog title={words.title} confirmLabel={buttons.start} cancelLabel={buttons.later} danger={false} light closing={closing} onConfirm={start} onCancel={onLater}>
+    <ConfirmDialog title={words.title} confirmLabel={buttons.start} cancelLabel={buttons.later} danger={false} light confirmDisabled={starting} closing={closing} onConfirm={start} onCancel={onLater}>
       <ul data-call-intro className="mt-4 space-y-3">
         {words.lines.map((line, i) => {
           const Icon = ICONS[i]!;

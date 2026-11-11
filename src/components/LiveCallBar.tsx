@@ -146,9 +146,9 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   const mounted = useRef(false);
   const kicked = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
-  const [fresh, setFresh] = useState(() => configured && !seenIntro());
+  const [fresh, setFresh] = useState(() => !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
-  const intro = fresh || (snap.status === "needsKey" && configured);
+  const intro = (fresh && configured) || (snap.status === "needsKey" && configured);
   const introShown = usePresence(intro);
   const messages = visibleMessages(bot);
 
@@ -159,12 +159,14 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.id, intro, live]);
 
   useEffect(() => {
+    if (!state.config || kicked.current) return;
+    kicked.current = true;
+    if (!intro) void call.start();
+  }, [call, intro, state.config]);
+
+  useEffect(() => {
     mounted.current = true;
     startCall(bot.id);
-    if (!kicked.current) {
-      kicked.current = true;
-      if (!fresh) void call.start();
-    }
     const onVisible = () => call.hidden(document.hidden);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
