@@ -2,7 +2,8 @@ import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ClaudeMark, claudeViewBox, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
+import { ClaudeMark, claudeFit, claudeViewBox, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
+
 
 describe("ProviderMark", () => {
   it.each(["grok", "grokAgent"])("renders the Grok mark as an SVG for %s", (driverKind) => {
@@ -113,6 +114,35 @@ describe("ClaudeMark", () => {
 
   it.each([14, 16])("keeps the %i px bot at its ratio 1 size on a ratio 2 screen", (size) => {
     expect(claudeViewBox(size, 2)[2]).toBe(claudeViewBox(size, 1)[2]);
+  });
+});
+
+describe("claudeFit", () => {
+  // body runs, then the eye gaps, as [x, y, w, h] on the grid
+  const grid = [[3, 0, 13, 2], [3, 2, 2, 2], [6, 2, 7, 2], [14, 2, 2, 2], [1, 4, 17, 2], [3, 6, 13, 2], [3, 8, 1, 2], [5, 8, 1, 2], [13, 8, 1, 2], [15, 8, 1, 2], [5, 2, 1, 2], [13, 2, 1, 2]] as const;
+  const fitted = (size: number, ratio: number) => {
+    const place = claudeFit(size, ratio);
+    const rects = grid.map(([x, y, w, h]) => place(x, y, w, h));
+    return { rects, left: Math.min(...rects.map((r) => r.x)), right: Math.max(...rects.map((r) => r.x + r.width)) };
+  };
+
+  it.each([1.25, 1.5, 1.75])("matches the width of the other logos at ratio %d", (ratio) => {
+    for (const size of [14, 16, 18, 20, 24]) {
+      const { left, right } = fitted(size, ratio);
+      expect((right - left) / (size * ratio)).toBeGreaterThan(0.9);
+      expect((right - left) / (size * ratio)).toBeLessThan(1.1);
+    }
+  });
+
+  it.each([1.25, 1.5, 1.75])("mirrors every rect about the center column at ratio %d", (ratio) => {
+    for (const size of [14, 16, 18, 20, 24]) {
+      const { rects, left, right } = fitted(size, ratio);
+      for (const r of rects) expect(rects).toContainEqual({ ...r, x: left + right - r.x - r.width });
+    }
+  });
+
+  it("keeps every column at least one device px, so eyes and legs survive", () => {
+    for (const r of fitted(14, 1.25).rects) expect(Math.min(r.width, r.height)).toBeGreaterThanOrEqual(1);
   });
 });
 
