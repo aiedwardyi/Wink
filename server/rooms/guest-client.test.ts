@@ -8,6 +8,7 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, type GuestClientDeps } from "./guest-client.ts";
+import * as joinedFiles from "./joined-files.ts";
 import { closeJoinedDb, joinedKey, joinedRoom } from "./joined.ts";
 
 const BASE = "wink.test";
@@ -118,6 +119,57 @@ describe("room codes", () => {
 });
 
 describe("join", () => {
+  it("refuses an ordinary join while local removal awaits its files", async () => {
+    route = (req, res) => req.url?.endsWith("/leave") ? reply(res, 200, {}) : quietDoor(req, res);
+    const c = guest();
+    c.start();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+    expect((await c.leave("r1")).ok).toBe(true);
+    let release!: () => void;
+    const files = vi.spyOn(joinedFiles, "removeJoinedFiles").mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    const removing = c.remove("r1");
+    let result;
+    try {
+      result = await c.join(CODE);
+      if (result.ok) await until(() => c.rooms()[0]?.link === "live");
+    } finally {
+      release();
+      await removing;
+      files.mockRestore();
+    }
+    expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
+    expect(joinedRoom("r1")).toBeNull();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+  });
+
+  it("refuses local removal while an ordinary join awaits the door", async () => {
+    route = (req, res) => req.url?.endsWith("/leave") ? reply(res, 200, {}) : quietDoor(req, res);
+    const c = guest();
+    c.start();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => c.rooms()[0]?.link === "live");
+    expect((await c.leave("r1")).ok).toBe(true);
+    let release: (() => void) | undefined;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") release = () => quietDoor(req, res);
+      else quietDoor(req, res);
+    };
+    const joining = c.join(CODE);
+    await until(() => Boolean(release));
+    let result;
+    try {
+      result = await c.remove("r1");
+    } finally {
+      release!();
+      await joining;
+      await until(() => c.rooms()[0]?.link === "live");
+    }
+    expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
+    await until(() => c.rooms()[0]?.link === "live");
+  });
+
   it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {
     route = quietDoor;
     const result = await guest().join(`  ${CODE}\n`);

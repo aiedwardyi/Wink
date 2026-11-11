@@ -26,12 +26,13 @@ async function mount() {
   }))));
   const pane = host.querySelector<HTMLElement>("[data-team-room-transcript]")!;
   let height = 1000;
+  let viewport = 500;
   let top = 500;
   Object.defineProperties(pane, {
-    clientHeight: { get: () => 500 }, scrollHeight: { get: () => height },
-    scrollTop: { get: () => top, set: (value: number) => { top = Math.min(height - 500, value); } },
+    clientHeight: { get: () => viewport }, scrollHeight: { get: () => height },
+    scrollTop: { get: () => top, set: (value: number) => { top = Math.min(height - viewport, value); } },
   });
-  return { pane, grow: () => { height += 220; } };
+  return { pane, grow: () => { height += 220; }, expand: () => { viewport += 100; top = Math.min(height - viewport, top); } };
 }
 
 it("stays at the exact bottom when picture growth sends a scroll before the resize callback", async () => {
@@ -52,4 +53,24 @@ it("does not pull a reader back down after an upward wheel gesture", async () =>
   grow();
   await act(async () => resize());
   expect(pane.scrollTop).toBe(300);
+});
+
+it("keeps the scrollbar's upward position when a picture grows", async () => {
+  const { pane, grow } = await mount();
+  await act(async () => resize());
+  pane.scrollTop = 300;
+  await act(async () => pane.dispatchEvent(new Event("scroll", { bubbles: true })));
+  grow();
+  await act(async () => resize());
+  expect(pane.scrollTop).toBe(300);
+});
+
+it("keeps following when a taller viewport moves the scroll position upward", async () => {
+  const { pane, grow, expand } = await mount();
+  await act(async () => resize());
+  expand();
+  await act(async () => pane.dispatchEvent(new Event("scroll", { bubbles: true })));
+  grow();
+  await act(async () => resize());
+  expect(pane.scrollHeight - pane.scrollTop - pane.clientHeight).toBe(0);
 });

@@ -63,6 +63,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
   const previousTop = useRef(0);
+  const previousSize = useRef({ height: 0, viewport: 0 });
   const touchY = useRef(0);
   const last = lines.at(-1);
   const lastId = last?.id;
@@ -73,6 +74,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
       atEnd.current = true;
       el.scrollTop = el.scrollHeight;
       previousTop.current = el.scrollTop;
+      previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
     }
   }, [lastId, lastMine]);
   // Layout scrolls must not disarm follow before pictures finish growing.
@@ -85,6 +87,7 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
         el.scrollTop = el.scrollHeight;
         previousTop.current = el.scrollTop;
       }
+      previousSize.current = { height: el.scrollHeight, viewport: el.clientHeight };
     });
     observer.observe(log);
     observer.observe(el);
@@ -108,8 +111,11 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
       tabIndex={0}
       onScroll={(e) => {
         const el = e.currentTarget;
+        const size = { height: el.scrollHeight, viewport: el.clientHeight };
+        if (el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
         if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
         previousTop.current = el.scrollTop;
+        previousSize.current = size;
       }}
     >
       <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>

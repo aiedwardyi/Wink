@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { StoreProvider } from "@/state/store";
@@ -163,6 +164,7 @@ it("copies the hosted invite and opens its existing People sheet", async () => {
   expect(writeText).toHaveBeenCalledWith("fixture-code");
   await choose(await context("host"), "People");
   expect(document.querySelector('[role="dialog"][aria-label="People"]')).not.toBeNull();
+  expect(document.querySelector('[role="dialog"][aria-label="People"]')!.closest("aside")).toBeNull();
   expect(document.querySelector("[data-team-room-code]")?.textContent).toContain("fixture-code");
 });
 
@@ -173,6 +175,30 @@ it("requires the existing leave confirmation before posting", async () => {
   const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
   await choose(dialog, "Leave");
   expect(calls).toContainEqual({ path: "/api/joined/rooms/r9/leave", method: "POST", body: undefined });
+});
+
+it.each([
+  ["en", "Leave", "Wink couldn't finish that. Try again."],
+  ["ko", "나가기", "Wink가 작업을 마치지 못했어요. 다시 시도해 주세요."],
+] as const)("keeps a failed leave open for retry in %s", async (locale, label, error) => {
+  persistPreference(locale);
+  await mount();
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  let finish!: (response: Response) => void;
+  fetch.mockImplementation((...args) => String(args[0]).endsWith("/leave") ? new Promise<Response>((resolve) => { finish = resolve; }) : original(...args));
+  await choose(await context("joined:r9"), label);
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  await choose(dialog, label);
+  expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+  expect([...dialog.querySelectorAll("button")].find((button) => button.textContent === label)!.disabled).toBe(true);
+  await act(async () => finish(new Response(JSON.stringify({ error: "unavailable" }), { status: 503 })));
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(error);
+  await choose(dialog, label);
+  const room = { ...joined.rooms[0], status: "left", link: null };
+  await act(async () => finish(new Response(JSON.stringify({ room }))));
+  expect(noteJoinedRoom).toHaveBeenCalledWith(room);
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 it.each(["left", "removed"])("shows the %s room recovery menu and confirms local removal", async (status) => {
@@ -216,4 +242,23 @@ it.each([
   await choose(await context("joined:r9"), label);
   expect(document.querySelector('[role="dialog"]:not([inert]) input')).toBeNull();
   expect(calls.at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: undefined });
+});
+
+it.each(["en", "ko"] as const)("replaces a rejected saved code in %s", async (locale) => {
+  persistPreference(locale);
+  joined.rooms[0].status = "left";
+  await mount();
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((...args) => String(args[0]).endsWith("/rejoin") && !args[1]?.body
+    ? Promise.resolve(new Response(JSON.stringify({ error: "bad-code" }), { status: 400 })) : original(...args));
+  await choose(await context("joined:r9"), locale === "en" ? "Rejoin" : "다시 참여");
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+  expect(dialog).not.toBeNull();
+  const code = `wkr1:studio.example.test:invite.wki_${"B".repeat(43)}`;
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: { getData: () => code } });
+  await act(async () => dialog!.querySelector("input")!.dispatchEvent(paste));
+  expect(calls.at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
 });

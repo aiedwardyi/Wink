@@ -138,6 +138,7 @@ export class GuestClient {
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
   private readonly changing = new Set<string>();
+  private joining = 0;
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
   private started = false;
   private readonly deps: GuestClientDeps;
@@ -168,7 +169,17 @@ export class GuestClient {
   }
 
   /** The whole join: the pasted code in, a synced room out. */
-  async join(code: string, expectedRoomId?: string): Promise<GuestResult<JoinedView>> {
+  async join(code: string): Promise<GuestResult<JoinedView>> {
+    if (this.changing.size) return failed(409, "room is busy");
+    this.joining++;
+    try {
+      return await this.joinNow(code);
+    } finally {
+      this.joining--;
+    }
+  }
+
+  private async joinNow(code: string, expectedRoomId?: string): Promise<GuestResult<JoinedView>> {
     const pasted = code.trim();
     const relayHost = roomCodeHost(pasted, this.deps.bases());
     if (!relayHost) return failed(400, "bad-code");
@@ -220,14 +231,14 @@ export class GuestClient {
     const room = joinedRoom(roomId);
     if (!room) return failed(404, "not found");
     if (room.status === "removed") return failed(403, "removed");
-    if (room.status !== "left" || this.changing.has(roomId)) return failed(409, "room is busy");
+    if (room.status !== "left" || this.changing.has(roomId) || this.joining) return failed(409, "room is busy");
     if (suppliedCode !== undefined && typeof suppliedCode !== "string") return failed(400, "bad-code");
     const code = typeof suppliedCode === "string" ? suppliedCode : joinedCode(roomId);
     if (!code) return failed(409, "no-saved-code");
     if (roomCodeHost(code.trim(), this.deps.bases()) !== room.relayHost) return failed(400, "bad-code");
     this.changing.add(roomId);
     try {
-      return await this.join(code, roomId);
+      return await this.joinNow(code, roomId);
     } finally {
       this.changing.delete(roomId);
     }
@@ -236,7 +247,7 @@ export class GuestClient {
   async remove(roomId: string): Promise<GuestResult<boolean>> {
     const room = joinedRoom(roomId);
     if (!room) return failed(404, "not found");
-    if (room.status === "joined" || this.changing.has(roomId)) return failed(409, "room is busy");
+    if (room.status === "joined" || this.changing.has(roomId) || this.joining) return failed(409, "room is busy");
     this.changing.add(roomId);
     try {
       await removeJoinedFiles(roomId);

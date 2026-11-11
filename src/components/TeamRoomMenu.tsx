@@ -51,7 +51,7 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
     try {
       const result = await rejoinRoom(joinedId);
       if (!("room" in result)) {
-        if (result.status === 409 && result.error === "no-saved-code") pick("rejoin");
+        if ((result.status === 409 && result.error === "no-saved-code") || ["bad-code", "no-invite", "wrong-secret", "too-many-tries"].includes(result.error)) pick("rejoin");
         else setProblem(joinErrorKey(result.status, result.error));
         return;
       }
@@ -287,11 +287,27 @@ export function TeamRoomDialogs() {
   const { state, dispatch } = useStore();
   const [removing, setRemoving] = useState(false);
   const [removeFailed, setRemoveFailed] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [leaveFailed, setLeaveFailed] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const open = useSyncExternalStore(watch, () => sheet);
   const close = () => openSheet(null);
   const group = state.groups.find((each) => each.id === roomTarget?.id);
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
+  const leave = async () => {
+    if (!joinedId || leaving) return;
+    setLeaving(true);
+    setLeaveFailed(false);
+    try {
+      const { room } = await request(`${joinedRoomBase(joinedId)}/leave`, { method: "POST" });
+      noteJoinedRoom(room);
+      close();
+    } catch {
+      setLeaveFailed(true);
+    } finally {
+      setLeaving(false);
+    }
+  };
   const remove = async () => {
     if (!joinedId || removing) return;
     setRemoving(true);
@@ -308,6 +324,7 @@ export function TeamRoomDialogs() {
     }
   };
   useEffect(() => close, []);
+  useEffect(() => { if (open === "leave") setLeaveFailed(false); }, [open]);
   return (
     <>
       <Presence open={open === "create"}>{(closing) => <CreateSheet closing={closing} onClose={close} />}</Presence>
@@ -316,7 +333,7 @@ export function TeamRoomDialogs() {
         {(closing) => <JoinSheet closing={closing} onClose={close} rejoin={{ roomId: joinedId!, name: roomTarget?.name ?? "" }} />}
       </Presence>
       <Presence open={open === "people" && isTeamRoom(group)}>
-        {(closing) => isTeamRoom(group) && <TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />}
+        {(closing) => isTeamRoom(group) && createPortal(<TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />, document.body)}
       </Presence>
       <Presence open={open === "leave" && Boolean(joinedId)}>
         {(closing) => <ConfirmDialog
@@ -324,12 +341,12 @@ export function TeamRoomDialogs() {
           title={t("teamRoom.leaveTitle", { name: roomTarget?.name ?? "" })}
           body={t("teamRoom.leaveBody")}
           confirmLabel={t("teamRoom.leave")}
+          confirmDisabled={leaving}
           onCancel={close}
-          onConfirm={() => {
-            close();
-            if (joinedId) void request(`${joinedRoomBase(joinedId)}/leave`, { method: "POST" }).catch(() => {});
-          }}
-        />}
+          onConfirm={() => void leave()}
+        >
+          {leaveFailed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
+        </ConfirmDialog>}
       </Presence>
       <Presence open={open === "remove" && Boolean(joinedId)}>
         {(closing) => <ConfirmDialog
