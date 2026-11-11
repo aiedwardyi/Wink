@@ -213,11 +213,10 @@ export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]
   });
 }
 
-/** Drops the local copy, so the next connect starts from a snapshot. */
+/** Drops the local copy, so the next connect starts from a snapshot. Translations stay: an entry id never changes text. */
 export function resetJoined(roomId: string): void {
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
-    database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("UPDATE joined SET state = NULL, version = 0, cursor = 0 WHERE room_id = ?").run(roomId);
   });
 }

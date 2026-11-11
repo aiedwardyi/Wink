@@ -128,7 +128,7 @@ describe("room translation", () => {
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 
-  it("translates a joined line locally and persists it across reload", async () => {
+  it("translates a joined line locally and keeps it across reload and a file delete reset", async () => {
     joinRoom();
     expect((await call(joinedPath())).status).toBe(200);
     closeJoinedDb();
@@ -138,7 +138,7 @@ describe("room translation", () => {
     expect((await call(joinedPath())).status).toBe(404);
     addJoinedEntries(roomId, [{ seq: 1, id: entryId, at: Date.now(), author: { kind: "host", id: "host", name: "Private host" }, text: "출시 준비 끝났어요." }]);
     expect((await call(joinedPath())).status).toBe(200);
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText).toHaveBeenCalledTimes(1);
   });
 
   it("sends only the selected line and uses an isolated text call", async () => {
