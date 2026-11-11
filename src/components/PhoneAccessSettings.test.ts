@@ -39,11 +39,11 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function renderView() {
+async function renderView(props: object = {}) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request }))));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, ...props }))));
   return { host, root };
 }
 
@@ -450,21 +450,19 @@ describe("This PC", () => {
     vi.useRealTimers();
   });
 
-  it("green check only when on and connected", async () => {
-    vi.useFakeTimers();
-    let relay = status({ enabled: false, state: "off", host: null });
-    serve({ "GET /api/phone-relay/status": () => relay, "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
+  it("no check on the switch row", async () => {
+    serve({ "GET /api/phone-relay/status": () => status(), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [{ id: "p1", name: "iPhone", createdAt: Date.UTC(2026, 10, 8), lastSeenAt: Date.UTC(2026, 10, 10) }] }) });
     const { host, root } = await renderView();
-    const check = () => host.querySelector('[data-this-pc] [aria-label="Connected"]');
-    expect(check()).toBeNull();
-    relay = status({ state: "reconnecting", host: null });
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-    expect(check()).toBeNull();
-    relay = status();
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-    expect(check()).not.toBeNull();
+    expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector(".animate-pop-in")).toBeNull();
     await act(async () => root.unmount());
-    vi.useRealTimers();
+  });
+
+  it("your pcs above signed in", async () => {
+    serve({ "GET /api/phone-relay/status": () => status(), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }) });
+    const { host, root } = await renderView({ pcs: createElement("section", { "data-your-pcs": "" }) });
+    expect([...host.querySelectorAll("section")].map((section) => section.getAttributeNames().find((name) => name.startsWith("data-")))).toEqual(["data-this-pc", "data-your-pcs", "data-signed-in"]);
+    await act(async () => root.unmount());
   });
 
   it("shows this PC's address as a QR while on, and the devices signed in to it", async () => {

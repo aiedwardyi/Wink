@@ -27,8 +27,7 @@ export function PhoneLinkSettings() {
 
   return (
     <div data-phone-settings className="usage-sections">
-      <PhoneAccessSettings refresh={paired} onEnabled={setOn} />
-      <YourPcs />
+      <PhoneAccessSettings refresh={paired} onEnabled={setOn} pcs={<YourPcs />} />
       <section data-other-ways="" className="min-w-0">
         <button type="button" aria-expanded={othersOpen} aria-controls="devices-other" onClick={() => setOthersOpen((open) => !open)}
           className="group flex items-center gap-2 text-[14px] font-semibold leading-5 text-ink">
