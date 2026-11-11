@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, File as FileIcon, Image as ImageIcon, Paperclip, X } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
@@ -13,7 +13,7 @@ import { useFileDrop } from "@/lib/use-file-drop";
 
 import { FileDropOverlay } from "./FileDropOverlay";
 
-export function TeamRoomComposer({ name, base, draftId }: { name: string; base: string; draftId: string }) {
+export function TeamRoomComposer({ name, base, draftId, call }: { name: string; base: string; draftId: string; call?: (empty: boolean) => ReactNode }) {
   const { t } = useI18n();
   const { text, setText, files, keepFiles, removeFile, clear, sending, startSend } = useRoomDraft(draftId);
   const [problem, setProblem] = useState<RoomProblem | null>(null);
@@ -146,7 +146,7 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
             e.preventDefault();
             void send();
           }}
-          placeholder={t("composer.roomLead", { name })}
+          placeholder={call ? "" : t("composer.roomLead", { name })}
           aria-label={t("composer.messageAria", { name })}
           className="col-span-full row-start-1 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
         />
@@ -161,6 +161,7 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
             <Paperclip size={17} />
           </button>
         </div>
+        {call?.(!text && !files.length)}
         <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
           {ready && (
             <button

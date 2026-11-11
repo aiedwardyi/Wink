@@ -14,7 +14,7 @@ import { TeamRoomView } from "./TeamRoomView";
 
 const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
+vi.mock("@/state/store", () => ({ useStore: () => ({ state: { bots: [], connected: true } }), formatTime: () => "" }));
 
 const group = {
   id: "g1", threadId: "t1", name: "Design team", memberIds: [], messages: [],

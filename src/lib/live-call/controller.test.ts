@@ -36,13 +36,14 @@ function fakeAudio(): CallAudioPort & { flushed: number } {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio()) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), room?: { id: string; kind: "host" | "joined" }) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
     botId: "b1",
     botName: "Nova",
     device: "phone",
+    ...{ room },
     engine: () => { const engine = new FakeEngine(); engines.push(engine); return engine; },
     audio,
     now: () => 1_000,
@@ -80,6 +81,139 @@ describe("spokenText", () => {
 });
 
 describe("LiveCall", () => {
+  it("offers a room post after a voice order finishes with typed steering", async () => {
+    const { call, engine } = setup({}, fakeAudio(), { id: "launch", kind: "host" });
+    await call.start();
+    engine().events.ready();
+    call.propose("Check Safari", "t1");
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o", "Check Safari"), userRow("u", "Focus on cookies", { steered: true }), botRow("r", "Fixed the cookie setting.")] });
+    await flush();
+    expect(call.state().postOffer?.text).toBe("Nova: Fixed the cookie setting.");
+    expect(call.state().status).toBe("listening");
+    call.end();
+  });
+
+  it.each([200, 503])("keeps a newer room offer when an earlier send finishes with %i", async (status) => {
+    vi.stubGlobal("crypto", { randomUUID: vi.fn().mockReturnValueOnce("send-a").mockReturnValueOnce("send-b") });
+    let finish!: (result: Posted) => void;
+    const { call, engine } = setup({ "/send": () => new Promise((resolve) => { finish = resolve; }) }, fakeAudio(), { id: "launch", kind: "joined" });
+    await call.start();
+    engine().events.ready();
+    call.observe({ busy: false, messages: [orderRow("a", "Check A"), botRow("ra", "A done.")] });
+    await flush();
+    const sending = call.answerPost(true);
+    call.observe({ busy: false, messages: [orderRow("a", "Check A"), botRow("ra", "A done."), orderRow("b", "Check B"), botRow("rb", "B done.")] });
+    await flush();
+    expect(call.state().postOffer?.sendId).toBe("send-b");
+    finish({ status, data: {} });
+    await sending;
+    expect(call.state().postOffer).toEqual({ text: "Nova: B done.", sendId: "send-b" });
+    expect(call.state().postFailed).toBe(false);
+    call.end();
+  });
+
+  it("carries the room in the token body, including reconnects", async () => {
+    const room = { id: "launch", kind: "host" as const };
+    const { call, posts, engine } = setup({}, fakeAudio(), room);
+    await call.start();
+    expect(posts[0]!.body.room).toEqual(room);
+    engine().events.ready();
+    engine().events.resumable("resume");
+    engine().events.closed(1006, "dropped");
+    await flush();
+    expect(posts.filter((post) => post.path.endsWith("/token")).map((post) => post.body.room)).toEqual([room, room]);
+    call.end();
+  });
+
+  it("passes a new teammate line silently, once and after speech", async () => {
+    const audio = fakeAudio();
+    const { call, engine } = setup({}, audio, { id: "launch", kind: "host" });
+    const observe = (call as LiveCall & { observeRoom?: (lines: any[]) => void }).observeRoom;
+    expect(observe).toBeTypeOf("function");
+    const old = { id: "m1", author: { name: "Minji" }, text: "Safari login breaks", files: [] };
+    observe!.call(call, [old]);
+    await call.start();
+    engine().events.ready();
+    engine().events.audio(new Int16Array([1]));
+    audio.onStart();
+    const next = { id: "m2", author: { name: "민지" }, text: "I can test once fixed", files: [{ name: "check.png", id: "secret-file-id" }] };
+    observe!.call(call, [old, next]);
+    expect(engine().contexts).toEqual([]);
+    engine().events.turnDone();
+    expect(engine().contexts).toEqual([expect.stringContaining("민지: I can test once fixed")]);
+    expect(engine().contexts[0]).toContain("check.png");
+    expect(engine().contexts[0]).not.toContain("secret-file-id");
+    observe!.call(call, [old, next]);
+    expect(engine().contexts).toHaveLength(1);
+    expect(engine().texts).toHaveLength(1);
+    call.end();
+  });
+
+  it("offers a voice order reply and posts only on a second yes through the caller's room route", async () => {
+    for (const kind of ["host", "joined"] as const) {
+      const { call, engine, posts } = setup({}, fakeAudio(), { id: "launch", kind });
+      await call.start();
+      engine().events.ready();
+      call.propose("Check Safari", "t1");
+      await call.answer(true);
+      expect(posts.find((post) => post.path.endsWith("/messages"))?.path).toBe("/api/bots/b1/messages");
+      call.observe({ busy: false, messages: [orderRow("o1", "Check Safari"), botRow("r1", "Found a cookie setting.")] });
+      await flush();
+      expect((call.state() as any).postOffer?.text).toBe("Nova: Found a cookie setting.");
+      expect(posts.filter((post) => post.path.endsWith("/send"))).toEqual([]);
+      engine().events.heard("응, 올려줘");
+      engine().events.answering();
+      await flush();
+      const sent = posts.filter((post) => post.path.endsWith("/send"));
+      expect(sent).toEqual([{ path: `/api/${kind === "joined" ? "joined/" : ""}rooms/launch/send`, body: { text: "Nova: Found a cookie setting.", sendId: "send-1" } }]);
+      expect(sent[0]!.body).not.toHaveProperty("author");
+      engine().events.heard("yes");
+      engine().events.answering();
+      await flush();
+      expect(posts.filter((post) => post.path.endsWith("/send"))).toHaveLength(1);
+      call.end();
+    }
+  });
+
+  it("declines a room post and keeps typed replies out of the offer", async () => {
+    const { call, engine, posts } = setup({}, fakeAudio(), { id: "launch", kind: "host" });
+    await call.start();
+    engine().events.ready();
+    call.observe({ busy: false, messages: [userRow("typed", "What broke?"), botRow("reply", "The cookie.")] });
+    expect(call.state().postOffer).toBeUndefined();
+    call.observe({ busy: false, messages: [orderRow("o", "Check"), botRow("r", "Fixed.")] });
+    await flush();
+    expect(call.state().postOffer).toBeDefined();
+    engine().events.heard("아니, 취소");
+    engine().events.answering();
+    expect(call.state().postOffer).toBeUndefined();
+    expect(posts.some((post) => post.path.endsWith("/send"))).toBe(false);
+    call.end();
+  });
+
+  it("caps the speakable room result and retries with the same sendId", async () => {
+    let tries = 0;
+    const { call, engine, posts } = setup({
+      "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed. ".repeat(400)] } },
+      "/send": async () => ({ status: ++tries === 1 ? 503 : 200, data: {} }),
+    }, fakeAudio(), { id: "launch", kind: "joined" });
+    await call.start();
+    engine().events.ready();
+    call.observe({ busy: false, messages: [orderRow("o", "Check"), botRow("r", "raw reply")] });
+    await flush();
+    expect(call.state().postOffer?.text.length).toBeLessThanOrEqual(1_500);
+    expect(call.state().postOffer?.text).toMatch(/^Nova: Fixed\./);
+    await call.answerPost(true);
+    expect(call.state().postFailed).toBe(true);
+    await Promise.all([call.answerPost(true), call.answerPost(true)]);
+    const sent = posts.filter((post) => post.path.endsWith("/send"));
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body).toEqual(sent[0]!.body);
+    expect(call.state().postOffer).toBeUndefined();
+    call.end();
+  });
+
   it("needs a key on 409 and greets once connected", async () => {
     const needs = setup({ "/call/token": { status: 409, data: { error: "Add a Gemini key to call.", cardId: "k1" } } });
     await needs.call.start();
