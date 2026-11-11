@@ -6,14 +6,15 @@ import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { CallAudio } from "@/lib/live-call/audio";
-import { LiveCall, MIC_BLOCKED, type CallStatus, type Posted } from "@/lib/live-call/controller";
+import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { ORDER_EXPIRY_MS } from "../../shared/live-call";
+import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "openSettings", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -32,6 +33,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     captions: "Captions",
     you: "You",
     micBlocked: "Microphone is off for Wink.",
+    micMissing: "No microphone found. Plug one in, or type in the chat instead.",
+    micBusy: "Your microphone is in use by another app.",
     openSettings: "Open settings",
   },
   ko: {
@@ -52,6 +55,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     captions: "자막",
     you: "나",
     micBlocked: "Wink에서 마이크가 꺼져 있습니다.",
+    micMissing: "마이크를 찾을 수 없습니다. 마이크를 연결하거나 채팅으로 입력하세요.",
+    micBusy: "다른 앱에서 마이크를 사용 중입니다.",
     openSettings: "설정 열기",
   },
 };
@@ -73,12 +78,10 @@ function firstNeed(messages: Message[]): { id: string; short: string } | undefin
 
 function seenPrivacy(): boolean {
   try {
-    if (localStorage.getItem(PRIVACY_SEEN)) return true;
-    localStorage.setItem(PRIVACY_SEEN, "1");
+    return Boolean(localStorage.getItem(PRIVACY_SEEN));
   } catch {
-    // shown again next time
+    return false;
   }
-  return false;
 }
 
 export function clock(ms: number): string {
@@ -119,7 +122,7 @@ function TimeLeft({ expiresAt }: { expiresAt: number }) {
   );
 }
 
-export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; onEnd: () => void }) {
+export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; onEnd: (note?: string) => void }) {
   const { state } = useStore();
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
@@ -142,19 +145,23 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   const mounted = useRef(false);
   const kicked = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
+  const [fresh, setFresh] = useState(() => configured && !seenIntro());
+  // A key saved mid-call shows the intro too, so the call never goes live unseen.
+  const intro = fresh || (snap.status === "needsKey" && configured);
   const messages = visibleMessages(bot);
 
   useEffect(() => {
+    if (intro) return;
     publish(bot.id, live);
     return () => publish(bot.id, undefined);
-  }, [bot.id, live]);
+  }, [bot.id, intro, live]);
 
   useEffect(() => {
     mounted.current = true;
     startCall(bot.id);
     if (!kicked.current) {
       kicked.current = true;
-      void call.start();
+      if (!fresh) void call.start();
     }
     const onVisible = () => call.hidden(document.hidden);
     document.addEventListener("visibilitychange", onVisible);
@@ -172,14 +179,18 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.id, call, onEnd]);
 
   useEffect(() => {
-    if (snap.status === "needsKey" && configured) void call.start();
-  }, [call, configured, snap.status]);
-
-  useEffect(() => {
     if (snap.status !== "ended" && (owner === null || owner === bot.id)) return;
     endCall(bot.id);
     onEnd();
   }, [bot.id, onEnd, owner, snap.status]);
+
+  // No mic to fix in settings: hang up and leave only the line.
+  const micGone = snap.status === "failed" && (snap.error === MIC_MISSING || snap.error === MIC_BUSY);
+  useEffect(() => {
+    if (!micGone) return;
+    endCall(bot.id);
+    onEnd(snap.error === MIC_MISSING ? words.micMissing : words.micBusy);
+  }, [bot.id, micGone, onEnd, snap.error, words]);
 
   useEffect(() => {
     call.observe({ busy: Boolean(bot.busy), messages, needs: firstNeed(messages) });
@@ -187,11 +198,24 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
 
   const [sendBefore, sendAfter] = words.send.split("{order}");
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
+  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
+
+  // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
+  useEffect(() => {
+    if (note !== words.privacy) return;
+    try {
+      localStorage.setItem(PRIVACY_SEEN, "1");
+    } catch {
+      // shown again next time
+    }
+  }, [note, words.privacy]);
 
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
+      <Fold open={intro} soft keep>
+        <CallIntro onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />
+      </Fold>
       <Fold open={Boolean(snap.pending)} soft keep>
         <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
           {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}

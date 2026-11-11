@@ -8,7 +8,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", token: undefined as (() => Response) | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", token: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -50,11 +50,19 @@ const fetchImpl = async (input: RequestInfo | URL) => {
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
   if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
+  if (fakes.key && path.startsWith("/api/bots?")) return Response.json({ bots: [atlas], groups: [], computerControl: {} });
   return new Response("{}", { status: 404 });
 };
 
-async function mount() {
-  vi.stubGlobal("EventSource", class { onmessage = null; close() {} });
+async function saveKey() {
+  fakes.key = true;
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
+  await vi.waitFor(() => expect(posts.some((path) => path.startsWith("/api/bots?"))).toBe(true));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true } }), lastEventId: "qa:2" }));
+}
+
+async function mount(key = false) {
+  vi.stubGlobal("EventSource", class { onmessage = null; constructor() { fakes.sse = this; } close() {} });
   vi.stubGlobal("fetch", vi.fn(fetchImpl));
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("AudioContext", class { resume() { return Promise.resolve(); } close() { return Promise.resolve(); } });
@@ -63,6 +71,7 @@ async function mount() {
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }))));
+  if (key) await saveKey();
   return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
@@ -78,6 +87,10 @@ async function connect(host: HTMLElement) {
   await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).not.toBeNull());
   return engine;
 }
+
+const intro = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-call-intro]");
+const pick = (root: HTMLElement, text: string) => [...root.querySelectorAll("button")].find((b) => b.textContent === text)!;
+const tokens = () => posts.filter((path) => path.endsWith("/call/token")).length;
 
 async function type(host: HTMLElement, text: string) {
   const input = host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")!;
@@ -96,6 +109,8 @@ afterEach(() => {
   fakes.engines.length = 0;
   fakes.micError = "";
   fakes.token = undefined;
+  fakes.key = false;
+  fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
 });
 
@@ -219,6 +234,117 @@ describe("live call in the message box", () => {
       expect(alert.textContent).toBe("Microphone is off for Wink.Open settings");
       await act(async () => [...alert.querySelectorAll("button")].find((b) => b.textContent === "Open settings")!.click());
       expect(permOpenSettings).toHaveBeenCalledWith("mic");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("saving the key does not start the call", async () => {
+    fakes.token = () => Response.json({ error: "Add a Gemini key to call." }, { status: 409 });
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[data-live-call]")?.getAttribute("data-live-call")).toBe("needsKey"));
+      fakes.token = undefined;
+      await saveKey();
+      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      expect(tokens()).toBe(1);
+      expect(fakes.engines).toHaveLength(0);
+      expect(frame(host).querySelector("[data-call-box]")).toBeNull();
+      await act(async () => pick(intro(host)!, "Start call").click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("first call shows the intro once", async () => {
+    const { host, unmount } = await mount(true);
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      const card = intro(host)!;
+      expect(card.textContent).toContain("Voice call");
+      expect(card.textContent).toContain("Uses your Gemini credit while live. End stops it.");
+      expect(pick(card, "Start call").className).toContain("bg-accent");
+      expect(tokens()).toBe(0);
+      expect(frame(host).querySelector("[data-call-box]")).toBeNull();
+      await act(async () => pick(card, "Start call").click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).not.toBeNull());
+      await vi.waitFor(() => expect(intro(host)).toBeNull());
+      expect(button(frame(host), "End")!.className).toContain("bg-danger");
+      expect(host.textContent).toContain("Free Gemini");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("second call starts without the intro", async () => {
+    const { host, unmount } = await mount(true);
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      await act(async () => pick(intro(host)!, "Start call").click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      await act(async () => button(host, "Hang up on Atlas")!.click());
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+      await connect(host);
+      expect(intro(host)).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("not now starts nothing", async () => {
+    const { host, unmount } = await mount(true);
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+      await act(async () => pick(intro(host)!, "Not now").click());
+      await vi.waitFor(() => expect(button(host, "Call Atlas")).not.toBeNull());
+      expect(intro(host)).toBeNull();
+      expect(tokens()).toBe(0);
+      expect(fakes.engines).toHaveLength(0);
+      expect(posts.some((path) => path.includes("/call/") && !path.endsWith("/call/token"))).toBe(false);
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(intro(host)).not.toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("missing mic shows plain line", async () => {
+    const { host, unmount } = await mount();
+    try {
+      for (const [error, line] of [
+        ["NotFoundError", "No microphone found. Plug one in, or type in the chat instead."],
+        ["OverconstrainedError", "No microphone found. Plug one in, or type in the chat instead."],
+        ["NotReadableError", "Your microphone is in use by another app."],
+      ] as const) {
+        fakes.micError = error;
+        await act(async () => button(host, "Call Atlas")!.click());
+        await vi.waitFor(() => expect(host.textContent).toContain(line));
+        expect(host.textContent).not.toContain(error);
+      }
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("mic failure leaves no live call", async () => {
+    fakes.micError = "NotFoundError";
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(button(host, "Call Atlas")?.getAttribute("aria-pressed")).toBe("false"));
+      expect(button(host, "Hang up on Atlas")).toBeNull();
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+      expect(button(host, "End")).toBeNull();
+      fakes.micError = "";
+      await connect(host);
     } finally {
       await unmount();
     }
