@@ -172,9 +172,9 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
       const asked = DOC_ASK.test(input.humanText);
       const made = async (path: string) => asked || ((await stat(resolve(input.roots[0]!, path)).catch(() => null))?.birthtimeMs ?? 0) >= input.startedAt - 2_000;
-      // A document the bot wrote is for the person only when their message names or asks for it, or the reply names one the bot made this turn; the rest are its own notes.
+      // A document the bot wrote is for the person only when their message names or asks for it, or the reply or scan finds one the bot made this turn; the rest are its own notes.
       const docs: string[] = [];
-      for (const path of found) if (scanned.includes(path) || named(input.humanText, path, found) || named(input.reply, path, found) && await made(path)) docs.push(path);
+      for (const path of found) if (named(input.humanText, path, found) || (scanned.includes(path) || named(input.reply, path, found)) && await made(path)) docs.push(path);
       if (latest.get(input.threadId) !== token) return;
       // A file only the mtime scan found may be the user's own: checked, never fixed, unless the reply names it.
       const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, found));
