@@ -963,10 +963,10 @@ describe("relative file links", () => {
       { name: "hero-shot.png", path: `${folder}/hero-shot.png`, size: 1_532_001 },
       { name: "notes.txt", path: `${folder}/notes.txt`, size: 812 },
     ];
-    const mount = async (locale: "en" | "ko" = "en", listed = files, link = folder) => {
+    const mount = async (locale: "en" | "ko" = "en", listed = files, link = folder, more = 7) => {
       applyLocale(locale);
       vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
-        ? new Response(JSON.stringify({ files: listed, more: 7 }), { headers: { "content-type": "application/json" } })
+        ? new Response(JSON.stringify({ files: listed, more }), { headers: { "content-type": "application/json" } })
         : new Response(JSON.stringify({ error: "not found" }), { status: 404 })));
       const host = document.createElement("div");
       document.body.append(host);
@@ -1035,6 +1035,35 @@ describe("relative file links", () => {
         expect(saves.map((save) => [save.getAttribute("href"), save.getAttribute("download")])).toEqual([files[0]!, files[2]!].map((file) => [src(file.path), file.name]));
         expect(saves[1]!.getAttribute("aria-label")).toBe(label);
         expect(saves[1]!.querySelector("svg")).not.toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it.each([["en", "1 more file"], ["ko", "파일 1개가 더 있어요"]] as const)("says one more file in %s", async (locale, line) => {
+      const { root } = await mount(locale, files, folder, 1);
+      try {
+        expect(document.querySelector("[data-linked-folder] p")?.textContent).toBe(line);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("lists a folder once for a double tap", async () => {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
+        ? new Response(JSON.stringify({ files, more: 0 }))
+        : new Response(JSON.stringify({ error: "not found" }), { status: 404 })));
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      try {
+        await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${folder})`, threadId: "t1" })));
+        await act(async () => {
+          host.querySelector("button")!.click();
+          host.querySelector("button")!.click();
+        });
+        expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/linked-folder?"))).toHaveLength(1);
+        expect(document.querySelectorAll("[data-linked-folder]")).toHaveLength(1);
       } finally {
         await act(async () => root.unmount());
       }

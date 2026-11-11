@@ -30,15 +30,22 @@ export function LinkedFolderLink({ folderPath, threadId, fileSrc, children }: { 
   const { t } = useI18n();
   const [listing, setListing] = useState<Listing | null>(null);
   const [refused, setRefused] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const busy = useRef(false);
   const open = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    setLoading(true);
     const res = await fetch(`/api/threads/${encodeURIComponent(threadId)}/linked-folder?path=${encodeURIComponent(folderPath)}`).catch(() => null);
     const body = res?.ok ? listingSchema.safeParse(await res.json().catch(() => null)) : null;
+    busy.current = false;
+    setLoading(false);
     setRefused(!body?.success);
     if (body?.success) setListing(body.data);
   };
   return (
     <>
-      <button type="button" onClick={() => void open()} title={folderPath} className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
+      <button type="button" onClick={() => void open()} aria-busy={loading || undefined} title={folderPath} className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
         {children}
       </button>
       {refused && <span className="ml-1.5 text-[12px] text-ink-secondary">{t("chat.fileLink.desktopOnly")}</span>}
@@ -151,7 +158,7 @@ function LinkedFolderSheet({ name, listing, fileSrc, onClose }: { name: string; 
               </div>
             );
           })}
-          {listing.more > 0 && <p className="px-2 pb-1 pt-2 text-[12px] text-ink-secondary">{t("chat.folder.more", { count: listing.more })}</p>}
+          {listing.more > 0 && <p className="px-2 pb-1 pt-2 text-[12px] text-ink-secondary">{t(listing.more === 1 ? "chat.folder.moreOne" : "chat.folder.more", { count: listing.more })}</p>}
         </div>
       </div>
       {image && <MediaViewer image={image} onClose={() => setImage(null)} />}
