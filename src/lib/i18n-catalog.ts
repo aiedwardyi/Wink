@@ -3277,7 +3277,7 @@ export const ko = {
   "teamRoom.leaveBody": "같은 코드로 다시 참여할 수 있어요.",
   "teamRoom.rejoin": "다시 참여",
   "teamRoom.removeLocal": "목록에서 제거",
-  "teamRoom.removeLocalTitle": "이 PC에서 {name}을 제거할까요?",
+  "teamRoom.removeLocalTitle": "이 PC에서 {name} 제거할까요?",
   "teamRoom.removeLocalBody": "이 PC의 채팅방 사본과 대화 기록을 삭제해요. 호스트의 채팅방은 그대로 유지돼요.",
   "teamRoom.dropFile": "{name} 빼기",
   "teamRoom.tooMany": "메시지 하나에 파일은 10개까지 보낼 수 있어요.",
