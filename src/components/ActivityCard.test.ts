@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { RIPPLE_GAP_MS } from "@/lib/activity-glitter";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
-import { ActivityCard, resetActivity } from "./ActivityCard";
+import { ActivityCard, resetActivity, warmActivity } from "./ActivityCard";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -82,6 +82,20 @@ it("paints the last result on the first frame and refreshes behind it", async ()
     expect(squaresOf(host)[7]!.className).toContain("bg-control");
     expect(squaresOf(host)[8]!.className).toContain("bg-accent");
     expect(JSON.parse(localStorage.getItem("omb-activity")!).counts[8]).toBe(4);
+  } finally {
+    await unmount();
+  }
+});
+
+it("paints warmed numbers on the first open with nothing saved", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(activityOf(weeks((day) => (day === 7 ? 9 : 0)))))));
+  await warmActivity();
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+  const { host, unmount } = mount();
+  try {
+    expect(squaresOf(host)[7]!.className).toContain("bg-accent");
+    expect(host.querySelector(".invisible")).toBeNull();
+    expect(host.textContent).toContain("Best Day");
   } finally {
     await unmount();
   }

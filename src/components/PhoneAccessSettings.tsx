@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
+import { onThisPc } from "@/lib/devices-setup";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
@@ -61,12 +62,55 @@ const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-co
 const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent";
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
+type Google = { state: string; email?: string };
+type Saved = { status: RelayStatus | null; google: Google | null };
+const KEY = "omb-phone-relay";
+let last: Saved | null = null;
+let pending: Promise<unknown> | null = null;
+
+function saved(): Saved {
+  if (last) return last;
+  last = { status: null, google: null };
+  try {
+    const body = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null };
+  } catch {
+    /* A fresh fetch fills it in. */
+  }
+  return last;
+}
+
+function keep(next: Partial<Saved>) {
+  last = { ...saved(), ...next };
+  try {
+    localStorage.setItem(KEY, JSON.stringify(last));
+  } catch {
+    /* It still paints from memory this session. */
+  }
+}
+
+/** This PC's relay and Google state, fetched at idle so Devices paints them on its first open. */
+export function warmRelay(): Promise<unknown> {
+  if (!onThisPc()) return Promise.resolve();
+  pending ??= Promise.all([
+    api("/api/phone-relay/status").then((status: RelayStatus) => keep({ status }), () => {}),
+    api("/api/google-account").then((google: Google) => keep({ google }), () => {}),
+  ]).finally(() => { pending = null; });
+  return pending;
+}
+
+/** Tests only: forget the last state. */
+export function resetRelay(): void {
+  last = null;
+  pending = null;
+}
+
 /** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. */
 export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
-  const [status, setStatus] = useState<RelayStatus | null>(null);
+  const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
-  const [google, setGoogle] = useState<{ state: string; email?: string } | null>(null);
+  const [google, setGoogle] = useState<Google | null>(() => saved().google);
   const [phones, setPhones] = useState<Phone[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [asking, setAsking] = useState(false);
@@ -79,7 +123,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   const copiedTimer = useRef<number | undefined>(undefined);
 
   const loadGoogle = useCallback(
-    () => request("/api/google-account").then(setGoogle, () => {}),
+    () => request("/api/google-account").then((body: Google) => {
+      keep({ google: body });
+      setGoogle(body);
+    }, () => {}),
     [request],
   );
 
@@ -89,6 +136,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       request("/api/phone-relay/status")
         .then((body: RelayStatus) => {
           if (!live) return;
+          keep({ status: body });
           setStatus(body);
           setRefused(false);
           setNow(Date.now());
@@ -124,7 +172,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     return () => window.clearInterval(tick);
   }, [retrying]);
 
-  if (!status && !refused) return null;
+  // Unknown until the first answer: the row paints at once, its switch held off.
+  const known = status !== null || refused;
 
   const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
     if (busy) return;
@@ -227,15 +276,15 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     </form>
   );
 
-  const signedOut = google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
-  const unavailable = (refused && !status) || status?.available === false || (!configured && status?.available !== true);
+  const signedOut = known && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
   const toggle = (
     <button
       type="button"
       role="switch"
       aria-checked={enabled}
       aria-label={t("settings.devices.reach")}
-      disabled={busy || (!enabled && unavailable)}
+      disabled={busy || !known || (!enabled && unavailable)}
       onClick={() => {
         if (enabled) return void save(false);
         // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
