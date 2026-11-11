@@ -102,19 +102,20 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const lastUser = messages.findLast((row) => row.role === "user" && row.kind === "text" && row.text?.trim());
   const language = lastUser && HANGUL.test(lastUser.text!) ? "Korean" : "English";
+  const speak = locale === "ko" ? "Korean" : "English";
   const order = bot.busy ? lastUser?.text?.trim().slice(0, 300) : undefined;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return [
     `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
     "DUTIES: You only talk; the work happens in the chat. For work, say it back in one short sentence and ask whether to send it, then call propose_work. Until its result says sent or queued, nothing was sent. Never say done, fixed, sent or merged unless a [Wink] line or a propose_work result says so.",
     "FACTS: Only from YOUR NOTES, RECENT CHAT and [Wink] lines. Not sure: say so.",
-    `STYLE: 1-2 short sentences. Answer in the user's language; in Korean match their politeness. No code, paths or links aloud. Wait through pauses. Stop when cut off. Greet in ${language}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences and end with: details in chat.`,
+    `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Wait through pauses. Stop when cut off. Greet in ${language}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
@@ -193,10 +194,10 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const fetchFn = deps.fetch ?? fetch;
   const briefs = new Map<string, { botId: string; brief: string; at: number }>();
 
-  const briefFor = async (bot: BotRecord, callId: string) => {
+  const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached.brief;
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now());
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), typeof locale === "string" ? locale : undefined);
     briefs.delete(callId);
     briefs.set(callId, { botId: bot.id, brief, at: now() });
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -226,7 +227,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const brief = await briefFor(bot, callId);
+    const brief = await briefFor(bot, callId, body.locale);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;

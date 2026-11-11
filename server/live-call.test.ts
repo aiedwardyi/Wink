@@ -71,6 +71,25 @@ describe("call token", () => {
     expect(h.sent(2).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("a later line");
   });
 
+  it("brief has no details-in-chat tail", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("say it in 1-3 sentences.");
+    expect(brief).not.toContain("details in chat");
+  });
+
+  it("brief pins the app language", async () => {
+    const h = harness();
+    await h.post("token", { locale: "ko" });
+    await h.post("token");
+    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("Speak Korean");
+    expect(brief(0)).toContain("ask again in Korean");
+    expect(brief(1)).toContain("Speak English");
+    expect(brief(0)).not.toContain("the user's language");
+  });
+
   it("409s without a key and puts one Gemini key card in the chat", async () => {
     const h = harness({ key: undefined });
     const first = await h.post("token");
