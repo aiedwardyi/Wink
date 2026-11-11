@@ -9,21 +9,24 @@ import { join } from "node:path";
 import { pipeline } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
-import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, sniffImageMime } from "../attachments.ts";
+import { sniffImageMime } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
 import { RateLimiter } from "../phone-auth.ts";
 import { roomById, RoomError, type RoomFile } from "./db.ts";
+import { holdRoomFiles, roomFilesBusy, roomFilesFolder, roomFilesRoot } from "./files-folder.ts";
 
-export const ROOM_DISK_BYTES = 1024 ** 3;
-export const MAX_MESSAGE_FILES = 10;
-const UPLOADS = 30;
+export const IMAGE_MAX_BYTES = 100 * 1024 ** 2;
+export const DOCUMENT_MAX_BYTES = 1024 ** 3;
+export const ROOM_DISK_BYTES = 100 * 1024 ** 3;
+export const MAX_MESSAGE_FILES = 50;
+const UPLOADS = 50;
 const UPLOAD_WINDOW_MS = 10 * 60_000;
 const UNSENT_MS = 24 * 60 * 60_000;
 const HEAD_BYTES = 16;
 const FILE_ID = /^[A-Za-z0-9_-]{24}$/;
 const UPLOAD_ID = /^[A-Za-z0-9_-]{16,80}$/;
 
-const ROOT = () => join(DATA_DIR, "room-files");
+const ROOT = roomFilesRoot;
 const roomDir = (roomId: string) => join(ROOT(), roomId);
 const DB_FILE = () => join(DATA_DIR, "rooms.db");
 
@@ -115,6 +118,43 @@ function cleanName(raw: string | null): string {
 
 const used = (roomId: string) =>
   (withDb((db) => db.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM room_files WHERE room_id = ?").get(roomId)) as { bytes: number }).bytes;
+
+export function listRoomFiles(roomId: string, host: string) {
+  const files = withDb((db) => db.prepare(`
+    SELECT f.id, f.name, f.type, f.bytes, f.at, f.owner,
+      CASE WHEN f.owner = 'host' THEN ? ELSE COALESCE(p.name,
+        (SELECT author_name FROM log, json_each(log.files) sent WHERE log.room_id = f.room_id AND json_extract(sent.value, '$.id') = f.id LIMIT 1), f.owner) END AS sender
+    FROM room_files f LEFT JOIN people p ON p.room_id = f.room_id AND p.id = f.owner
+    WHERE f.room_id = ? ORDER BY f.at DESC, f.rowid DESC
+  `).all(host, roomId));
+  return { files, used: used(roomId), capacity: ROOM_DISK_BYTES, error: roomFilesFolder().error };
+}
+
+export function roomFilesState(roomId: string) {
+  const deleted = withDb((db) => db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ?").all(roomId)) as Array<{ id: string }>;
+  return { deleted: deleted.map((file) => file.id), error: roomFilesFolder().error };
+}
+
+export async function deleteRoomFile(roomId: string, id: string): Promise<void> {
+  const release = holdRoomFiles();
+  try {
+    if (!FILE_ID.test(id)) throw statusError(404, "not found");
+    await rm(join(roomDir(roomId), id), { force: true });
+    withDb((db) => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("INSERT OR IGNORE INTO room_file_deletions (room_id, id) VALUES (?, ?)").run(roomId, id);
+        db.prepare("DELETE FROM room_files WHERE room_id = ? AND id = ?").run(roomId, id);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  } finally {
+    release();
+  }
+}
 
 export interface Upload {
   /** "host" or a person id. */
@@ -214,10 +254,19 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
   });
 }
 
-const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up to 10 MB" : "files can be up to 25 MB");
+const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up to 100 MB" : "files can be up to 1 GB");
 
 /** Durable before the reply: bytes fsynced and renamed into place, then the row committed. */
 export async function saveRoomFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
+  const release = holdRoomFiles();
+  try {
+    return await saveFile(req, roomId, upload);
+  } finally {
+    release();
+  }
+}
+
+async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
   if (upload.uploadId === null || !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
   const length = Number(req.headers["content-length"] ?? 0);
@@ -300,6 +349,7 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
     "content-length": String(file.bytes),
     "content-disposition": `${preview ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
     "x-content-type-options": "nosniff",
+    "x-content-sha256": file.sha256,
     "content-security-policy": "default-src 'none'; sandbox",
     "cache-control": "no-store",
   };
@@ -323,14 +373,16 @@ export async function sendBlob(res: ServerResponse, path: string, file: RoomFile
 
 /** The ACL is the caller's; this only resolves an id inside one room. */
 export function serveRoomFile(res: ServerResponse, roomId: string, id: string, preview: boolean): Promise<boolean> {
+  const release = holdRoomFiles();
+  res.once("close", release);
   const file = roomFile(roomId, id);
   return file ? sendBlob(res, join(roomDir(roomId), file.id), file, preview) : Promise.resolve(false);
 }
 
 /** On start: half-written uploads, blobs without a row, and day-old uploads no message took. */
-export function sweepRoomFiles(): void {
-  if (!existsSync(ROOT())) return;
+export function sweepRoomFiles(groups: readonly { hosted?: { roomId: string }; picture?: string }[] = []): void {
   try {
+    if (roomFilesBusy() || !existsSync(ROOT())) return;
     const cutoff = Date.now() - UNSENT_MS;
     withDb((db) => {
       const stale = db.prepare(`
@@ -340,9 +392,13 @@ export function sweepRoomFiles(): void {
         )
       `).all(cutoff) as Array<{ room_id: string; id: string }>;
       const drop = db.prepare("DELETE FROM room_files WHERE room_id = ? AND id = ?");
-      for (const row of stale) drop.run(row.room_id, row.id);
+      for (const row of stale) {
+        if (!groups.some((group) => group.hosted?.roomId === row.room_id && group.picture === row.id)) drop.run(row.room_id, row.id);
+      }
       const known = db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND id = ?");
+      const rooms = new Set((db.prepare("SELECT id FROM rooms").all() as Array<{ id: string }>).map((room) => room.id));
       for (const roomId of readdirSync(ROOT())) {
+        if (!rooms.has(roomId)) continue;
         try {
           for (const name of readdirSync(roomDir(roomId))) {
             if (!FILE_ID.test(name) || !known.get(roomId, name)) rmSync(join(roomDir(roomId), name), { force: true, recursive: true });

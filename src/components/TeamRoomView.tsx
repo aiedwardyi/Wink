@@ -14,19 +14,22 @@ import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
 import { RoomAlertsBell } from "./RoomAlertsBell";
-import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
+import { TeamRoomPicture } from "./RoomPicture";
+import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomPeople } from "./TeamRoomPeople";
+import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function TeamRoomView({ group }: { group: TeamRoom }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
   const lines = useMemo(() => hostLines(group.messages), [group.messages]);
   const base = hostRoomBase(group.hosted.roomId);
+  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const count = roomPeople(group).length;
   const missing = Boolean(group.room && "missing" in group.room);
   return (
@@ -35,10 +38,14 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         {(closing) => <TeamRoomPeople group={group} closing={closing} onClose={() => setPeopleOpen(false)} triggerRef={peopleButton} />}
       </Presence>
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
-        <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!missing && <TeamRoomPicture key={group.id} group={group} />}
+          <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{group.name}</span>
+        </div>
         {!missing && (
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
+            <TeamRoomFilesMenu roomId={group.hosted.roomId} />
             <button
               ref={peopleButton}
               type="button"
@@ -54,9 +61,9 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} />
+      <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply} />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} replyTo={replyTo} onClearReply={clearReply} />}
       </div>
     </main>
   );

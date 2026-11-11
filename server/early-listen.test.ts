@@ -162,6 +162,11 @@ describe("startEarlyListen", () => {
     expect(early.server.headersTimeout).toBeGreaterThan(early.server.keepAliveTimeout);
   });
 
+  it("lets room uploads outlast requestTimeout", async () => {
+    const { early } = await listen();
+    expect(early.server.listenerCount("clientError")).toBe(1);
+  });
+
   it("reports a taken port as already in use", async () => {
     const holder = createServer();
     await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));

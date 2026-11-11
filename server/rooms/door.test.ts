@@ -17,6 +17,7 @@ import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
+import * as roomDoor from "./door.ts";
 import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { hostedRoomView } from "./guards.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites } from "./invites.ts";
@@ -250,6 +251,29 @@ afterEach(() => {
 });
 
 describe("door routes", () => {
+  it("shares only the picture id and pushes replacement and removal to both guests", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const daniel = await joined(group, "Daniel");
+    const first = await openStream(group.hosted.roomId, mina.key, 0);
+    const second = await openStream(group.hosted.roomId, daniel.key, 0);
+    try {
+      store.patchGroup(group.id, { picture: "P".repeat(24) } as never);
+      const snapshot = await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key });
+      expect(snapshot.body.state.picture).toBe("P".repeat(24));
+      for (const stream of [first, second]) {
+        await stream.until((frames) => frames.some((frame) => frame.kind === "state" && (frame.state as any).picture === "P".repeat(24)));
+        expect(Buffer.byteLength(JSON.stringify(stream.frames))).toBeLessThan(256 * 1024);
+      }
+      store.patchGroup(group.id, { picture: undefined } as never);
+      for (const stream of [first, second]) await stream.until((frames) => frames.filter((frame) => frame.kind === "state").length >= 3);
+      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key })).body.state).not.toHaveProperty("picture");
+    } finally {
+      await shut(first);
+      await shut(second);
+    }
+  });
+
   it("answers 404 for every path it does not list, before reading a key", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
@@ -313,6 +337,16 @@ describe("a shared bot group", () => {
   const botSays = (group: HostedGroup, bot: { id: string; name: string }, text: string, replyToId?: string) =>
     appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: bot.id, name: bot.name }, text, ...(replyToId ? { replyToId } : {}) });
   const alias = (bot: { id: string; name: string }) => ({ kind: "person", id: `bot-${bot.id}`, name: bot.name });
+
+  it("never gives a guest a bot's name by room code or rename", async () => {
+    const wink = newBot("Wink");
+    const group = crew([wink.id]);
+    const shared = roomCode(group.hosted.roomId);
+    const first = await post("/room/v1/join", { code: `wkr1:${HOST}:${shared.id}.${shared.secret}`, name: "wink", device: "pc-wink-0123456789abcdef" });
+    expect(first.body.person.name).toBe("wink 2");
+    const mina = await joined(group, "Mina");
+    expect((await post(`/room/v1/rooms/${group.hosted.roomId}/name`, { name: "Wink" }, { key: mina.key })).body).toEqual({ name: "Wink 3" });
+  });
 
   it("gives older guests a person alias for each bot line, newer guests the bot, and both the roster", async () => {
     const wink = newBot("Wink");
@@ -850,7 +884,8 @@ describe("files", () => {
     expect(await call(path, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
     expect(await call(`/room/v1/rooms/${b.hosted.roomId}/files/${up.body.file.id}`, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
     expect(await call(path)).toMatchObject({ status: 401, body: { error: "unauthorized" } });
-    for (const method of ["HEAD", "PUT", "DELETE", "POST"]) expect((await call(path, { method, key: mina.key, headers: { origin: ORIGIN } })).status, method).toBe(404);
+    for (const method of ["HEAD", "PUT", "POST"]) expect((await call(path, { method, key: mina.key, headers: { origin: ORIGIN } })).status, method).toBe(404);
+    expect((await call(path, { method: "DELETE", key: mina.key, headers: { origin: ORIGIN } })).status).toBe(403);
     expect((await call(`/room/v1/rooms/${a.hosted.roomId}/files`, { key: mina.key })).status).toBe(404);
     expect((await upload(b.hosted.roomId, mina.key, "wrong room")).status).toBe(404);
     removeRoomPerson(a.hosted.roomId, mina.personId);
@@ -880,7 +915,7 @@ describe("files", () => {
     expect(await post(path, { text: "look", fileIds: [theirs.body.file.id] }, { key: mina.key })).toMatchObject({ status: 404, body: { error: "no such file in this room" } });
     expect(await post(path, { text: " ", fileIds: [] }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "message is empty" } });
     expect(await post(path, { text: "x", fileIds: "nope" }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "bad request" } });
-    expect(await post(path, { text: "x", fileIds: Array.from({ length: 11 }, () => mine.body.file.id) }, { key: mina.key })).toMatchObject({ status: 400 });
+    expect(await post(path, { text: "x", fileIds: Array.from({ length: 51 }, () => mine.body.file.id) }, { key: mina.key })).toMatchObject({ status: 400 });
     expect(recentRoomEntries(roomId, 5).map((entry) => entry.files?.map((file) => file.id))).toEqual([[mine.body.file.id]]);
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ roomFiles: [mine.body.file] });
     const preview = await call(`/room/v1/rooms/${roomId}/files/${mine.body.file.id}/preview`, { key: pat.key });
@@ -947,5 +982,57 @@ describe("wiring", () => {
     expect(index).toContain("room: handleRoomDoor,");
     expect(index).toContain("configureRoomDoor({ store,");
     expect(index).toMatch(/if \(!relay && roomDoorPath\(path\)\) return json\(res, 404, \{ error: "not found" \}\);/);
+  });
+});
+
+
+describe("own name", () => {
+  it("cleans and numbers the caller's name and limits changes", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const other = await joined(group, "민아");
+    const path = `/room/v1/rooms/${group.hosted.roomId}/name`;
+    const rename = (name: unknown) => post(path, { name }, { key: mina.key });
+    expect((await rename("@민아")).body).toEqual({ name: "민아 2" });
+    expect((await rename("민아 2")).body).toEqual({ name: "민아 2" });
+    expect((await rename("")).body).toEqual({ name: "Guest" });
+    expect(roomPeople(group.hosted.roomId).find((person) => person.id === other.personId)?.name).toBe("민아");
+    expect((await rename(12)).status).toBe(400);
+    expect((await call(path, { key: mina.key })).status).toBe(404);
+    expect((await post(path, { name: "x" })).status).toBe(401);
+    for (let i = 0; i < 10; i++) await rename("Guest");
+    expect((await rename("Guest")).status).toBe(429);
+  });
+
+  it("pushes renamed people to both live viewers", async () => {
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const other = await joined(group, "Daniel");
+    const streams = await Promise.all([openStream(group.hosted.roomId, mina.key, 0), openStream(group.hosted.roomId, other.key, 0)]);
+    try {
+      expect((await post(`/room/v1/rooms/${group.hosted.roomId}/name`, { name: "민아" }, { key: mina.key })).status).toBe(200);
+      for (const stream of streams) {
+        const frames = await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.people.some((person) => person.name === "민아")));
+        expect(Buffer.byteLength(JSON.stringify(frames.at(-1)))).toBeLessThan(256 * 1024);
+      }
+    } finally {
+      streams.forEach((stream) => stream.close());
+    }
+  });
+
+  it("pushes a profile rename without a group edit", async () => {
+    let host = "Edward";
+    configureRoomDoor({ store, hostName: () => host });
+    const group = peopleRoom();
+    const mina = await joined(group, "Mina");
+    const stream = await openStream(group.hosted.roomId, mina.key, 0);
+    try {
+      expect(typeof roomDoor.hostNameChanged).toBe("function");
+      host = "에드워드";
+      roomDoor.hostNameChanged();
+      await stream.until((frames) => frames.some((frame) => frame.kind === "state" && frame.state.host === host));
+    } finally {
+      stream.close();
+    }
   });
 });

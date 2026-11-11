@@ -2,18 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Group, Message } from "@/state/store-types";
 
-import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./composer-attachments";
 import {
   filesProblem,
   hostLines,
   inviteErrorKey,
   isTeamRoom,
+  joinedLines,
   joinedPhase,
   joinedRoomIdOf,
   joinedSelection,
   joinErrorKey,
   joinRoom,
   looksLikeRoomCode,
+  ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
+  ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
+  roomMessage,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -42,7 +45,15 @@ describe("team room shape", () => {
       { id: "a", role: "user", kind: "text", text: "hi", at: 1, author: { kind: "person", id: "p", name: "Mina" }, roomEntryId: "e1" },
       { id: "b", role: "bot", kind: "text", text: "system note", at: 2 },
     ];
-    expect(hostLines(messages)).toEqual([{ id: "a", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [] }]);
+    expect(hostLines(messages)).toEqual([{ id: "a", entryId: "e1", at: 1, author: { kind: "person", id: "p", name: "Mina" }, text: "hi", files: [], message: messages[0] }]);
+    expect(roomMessage(hostLines(messages)[0]!)).toBe(messages[0]);
+  });
+
+  it("keeps joined reply ids on the line and its message adapter", () => {
+    const entry = { seq: 2, id: "e2", at: 2, author: { kind: "person" as const, id: "mina", name: "Mina Park" }, text: "reply", replyToId: "e1" };
+    const line = joinedLines([entry])[0]!;
+    expect(line.replyToId).toBe("e1");
+    expect(roomMessage(line)).toMatchObject({ id: "e2", roomEntryId: "e2", replyToId: "e1", text: "reply", author: entry.author });
   });
 
   it("reads joined, link and leave into one phase", () => {
@@ -93,8 +104,25 @@ describe("room codes", () => {
 describe("sending to a room", () => {
   const file = (name: string, type: string, size = 3) => new File([new Uint8Array(size)], name, { type });
 
+  it("accepts room limits independently of bot attachments", () => {
+    const image = { name: "photo.png", type: "image/png", size: 100 * 1024 ** 2 };
+    expect(filesProblem([image])).toBeNull();
+    expect(filesProblem([{ ...image, size: 101 * 1024 ** 2 }])?.key).toBe("teamRoom.tooBig");
+    expect(filesProblem([{ name: "plan.pdf", type: "application/pdf", size: 1024 ** 3 }])).toBeNull();
+    const files = Array.from({ length: 50 }, () => ({ name: "a.txt", type: "text/plain", size: 1 }));
+    expect(filesProblem(files)).toBeNull();
+    expect(filesProblem([...files, files[0]!])?.key).toBe("teamRoom.tooMany");
+  });
+
+  it.each(["/api/rooms/r1", "/api/joined/rooms/r9"])("carries the reply id to %s", async (base) => {
+    const fetch = vi.fn(async (_path: string, _init: RequestInit) => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await sendToRoom(base, "reply", [], "send-0123456789abcdef", "original-entry")).toBeNull();
+    expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toEqual({ text: "reply", sendId: "send-0123456789abcdef", replyToId: "original-entry" });
+  });
+
   it("refuses too many or too big before any upload", () => {
-    const many = Array.from({ length: 11 }, (_, index) => ({ name: `${index}.txt`, size: 1, type: "text/plain" }));
+    const many = Array.from({ length: 51 }, (_, index) => ({ name: `${index}.txt`, size: 1, type: "text/plain" }));
     expect(filesProblem(many)).toEqual({ key: "teamRoom.tooMany" });
     expect(filesProblem([{ name: "huge.png", size: IMAGE_MAX_BYTES + 1, type: "image/png" }])).toEqual({ key: "teamRoom.tooBig", vars: { name: "huge.png" } });
     expect(filesProblem([{ name: "plan.pdf", size: DOCUMENT_MAX_BYTES, type: "application/pdf" }])).toBeNull();

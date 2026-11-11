@@ -1,13 +1,15 @@
-// The host's People sheet: the room's one code to copy, the list, Remove.
+// People can edit their own Wink name; the host also has Invite and Remove.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Check, Copy, X } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type TeamRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 import type { Group } from "@/state/store-types";
+
+import { RoomOwnName } from "./RoomOwnName";
 
 // Joins and removals at the door send no group frame, so the open sheet asks.
 const POLL_MS = 3_000;
@@ -47,24 +49,27 @@ function CodeBox({ code }: { code: string }) {
   );
 }
 
-export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: {
-  group: TeamRoom;
+export function TeamRoomPeople({ group, joined, closing = false, onClose, triggerRef }: {
+  group?: TeamRoom;
+  joined?: JoinedView;
   closing?: boolean;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const [code, setCode] = useState<string | null>(null);
   const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const roomId = group.hosted.roomId;
-  const people = roomPeople(group);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const roomId = group?.hosted.roomId;
+  const people = group ? roomPeople(group) : joined?.state?.people ?? [];
   useBackLayer(!closing, onClose);
 
   useEffect(() => {
-    if (closing) return;
+    if (closing || !roomId) return;
     setCode(null);
     let alive = true;
     void inviteToRoom(roomId).then((result) => {
@@ -78,7 +83,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
   }, [closing, roomId, codeVersion]);
 
   useEffect(() => {
-    if (closing) return;
+    if (closing || !group) return;
     let alive = true;
     const poll = async () => {
       try {
@@ -95,7 +100,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
       alive = false;
       window.clearInterval(timer);
     };
-  }, [closing, dispatch, group.id]);
+  }, [closing, dispatch, group?.id]);
 
   useEffect(() => {
     if (closing) return;
@@ -106,7 +111,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        closeRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -127,11 +132,11 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
       dialog.removeEventListener("keydown", onKey);
       triggerRef.current?.focus();
     };
-  }, [closing, onClose, triggerRef]);
+  }, [closing, triggerRef]);
 
   const remove = async (personId: string) => {
-    const room = group.room && "people" in group.room ? group.room : null;
-    if (!room) return;
+    const room = group?.room && "people" in group.room ? group.room : null;
+    if (!room || !group || !roomId) return;
     try {
       await removeFromRoom(roomId, personId);
       setCodeVersion((version) => version + 1);
@@ -167,7 +172,7 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
             <X size={15} />
           </button>
         </div>
-        <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
+        <div className="mb-3 truncate text-[13px] text-ink-secondary">{group?.name ?? joined?.state?.roomName}</div>
         {code && (
           <div className="flex flex-col gap-2">
             <CodeBox code={code} />
@@ -176,17 +181,20 @@ export function TeamRoomPeople({ group, closing = false, onClose, triggerRef }: 
         )}
         {problem && <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(problem)}</p>}
         <ul className="mt-3 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
+          {group ? <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} /> : (
+            <li className="flex items-center gap-2 px-2 py-1.5"><span className="min-w-0 flex-1 truncate text-[14px] text-ink">{joined?.state?.host}</span><span className="text-[12px] text-ink-secondary">{t("teamRoom.host")}</span></li>
+          )}
           {people.map((person) => (
-            <li key={person.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised/50">
+            person.id === joined?.me.id ? <RoomOwnName key={person.id} name={person.name} /> : <li key={person.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised/50">
               <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{person.name}</span>
-              <button
+              {group && <button
                 type="button"
                 onClick={() => void remove(person.id)}
                 aria-label={t("teamRoom.removeNamed", { name: person.name })}
                 className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
               >
                 {t("teamRoom.remove")}
-              </button>
+              </button>}
             </li>
           ))}
           {people.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}

@@ -3,11 +3,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { json, readBody } from "../http-helpers.ts";
+import { isRelayRequest } from "../phone-relay/via.ts";
 import type { Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { committedRoomText, roomEntry } from "./db.ts";
-import { doorEntry } from "./door-streams.ts";
-import { MAX_MESSAGE_FILES, saveRoomFile, serveRoomFile } from "./files.ts";
+import { doorEntry, resetDoorRoom } from "./door-streams.ts";
+import { deleteRoomFile, listRoomFiles, MAX_MESSAGE_FILES, roomFilesState, saveRoomFile, serveRoomFile } from "./files.ts";
+import { moveRoomFiles, roomFilesFolder } from "./files-folder.ts";
 import { hostedSend } from "./send.ts";
 
 export type FileAction = "upload" | "download" | "preview";
@@ -26,7 +28,9 @@ function reply(res: ServerResponse, status: number, body: unknown, close = false
 export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, res: ServerResponse, url: URL, roomId: string, owner: string, still?: () => boolean): Promise<void> {
   const action = fileAction(match);
   if (action !== "upload") {
-    if (!(await serveRoomFile(res, roomId, match[2]!, action === "preview"))) reply(res, 404, { error: "not found" });
+    try {
+      if (!(await serveRoomFile(res, roomId, match[2]!, action === "preview"))) reply(res, 404, { error: "not found" });
+    } catch { reply(res, 503, { error: "room files folder is unavailable" }); }
     return;
   }
   try {
@@ -50,14 +54,52 @@ const HOST_ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(send|files(?:\/[A-Za-z0-9_-]{
 
 /** The host's side: upload, download, preview, and a send that carries files. False when the path isn't ours. */
 export async function hostFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor">; botCaller: boolean },
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, deps: { store: Pick<Store, "groups" | "messagesFor" | "patchMessage" | "patchGroup">; hostName?: () => string; botCaller: boolean },
 ): Promise<boolean> {
+  if (url.pathname === "/api/room-files-folder") {
+    if (isRelayRequest(req) || deps.botCaller) reply(res, 403, { error: "forbidden" });
+    else {
+      try {
+        if (method === "GET") reply(res, 200, roomFilesFolder());
+        else if (method === "PUT") reply(res, 200, await moveRoomFiles((await readBody(req))?.path));
+        else reply(res, 404, { error: "not found" });
+      } catch { reply(res, 503, { error: "room files folder is unavailable" }); }
+    }
+    return true;
+  }
   if (!url.pathname.startsWith("/api/rooms/")) return false;
+  const state = /^\/api\/rooms\/([\w-]{1,64})\/files-state$/.exec(url.pathname);
+  if (state) {
+    if (method !== "GET" || !deps.store.groups.some((group) => group.hosted?.roomId === state[1])) reply(res, 404, { error: "not found" });
+    else if (deps.botCaller) reply(res, 403, { error: "forbidden" });
+    else reply(res, 200, roomFilesState(state[1]!));
+    return true;
+  }
   const route = HOST_ROUTE.exec(url.pathname);
   const roomId = route?.[1];
   const group = roomId ? deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) : undefined;
   const file = route?.[2] === "send" ? null : FILE_PATH.exec(url.pathname.slice("/api".length));
   const action = file ? fileAction(file) : "send";
+  if (file && group && (method === "DELETE" || (method === "GET" && !file[2]))) {
+    if (deps.botCaller) reply(res, 403, { error: "forbidden" });
+    else {
+      try {
+        if (method === "GET") reply(res, 200, listRoomFiles(roomId!, deps.hostName?.() ?? "The host"));
+        else if (!file[2] || file[3]) reply(res, 404, { error: "not found" });
+        else {
+          await deleteRoomFile(roomId!, file[2]);
+          if (group.picture === file[2]) deps.store.patchGroup(group.id, { picture: undefined });
+          for (const message of deps.store.messagesFor(group.threadId)) {
+            if (!message.roomFiles?.some((each) => each.id === file[2])) continue;
+            deps.store.patchMessage(group.threadId, message.id, { roomFiles: message.roomFiles.map((each) => each.id === file[2] ? { ...each, deleted: true } : each) });
+          }
+          resetDoorRoom(roomId!);
+          reply(res, 200, { ok: true });
+        }
+      } catch { reply(res, 503, { error: "room files folder is unavailable" }); }
+    }
+    return true;
+  }
   if (!route || !group || method !== (action === "upload" || action === "send" ? "POST" : "GET")) {
     reply(res, 404, { error: "not found" });
     return true;

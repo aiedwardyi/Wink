@@ -17,6 +17,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import App from "./App";
+import { endSelectMode } from "./components/MessageMenu";
 
 const CODE = `wkr1:edward-pc.tail1234.ts.net:inv_mina.wki_${"A".repeat(43)}`;
 
@@ -138,6 +139,7 @@ const asked = (method: string, path: string) => calls.filter((call) => call.meth
 afterEach(async () => {
   vi.useRealTimers();
   if (root) await act(async () => root!.unmount());
+  endSelectMode();
   host?.remove();
   root = null;
   host = null;
@@ -145,6 +147,100 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   localStorage.clear();
   store.dispatch = null;
+});
+
+describe.each(["host", "joined"] as const)("Team room message menu on %s", (side) => {
+  async function openRoom(locale: "en" | "ko" = "en") {
+    const original = line("original", { kind: "person", id: "p-mina", name: "Mina Park" }, "PR #1304 머지했어요");
+    const own = line("own", { kind: "host", id: "host", name: "Daniel Cho" }, "Ready");
+    const quoted = { ...own, id: "quoted", replyToId: original.id, text: "Thanks" };
+    const entries = [original, own, quoted].map((message, index) => ({
+      ...message, seq: index + 1, files: [],
+      author: message.author?.kind === "host" ? { kind: "person", id: "p-mina", name: "Mina Park" } : { kind: "host", id: "host", name: "Daniel Cho" },
+    }));
+    await boot({ locale, groups: side === "host" ? [teamRoom([], [original, own, quoted])] : [], route: (call) => {
+      if (call.path === "/api/joined/rooms") return reply({ rooms: [joinedView("joined", "live")] });
+      if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...joinedView("joined", "live"), entries } });
+      if (call.path.includes("/files?")) return reply({ file: { id: "quoted-file" } });
+      if (call.path.endsWith("/send")) return reply({ ok: true });
+      return undefined;
+    } });
+    await act(async () => store.dispatch!({ type: "select", id: side === "host" ? "g1" : "joined:r9" }));
+    await vi.waitFor(() => expect($("[data-mid=original]")).not.toBeNull());
+  }
+
+  async function menu(id = "original") {
+    await act(async () => { $("[data-mid=" + id + "] [data-team-room-content]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 })); });
+    expect($("[data-message-menu]")).not.toBeNull();
+  }
+
+  it("copies either author, closes on scroll, and sends a quoted reply with the entry id", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await openRoom();
+    for (const id of ["original", "own"]) {
+      await menu(id);
+      expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["Reply", "Copy"]);
+      await click($("[data-menu-copy]"));
+    }
+    expect(writeText.mock.calls).toEqual([["PR #1304 머지했어요"], ["Ready"]]);
+    await menu();
+    await act(async () => { $("[data-team-room-transcript]")!.dispatchEvent(new Event("scroll")); });
+    expect($("[data-message-menu]")).toBeNull();
+    await menu();
+    await click($("[data-menu-reply]"));
+    expect(button("Cancel reply")).toBeTruthy();
+    expect(document.activeElement).toBe($("main textarea"));
+    await type($("main textarea"), "Reply text");
+    const picker = $<HTMLInputElement>('main input[type="file"]:not([data-room-picture-input])')!;
+    await act(async () => {
+      Object.defineProperty(picker, "files", { value: [new File(["notes"], "reply.txt", { type: "text/plain" })], configurable: true });
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click(button("Send"));
+    const path = side === "host" ? "/api/rooms/r1/send" : "/api/joined/rooms/r9/send";
+    await vi.waitFor(() => expect(asked("POST", path)[0]?.body).toMatchObject({ text: "Reply text", replyToId: side === "host" ? "e-original" : "original", fileIds: ["quoted-file"] }));
+    expect(button("Cancel reply")).toBeUndefined();
+  });
+
+  it("jumps to a loaded original and Escape closes the menu before the quote", async () => {
+    await openRoom();
+    const original = $("[data-mid=original]")!;
+    const scrollIntoView = vi.fn();
+    Object.assign(original, { scrollIntoView });
+    await click($("[data-mid=quoted] button"));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    await menu();
+    await click($("[data-menu-reply]"));
+    await menu("own");
+    const escape = () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await escape();
+    expect($("[data-message-menu]")).toBeNull();
+    expect(button("Cancel reply")).toBeTruthy();
+    await escape();
+    expect(button("Cancel reply")).toBeUndefined();
+  });
+
+  it("holds for 500 ms, labels the touch menu in Korean and closes it with Back", async () => {
+    await openRoom("ko");
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("coarse"), media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const row = $("[data-mid=original] [data-team-room-content]")!;
+    const event = new Event("touchstart", { bubbles: true });
+    Object.defineProperty(event, "touches", { value: [{ clientX: 100, clientY: 100 }] });
+    await act(async () => { row.dispatchEvent(event); });
+    await act(async () => vi.advanceTimersByTime(499));
+    expect($("[data-message-menu]")).toBeNull();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["답장", "복사", "텍스트 선택"]);
+    await act(async () => { window.dispatchEvent(new Event("orbit:close-message-menu")); });
+    expect($("[data-message-menu]")).toBeNull();
+    await act(async () => { row.dispatchEvent(event); vi.advanceTimersByTime(500); });
+    await click($("[data-menu-select]"));
+    expect($("[data-mid=original]")?.hasAttribute("data-select-mode")).toBe(true);
+    expect(window.getSelection()?.toString()).toBe("PR #1304 머지했어요");
+    await act(async () => endSelectMode());
+  });
 });
 
 describe("Team rooms for the host", () => {
@@ -262,6 +358,11 @@ describe("Team rooms for the host", () => {
     scroll.mockRestore();
   });
 
+  it("keeps a room's picture on its sidebar row after a bot joins", async () => {
+    await boot({ groups: [{ ...teamRoom(), memberIds: ["nova"], picture: "P".repeat(24) } as Group] });
+    expect($('aside [data-room-picture] img')).not.toBeNull();
+  });
+
   it("creates a zero-bot room from a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
@@ -285,7 +386,7 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["Turn off alerts for this room", "People", "Attach a file"]);
+    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "People", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
   });
 
@@ -402,7 +503,7 @@ describe("Team rooms for the host", () => {
     await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(1));
     expect(asked("POST", "/api/rooms/r1/send")[0]!.body).toMatchObject({ text: "hello" });
 
-    const picker = $<HTMLInputElement>('[data-team-room="host"] input[type="file"]')!;
+    const picker = $<HTMLInputElement>('[data-team-room="host"] input[type="file"]:not([data-room-picture-input])')!;
     const picture = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [picture], configurable: true });
@@ -552,8 +653,17 @@ describe("Team rooms for a teammate", () => {
     const main = $('[data-team-room="joined"]')!;
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["Turn off alerts for this room", "Leave", "Attach a file"]);
-    expect(main.textContent).not.toMatch(/Nova|People|Settings|Manage members|Find in conversation|approve|model/i);
+    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["People", "Turn off alerts for this room", "Leave", "Attach a file"]);
+    expect(main.textContent).not.toMatch(/Nova|Settings|Manage members|Find in conversation|approve|model/i);
+    await click(button("People"));
+    expect($('[role="dialog"]')!.textContent).toContain("Edward");
+    expect($('[role="dialog"]')!.textContent).toContain("You");
+    expect(button("Remove")).toBeUndefined();
+    await click(button("Change your name"));
+    const input = $<HTMLInputElement>('[role="dialog"] input')!;
+    expect(document.activeElement).toBe(input);
+    await joinedFrame("r9");
+    expect(document.activeElement).toBe(input);
     expect(calls.some((call) => call.path.startsWith("/api/rooms/"))).toBe(false);
     await act(async () => store.dispatch!({ type: "hydrate", bots: [nova], groups: [], botsUnreadable: false, computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } } as never));
     expect(store.selectedId).toBe("joined:r9");

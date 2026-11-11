@@ -8,9 +8,10 @@ import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
-import { committedRoomText, recentRoomEntries, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
+import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
+  compatibleDoorEntry,
   doorEntry,
   doorStreamCount,
   endDoorRoom,
@@ -35,8 +36,8 @@ const SNAPSHOT_ENTRIES = 200;
 const SNAPSHOT_BYTES = 3 * 1024 * 1024;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|asks\/[\w-]{1,64}\/cancel)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const JOIN_STATUS = {
   busy: 429,
@@ -52,6 +53,7 @@ const JOIN_STATUS = {
 export interface RoomDoorDeps {
   store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot">;
   hostName(): string;
+  onPeopleChanged?(group: HostedGroup): void;
 }
 
 type Guest = { roomId: string; person: RoomPerson };
@@ -62,6 +64,7 @@ let door: {
   badKeys: RateLimiter;
   snapshots: RateLimiter;
   connects: RateLimiter;
+  names: RateLimiter;
   versions: Map<string, { version: number; shared: string }>;
   /** Group id to room id, for rooms that had a stream. */
   watched: Map<string, string>;
@@ -79,6 +82,7 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
     badKeys: new RateLimiter(20, MINUTE, now),
     snapshots: new RateLimiter(30, MINUTE, now),
     connects: new RateLimiter(10, MINUTE, now),
+    names: new RateLimiter(10, MINUTE, now),
     versions: new Map(),
     watched: new Map(),
     unsubscribe: deps.store.onChange((change) => {
@@ -104,13 +108,16 @@ function doorGroup(roomId: string): HostedGroup | null {
   return (door?.deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) as HostedGroup | undefined) ?? null;
 }
 
+/** The host's and the bots' names, which no guest may take. */
+const takenNames = (group: HostedGroup) => [door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? [])];
+
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
   const bots = group.memberIds.flatMap((id) => {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
   });
-  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots };
+  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, ...(group.picture ? { picture: group.picture } : {}) };
 }
 
 /** Full state for one viewer. The version moves only when what everyone sees changed. */
@@ -134,6 +141,25 @@ function pushRoomState(roomId: string): void {
     const person = people.find((candidate) => candidate.id === personId);
     return person ? doorState(group, person) : null;
   });
+}
+
+export function hostNameChanged(): void {
+  for (const group of door?.deps.store.groups ?? []) if (group.hosted) pushRoomState(group.hosted.roomId);
+}
+
+async function rename(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.names.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const body = await readJson(req, JOIN_BODY_BYTES);
+  if (!body.ok) return bodyError(res, body.status);
+  const group = doorGroup(roomId);
+  const still = guestByKey(bearerOf(req) ?? "");
+  if (!group || still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const value = record(body.value)?.name;
+  if (typeof value !== "string") return send(res, 400, { error: "bad request" });
+  const name = renameRoomPerson(roomId, person.id, value, takenNames(group));
+  pushRoomState(roomId);
+  door!.deps.onPeopleChanged?.(group);
+  send(res, 200, { name });
 }
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
@@ -187,8 +213,9 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
-  if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const group = roomId ? doorGroup(roomId) : null;
+  if (roomId && !group) return send(res, 404, { error: "no-invite" });
+  const result = joinRoom(parts[2]!, parts[3]!, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
@@ -220,15 +247,15 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
   return entries.slice(from);
 }
 
-function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson): void {
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
   const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
   const bots = url.searchParams.get("with") === "bots";
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => doorEntry(entry, bots))), state: doorState(group, person) });
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson): void {
+function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -237,7 +264,7 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots");
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
@@ -312,17 +339,20 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
   const route = file ?? ROUTE.exec(url.pathname);
   const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
-  if (!route || !action || method !== (METHODS[action] ?? "POST")) return notFound(res);
+  if (!route || !action || (method !== (METHODS[action] ?? "POST") && !(file && method === "DELETE"))) return notFound(res);
   const guest = guestFor(req, res, relay.peer);
   if (!guest) return;
   if (guest.roomId !== route[1]) return notFound(res);
+  if (file && method === "DELETE") return send(res, 403, { error: "forbidden" });
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
   if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
-  if (action === "snapshot") return snapshot(res, url, group, guest.person);
-  if (action === "stream") return stream(res, url, group, guest.person);
+  const largeFiles = req.headers["x-orbit-room-files"] === "1";
+  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles);
+  if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
+  if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

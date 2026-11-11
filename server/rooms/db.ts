@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { redactSecretsInText } from "../../shared/redact.ts";
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
-import { checkedRoomName } from "./names.ts";
+import { checkedRoomName, joinerName } from "./names.ts";
 
 export type RoomLevel = "chat" | "ask" | "trusted";
 export type RoomGrant = "words" | "work";
@@ -39,6 +39,7 @@ export interface RoomFile {
   type: string;
   bytes: number;
   sha256: string;
+  deleted?: boolean;
 }
 
 export interface RoomEntry {
@@ -95,6 +96,16 @@ function open(): DatabaseSync {
       joined_at INTEGER NOT NULL,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS translations (
+      room_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      lang TEXT NOT NULL,
+      text TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (room_id, entry_id, lang)
+    );
+    CREATE TRIGGER IF NOT EXISTS room_translations_delete AFTER DELETE ON rooms
+    BEGIN DELETE FROM translations WHERE room_id = OLD.id; END;
     CREATE TABLE IF NOT EXISTS log (
       room_id TEXT NOT NULL,
       seq INTEGER NOT NULL,
@@ -110,6 +121,11 @@ function open(): DatabaseSync {
       clean INTEGER,
       files TEXT,
       PRIMARY KEY (room_id, seq)
+    );
+    CREATE TABLE IF NOT EXISTS room_file_deletions (
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      PRIMARY KEY (room_id, id)
     );
     CREATE TRIGGER IF NOT EXISTS log_append_only BEFORE UPDATE ON log
     BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
@@ -162,6 +178,12 @@ export function roomPeople(roomId: string): RoomPerson[] {
   return rows.map((row) => ({ id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at }));
 }
 
+export function renameRoomPerson(roomId: string, personId: string, value: string, taken: readonly string[]): string {
+  const name = joinerName(value, [...taken, ...roomPeople(roomId).filter((person) => person.id !== personId).map((person) => person.name)]);
+  db().prepare("UPDATE people SET name = ? WHERE room_id = ? AND id = ?").run(name, roomId, personId);
+  return name;
+}
+
 /** `taken` is the host's and the bots' names; people are checked here. */
 export function addPerson(roomId: string, name: unknown, level: RoomLevel, taken: readonly string[]): RoomPerson {
   const database = db();
@@ -198,12 +220,25 @@ const rowToEntry = (row: LogRow): RoomEntry => ({
   ...(row.ask_id ? { askId: row.ask_id } : {}),
   ...(row.grant_kind ? { grant: row.grant_kind } : {}),
   ...(row.clean === null ? {} : { clean: row.clean === 1 }),
-  ...(row.files ? { files: JSON.parse(row.files) as RoomFile[] } : {}),
+  ...(row.files ? { files: (JSON.parse(row.files) as RoomFile[]).map((file) => ({
+    ...file,
+    ...(db().prepare("SELECT 1 FROM room_file_deletions WHERE id = ? AND room_id = (SELECT room_id FROM log WHERE id = ?)").get(file.id, row.id) ? { deleted: true } : {}),
+  })) } : {}),
 });
 
 export function roomEntry(roomId: string, id: string): RoomEntry | null {
   const row = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND id = ?`).get(roomId, id) as LogRow | undefined;
   return row ? rowToEntry(row) : null;
+}
+
+export function roomTranslation(roomId: string, entryId: string, lang: string): string | undefined {
+  return (db().prepare("SELECT text FROM translations WHERE room_id = ? AND entry_id = ? AND lang = ?")
+    .get(roomId, entryId, lang) as { text: string } | undefined)?.text;
+}
+
+export function saveRoomTranslation(roomId: string, entryId: string, lang: string, text: string): void {
+  db().prepare("INSERT OR IGNORE INTO translations (room_id, entry_id, lang, text, at) VALUES (?, ?, ?, ?, ?)")
+    .run(roomId, entryId, lang, text, Date.now());
 }
 
 /** The newest `limit` entries, oldest first. */

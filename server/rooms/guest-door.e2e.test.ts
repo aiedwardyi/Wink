@@ -16,7 +16,7 @@ import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, type HostedGroup } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
-import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
+import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
@@ -37,6 +37,7 @@ let engine: Record<"sendTurn" | "generateText" | "generateReview" | "answerWords
 let doorHeaders: IncomingHttpHeaders[] = [];
 let client: GuestClient | null = null;
 let changes: unknown[] = [];
+let ownName = "Mina";
 
 /** The relay hop: splices TCP to the PC, which ends TLS, as the real relay does. */
 const hop = {
@@ -114,13 +115,19 @@ const close = () => {
   closeJoinedDb();
 };
 
+// The join limiter is per process, so each test starts on a later minute.
+let skew = 0;
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+  vi.setSystemTime(Date.now() + (skew += 2 * 60_000));
   close();
   rmSync(DATA_DIR, { recursive: true, force: true });
   mkdirSync(DATA_DIR, { recursive: true });
   hop.up = true;
   doorHeaders = [];
   changes = [];
+  ownName = "Mina";
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   roomAskHooks.words = vi.fn();
@@ -137,6 +144,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   delete roomAskHooks.words;
   vi.restoreAllMocks();
   hop.drop();
@@ -147,7 +155,7 @@ afterEach(() => {
 const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }) =>
   (client = new GuestClient({
     bases: () => [null, BASE],
-    joiner: () => ({ name: "Mina", device: "pc-mina-0123456789abcdef" }),
+    joiner: () => ({ name: ownName, device: "pc-mina-0123456789abcdef" }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     onChange: (roomId) => changes.push({ kind: "joined", hosted: true, roomId }),
     timing: { retryMs: 50, maxRetryMs: 200, ...timing },
@@ -442,16 +450,42 @@ describe("teammate and the real door", () => {
   it("leaves paths outside /api/joined/ alone", async () => {
     expect(await joinedRoute("GET", "/api/joinedx", teammate(), async () => ({}))).toBeNull();
   });
+
+  it("carries own and host renames over TLS within a second and keeps new author names", async () => {
+    let hostName = "Edward";
+    configureRoomDoor({ store, hostName: () => hostName });
+    const { c, roomId } = await joinedTeam();
+    await live(c, roomId);
+    await c.send(roomId, "before rename");
+    const started = Date.now();
+    ownName = "민아";
+    await c.nameChanged();
+    await until(() => c.room(roomId)?.me.name === ownName);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
+    expect(await c.send(roomId, "after rename")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
+    hostName = "에드워드";
+    hostNameChanged();
+    await until(() => c.room(roomId)?.state?.host === hostName);
+    expect(joinedEntries(roomId, 10).find((entry) => entry.text === "before rename")?.author.name).toBe("Mina");
+  });
+
+  it("delivers an offline name change when the relay reconnects", async () => {
+    const { c, roomId } = await joinedTeam();
+    await live(c, roomId);
+    hop.up = false;
+    hop.drop();
+    ownName = "민아";
+    await c.nameChanged();
+    expect(roomPeople(roomId)[0]?.name).toBe("Mina");
+    hop.up = true;
+    await until(() => c.room(roomId)?.me.name === ownName);
+    expect(roomPeople(roomId)[0]?.name).toBe(ownName);
+    expect(await c.send(roomId, "after reconnect")).toMatchObject({ ok: true, value: { author: { name: ownName } } });
+  });
 });
 
 describe("an older teammate build in a shared bot group", () => {
-  // The join limiter is per process; the file's earlier joins have spent this minute.
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 2 * 60_000);
-  });
-  afterEach(() => vi.useRealTimers());
-
   const crew = () => {
     const wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
     const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;

@@ -9,11 +9,29 @@ import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
 import { useRoomDraft } from "@/lib/room-drafts";
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { useBackLayer } from "@/lib/use-back-layer";
 import { useFileDrop } from "@/lib/use-file-drop";
+import type { Message } from "@/state/store-types";
 
 import { FileDropOverlay } from "./FileDropOverlay";
+import { ReplyQuote } from "./ReplyQuote";
 
-export function TeamRoomComposer({ name, base, draftId }: { name: string; base: string; draftId: string }) {
+export function useTeamRoomReply(base: string) {
+  const [draft, setDraft] = useState<{ base: string; message: Message } | null>(null);
+  const replyTo = draft?.base === base ? draft.message : null;
+  const clearReply = () => setDraft(null);
+  useBackLayer(Boolean(replyTo), clearReply);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("[data-message-menu], [data-selection-menu]")) setDraft(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setDraft]);
+  return { replyTo, selectReply: (message: Message) => setDraft({ base, message }), clearReply };
+}
+
+export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }: { name: string; base: string; draftId: string; replyTo: Message | null; onClearReply: () => void }) {
   const { t } = useI18n();
   const { text, setText, files, keepFiles, removeFile, clear, sending, startSend } = useRoomDraft(draftId);
   const [problem, setProblem] = useState<RoomProblem | null>(null);
@@ -22,8 +40,14 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
   const repick = useRef<string | undefined>(undefined);
   const composing = useRef(false);
   const composeEnded = useRef(0);
+  const reply = useRef(replyTo);
+  reply.current = replyTo;
   const ready = Boolean(text.trim() || files.length);
   const needsFile = files.some((file) => !file.file);
+
+  useEffect(() => {
+    if (replyTo) inputRef.current?.focus();
+  }, [replyTo]);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -46,17 +70,22 @@ export function TeamRoomComposer({ name, base, draftId }: { name: string; base: 
   const send = async () => {
     if (!ready || sending || needsFile) return;
     const revision = draftRevision(draftId);
-    const request = startSend((sendId) => sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId));
+    const sentReply = replyTo;
+    const request = startSend((sendId) => sendToRoom(base, text.trim(), files.flatMap((file) => file.file ? [file.file] : []), sendId, replyTo?.roomEntryId ?? replyTo?.id));
     if (!request) return;
     const failed = await request;
     setProblem(failed);
     if (failed) return;
-    if (draftRevision(draftId) === revision) clear();
+    if (draftRevision(draftId) === revision) {
+      clear();
+      if (reply.current === sentReply) onClearReply();
+    }
   };
 
   return (
     <div className="relative px-5 pb-3">
       {dragging && <FileDropOverlay label={t("teamRoom.dropToAttach")} />}
+      {replyTo && <div className="mb-2"><ReplyQuote message={replyTo} fallbackName={replyTo.author?.name} onClear={onClearReply} /></div>}
       {problem && (
         <div role="alert" className="mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
           <span className="min-w-0 flex-1">{t(problem.key, problem.vars)}</span>

@@ -53,8 +53,9 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
+import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
-import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
+import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -62,6 +63,7 @@ import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
 import { peopleRoute } from "./rooms/people-routes.ts";
 import { shareRoute } from "./rooms/share.ts";
+import { translateRoute, translationInstances } from "./rooms/translate.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -594,7 +596,7 @@ googleAccount.onSession(() => {
     if (!fill || googleAccount.owner()?.sub !== sub) return;
     saveConfig({ profile: fill.avatarUrl ? { ...fill, googleAvatarUrl: fill.avatarUrl } : fill });
     Object.assign(cfg, loadConfig());
-    if (fill.name) phoneAccess.nameChanged();
+    if (fill.name) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
     broadcast({ kind: "config", ...configStatus() });
   }).catch((error) => console.warn(`[google] profile fill failed: ${error instanceof Error ? error.message : String(error)}`));
 });
@@ -6251,8 +6253,8 @@ configureRoomAsks({
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
   alert: roomAlert,
 });
-configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
-sweepRoomFiles();
+configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
+sweepRoomFiles(store.groups);
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
@@ -8459,10 +8461,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await hostFileRoute(req, res, method, url, { store, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
@@ -8589,7 +8592,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
       }
-      if ((cfg.profile?.name ?? "").trim() !== previousPerson) phoneAccess.nameChanged();
+      if ((cfg.profile?.name ?? "").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
       memoryPass.onConfigChanged();
       if (patch.imageGen?.key !== undefined) {
         usageBoard.touch();
@@ -8824,6 +8827,7 @@ if (early) {
   startupTiming.serving();
 } else {
   const server = createServer(SERVER_TIMEOUTS, handleRequest);
+  keepRoomUploads(server);
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`wink server on http://127.0.0.1:${PORT}`);
     markServerServing();

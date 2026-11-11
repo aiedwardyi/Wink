@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TeamRoom } from "@/lib/team-rooms";
 
 const mock = vi.hoisted(() => ({ dispatch: vi.fn() }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ dispatch: mock.dispatch }) }));
+vi.mock("@/state/store", () => ({ useStore: () => ({ state: {}, dispatch: mock.dispatch }) }));
 vi.mock("@/lib/i18n", () => {
   const t = (key: string) => key;
   return { t, useI18n: () => ({ t }) };

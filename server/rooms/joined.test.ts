@@ -1,5 +1,6 @@
 import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
@@ -8,6 +9,7 @@ import {
   closeJoinedDb,
   endJoined,
   joinedEntries,
+  joinedEntry,
   joinedCursor,
   joinedKey,
   joinedRoom,
@@ -30,6 +32,17 @@ beforeAll(() => mkdirSync(DATA_DIR, { recursive: true }));
 afterEach(() => closeJoinedDb());
 
 describe("joined.db", () => {
+  it("finds held entry ids through an index", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    addJoinedEntries("r1", [entry(1)]);
+    expect(joinedEntry("r1", "e1")?.text).toBe("line 1");
+    const database = new DatabaseSync(join(DATA_DIR, "joined.db"), { readOnly: true });
+    try {
+      const plan = database.prepare("EXPLAIN QUERY PLAN SELECT body FROM entries WHERE room_id = ? AND json_extract(body, '$.id') = ? LIMIT 1").all("r1", "e1");
+      expect(JSON.stringify(plan)).toContain("USING INDEX entries_id");
+    } finally { database.close(); }
+  });
+
   it.skipIf(process.platform === "win32")("is created owner-only", () => {
     saveJoined("r1", HOST, ME, KEY);
     expect(statSync(join(DATA_DIR, "joined.db")).mode & 0o777).toBe(0o600);
@@ -52,6 +65,12 @@ describe("joined.db", () => {
     expect(setJoinedState("r1", state(5, "New"))).toBe(true);
     expect(setJoinedState("r1", state(4, "Old"))).toBe(false);
     expect(joinedRoom("r1")?.state?.roomName).toBe("New");
+  });
+
+  it("returns the saved reply id with a joined line", () => {
+    saveJoined("reply-room", HOST, ME, KEY);
+    addJoinedEntries("reply-room", [entry(1), { ...entry(2), replyToId: "e1" }]);
+    expect(joinedEntries("reply-room", 10)[1]?.replyToId).toBe("e1");
   });
 
   it("reset drops the copy and the state", () => {

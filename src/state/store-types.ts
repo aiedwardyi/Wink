@@ -125,7 +125,7 @@ export interface Message {
   /** Team rooms: the room log entry this line mirrors, its author and files. */
   author?: { kind: "host" | "person" | "bot"; id: string; name: string };
   roomEntryId?: string;
-  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number }>;
+  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number; deleted?: boolean }>;
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
@@ -146,6 +146,7 @@ export type GroupDefaultResponder =
 
 /** A room: several bots + you in one shared thread. */
 export interface Group {
+  picture?: string | null;
   id: string;
   threadId: string;
   name: string;

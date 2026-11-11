@@ -4,7 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import type { RoomLine } from "@/lib/team-rooms";
 import { TeamRoomTranscript } from "./TeamRoomRow";
+
+vi.mock("@/lib/room-translate", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/room-translate")>(),
+  useTranslationAvailable: () => false,
+}));
 
 let root: Root | null = null;
 let resize: () => void;
@@ -20,7 +26,7 @@ async function mount() {
   vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
   const host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {},
     lines: [{ id: "picture", at: Date.now(), author: { kind: "host", id: "host", name: "Mina" }, text: "", files: [{ id: "file", name: "design.png", bytes: 100, type: "image/png" }] }],
     mine: () => false, base: "/api/rooms/r1", label: "Design team",
   }))));
@@ -73,4 +79,35 @@ it("keeps following when a taller viewport moves the scroll position upward", as
   grow();
   await act(async () => resize());
   expect(pane.scrollHeight - pane.scrollTop - pane.clientHeight).toBe(0);
+});
+
+it("labels old lines by current author id and keeps departed names", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const lines: RoomLine[] = [
+    { id: "a", at: 1, author: { kind: "person", id: "p1", name: "Mina" }, text: "old line", files: [] },
+    { id: "b", at: 2, author: { kind: "host", id: "host", name: "Edward" }, text: "host line", files: [] },
+    { id: "c", at: 3, author: { kind: "person", id: "gone", name: "Daniel Cho" }, text: "left", files: [] },
+  ];
+  try {
+    await act(async () => root.render(createElement(TeamRoomTranscript, { onReply: () => {},
+      lines, mine: () => false, base: "", label: "Room", hostName: "에드워드", people: [{ id: "p1", name: "민아" }],
+    })));
+    expect(host.textContent).toContain("민아");
+    expect(host.textContent).toContain("에드워드");
+    expect(host.textContent).toContain("Daniel Cho");
+    expect(host.textContent).not.toContain("Mina");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("opens the message menu from the keyboard", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  const lines: RoomLine[] = [{ id: "m1", at: 1, author: { kind: "person", id: "p1", name: "Mina" }, text: "hello", files: [] }];
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {}, lines, mine: () => false, base: "", label: "Room" }))));
+  const row = host.querySelector<HTMLElement>('[data-mid="m1"]')!;
+  await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })));
+  expect(document.querySelector("[data-message-menu]")).not.toBeNull();
 });
