@@ -160,8 +160,9 @@ describe("Account settings", () => {
     url = "";
     const pane = await render("companion");
     expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
-    expect(pane.textContent).toContain("Not available for this account yet.");
-    await act(async () => [...pane.querySelectorAll("button")].find((node) => node.textContent === "Use Tailscale instead")!.click());
+    expect(pane.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
+    await act(async () => [...pane.querySelectorAll("button")].find((node) => node.textContent === "Other ways to connect")!.click());
+    await act(async () => [...pane.querySelectorAll("button")].find((node) => node.textContent === "Set Up")!.click());
     expect(pane.querySelectorAll("ol > li")).toHaveLength(5);
   });
 });

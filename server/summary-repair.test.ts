@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Message } from "./store.ts";
 import { createSummaryRepair } from "./summary-repair.ts";
+import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 const NOTICE = "Model summary unavailable; full transcript retained by Wink.";
@@ -51,6 +52,9 @@ function fallbackThread(prefix: string, text = "work item"): Message[] {
     message(`${prefix}m20`, "latest"),
   ];
 }
+
+const day = `${String(new Date(1_000).getMonth() + 1).padStart(2, "0")}-${String(new Date(1_000).getDate()).padStart(2, "0")}`;
+const BLOCK = [TYPED_VALUES_HEADER, ...[10, 12, 14].map((index) => `- ${day} work item ${index}`)].join("\n");
 
 function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>) {
   const threads = new Map<string, Message[]>();
@@ -117,7 +121,7 @@ describe("summary repair queue", () => {
     calls[1]!.resolve("SUMMARY\nrepaired b");
     await repair.idle();
 
-    expect(appended.map((item) => [item.threadId, item.compaction.summary])).toEqual([["ta", "repaired a"], ["tb", "repaired b"]]);
+    expect(appended.map((item) => [item.threadId, item.compaction.summary])).toEqual([["ta", `repaired a\n\n${BLOCK}`], ["tb", `repaired b\n\n${BLOCK}`]]);
   });
 
   it("stops after three runs per fallback with 10 and 60 minute backoff", async () => {
@@ -189,6 +193,16 @@ describe("summary repair queue", () => {
     await repair.idle();
 
     expect(generateText).toHaveBeenCalledOnce();
+    expect(appended.map((item) => item.compaction.summary)).toEqual([`repaired summary\n\n${BLOCK}`]);
+  });
+
+  it("repairs to a summary equal to the model text when the chat has no typed values", async () => {
+    const { threads, appended, repair } = setup(vi.fn(async () => "SUMMARY\nrepaired summary"));
+    threads.set("t", fallbackThread("x").map((item) => (item.kind === "text" ? { ...item, text: "work item" } : item)));
+
+    repair.onSettled("bot", "t");
+    await repair.idle();
+
     expect(appended.map((item) => item.compaction.summary)).toEqual(["repaired summary"]);
   });
 
@@ -248,7 +262,7 @@ describe("summary repair queue", () => {
     second.threads.set("t", first.threads.get("t")!);
     second.repair.onSettled("bot", "t");
     await second.repair.idle();
-    expect(second.appended.map((item) => item.compaction.summary)).toEqual(["repaired summary"]);
+    expect(second.appended.map((item) => item.compaction.summary)).toEqual([`repaired summary\n\n${BLOCK}`]);
   });
 
   it("logs no prompt or summary text", async () => {

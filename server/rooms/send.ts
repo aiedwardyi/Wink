@@ -16,8 +16,7 @@ const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "h
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
-  const { store, teamRooms, hostName, driverKind } = roomAskDeps();
-  if (!teamRooms()) throw new RoomError(409, "team rooms are off");
+  const { store, hostName, driverKind } = roomAskDeps();
   const roomId = group.hosted.roomId;
   const people = roomPeople(roomId);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;

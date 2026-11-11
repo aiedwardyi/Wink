@@ -184,8 +184,8 @@ export function CreateBotSheet({
                   id="create-bot-folder"
                   value={folder}
                   onChange={(event) => setFolder(event.target.value)}
-                  placeholder={t("createBot.folderPlaceholder")}
-                  className="min-w-0 flex-1 rounded-xl border border-hairline/50 bg-inset px-4 py-2.5 font-mono text-[13px] text-ink placeholder:text-ink-secondary focus:border-accent/70 focus:outline-none"
+                  placeholder={t(canPick ? "createBot.folderPlaceholder" : "createBot.folderTypePlaceholder")}
+                  className="min-w-0 flex-1 rounded-xl border border-hairline/50 bg-inset px-4 py-2.5 font-mono text-[13px] text-ink placeholder:font-sans placeholder:text-[15px] placeholder:text-ink-secondary focus:border-accent/70 focus:outline-none"
                 />
                 {canPick && (
                   <button

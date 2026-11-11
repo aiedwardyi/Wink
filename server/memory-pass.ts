@@ -73,15 +73,15 @@ export function eligibleRow(message: Message | undefined): message is Message & 
   );
 }
 
-/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive. */
-export function userTyping(text: string): string {
+/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
+export function userTyping(text: string, dropSensitive = true): string {
   const typed = text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
     .replace(/<attached-(?:image|file)\b[^>]*\/>/gi, "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
   // the whole message: a label and its value can sit in different paragraphs
-  if (secretLike(typed)) return "";
+  if (dropSensitive && secretLike(typed)) return "";
   const unwrapped = typed.replace(/"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)

@@ -62,12 +62,12 @@ function reply(res: ServerResponse, status: number, body: unknown): void {
 
 /** Local only, like the rest of /api/joined/. False when the path isn't a file route. */
 export async function joinedFileRoute(
-  req: IncomingMessage, res: ServerResponse, method: string, url: URL, client: Pick<GuestClient, "start" | "upload" | "file">, teamRooms: boolean,
+  req: IncomingMessage, res: ServerResponse, method: string, url: URL, client: Pick<GuestClient, "start" | "upload" | "file">,
 ): Promise<boolean> {
   const route = ROUTE.exec(url.pathname);
   if (!route) return false;
   const [, roomId, fileId, preview] = route as unknown as [string, string, string | undefined, string | undefined];
-  if (!teamRooms || method !== (fileId ? "GET" : "POST")) {
+  if (method !== (fileId ? "GET" : "POST")) {
     reply(res, 404, { error: "not found" });
     return true;
   }

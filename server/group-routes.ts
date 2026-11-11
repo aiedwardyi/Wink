@@ -42,7 +42,6 @@ type GroupRouteDeps = {
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
   releaseInterruptedBot: (botId: string, threadId: string) => void;
-  teamRooms: () => boolean;
 };
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
@@ -68,7 +67,6 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     flushInterruptedTask,
     closeOpenApprovals,
     releaseInterruptedBot,
-    teamRooms,
   } = deps;
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => {
     const bot = store.bot(id)!;
@@ -151,7 +149,6 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         setup = { bulletin: requested.bulletin, defaultResponder: responder, completed: true };
       }
       if (body.hosted !== undefined && body.hosted !== true) return json(res, 400, { error: "hosted must be true" });
-      if (body.hosted && !teamRooms()) return json(res, 409, { error: "team rooms are off" });
       const refusal = body.hosted ? roomBots(memberIds) : null;
       if (refusal) return json(res, 400, { error: refusal });
       const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: (body.peopleOnly ? createPeopleOnlyRoom : createRoom)(name).id } : undefined);

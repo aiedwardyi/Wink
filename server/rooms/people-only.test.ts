@@ -32,7 +32,6 @@ let engine: { sendTurn: ReturnType<typeof vi.fn>; generateText: ReturnType<typeo
 function routes() {
   return createGroupRoutes({
     store,
-    teamRooms: () => true,
     instanceForBot: (_bot: BotRecord) => ({ driverKind: "claudeAgent" }),
     checkedMemberIds: (value: unknown) => (Array.isArray(value) && value.length ? { ok: true, memberIds: value } : { ok: false, error: "a channel needs at least one bot" }),
     checkedGroupResponder: () => ({ kind: "everyone" }),
@@ -80,7 +79,6 @@ beforeEach(() => {
   engine = { sendTurn: vi.fn(), generateText: vi.fn(), generateReview: vi.fn(), answerWords: vi.fn() };
   deps = {
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
@@ -260,7 +258,7 @@ describe("bot work in a people-only room fails closed", () => {
       takeStartingHold: vi.fn(() => () => {}),
       beginGroupTurnOperation: vi.fn(),
     };
-    const cfg = { features: { teamRooms: true }, profile: {} };
+    const cfg = { profile: {} };
     const run = load("runGroupMemberTurn", { ...runners, store, cfg, hostedTurnRefused, continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {}, turnStartClaims: new Map() });
     expect(await run(group.id, group.threadId, wink, ...args, stale)).toBe(false);
     for (const spy of Object.values(runners)) expect(spy).not.toHaveBeenCalled();

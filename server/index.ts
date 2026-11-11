@@ -59,6 +59,7 @@ import { joinedRoute } from "./rooms/joined-routes.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
+import { peopleRoute } from "./rooms/people-routes.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -6237,7 +6238,6 @@ _loadPending();
 
 configureRoomAsks({
   store,
-  teamRooms: () => cfg.features?.teamRooms === true,
   hostName: () => cfg.profile?.name?.trim() || "The host",
   driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
   instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
@@ -6245,10 +6245,10 @@ configureRoomAsks({
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
 });
-configureRoomDoor({ store, teamRooms: () => cfg.features?.teamRooms === true, hostName: () => cfg.profile?.name?.trim() || "The host" });
+configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
 sweepRoomFiles();
 const guestClient = new GuestClient({ bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)], onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }) });
-if (cfg.features?.teamRooms === true) guestClient.start();
+guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
 
@@ -7243,7 +7243,6 @@ const groupRoutes = createGroupRoutes({
   flushInterruptedTask,
   closeOpenApprovals,
   releaseInterruptedBot,
-  teamRooms: () => cfg.features?.teamRooms === true,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -8450,9 +8449,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
-    if (await joinedFileRoute(req, res, method, url, guestClient, cfg.features?.teamRooms === true)) return;
-    if (await hostFileRoute(req, res, method, url, { store, teamRooms: cfg.features?.teamRooms === true })) return;
-    const joinedReply = await joinedRoute(method, path, guestClient, cfg.features?.teamRooms === true, () => readBody(req));
+    if (await joinedFileRoute(req, res, method, url, guestClient)) return;
+    if (await peopleRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await hostFileRoute(req, res, method, url, { store })) return;
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);

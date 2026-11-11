@@ -34,6 +34,7 @@ import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstC
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
@@ -173,7 +174,7 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null;
       const selectedId =
         state.selectedId && known(state.selectedId)
           ? state.selectedId

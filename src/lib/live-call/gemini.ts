@@ -100,6 +100,11 @@ export class GeminiLive implements LiveEngine {
     this.send({ realtimeInput: { text } });
   }
 
+  // Appended to history with no reply, but it can cut off audio still playing.
+  sendContext(text: string) {
+    this.send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: false } });
+  }
+
   sendToolResult(id: string, name: string, result: unknown) {
     this.send({ toolResponse: { functionResponses: [{ id, name, response: { result } }] } });
   }

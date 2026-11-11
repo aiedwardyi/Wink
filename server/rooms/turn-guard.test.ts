@@ -67,7 +67,6 @@ beforeEach(() => {
   interrupt = vi.fn(async () => {});
   configureRoomAsks({
     store,
-    teamRooms: () => true,
     hostName: () => "Edward",
     driverKind: () => "claudeAgent",
     instance: () => null,
@@ -123,17 +122,15 @@ describe("every room runner caller on a hosted thread", () => {
     ["drain without an ask", [0, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, undefined]],
   ];
 
-  for (const flag of [true, false]) {
-    it.each(SHAPES)(`refuses the %s shape with 0 model calls, teamRooms ${flag ? "on" : "off"}`, async (_name, args) => {
-      const deps = spies();
-      const cfg = { features: { teamRooms: flag }, profile: {} };
-      const run = load("runGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {}, turnStartClaims: new Map() });
-      expect(await run(group.id, group.threadId, botId, ...args)).toBe(false);
-      const claimed = load("runClaimedGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, currentTurnEpoch: () => 0 });
-      expect(await claimed(group.id, group.threadId, botId, ...args.slice(0, 5), undefined, ...args.slice(5))).toBe(false);
-      for (const spy of Object.values(deps)) expect(spy).not.toHaveBeenCalled();
-    });
-  }
+  it.each(SHAPES)("refuses the %s shape with 0 model calls", async (_name, args) => {
+    const deps = spies();
+    const cfg = { profile: {} };
+    const run = load("runGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {}, turnStartClaims: new Map() });
+    expect(await run(group.id, group.threadId, botId, ...args)).toBe(false);
+    const claimed = load("runClaimedGroupMemberTurn", { ...deps, store, cfg, hostedTurnRefused, currentTurnEpoch: () => 0 });
+    expect(await claimed(group.id, group.threadId, botId, ...args.slice(0, 5), undefined, ...args.slice(5))).toBe(false);
+    for (const spy of Object.values(deps)) expect(spy).not.toHaveBeenCalled();
+  });
 
   it("refuses the Live Verify doc fix and any askless drain before ready or a queue slot", async () => {
     const ready = vi.fn(async () => true);

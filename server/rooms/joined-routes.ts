@@ -17,10 +17,9 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave">, teamRooms: boolean, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave">, body: () => Promise<unknown>,
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
-  if (!teamRooms) return notFound;
   client.start();
   if (path === "/api/joined/rooms") return method === "GET" ? { status: 200, body: { rooms: client.rooms() } } : notFound;
   if (path === "/api/joined/join") {

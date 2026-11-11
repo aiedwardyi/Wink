@@ -2,6 +2,23 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.251] - 2026-11-11
+
+### Added
+- Voice calls in the desktop app: the phone button now shows in the chat header.
+
+### Changed
+- The memory file reads as plain text, with an Edit button at the top right.
+- The model picker uses a light look on light skins.
+- Quick answers now reply to greetings and quick pings while your bot is busy, and the waiting dots are gone.
+
+### Fixed
+- Voice calls work in another PC's window, and End works after a call fails.
+- "Live now" reads indigo on light skins.
+- The compact worker chip matches the size of its neighbors.
+- The folder field explains itself when there is no Browse button.
+- The whole "Show more" row is clickable.
+
 ## [1.0.250] - 2026-11-11
 
 ### Added
@@ -880,6 +897,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.251]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.251
 [1.0.250]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.250
 [1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
 [1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248

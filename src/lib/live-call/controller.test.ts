@@ -7,6 +7,7 @@ import type { LiveEngine, LiveEvents } from "./engine";
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
   texts: string[] = [];
+  contexts: string[] = [];
   results: Array<{ id: string; result: unknown }> = [];
   paused = 0;
   closed = false;
@@ -14,6 +15,7 @@ class FakeEngine implements LiveEngine {
   sendAudio() {}
   audioPaused() { this.paused += 1; }
   sendText(text: string) { this.texts.push(text); }
+  sendContext(text: string) { this.contexts.push(text); }
   sendToolResult(id: string, _name: string, result: unknown) { this.results.push({ id, result }); }
   close() { this.closed = true; }
 }
@@ -184,6 +186,8 @@ describe("LiveCall", () => {
 
   it("relays the settled reply once, skipping voice, quick and older rows", async () => {
     const { call, engine } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed the bug.", "Tests pass."] } } });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the bug." } }]);
+    await call.answer(true);
     const rows = [
       botRow("old", "before", { at: 10 }),
       botRow("v", "voice", { call: { id: "c-0123456789ab", voice: true } }),
@@ -199,9 +203,43 @@ describe("LiveCall", () => {
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed the bug. Tests pass."]);
   });
 
+  it("typed message reply is not spoken", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [botRow("r", "Here is the plan.")] });
+    await flush();
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+  });
+
+  it("typed reply reaches the voice as silent context", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine } = await started({}, audio);
+    const rows = [{ id: "u", role: "user", kind: "text", text: "What broke?", at: 2_000 } as Message, botRow("r", "The login token expired.")];
+    audio.onStart();
+    audio.playing = true;
+    call.observe({ busy: false, messages: rows });
+    expect(engine().contexts).toEqual([]);
+    audio.playing = false;
+    engine().events.turnDone();
+    call.observe({ busy: false, messages: rows });
+    expect(engine().contexts).toEqual(["[Wink] Typed in chat, already on screen. Context only, do not read it out.\nUser: What broke?\nNova: The login token expired."]);
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+  });
+
+  it("voice order reply is spoken", async () => {
+    const { call, engine } = await started();
+    call.observe({ busy: false, messages: [botRow("typed", "Typed answer.")] });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [botRow("typed", "Typed answer."), botRow("r", "Fixed.")] });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed."]);
+  });
+
   it("holds the report until the voice finishes its turn", async () => {
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed."] } } }, audio);
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
+    await call.answer(true);
     audio.onStart();
     audio.playing = true;
     call.observe({ busy: false, messages: [botRow("r", "Fixed.")] });
@@ -236,7 +274,7 @@ describe("LiveCall", () => {
     await flush();
     expect(engines).toHaveLength(2);
     expect(engines[0]!.closed).toBe(true);
-    expect(posts.filter((p) => p.path.endsWith("/call/token")).at(-1)?.body).toEqual({ callId: "c-0123456789ab", resume: true });
+    expect(posts.filter((p) => p.path.endsWith("/call/token")).at(-1)?.body).toEqual({ locale: "en", callId: "c-0123456789ab", resume: true });
     engine().events.ready();
     expect(engine().texts).toEqual([]);
   });
