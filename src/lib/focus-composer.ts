@@ -72,7 +72,7 @@ export function focusComposer(doc: Document = document, target?: HTMLTextAreaEle
     if (!target || target.disabled || target.ownerDocument !== doc) return false;
     composer = target;
   } else {
-    const composers = [...doc.querySelectorAll<HTMLTextAreaElement>("[data-orbit-composer]:not(:disabled)")];
+    const composers = [...doc.querySelectorAll<HTMLTextAreaElement>("[data-orbit-composer]:not(:disabled), [data-team-room] textarea:not(:disabled)")];
     composer = composers.find((candidate) => candidate.getClientRects().length > 0) ?? composers[0];
   }
   if (!composer) return false;

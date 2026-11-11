@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { Suspense, act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useStaleBuildReload } from "./stale-build";
+import { lazyView, useStaleBuildReload } from "./stale-build";
 
 // a module script would make happy-dom try to load it
 const entry = (name: string) => `<script type="text/plain" src="/assets/${name}"></script>`;
@@ -81,5 +81,28 @@ describe("useStaleBuildReload", () => {
     expect(reload).not.toHaveBeenCalled();
     await act(async () => field.blur());
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("lazyView", () => {
+  it("mounts a preloaded view on its first frame, without the fallback", async () => {
+    const View = lazyView(async () => ({ default: ({ name }: { name: string }) => createElement("p", null, `hi ${name}`) }));
+    await View.preload();
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() => root.render(createElement(Suspense, { fallback: "wait" }, createElement(View, { name: "Atlas" }))));
+    expect(host.textContent).toBe("hi Atlas");
+    await act(async () => root.unmount());
+  });
+
+  it("still suspends a view nobody preloaded", async () => {
+    const View = lazyView(async () => ({ default: () => createElement("p", null, "late") }));
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() => root.render(createElement(Suspense, { fallback: "wait" }, createElement(View))));
+    expect(host.textContent).toBe("wait");
+    await act(async () => {});
+    await vi.waitFor(() => expect(host.textContent).toBe("late"));
+    await act(async () => root.unmount());
   });
 });

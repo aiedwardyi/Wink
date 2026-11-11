@@ -34,6 +34,10 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(store).toMatch(/partByKey\.get\("instances"\)/);
   });
 
+  it("warms lazy screens in every window once the first chat is up", () => {
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(state\.hydrated\) return warmViews\(\[SettingsPanel\.preload, SettingsModal\.preload\]\);\s*\}, \[state\.hydrated\]\);/);
+  });
+
   it("fetches app settings on desktop before boot API calls can hold every connection", () => {
     expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(window\.ogb\) void import\("@\/components\/SettingsModal"\)\.catch\(\(\) => \{\}\);\s*\}, \[\]\);/);
   });

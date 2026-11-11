@@ -110,6 +110,7 @@
       const image = new Image();
       const finish = (online) => {
         clearTimeout(timeout);
+        // Clearing src can fire onerror; detach handlers first.
         image.onload = null;
         image.onerror = null;
         image.src = "";
