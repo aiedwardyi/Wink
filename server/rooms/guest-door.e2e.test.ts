@@ -145,6 +145,7 @@ afterEach(() => {
 const teammate = (timing?: { silenceMs?: number; retryMs?: number; maxRetryMs?: number }) =>
   (client = new GuestClient({
     bases: () => [null, BASE],
+    joiner: () => ({ name: "Mina", device: "pc-mina-0123456789abcdef" }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     onChange: (roomId) => changes.push({ kind: "joined", hosted: true, roomId }),
     timing: { retryMs: 50, maxRetryMs: 200, ...timing },

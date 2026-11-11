@@ -183,6 +183,7 @@ afterEach(() => {
 const teammate = () =>
   (client = new GuestClient({
     bases: () => [null, BASE],
+    joiner: () => ({ name: "Mina", device: "pc-mina-0123456789abcdef" }),
     https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
     timing: { retryMs: 50, maxRetryMs: 200 },
   }));

@@ -1,6 +1,7 @@
-// Team room invites and guest keys, in rooms.db beside db.ts's tables. Secrets
-// and keys live only as SHA-256 digests, and a key works only while its person
-// row exists. Every call is synchronous, so no two joins race one invite.
+// Team room invites, room codes and guest keys, in rooms.db beside db.ts's tables.
+// Invite secrets and keys live only as SHA-256 digests; a room code is kept whole
+// so the host can show it again. A key works only while its person row exists.
+// Every call is synchronous, so no two joins race one invite.
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import { RateLimiter } from "../phone-auth.ts";
 import { MAX_PAIRING_ATTEMPTS, sameText, sha256 } from "../phone-devices.ts";
 import { RoomError, roomById, type RoomLevel, type RoomPerson } from "./db.ts";
 import { endDoorPerson } from "./door-streams.ts";
-import { checkedRoomName } from "./names.ts";
+import { checkedRoomName, joinerName } from "./names.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
 const MAX_PEOPLE = 20;
@@ -21,6 +22,7 @@ const JOINS_PER_MINUTE = 20;
 const SECRET_PREFIX = "wki_";
 const KEY_PREFIX = "wkg_";
 const MAX_CREDENTIAL_LENGTH = 128;
+const DEVICE = /^[\w-]{16,64}$/;
 
 export interface RoomInvite {
   id: string;
@@ -30,8 +32,11 @@ export interface RoomInvite {
   expiresAt: number;
 }
 
-type JoinError = "busy" | "no-invite" | "wrong-secret" | "too-many-tries" | "room-full" | "name-taken";
+type JoinError = "busy" | "no-invite" | "wrong-secret" | "too-many-tries" | "room-full" | "name-taken" | "bad-code" | "removed";
 export type JoinResult = { ok: true; roomId: string; person: RoomPerson; key: string } | { ok: false; error: JoinError };
+
+/** Who is knocking, from their own Wink. `device` stays the same on their PC. */
+export type Joiner = { name?: unknown; device?: unknown };
 
 type InviteRow = {
   id: string; room_id: string; name: string; level: RoomLevel; secret_hash: string; created_at: number; expires_at: number; tries_left: number;
@@ -64,6 +69,18 @@ function open(): DatabaseSync {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS guest_keys_person ON guest_keys(room_id, person_id);
+    CREATE TABLE IF NOT EXISTS room_codes (
+      room_id TEXT PRIMARY KEY,
+      id TEXT NOT NULL UNIQUE,
+      secret TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS room_devices (
+      room_id TEXT NOT NULL,
+      device TEXT NOT NULL,
+      person_id TEXT NOT NULL,
+      removed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (room_id, device)
+    );
   `);
   return db;
 }
@@ -135,15 +152,53 @@ export function cancelInvite(roomId: string, inviteId: string): boolean {
   return db().prepare("DELETE FROM invites WHERE room_id = ? AND id = ?").run(roomId, inviteId).changes > 0;
 }
 
+/** The room's one code: it joins anyone, any number of times, while the room is served. */
+export function roomCode(roomId: string): { id: string; secret: string } {
+  const database = db();
+  database.prepare("INSERT OR IGNORE INTO room_codes (room_id, id, secret) VALUES (?, ?, ?)").run(roomId, newId(), newCredential(SECRET_PREFIX));
+  const row = database.prepare("SELECT id, secret FROM room_codes WHERE room_id = ?").get(roomId) as { id: string; secret: string };
+  return { id: row.id, secret: row.secret };
+}
+
+/** One person per PC: the same device back while still in the room gets a fresh key, not a second seat. */
+function joinByRoomCode(database: DatabaseSync, codeId: string, secret: string, taken: readonly string[], joiner: Joiner): JoinResult {
+  const code = database.prepare("SELECT room_id, secret FROM room_codes WHERE id = ?").get(codeId) as { room_id: string; secret: string } | undefined;
+  if (!code) return { ok: false, error: "no-invite" };
+  if (!sameText(sha256(code.secret), sha256(secret))) return { ok: false, error: "wrong-secret" };
+  if (typeof joiner.device !== "string" || !DEVICE.test(joiner.device)) return { ok: false, error: "bad-code" };
+  const roomId = code.room_id;
+  const seen = database.prepare("SELECT person_id, removed FROM room_devices WHERE room_id = ? AND device = ?").get(roomId, joiner.device) as
+    | { person_id: string; removed: number }
+    | undefined;
+  if (seen?.removed) return { ok: false, error: "removed" };
+  const back = seen && (database.prepare("SELECT id, name, level, joined_at FROM people WHERE room_id = ? AND id = ?").get(roomId, seen.person_id) as
+    | { id: string; name: string; level: RoomLevel; joined_at: number }
+    | undefined);
+  let person: RoomPerson;
+  if (back) {
+    person = { id: back.id, name: back.name, level: back.level, joinedAt: back.joined_at };
+    database.prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, person.id);
+  } else {
+    const people = peopleNames(database, roomId);
+    if (people.length >= MAX_PEOPLE) return { ok: false, error: "room-full" };
+    person = { id: newId(), name: joinerName(joiner.name, [...taken, ...people]), level: "chat", joinedAt: Date.now() };
+    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, ?, ?)").run(roomId, person.id, person.name, person.level, person.joinedAt);
+    database.prepare("INSERT OR REPLACE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(roomId, joiner.device, person.id);
+  }
+  const key = newCredential(KEY_PREFIX);
+  database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)").run(sha256(key), roomId, person.id, Date.now());
+  return { ok: true, roomId, person, key };
+}
+
 const joins = new RateLimiter(JOINS_PER_MINUTE, 60_000, () => Date.now(), 1);
 
-/** Swaps a live invite for a person and their guest key, in one transaction. */
-export function joinRoom(inviteId: string, secret: string, taken: readonly string[]): JoinResult {
+/** Swaps a live invite, or the room code, for a person and their guest key, in one transaction. */
+export function joinRoom(inviteId: string, secret: string, taken: readonly string[], joiner: Joiner = {}): JoinResult {
   if (!joins.take("join")) return { ok: false, error: "busy" };
   return transaction((database): JoinResult => {
     pruneExpired(database);
     const invite = database.prepare("SELECT * FROM invites WHERE id = ?").get(inviteId) as InviteRow | undefined;
-    if (!invite) return { ok: false, error: "no-invite" };
+    if (!invite) return joinByRoomCode(database, inviteId, secret, taken, joiner);
     if (!sameText(invite.secret_hash, sha256(secret.length <= MAX_CREDENTIAL_LENGTH ? secret : ""))) {
       if (invite.tries_left > 1) {
         database.prepare("UPDATE invites SET tries_left = tries_left - 1 WHERE id = ?").run(invite.id);
@@ -176,10 +231,16 @@ export function guestByKey(key: string): { roomId: string; person: RoomPerson } 
   return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at } } : null;
 }
 
-/** The room a live invite is for, without spending a try. */
+/** The room a live invite or room code is for, without spending a try. */
 export function inviteRoomId(inviteId: string): string | null {
-  const row = db().prepare("SELECT room_id FROM invites WHERE id = ? AND expires_at > ?").get(inviteId, Date.now()) as { room_id: string } | undefined;
+  const row = db().prepare("SELECT room_id FROM invites WHERE id = ? AND expires_at > ? UNION ALL SELECT room_id FROM room_codes WHERE id = ?")
+    .get(inviteId, Date.now(), inviteId) as { room_id: string } | undefined;
   return row?.room_id ?? null;
+}
+
+/** Host Remove: that person's PC can't come back with the room code. Leave never calls this. */
+export function barRoomPerson(roomId: string, personId: string): void {
+  db().prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
 }
 
 export function revokeGuestKeys(roomId: string, personId: string): boolean {

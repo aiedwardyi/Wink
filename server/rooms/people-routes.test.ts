@@ -36,7 +36,7 @@ async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req) && (await access.gate(req, res)).handled) return;
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
   reached.push(path);
-  const deps = { store, hostName: () => "Edward", relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
+  const deps = { store, relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
   if (await peopleRoute(req, res, req.method ?? "GET", path, deps)) return;
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
@@ -76,8 +76,10 @@ function call(path: string, init: { method?: string; body?: unknown; relay?: boo
   });
 }
 
-const invite = (roomId: string, name: unknown, authorization?: string) => call(`/api/rooms/${roomId}/invites`, { method: "POST", body: { name }, authorization });
+const invite = (roomId: string, authorization?: string) => call(`/api/rooms/${roomId}/invites`, { method: "POST", authorization });
 const remove = (roomId: string, personId: string, authorization?: string) => call(`/api/rooms/${roomId}/people/${personId}`, { method: "DELETE", authorization });
+const joinAs = (code: unknown, name: string, device?: string) => call("/room/v1/join", { method: "POST", relay: true, body: { code, name, device } });
+const pcOf = (name: string) => `pc-${name.toLowerCase()}-0123456789abcdef`;
 
 interface Stream {
   frames: DoorFrame[];
@@ -125,8 +127,8 @@ function peopleRoom(name = "Team"): HostedGroup {
 }
 
 async function joined(group: HostedGroup, name: string): Promise<{ key: string; personId: string }> {
-  const { body } = await invite(group.hosted.roomId, name);
-  const res = await call("/room/v1/join", { method: "POST", relay: true, body: { code: body.code } });
+  const { body } = await invite(group.hosted.roomId);
+  const res = await joinAs(body.code, name, pcOf(name));
   expect(res.status).toBe(200);
   return { key: res.body.key, personId: res.body.person.id };
 }
@@ -181,30 +183,31 @@ afterEach(() => {
 });
 
 describe("invite", () => {
-  it("hands back a code that joins through the door as that name", async () => {
+  it("hands back one code that joins every teammate by their own name", async () => {
     const group = peopleRoom();
-    const res = await invite(group.hosted.roomId, "Mina");
-    expect(res.status).toBe(200);
-    expect(res.body.invite).toMatchObject({ name: "Mina" });
-    expect(res.body.code).toMatch(CODE);
-    expect(roomInvites(group.hosted.roomId).map((row) => row.name)).toEqual(["Mina"]);
-    const join = await call("/room/v1/join", { method: "POST", relay: true, body: { code: res.body.code } });
-    expect(join).toMatchObject({ status: 200, body: { roomId: group.hosted.roomId, person: { name: "Mina" } } });
-    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
-  });
-
-  it("is 409 while this PC has no relay host, and makes no invite", async () => {
-    const group = peopleRoom();
-    relayHost = null;
-    expect(await invite(group.hosted.roomId, "Mina")).toEqual({ status: 409, body: { error: "phone access is off" } });
+    const first = await invite(group.hosted.roomId);
+    expect(first.status).toBe(200);
+    expect(first.body.code).toMatch(CODE);
+    expect((await invite(group.hosted.roomId)).body).toEqual({ code: first.body.code });
+    expect(await joinAs(first.body.code, "Mina", pcOf("Mina"))).toMatchObject({ status: 200, body: { roomId: group.hosted.roomId, person: { name: "Mina" } } });
+    expect(await joinAs(first.body.code, "Joon", pcOf("Joon"))).toMatchObject({ status: 200, body: { roomId: group.hosted.roomId, person: { name: "Joon" } } });
+    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina", "Joon"]);
     expect(roomInvites(group.hosted.roomId)).toEqual([]);
   });
 
-  it("refuses names the room can't take", async () => {
+  it("is 409 while this PC has no relay host", async () => {
     const group = peopleRoom();
-    expect((await invite(group.hosted.roomId, "Mina")).status).toBe(200);
-    for (const name of ["", "  ", "Edward", "mina", "a@b", 42]) expect([name, (await invite(group.hosted.roomId, name)).status]).toEqual([name, 400]);
-    expect(roomInvites(group.hosted.roomId).map((row) => row.name)).toEqual(["Mina"]);
+    relayHost = null;
+    expect(await invite(group.hosted.roomId)).toEqual({ status: 409, body: { error: "phone access is off" } });
+  });
+
+  it("makes each joiner's own name fit the room, and needs their PC's id", async () => {
+    const group = peopleRoom();
+    const { body } = await invite(group.hosted.roomId);
+    expect(await joinAs(body.code, "Mina")).toEqual({ status: 400, body: { error: "bad-code" } });
+    const names: string[] = [];
+    for (const name of ["Edward", "Mina", "mina", " a@b\n", "", "everyone"]) names.push((await joinAs(body.code, name, pcOf(`${names.length}`))).body.person?.name);
+    expect(names).toEqual(["Edward 2", "Mina", "mina 2", "ab", "Guest", "everyone 2"]);
   });
 
   it("never logs the code", async () => {
@@ -213,8 +216,8 @@ describe("invite", () => {
     const keep = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
     for (const name of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, name).mockImplementation(keep);
     for (const out of [process.stdout, process.stderr]) vi.spyOn(out, "write").mockImplementation(((chunk: unknown) => (keep(chunk), true)) as typeof out.write);
-    const { body } = await invite(group.hosted.roomId, "Mina");
-    await call("/room/v1/join", { method: "POST", relay: true, body: { code: body.code } });
+    const { body } = await invite(group.hosted.roomId);
+    await joinAs(body.code, "Mina", pcOf("Mina"));
     vi.restoreAllMocks();
     const secret = String(body.code).split(".").at(-1)!;
     expect(secret).toMatch(/^wki_/);
@@ -234,6 +237,32 @@ describe("remove", () => {
     expect(roomPeople(group.hosted.roomId)).toEqual([]);
     expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { relay: true, key: mina.key })).status).toBe(401);
     expect(await remove(group.hosted.roomId, mina.personId)).toEqual({ status: 404, body: { error: "not found" } });
+  });
+
+  it("keeps a removed teammate's PC out of the room code while others still join", async () => {
+    const group = peopleRoom();
+    const { body } = await invite(group.hosted.roomId);
+    const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
+    expect(mina.status).toBe(200);
+    expect((await remove(group.hosted.roomId, mina.body.person.id)).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Joon"]);
+  });
+
+  it("lets a teammate who left come back, and never lists one PC twice", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const { body } = await invite(id);
+    const first = await joinAs(body.code, "Mina", pcOf("Mina"));
+    const again = await joinAs(body.code, "Mina", pcOf("Mina"));
+    expect(again.body.person).toEqual(first.body.person);
+    expect(roomPeople(id)).toHaveLength(1);
+    expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: first.body.key })).status).toBe(401);
+    expect((await call(`/room/v1/rooms/${id}/leave`, { method: "POST", relay: true, key: again.body.key, body: {} })).status).toBe(200);
+    expect(roomPeople(id)).toEqual([]);
+    expect((await joinAs(body.code, "Mina", pcOf("Mina"))).status).toBe(200);
+    expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
   });
 });
 
@@ -256,7 +285,7 @@ describe("who reaches them", () => {
   it("refuses a bot's comms token", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
-    expect(await invite(group.hosted.roomId, "Joon", BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
+    expect(await invite(group.hosted.roomId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
     expect(await remove(group.hosted.roomId, mina.personId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
     expect(roomInvites(group.hosted.roomId)).toEqual([]);
     expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);

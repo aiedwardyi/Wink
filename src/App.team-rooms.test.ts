@@ -175,7 +175,7 @@ describe("Team rooms for the host", () => {
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
   });
 
-  it("invites a person with one code to copy, lists them once they join, and removes them", async () => {
+  it("shows the room's one code to copy with no name step, lists who joined, and removes them", async () => {
     let people: Array<{ id: string; name: string }> = [];
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -183,10 +183,10 @@ describe("Team rooms for the host", () => {
     await boot({
       groups: [teamRoom()],
       route: (call) => {
-        if (call.path === "/api/rooms/r1/invites") return reply({ invite: { id: "inv_mina", name: "Mina" }, code: CODE });
+        if (call.path === "/api/rooms/r1/invites") return reply({ code: CODE });
         if (call.path === "/api/bots?messages=0") return reply({ bots: [], groups: [{ ...teamRoom(people) }] });
         if (call.method === "DELETE" && call.path === "/api/rooms/r1/people/p1") {
-          people = [];
+          people = people.filter((person) => person.id !== "p1");
           return reply({ ok: true });
         }
         return undefined;
@@ -194,23 +194,27 @@ describe("Team rooms for the host", () => {
     });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     await click(button("People"));
-    expect($('[role="dialog"]')!.textContent).toContain("No one yet.");
-    await type($<HTMLInputElement>('input[aria-label="Name"]')!, "Mina");
-    await click(button("Invite"));
-    expect(asked("POST", "/api/rooms/r1/invites").map((call) => call.body)).toEqual([{ name: "Mina" }]);
+    const dialog = $('[role="dialog"]')!;
+    expect(dialog.querySelector("input, textarea")).toBeNull();
+    expect(button("Invite")).toBeUndefined();
     await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
-    expect(document.querySelectorAll("[data-team-room-code]")).toHaveLength(1);
-    await click(button("Copy the code for Mina"));
+    expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(1);
+    expect(dialog.textContent).toContain("Anyone with this code can join.");
+    expect(dialog.textContent).toContain("No one yet.");
+    await click(button("Copy"));
     expect(writeText).toHaveBeenCalledWith(CODE);
     expect($("[data-team-room-code]")!.textContent).toContain("Copied");
 
-    people = [{ id: "p1", name: "Mina" }];
+    people = [{ id: "p1", name: "Mina" }, { id: "p2", name: "Joon" }];
     await act(async () => vi.advanceTimersByTime(3_000));
-    await vi.waitFor(() => expect(button("Remove Mina")).toBeTruthy());
-    expect($("[data-team-room-code]")).toBeNull();
+    await vi.waitFor(() => expect(button("Remove Joon")).toBeTruthy());
+    expect(document.querySelectorAll("[data-team-room-code]")).toHaveLength(1);
+    expect($("[data-team-room-code]")!.textContent).toContain(CODE);
     await click(button("Remove Mina"));
     expect(asked("DELETE", "/api/rooms/r1/people/p1")).toHaveLength(1);
     expect(button("Remove Mina")).toBeUndefined();
+    expect(button("Remove Joon")).toBeTruthy();
+    expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(1);
   });
 
   it("keeps a person listed when Remove fails", async () => {
@@ -225,17 +229,25 @@ describe("Team rooms for the host", () => {
     expect(button("Remove Mina")).toBeTruthy();
   });
 
-  it("says why an invite failed in one line", async () => {
+  it("says why there's no code in one line", async () => {
     await boot({
       groups: [teamRoom()],
       route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ error: "phone access is off" }, 409) : undefined),
     });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     await click(button("People"));
-    await type($<HTMLInputElement>('input[aria-label="Name"]')!, "Mina");
-    await click(button("Invite"));
     await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Turn on Phone Access in Settings first."));
     expect($("[data-team-room-code]")).toBeNull();
+  });
+
+  it("shows the room code in Korean", async () => {
+    await boot({ locale: "ko", groups: [teamRoom()], route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ code: CODE }) : undefined) });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("참여자"));
+    await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
+    expect($('[role="dialog"]')!.textContent).toContain("초대 코드");
+    expect($('[role="dialog"]')!.textContent).toContain("이 코드가 있으면 누구나 참여할 수 있어요.");
+    expect(button("복사")).toBeTruthy();
   });
 
   it("renders text, pictures and files through the shared row and sends both kinds", async () => {
