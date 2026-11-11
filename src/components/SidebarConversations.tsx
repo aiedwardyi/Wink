@@ -26,7 +26,7 @@ export function compactSidebarModelLabel(label: string): string {
   return label.replace(/\s+Contributor$/i, " Cont.");
 }
 
-function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
+export function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
   const { t } = useI18n();
   const shown = formatCollapsedUnreadBadge(count);
   if (!shown) return null;
@@ -236,8 +236,9 @@ function GroupListItem({
             {last && (
               <span
                 className={cn(
-                  "shrink-0 text-xs text-ink-secondary @max-[10rem]/rowtext:hidden!",
-                  !selected && "hidden group-hover:inline group-focus-within:inline",
+                  "shrink-0 text-xs text-ink-secondary",
+                  !group.hosted && "@max-[10rem]/rowtext:hidden!",
+                  !selected && !group.hosted && "hidden group-hover:inline group-focus-within:inline",
                 )}
               >
                 {formatTime(last.at, localeTag(locale))}

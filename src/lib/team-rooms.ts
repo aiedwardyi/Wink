@@ -41,6 +41,8 @@ export interface JoinedView {
   link: JoinedLink | null;
   me: JoinedPerson;
   state: { roomName: string; host: string; people: JoinedPerson[] } | null;
+  unread?: number;
+  lastEntry?: JoinedEntry;
 }
 
 export interface JoinedEntry {

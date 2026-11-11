@@ -148,6 +148,49 @@ afterEach(async () => {
 });
 
 describe("Team rooms for the host", () => {
+  it("reads joined lines only on an active room and clears the row on every client frame", async () => {
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    let unread = 3;
+    const entries = [1, 2, 3].map((seq) => ({ ...joinedEntries[0], seq, id: `j${seq}` }));
+    const view = () => ({ ...joinedView("joined", "live"), unread, lastEntry: entries.at(-1) });
+    await boot({ route: (call) => {
+      if (call.path === "/api/joined/rooms") return reply({ rooms: [view()] });
+      if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...view(), entries } });
+      if (call.path === "/api/joined/rooms/r9/read") {
+        unread = 0;
+        return reply({ room: view() });
+      }
+      return undefined;
+    } });
+    await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
+    await vi.waitFor(() => expect($('[data-team-room="joined"] [data-team-room-line]')).not.toBeNull());
+    expect(asked("POST", "/api/joined/rooms/r9/read")).toHaveLength(0);
+    focus.mockReturnValue(true);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(asked("POST", "/api/joined/rooms/r9/read").map((call) => call.body)).toEqual([{ seq: 3 }]);
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect($('[data-joined-room-row] [data-sidebar-unread-count]')).toBeNull());
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(asked("POST", "/api/joined/rooms/r9/read")).toHaveLength(1);
+  });
+
+  it("counts joined teammate lines on the row and menu, then clears on a read frame", async () => {
+    let unread = 3;
+    const view = () => ({ ...joinedView("joined", "live"), unread, lastEntry: joinedEntries[0] });
+    await boot({ route: (call) => {
+      if (call.path === "/api/joined/rooms") return reply({ rooms: [view()] });
+      return undefined;
+    } });
+    await vi.waitFor(() => expect($('[data-joined-room-row]')).not.toBeNull());
+    expect($('[data-joined-room-row] [data-sidebar-unread-count]')?.textContent).toBe("3");
+    expect($('[data-menu-unread]')?.textContent).toBe("3");
+    expect($('[data-joined-room-row]')?.textContent).toContain("Edward: Welcome");
+    unread = 0;
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect($('[data-menu-unread]')).toBeNull());
+    expect($('[data-joined-room-row] [data-sidebar-unread-count]')).toBeNull();
+  });
+
   it("creates a zero-bot room from a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });

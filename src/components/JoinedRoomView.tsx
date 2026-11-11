@@ -1,5 +1,5 @@
 // A room joined on someone else's Wink. Only its lines and files reach this screen.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { request } from "@/lib/api-request";
@@ -9,8 +9,9 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { joinedLines, joinedPhase, joinedRoomBase } from "@/lib/team-rooms";
+import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
+import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
@@ -18,6 +19,7 @@ import { TeamRoomTranscript } from "./TeamRoomRow";
 
 export function JoinedRoomView({ roomId }: { roomId: string }) {
   const { t } = useI18n();
+  const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
   const room = useJoinedRoom(roomId);
   const [leaving, setLeaving] = useState(false);
@@ -35,6 +37,20 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     : null;
   const me = room?.me.id;
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
+  const seq = entries?.at(-1)?.seq;
+  useEffect(() => {
+    const read = () => {
+      if (seq === undefined || !shouldClearSelectedUnread(state, { id: joinedSelection(roomId), unread: Boolean(room?.unread) }, document.visibilityState === "visible" && document.hasFocus())) return;
+      void request(`${base}/read`, { method: "POST", body: JSON.stringify({ seq }) }).catch(() => {});
+    };
+    read();
+    window.addEventListener("focus", read);
+    document.addEventListener("visibilitychange", read);
+    return () => {
+      window.removeEventListener("focus", read);
+      document.removeEventListener("visibilitychange", read);
+    };
+  }, [base, roomId, room?.unread, seq, state.selectedId, state.workspaceOpen]);
   return (
     <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
