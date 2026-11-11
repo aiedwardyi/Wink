@@ -368,25 +368,35 @@ export function useOlderMessages(
   oldestId: string | undefined,
   hasMore: boolean | undefined,
 ) {
-  // One view serves many threads; a page still loading for one must not block another.
+  // A pending page must not block a new thread or cursor.
   const inflight = useRef(new Map<string, { measures: (() => void)[]; fails: (() => void)[] }>());
+  const current = useRef({ threadId, oldestId });
+  useLayoutEffect(() => {
+    current.current = { threadId, oldestId };
+  }, [threadId, oldestId]);
   return useCallback(
     (beforeCommit?: () => void, onFail?: () => void, pages = 1) => {
       if (!hasMore || !oldestId) return;
-      const joined = inflight.current.get(threadId);
+      const key = `${threadId}:${oldestId}`;
+      const joined = inflight.current.get(key);
       const waiting = joined ?? { measures: [], fails: [] };
       if (beforeCommit) waiting.measures.push(beforeCommit);
       if (onFail) waiting.fails.push(onFail);
       if (joined) return;
-      inflight.current.set(threadId, waiting);
+      inflight.current.set(key, waiting);
       fetchOlderPage(threadId, oldestId, pages)
         .then((page) => {
-          inflight.current.delete(threadId);
-          for (const measure of waiting.measures) measure();
+          inflight.current.delete(key);
+          const visible = current.current.threadId === threadId;
+          if (visible && current.current.oldestId !== oldestId) {
+            for (const fail of waiting.fails) fail();
+            return;
+          }
+          if (visible) for (const measure of waiting.measures) measure();
           dispatch({ type: "olderMessages", threadId, before: oldestId, ...page });
         })
         .catch(() => {
-          inflight.current.delete(threadId);
+          inflight.current.delete(key);
           for (const fail of waiting.fails) fail();
         });
     },

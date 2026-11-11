@@ -7,6 +7,7 @@ import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
 import * as workerRows from "@/lib/worker-runs";
+import { teamSnagNote, type ClaimedSnag } from "../../server/team-snags-owner";
 
 import { ChatView, stampedReplyComm } from "./ChatView";
 
@@ -91,6 +92,30 @@ const chips = (host: HTMLElement) => Array.from(host.querySelectorAll("button"))
 describe("ChatView note titles", () => {
   const note: Message = { id: "note", at: 1, role: "bot", kind: "note", text: "Team report fixture. Export stopped." };
   const title = (host: HTMLElement) => host.querySelector('[data-mid="note"] button[aria-expanded]')?.textContent;
+
+  it.each([
+    ["en", "A worker on Peter's PC (Studio) looks stuck (RACE-R2, 102 min)."],
+    ["ko", "Peter님의 PC(Studio)에서 작업자가 멈춘 것 같아요 (RACE-R2, 102분)."],
+  ])("shows a plain team snag title and folded details in %s", async (locale, expected) => {
+    localStorage.setItem("omb-locale", locale);
+    const snag: ClaimedSnag = {
+      id: "a".repeat(32), at: Date.now(), event: "stalled", build: "1.0.252", os: "win32", teacher: "teacher", worker: "worker",
+      pane8: "abcdef12", label: "RACE-R2 | Worker | high", minutes: 102, notes: [], detail: "3 STALLED notes unanswered",
+      pc: { label: "a".repeat(16), name: "Studio", person: "Peter" }, tail: "<img src=x onerror=alert(1)>\nraw worker output",
+    };
+    const stored = teamSnagNote([snag], "snags.jsonl");
+    const { host } = await mount(bot([{ ...note, text: stored }]));
+    expect(title(host)).toBe(expected);
+    const toggle = host.querySelector<HTMLButtonElement>('[data-mid="note"] button[aria-expanded]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    const details = host.querySelector("[data-orbit-note]")!;
+    expect(details.textContent?.split("\n")[0]).toBe(expected);
+    expect(details.textContent).toContain(snag.tail);
+    expect(details.querySelector("img")).toBeNull();
+    expect(details.textContent).not.toContain("untrusted peer data");
+    expect(stored).toContain("untrusted peer data");
+  });
 
   it.each([["en", "Bug Report"], ["ko", "버그 리포트"]])("labels a marked team report in %s", async (locale, expected) => {
     localStorage.setItem("omb-locale", locale);

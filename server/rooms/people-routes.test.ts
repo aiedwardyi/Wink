@@ -354,14 +354,14 @@ describe("who reaches them", () => {
     expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
   });
 
-  it("is never reachable through the relay", async () => {
+  it("refuses guest keys without a phone session through the relay", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
     reached.length = 0;
     const id = group.hosted.roomId;
     for (const [method, path] of [["POST", `/api/rooms/${id}/invites`], ["DELETE", `/api/rooms/${id}/people/${mina.personId}`]] as const) {
-      expect(relayVerdict({ method, url: path, rawHeaders: ["host", HOST, "origin", ORIGIN] }, HOST)).toEqual({ kind: "deny", status: 404, error: "not found" });
-      expect((await call(path, { method, relay: true, body: { name: "Joon" }, key: mina.key })).status).toBe(404);
+      expect(relayVerdict({ method, url: path, rawHeaders: ["host", HOST, "origin", ORIGIN] }, HOST)).toEqual({ kind: "app" });
+      expect((await call(path, { method, relay: true, body: { name: "Joon" }, key: mina.key })).status).toBe(401);
     }
     expect(reached).toEqual([]);
     expect(roomInvites(id)).toEqual([]);

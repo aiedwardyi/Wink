@@ -18,23 +18,6 @@ export function roomBotsRefusal(bots: ReadonlyArray<{ name: string; driverKind: 
 
 export const isHostedThread = (store: Pick<Store, "groupByThread">, threadId: string) => Boolean(store.groupByThread(threadId)?.hosted);
 
-export const hostedThreadIds = (store: Pick<Store, "groups">) => store.groups.flatMap((group) => (group.hosted ? [group.threadId] : []));
-
-/** A broadcast frame about a hosted room, which the iPhone never gets. */
-export function hostedFrame(store: Pick<Store, "group" | "groupByThread">, payload: Record<string, any>): boolean {
-  if (payload.hosted === true || payload.group?.hosted || (typeof payload.groupId === "string" && store.group(payload.groupId)?.hosted)) return true;
-  const threadId = payload.threadId ?? payload.event?.threadId ?? payload.notification?.threadId;
-  return typeof threadId === "string" && isHostedThread(store, threadId);
-}
-
-/** A relay request aimed at a hosted room's routes. */
-export function hostedRelayTarget(store: Pick<Store, "group" | "groupByThread">, path: string): boolean {
-  const group = /^\/api\/groups\/([\w-]+)/.exec(path)?.[1];
-  if (group) return Boolean(store.group(group)?.hosted);
-  const thread = /^\/api\/threads\/([\w-]+)/.exec(path)?.[1];
-  return thread !== undefined && isHostedThread(store, thread);
-}
-
 export type HostedRoomView = { missing: true } | { name: string; people: RoomPerson[] };
 
 /** A hosted group restored without its rooms.db rows reads as missing, never as an empty room. */

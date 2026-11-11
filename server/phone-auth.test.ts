@@ -90,16 +90,18 @@ describe("relay routes", () => {
       "/api/phone-relay",
       "/api/phone-relay/status",
       "/api/phone-relay/enroll",
-      "/api/joined/rooms",
-      "/api/joined/join",
-      "/api/joined/rooms/r1/send",
-      "/api/rooms/r1/files",
-      "/api/rooms/r1/send",
     ];
     for (const path of hidden) {
       for (const method of ["GET", "POST", "PUT", "DELETE"]) {
         expect(verdict(method, path, withOrigin), `${method} ${path}`).toEqual({ kind: "deny", status: 404, error: "not found" });
       }
+    }
+  });
+
+  it("routes rooms through the phone session gate", () => {
+    for (const path of ["/api/joined/rooms", "/api/joined/join", "/api/joined/rooms/r1/send", "/api/rooms/r1/files", "/api/rooms/r1/send", "/api/rooms/r1/invites"]) {
+      expect(verdict("GET", path, withOrigin).kind).toBe("app");
+      expect(verdict("POST", path, withOrigin).kind).toBe("app");
     }
   });
 

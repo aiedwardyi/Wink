@@ -50,7 +50,7 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { hostedFrame, hostedRelayTarget, hostedRoomView, hostedThreadIds, isHostedThread } from "./rooms/guards.ts";
+import { hostedRoomView, isHostedThread } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { hostedSend } from "./rooms/send.ts";
 import { configureRoomDoor, handleRoomDoor } from "./rooms/door.ts";
@@ -2441,8 +2441,6 @@ interface SseClient {
    * while a bot works. A client that isn't showing the computer panel —
    * a phone on cellular, most of all — should not pay for them. */
   screens: boolean;
-  /** Relay clients never get team room frames. */
-  phone: boolean;
 }
 const sseClients = new Set<SseClient>();
 
@@ -2464,10 +2462,10 @@ const SSE_HEARTBEAT_MS =
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; hosted: boolean }> = [];
+const replayBuffer: Array<{ seq: number; kind: string; frame: string | null }> = [];
 
 /** Screen frames are the only kind a client can decline. */
-const wants = (client: SseClient, kind: string, hosted: boolean) => (kind !== "screen" || client.screens) && !(hosted && client.phone);
+const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
 
 /** `<streamId>:<seq>` — opaque to clients, and the only thing they need to
  * remember to resume. Returns null when it belongs to another run. */
@@ -2536,11 +2534,10 @@ function writeBroadcastFrame(payload: Record<string, unknown>, alreadyMasked = f
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  const hosted = hostedFrame(store, payload);
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame, hosted });
+  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame });
   if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
   for (const client of [...sseClients]) {
-    if (!wants(client, kind, hosted)) continue;
+    if (!wants(client, kind)) continue;
     try {
       client.res.write(frame);
     } catch {
@@ -7454,7 +7451,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
-    if (relay && hostedRelayTarget(store, path)) return json(res, 404, { error: "no such room" });
     if (!relay && roomDoorPath(path)) return json(res, 404, { error: "not found" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
@@ -7689,7 +7685,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
       traceOpenSse(url, sseClients.size);
-      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off", phone: relay };
+      const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off" };
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -7728,7 +7724,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       );
       if (resumed) {
         for (const buffered of replayBuffer) {
-          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind, buffered.hosted)) res.write(buffered.frame);
+          if (buffered.seq > since && buffered.frame && wants(client, buffered.kind)) res.write(buffered.frame);
         }
       }
 
@@ -7900,7 +7896,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.filter((g) => !(relay && g.hosted)).map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -8000,7 +7996,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // index to maintain. Hits resolve to the bot/room that owns the thread;
     // rows belonging to deleted conversations resolve to nothing and drop.
     if (method === "GET" && path === "/api/search") {
-      return await threadRoutes.search(res, url, relay ? hostedThreadIds(store) : []);
+      return await threadRoutes.search(res, url);
     }
 
     // ── transcript export (the visible branch, human-readable) ──────────
@@ -8790,6 +8786,7 @@ startTeamSnagOwner({
   email: () => googleAccount.owner()?.email ?? null,
   tokens: googleAccount,
   file: join(DATA_DIR, "team-snags.jsonl"),
+  ownDevices: () => [{ host: phoneAccess.presenceHost() ?? "" }, ...(profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [])],
   post: (text, ids) => postChiefNote(store, profileSyncSettings.deviceId, text, ids),
   postedIds: () => chiefSnagIds(store),
   warn: (line) => console.warn(line),
