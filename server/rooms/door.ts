@@ -108,6 +108,9 @@ function doorGroup(roomId: string): HostedGroup | null {
   return (door?.deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) as HostedGroup | undefined) ?? null;
 }
 
+/** The host's and the bots' names, which no guest may take. */
+const takenNames = (group: HostedGroup) => [door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? [])];
+
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
   const bots = group.memberIds.flatMap((id) => {
@@ -153,7 +156,7 @@ async function rename(req: IncomingMessage, res: ServerResponse, roomId: string,
   if (!group || still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
   const value = record(body.value)?.name;
   if (typeof value !== "string") return send(res, 400, { error: "bad request" });
-  const name = renameRoomPerson(roomId, person.id, value, [door!.deps.hostName()]);
+  const name = renameRoomPerson(roomId, person.id, value, takenNames(group));
   pushRoomState(roomId);
   door!.deps.onPeopleChanged?.(group);
   send(res, 200, { name });
@@ -210,8 +213,9 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
-  if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const group = roomId ? doorGroup(roomId) : null;
+  if (roomId && !group) return send(res, 404, { error: "no-invite" });
+  const result = joinRoom(parts[2]!, parts[3]!, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);

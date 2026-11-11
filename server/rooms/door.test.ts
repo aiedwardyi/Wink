@@ -338,6 +338,16 @@ describe("a shared bot group", () => {
     appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: bot.id, name: bot.name }, text, ...(replyToId ? { replyToId } : {}) });
   const alias = (bot: { id: string; name: string }) => ({ kind: "person", id: `bot-${bot.id}`, name: bot.name });
 
+  it("never gives a guest a bot's name by room code or rename", async () => {
+    const wink = newBot("Wink");
+    const group = crew([wink.id]);
+    const shared = roomCode(group.hosted.roomId);
+    const first = await post("/room/v1/join", { code: `wkr1:${HOST}:${shared.id}.${shared.secret}`, name: "wink", device: "pc-wink-0123456789abcdef" });
+    expect(first.body.person.name).toBe("wink 2");
+    const mina = await joined(group, "Mina");
+    expect((await post(`/room/v1/rooms/${group.hosted.roomId}/name`, { name: "Wink" }, { key: mina.key })).body).toEqual({ name: "Wink 3" });
+  });
+
   it("gives older guests a person alias for each bot line, newer guests the bot, and both the roster", async () => {
     const wink = newBot("Wink");
     const group = crew([wink.id]);
