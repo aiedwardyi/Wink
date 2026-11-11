@@ -96,12 +96,16 @@ function GroupListItem({
   onMenu,
   drag,
   onReselect,
+  joined = false,
+  preview,
 }: {
   group: Group;
   density: SidebarDensity;
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
   drag?: SidebarRowDrag;
   onReselect?: () => void;
+  joined?: boolean;
+  preview?: string;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -158,6 +162,7 @@ function GroupListItem({
       data-sidebar-row
       data-sidebar-row-kind="group"
       data-sidebar-row-id={group.id}
+      data-joined-room-row={joined || undefined}
       data-sidebar-needs-you={asking || undefined}
       data-sidebar-chat-unread={group.unread || undefined}
       title={density === "icons" ? group.name : undefined}
@@ -251,7 +256,7 @@ function GroupListItem({
                 density === "compact" ? "text-xs leading-tight" : "text-[13px]",
               )}
             >
-              {roomConversationPreview(group, state.bots, showToolCalls)}
+              {preview ?? roomConversationPreview(group, state.bots, showToolCalls)}
             </span>
           </div>
         </div>

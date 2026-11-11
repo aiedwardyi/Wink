@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 
 import { cn } from "@/lib/cn";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { shouldResumeBottomFollow } from "@/lib/bottom-follow";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { isRoomPicture, roomFileUrl, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
@@ -61,20 +62,29 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
+  const previousTop = useRef(0);
+  const touchY = useRef(0);
   const last = lines.at(-1);
   const lastId = last?.id;
   const lastMine = last ? mine(last) : false;
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && (atEnd.current || lastMine)) el.scrollTop = el.scrollHeight;
+    if (el && (atEnd.current || lastMine)) {
+      atEnd.current = true;
+      el.scrollTop = el.scrollHeight;
+      previousTop.current = el.scrollTop;
+    }
   }, [lastId, lastMine]);
-  // pictures loading and a growing composer fire no scroll event; re-pin while following
+  // Layout scrolls must not disarm follow before pictures finish growing.
   useEffect(() => {
     const el = scrollRef.current;
     const log = logRef.current;
     if (!el || !log || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (atEnd.current) el.scrollTop = el.scrollHeight;
+      if (atEnd.current) {
+        el.scrollTop = el.scrollHeight;
+        previousTop.current = el.scrollTop;
+      }
     });
     observer.observe(log);
     observer.observe(el);
@@ -85,9 +95,21 @@ export function TeamRoomTranscript({ lines, mine, base, label }: { lines: RoomLi
       ref={scrollRef}
       data-team-room-transcript
       className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
+      onWheel={(event) => { if (event.deltaY < 0) atEnd.current = false; }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY ?? touchY.current;
+        if (y > touchY.current) atEnd.current = false;
+        touchY.current = y;
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) atEnd.current = false;
+      }}
+      tabIndex={0}
       onScroll={(e) => {
         const el = e.currentTarget;
-        atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
+        previousTop.current = el.scrollTop;
       }}
     >
       <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>

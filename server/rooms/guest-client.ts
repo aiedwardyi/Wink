@@ -13,6 +13,7 @@ import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.t
 import {
   addJoinedEntries,
   endJoined,
+  joinedCode,
   joinedCursor,
   joinedEntries,
   joinedFile,
@@ -20,6 +21,7 @@ import {
   joinedRoom,
   joinedRooms,
   resetJoined,
+  removeJoined,
   saveJoined,
   setJoinedState,
   type JoinedEntry,
@@ -27,7 +29,7 @@ import {
   type JoinedRoom,
   type JoinedState,
 } from "./joined.ts";
-import { cachedJoinedFile, keepJoinedFile } from "./joined-files.ts";
+import { cachedJoinedFile, keepJoinedFile, removeJoinedFiles } from "./joined-files.ts";
 import { NAME_MAX } from "./names.ts";
 
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
@@ -135,6 +137,7 @@ export class GuestClient {
   private readonly pending = new Map<string, number>();
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
+  private readonly changing = new Set<string>();
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
   private started = false;
   private readonly deps: GuestClientDeps;
@@ -177,7 +180,7 @@ export class GuestClient {
     if (!joined.success) return unavailable();
     const { roomId, person, key } = joined.data;
     this.unfollow(roomId);
-    saveJoined(roomId, relayHost, person, key);
+    saveJoined(roomId, relayHost, person, key, pasted);
     this.follow(roomId);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
@@ -210,6 +213,37 @@ export class GuestClient {
     this.leaving.delete(creds.key);
     if (!reply.ok && reply.status !== 401) return reply;
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
+  }
+
+  async rejoin(roomId: string): Promise<GuestResult<JoinedView>> {
+    const room = joinedRoom(roomId);
+    if (!room) return failed(404, "not found");
+    if (room.status === "removed") return failed(403, "removed");
+    if (room.status !== "left" || this.changing.has(roomId)) return failed(409, "room is busy");
+    const code = joinedCode(roomId);
+    if (!code) return failed(409, "no-saved-code");
+    this.changing.add(roomId);
+    try {
+      return await this.join(code);
+    } finally {
+      this.changing.delete(roomId);
+    }
+  }
+
+  async remove(roomId: string): Promise<GuestResult<boolean>> {
+    const room = joinedRoom(roomId);
+    if (!room) return failed(404, "not found");
+    if (room.status === "joined" || this.changing.has(roomId)) return failed(409, "room is busy");
+    this.changing.add(roomId);
+    try {
+      await removeJoinedFiles(roomId);
+      this.unfollow(roomId);
+      const removed = removeJoined(roomId);
+      if (removed) this.changed(roomId);
+      return { ok: true, value: removed };
+    } finally {
+      this.changing.delete(roomId);
+    }
   }
 
   /** Streams `body` to the door, which sniffs and caps it. The caller owns uploadId and resends it on retry; no retry here, the body is spent. */

@@ -64,6 +64,11 @@ export function noteJoinedRoom(room: JoinedView) {
   publish([...rooms.filter((each) => each.roomId !== room.roomId), room]);
 }
 
+export function forgetJoinedRoom(roomId: string) {
+  ++loads;
+  publish(rooms.filter((each) => each.roomId !== roomId));
+}
+
 const watch = (watcher: () => void) => {
   watchers.add(watcher);
   return () => void watchers.delete(watcher);

@@ -83,6 +83,10 @@ function open(): DatabaseSync {
       body TEXT NOT NULL,
       PRIMARY KEY (room_id, seq)
     );
+    CREATE TABLE IF NOT EXISTS joined_codes (
+      room_id TEXT PRIMARY KEY,
+      code TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -130,7 +134,7 @@ const rowToRoom = (row: RoomRow): JoinedRoom => ({
 });
 
 /** A fresh join replaces any earlier copy of the room. */
-export function saveJoined(roomId: string, relayHost: string, me: { id: string; name: string }, key: string): JoinedRoom {
+export function saveJoined(roomId: string, relayHost: string, me: { id: string; name: string }, key: string, code?: string): JoinedRoom {
   const joinedAt = Date.now();
   transaction((database) => {
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
@@ -138,6 +142,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
     `).run(roomId, relayHost, me.id, me.name, key, joinedAt);
+    if (code) database.prepare("INSERT OR REPLACE INTO joined_codes (room_id, code) VALUES (?, ?)").run(roomId, code);
   });
   return { roomId, relayHost, me, status: "joined", state: null, joinedAt };
 }
@@ -207,4 +212,19 @@ export function setJoinedState(roomId: string, state: JoinedState): boolean {
 /** Read-only from here on; the key is gone. */
 export function endJoined(roomId: string, status: "removed" | "left"): boolean {
   return db().prepare("UPDATE joined SET status = ?, key = NULL WHERE room_id = ? AND status = 'joined'").run(status, roomId).changes > 0;
+}
+
+export function joinedCode(roomId: string): string | null {
+  return (db().prepare("SELECT code FROM joined_codes WHERE room_id = ?").get(roomId) as { code: string } | undefined)?.code ?? null;
+}
+
+export function removeJoined(roomId: string): boolean {
+  return transaction((database) => {
+    const removed = database.prepare("DELETE FROM joined WHERE room_id = ? AND status != 'joined'").run(roomId).changes > 0;
+    if (removed) {
+      database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(roomId);
+    }
+    return removed;
+  });
 }

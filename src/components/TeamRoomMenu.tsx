@@ -1,17 +1,22 @@
 // The sidebar's way in: New team room (a name, nothing else) and Join team room (one code box).
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { KeyRound, UsersRound } from "lucide-react";
+import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { noteJoinedRoom } from "@/lib/joined-rooms";
-import { createTeamRoom, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode } from "@/lib/team-rooms";
+import { request } from "@/lib/api-request";
+import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
+import { createTeamRoom, inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, type JoinedView } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
-import { useStore } from "@/state/store";
+import { useStore, type Group } from "@/state/store";
 
-type Sheet = "create" | "join" | null;
+import { ConfirmDialog } from "./ConfirmDialog";
+import { TeamRoomPeople } from "./TeamRoomPeople";
+
+type Sheet = "create" | "join" | "people" | "leave" | "remove" | null;
 
 let sheet: Sheet = null;
+let roomTarget: { id: string; name: string } | null = null;
 const watchers = new Set<() => void>();
 
 function openSheet(next: Sheet) {
@@ -25,6 +30,79 @@ const watch = (watcher: () => void) => {
 };
 
 const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+
+export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClose: () => void }) {
+  const { t } = useI18n();
+  const { dispatch } = useStore();
+  const rooms = useJoinedRooms();
+  const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [busy, setBusy] = useState(false);
+  const joinedId = joinedRoomIdOf(group.id);
+  const room = rooms.find((each) => each.roomId === joinedId);
+  const pick = (next: Sheet) => {
+    roomTarget = { id: group.id, name: group.name };
+    openSheet(next);
+    onClose();
+  };
+  const rejoin = async () => {
+    if (!joinedId || busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      const result: { room: JoinedView } = await request(`${joinedRoomBase(joinedId)}/rejoin`, { method: "POST" });
+      if (result.room) noteJoinedRoom(result.room);
+      dispatch({ type: "select", id: group.id });
+      onClose();
+    } catch {
+      setProblem("teamRoom.badCode");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (room && room.status !== "joined") return (
+    <>
+      {room.status === "left" && <button type="button" disabled={busy} onClick={() => void rejoin()} className={`${ITEM} disabled:opacity-40`}>
+        <LogIn size={16} className="text-ink-secondary" />
+        {t("teamRoom.rejoin")}
+      </button>}
+      <button type="button" disabled={busy} onClick={() => pick("remove")} className={`${ITEM} text-danger disabled:opacity-40`}>
+        <Trash2 size={16} />
+        {t("teamRoom.removeLocal")}
+      </button>
+      {problem && <div role="alert" className="px-3.5 py-2 text-[12.5px] text-danger">{t(problem)}</div>}
+    </>
+  );
+  if (joinedId) return (
+    <button type="button" onClick={() => pick("leave")} className={`${ITEM} text-danger`}>
+      <LogOut size={16} />
+      {t("teamRoom.leave")}
+    </button>
+  );
+  if (!isTeamRoom(group)) return null;
+  const copy = async () => {
+    const result = await inviteToRoom(group.hosted.roomId);
+    if (!("code" in result)) return setProblem(inviteErrorKey(result.status));
+    try {
+      await navigator.clipboard.writeText(result.code);
+      onClose();
+    } catch {
+      setProblem("errors.request");
+    }
+  };
+  return (
+    <>
+      <button type="button" onClick={() => pick("people")} className={ITEM}>
+        <UsersRound size={16} className="text-ink-secondary" />
+        {t("teamRoom.people")}
+      </button>
+      <button type="button" onClick={() => void copy()} className={ITEM}>
+        <Copy size={16} className="text-ink-secondary" />
+        {t("teamRoom.copy")}
+      </button>
+      {problem && <div role="alert" className="px-3.5 py-2 text-[12.5px] text-danger">{t(problem)}</div>}
+    </>
+  );
+}
 
 export function TeamRoomMenuItems({ onPick }: { onPick: () => void }) {
   const { t } = useI18n();
@@ -195,13 +273,64 @@ function JoinSheet({ closing, onClose }: { closing: boolean; onClose: () => void
 }
 
 export function TeamRoomDialogs() {
+  const { t } = useI18n();
+  const { state, dispatch } = useStore();
+  const [removing, setRemoving] = useState(false);
+  const [removeFailed, setRemoveFailed] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const open = useSyncExternalStore(watch, () => sheet);
   const close = () => openSheet(null);
+  const group = state.groups.find((each) => each.id === roomTarget?.id);
+  const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
+  const remove = async () => {
+    if (!joinedId || removing) return;
+    setRemoving(true);
+    setRemoveFailed(false);
+    try {
+      await request(joinedRoomBase(joinedId), { method: "DELETE" });
+      forgetJoinedRoom(joinedId);
+      if (state.selectedId === roomTarget?.id) dispatch({ type: "select", id: state.bots[0]?.id ?? "" });
+      close();
+    } catch {
+      setRemoveFailed(true);
+    } finally {
+      setRemoving(false);
+    }
+  };
   useEffect(() => close, []);
   return (
     <>
       <Presence open={open === "create"}>{(closing) => <CreateSheet closing={closing} onClose={close} />}</Presence>
       <Presence open={open === "join"}>{(closing) => <JoinSheet closing={closing} onClose={close} />}</Presence>
+      <Presence open={open === "people" && isTeamRoom(group)}>
+        {(closing) => isTeamRoom(group) && <TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />}
+      </Presence>
+      <Presence open={open === "leave" && Boolean(joinedId)}>
+        {(closing) => <ConfirmDialog
+          closing={closing}
+          title={t("teamRoom.leaveTitle", { name: roomTarget?.name ?? "" })}
+          body={t("teamRoom.leaveBody")}
+          confirmLabel={t("teamRoom.leave")}
+          onCancel={close}
+          onConfirm={() => {
+            close();
+            if (joinedId) void request(`${joinedRoomBase(joinedId)}/leave`, { method: "POST" }).catch(() => {});
+          }}
+        />}
+      </Presence>
+      <Presence open={open === "remove" && Boolean(joinedId)}>
+        {(closing) => <ConfirmDialog
+          closing={closing}
+          title={t("teamRoom.removeLocalTitle", { name: roomTarget?.name ?? "" })}
+          body={t("teamRoom.removeLocalBody")}
+          confirmLabel={t("teamRoom.removeLocal")}
+          confirmDisabled={removing}
+          onCancel={close}
+          onConfirm={() => void remove()}
+        >
+          {removeFailed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
+        </ConfirmDialog>}
+      </Presence>
     </>
   );
 }
