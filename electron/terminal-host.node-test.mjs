@@ -2139,7 +2139,8 @@ test("shell integration only wraps the worker PowerShell", { skip: process.platf
   const script = Buffer.from(child.args[child.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
   assert.ok(script.includes(`133;D;${pane.sessionId}`));
   assert.ok(script.includes("Get-History -Count 1"));
-  assert.ok(!script.includes("PSReadLine"));
+  assert.match(script, /Set-PSReadLineOption -PredictionSource None/);
+  assert.match(script, /Set-PSReadLineOption -HistorySaveStyle SaveNothing/);
   await f.host.open(f.event, f.input);
   assert.deepEqual(f.children[1].args, ["-NoLogo"]);
 });
@@ -2164,6 +2165,7 @@ prompt`;
     assert.equal(stdout.split(finishedMark({ sessionId: "test-pane" }, 7)).length - 1, 3);
     assert.ok(stdout.includes(startedMark({ sessionId: "test-pane" }, "echo ok")));
     assert.match(stdout, /echo ok\r?\n/);
+    assert.doesNotMatch(stdout, /PSReadLine/);
     assert.match(stdout, /PROMPT:False/);
     assert.equal(stdout.match(/PROMPT:True/g).length, 2);
   });
