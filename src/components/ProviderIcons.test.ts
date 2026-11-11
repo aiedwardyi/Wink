@@ -141,8 +141,10 @@ describe("claudeFit", () => {
     }
   });
 
-  it("keeps every column at least one device px, so eyes and legs survive", () => {
-    for (const r of fitted(14, 1.25).rects) expect(Math.min(r.width, r.height)).toBeGreaterThanOrEqual(1);
+  it.each([1.25, 1.5, 1.75])("keeps every column at least one device px at ratio %d", (ratio) => {
+    for (const size of [14, 16, 18, 20, 24]) {
+      for (const r of fitted(size, ratio).rects) expect(Math.min(r.width, r.height)).toBeGreaterThanOrEqual(1);
+    }
   });
 });
 
