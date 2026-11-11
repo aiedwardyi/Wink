@@ -13,6 +13,11 @@ import type { JoinedFile } from "./joined.ts";
 
 const roomDir = (roomId: string) => join(DATA_DIR, "joined-files", roomId);
 
+export async function removeJoinedFiles(roomId: string): Promise<void> {
+  if (!/^[\w-]{1,64}$/.test(roomId)) throw new Error("bad room id");
+  await rm(roomDir(roomId), { recursive: true, force: true });
+}
+
 /** The held copy, when it is all there. */
 export function cachedJoinedFile(roomId: string, file: JoinedFile): string | null {
   const path = join(roomDir(roomId), file.id);

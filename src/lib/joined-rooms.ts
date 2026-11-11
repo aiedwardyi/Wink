@@ -64,6 +64,11 @@ export function noteJoinedRoom(room: JoinedView) {
   publish([...rooms.filter((each) => each.roomId !== room.roomId), room]);
 }
 
+export function forgetJoinedRoom(roomId: string) {
+  ++loads;
+  publish(rooms.filter((each) => each.roomId !== roomId));
+}
+
 const watch = (watcher: () => void) => {
   watchers.add(watcher);
   return () => void watchers.delete(watcher);
@@ -74,6 +79,11 @@ export function useJoinedRooms(): JoinedView[] {
     void loadRooms();
     return follow(() => void loadRooms());
   }, []);
+  return useLoadedJoinedRooms();
+}
+
+/** The list as last loaded; never starts a load. */
+export function useLoadedJoinedRooms(): JoinedView[] {
   return useSyncExternalStore(watch, () => rooms);
 }
 
