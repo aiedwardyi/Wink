@@ -18,7 +18,8 @@ import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGrou
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
-import { closeInvitesDb, createInvite, revokeGuestKeys, roomInvites } from "./invites.ts";
+import { hostedRoomView } from "./guards.ts";
+import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 
@@ -295,12 +296,107 @@ describe("door routes", () => {
     expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(200);
   });
 
-  it("serves only people-only rooms", async () => {
+  it("serves a hosted group with bots, and nothing for a room no group hosts", async () => {
     const botRoom = store.createGroup("Bots", [], false, undefined, undefined, { roomId: createRoom("Bots").id }) as HostedGroup;
-    const invite = code(botRoom, "Mina");
-    expect(await post("/room/v1/join", { code: invite.code })).toMatchObject({ status: 404, body: { error: "no-invite" } });
-    expect(roomPeople(botRoom.hosted.roomId)).toEqual([]);
-    expect(roomInvites(botRoom.hosted.roomId).map((row) => row.id)).toEqual([invite.inviteId]);
+    expect((await post("/room/v1/join", { code: code(botRoom, "Mina").code })).status).toBe(200);
+    expect(roomPeople(botRoom.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
+    const loose = createRoom("Loose");
+    const { invite, secret } = createInvite(loose.id, "Joon", "chat", ["Edward"]);
+    expect(await post("/room/v1/join", { code: `wkr1:${HOST}:${invite.id}.${secret}` })).toMatchObject({ status: 404, body: { error: "no-invite" } });
+    expect(roomInvites(loose.id).map((row) => row.id)).toEqual([invite.id]);
+  });
+});
+
+describe("a shared bot group", () => {
+  const newBot = (name: string) => store.patchBot(store.createBot().id, { name })!;
+  const crew = (botIds: string[]) => store.createGroup("Crew", botIds, false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+  const botSays = (group: HostedGroup, bot: { id: string; name: string }, text: string, replyToId?: string) =>
+    appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: bot.id, name: bot.name }, text, ...(replyToId ? { replyToId } : {}) });
+  const alias = (bot: { id: string; name: string }) => ({ kind: "person", id: `bot-${bot.id}`, name: bot.name });
+
+  it("gives older guests a person alias for each bot line, newer guests the bot, and both the roster", async () => {
+    const wink = newBot("Wink");
+    const group = crew([wink.id]);
+    store.patchGroup(group.id, { bulletin: "Ship it" });
+    const { key } = await joined(group, "Mina");
+    const hi = hostSays(group, "hi");
+    const reply = botSays(group, wink, "on it", hi.id);
+    const path = `/room/v1/rooms/${group.hosted.roomId}/snapshot`;
+    const old = (await call(path, { key })).body;
+    const fresh = (await call(`${path}?with=bots`, { key })).body;
+    const wire = { seq: reply.seq, id: reply.id, at: reply.at, text: "on it", replyToId: hi.id };
+    expect(old.entries[1]).toEqual({ ...wire, author: alias(wink) });
+    expect(fresh.entries[1]).toEqual({ ...wire, author: { kind: "bot", id: wink.id, name: "Wink" } });
+    expect(old.entries[0]).toEqual(fresh.entries[0]);
+    for (const body of [old, fresh]) {
+      expect(body.state).toMatchObject({ instructions: "Ship it", bots: [{ id: wink.id, name: "Wink", color: wink.color }] });
+    }
+  });
+
+  it("serializes replay, held and live frames per viewer", async () => {
+    const wink = newBot("Wink");
+    const group = crew([wink.id]);
+    const { key } = await joined(group, "Mina");
+    botSays(group, wink, "replayed");
+    const old = await openStream(group.hosted.roomId, key, 0);
+    const fresh = await openStream(group.hosted.roomId, key, "0&with=bots");
+    await Promise.all([old.until((frames) => frames.length >= 2), fresh.until((frames) => frames.length >= 2)]);
+    writeRoomEntry(store, group, { author: { kind: "bot", id: wink.id, name: "Wink" }, text: "live" });
+    const authors = async (stream: Stream) =>
+      (await stream.until((frames) => frames.length >= 3)).flatMap((frame) => (frame.kind === "entry" ? [[frame.entry.text, frame.entry.author]] : []));
+    expect(await authors(old)).toEqual([["replayed", alias(wink)], ["live", alias(wink)]]);
+    expect(await authors(fresh)).toEqual([["replayed", { kind: "bot", id: wink.id, name: "Wink" }], ["live", { kind: "bot", id: wink.id, name: "Wink" }]]);
+    for (const stream of [old, fresh]) await shut(stream);
+  });
+
+  it("moves the shared state version when the bot roster changes", async () => {
+    const wink = newBot("Wink");
+    const pip = newBot("Pip");
+    const group = crew([wink.id]);
+    const { key } = await joined(group, "Mina");
+    const stream = await openStream(group.hosted.roomId, key, 0);
+    const [first] = await stream.until((frames) => frames.length >= 1);
+    store.patchGroup(group.id, { memberIds: [wink.id, pip.id] });
+    const frames = await stream.until((all) => all.length >= 2);
+    const [before, after] = frames.map((frame) => (frame.kind === "state" ? frame.state : null));
+    expect(first!.kind).toBe("state");
+    expect(after!.version).toBeGreaterThan(before!.version);
+    expect(after!.bots.map((bot) => bot.name)).toEqual(["Wink", "Pip"]);
+    await shut(stream);
+  });
+
+  it("keeps a 200-line Korean bot snapshot under an older guest's 4 MiB reply limit", async () => {
+    const wink = newBot("Wink");
+    const group = crew([wink.id]);
+    const { key } = await joined(group, "Mina");
+    for (let i = 0; i < 200; i += 1) botSays(group, wink, `${i} ${"한".repeat(19_990)}`);
+    const res = await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key });
+    expect(res.status).toBe(200);
+    expect(Buffer.byteLength(JSON.stringify(res.body))).toBeLessThan(4 * 1024 * 1024);
+    expect(res.body.head).toBe(200);
+    const seqs = res.body.entries.map((entry: { seq: number }) => entry.seq);
+    expect(seqs.length).toBeGreaterThan(0);
+    expect(seqs).toEqual(seqs.map((_: number, at: number) => 201 - seqs.length + at));
+  });
+
+  it("records each person's first join for the host, once, and tells the host on join and remove", async () => {
+    const group = crew([newBot("Wink").id]);
+    const changed: string[] = [];
+    store.onChange((change) => {
+      if (change.type === "group") changed.push(change.groupId);
+    });
+    const shared = roomCode(group.hosted.roomId);
+    const join = { code: `wkr1:${HOST}:${shared.id}.${shared.secret}`, name: "Mina", device: "pc-mina-0123456789abcdef" };
+    const first = await post("/room/v1/join", join);
+    expect(first.status).toBe(200);
+    expect(changed).toContain(group.id);
+    expect((await post("/room/v1/join", join)).status).toBe(200);
+    const view = { people: [{ name: "Mina" }], joins: [{ personId: first.body.person.id, name: "Mina", at: expect.any(Number) }] };
+    expect(hostedRoomView(group.hosted)).toMatchObject(view);
+    changed.length = 0;
+    expect(removeRoomPerson(group.hosted.roomId, first.body.person.id)).toBe(true);
+    expect(changed).toContain(group.id);
+    expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], joins: view.joins });
   });
 });
 

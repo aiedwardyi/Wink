@@ -28,7 +28,7 @@ export interface DoorState {
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
-  bots: never[];
+  bots: Array<{ id: string; name: string; color: string }>;
   myAsks: never[];
 }
 
@@ -38,6 +38,8 @@ export interface DoorStream {
   roomId: string;
   personId: string;
   res: ServerResponse;
+  /** Asked with `with=bots`; anyone else reads a bot as a person by its name. */
+  bots: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
 }
@@ -46,11 +48,15 @@ const streams = new Set<DoorStream>();
 const sockets = new Map<string, Set<Duplex>>();
 const personKey = (roomId: string, personId: string) => `${roomId}\n${personId}`;
 
-export const doorEntry = (entry: RoomEntry): DoorEntry => ({
+/** Builds before bots in rooms parse only host and person authors. */
+const wireAuthor = (author: RoomAuthor, bots: boolean): RoomAuthor =>
+  bots || author.kind !== "bot" ? author : { kind: "person", id: `bot-${author.id}`, name: author.name };
+
+export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   seq: entry.seq,
   id: entry.id,
   at: entry.at,
-  author: entry.author,
+  author: wireAuthor(entry.author, bots),
   text: entry.text,
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
   ...(entry.files ? { files: entry.files } : {}),
@@ -78,12 +84,13 @@ function write(stream: DoorStream, chunk: string): void {
 }
 
 export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
-  write(stream, `data: ${JSON.stringify(frame)}\n\n`);
+  const sent = frame.kind === "entry" ? { kind: "entry", entry: { ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) } } : frame;
+  write(stream, `data: ${JSON.stringify(sent)}\n\n`);
 }
 
 /** Registered and buffering: live frames wait until goLive. */
-export function openDoorStream(roomId: string, personId: string, res: ServerResponse): DoorStream {
-  const stream: DoorStream = { roomId, personId, res, buffer: [] };
+export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false): DoorStream {
+  const stream: DoorStream = { roomId, personId, res, bots, buffer: [] };
   streams.add(stream);
   const heartbeat = setInterval(() => write(stream, ": ping\n\n"), HEARTBEAT_MS);
   res.once("close", () => {

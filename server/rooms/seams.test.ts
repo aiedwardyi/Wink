@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { Store, type GroupRecord } from "../store.ts";
 import { closeRoomsDb } from "./db.ts";
-import { hostedRoomView, isHostedThread } from "./guards.ts";
+import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./guards.ts";
 
 const SERVER = join(import.meta.dirname, "..");
 const parse = (file: string) => {
@@ -112,7 +112,7 @@ describe("hosted thread seams", () => {
   it("serves no linked file or folder from a hosted thread", async () => {
     const serveLinkedFile = vi.fn();
     const serveLinkedFolder = vi.fn();
-    const invoke = routeBlock(": serveLinkedFile)(", { store, json, serveLinkedFile, serveLinkedFolder, credentials: {} });
+    const invoke = routeBlock(": serveLinkedFile)(", { store, json, serveLinkedFile, serveLinkedFolder, credentials: {}, linkedFilesClosed });
     for (const kind of ["file", "folder"]) {
       const path = `/api/threads/${hosted.threadId}/linked-${kind}`;
       expect(await invoke({}, {}, path, "GET", new URL(`http://x${path}`), ["", hosted.threadId, kind])).toEqual({ status: 404, body: { error: "no such conversation" } });

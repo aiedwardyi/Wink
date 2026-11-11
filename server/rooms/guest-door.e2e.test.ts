@@ -15,13 +15,14 @@ import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAskHooks, type HostedGroup } from "./asks.ts";
-import { closeRoomsDb, recentRoomEntries, roomPeople } from "./db.ts";
+import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
+import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 
@@ -440,5 +441,47 @@ describe("teammate and the real door", () => {
 
   it("leaves paths outside /api/joined/ alone", async () => {
     expect(await joinedRoute("GET", "/api/joinedx", teammate(), async () => ({}))).toBeNull();
+  });
+});
+
+describe("an older teammate build in a shared bot group", () => {
+  // The join limiter is per process; the file's earlier joins have spent this minute.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const crew = () => {
+    const wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
+    const group = store.createGroup("Crew", [wink.id], false, undefined, undefined, { roomId: createRoom("Crew").id }) as HostedGroup;
+    return { wink, group, roomId: group.hosted.roomId, says: (text: string) => appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink.id, name: "Wink" }, text }) };
+  };
+
+  it("reads bot lines from the snapshot and the stream as named people, never as itself", async () => {
+    const { wink, group, roomId, says } = crew();
+    appendRoomEntry(roomId, { author: { kind: "host", id: "host", name: "Edward" }, text: "welcome" });
+    says("hello from the bot");
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    writeRoomEntry(store, group, { author: { kind: "bot", id: wink.id, name: "Wink" }, text: "live bot line" });
+    await until(() => texts(roomId).includes("live bot line"));
+    expect(joinedEntries(roomId, 10).map((entry) => [entry.text, entry.author])).toEqual([
+      ["welcome", { kind: "host", id: "host", name: "Edward" }],
+      ["hello from the bot", { kind: "person", id: `bot-${wink.id}`, name: "Wink" }],
+      ["live bot line", { kind: "person", id: `bot-${wink.id}`, name: "Wink" }],
+    ]);
+  });
+
+  it("lands a 200-line Korean bot history", async () => {
+    const { group, roomId, says } = crew();
+    for (let i = 0; i < 200; i += 1) says(`${i} ${"한".repeat(19_990)}`);
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    expect(seqs(roomId).at(-1)).toBe(200);
   });
 });

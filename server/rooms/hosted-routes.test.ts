@@ -79,9 +79,21 @@ describe("hosted group routes", () => {
     const r = routes();
     const refused = { status: 409, body: { error: "a team room keeps one conversation" } };
     expect(await call(r.createTask, { title: "Next" }, [group.id])).toEqual(refused);
-    expect(await call((_req, res, m) => r.switchTask(res, m, new URL("http://x/")), {}, [group.id, group.threadId])).toEqual(refused);
     expect(await call(r.patchTask, { title: "Renamed" }, [group.id, group.threadId])).toEqual(refused);
     expect(await call((_req, res, m) => r.deleteTask(res, m), {}, [group.id, group.threadId])).toEqual(refused);
     expect(store.groupTasks(group.id)).toHaveLength(1);
+  });
+
+  it("opens an older task of a shared group to read, keeping the shared thread active", async () => {
+    const group = store.createGroup("Crew", [bot("Wink", "codex")]);
+    const old = group.threadId;
+    store.appendMessage(old, { role: "user", kind: "text", text: "private plan" });
+    store.createGroupTask(group.id);
+    const shared = store.patchGroup(group.id, { hosted: { roomId: "room-1" } })!;
+    const open = (threadId: string) => call((_req, res, m) => routes().switchTask(res, m, new URL("http://x/")), {}, [group.id, threadId]);
+    expect(await open(old)).toEqual({ status: 200, body: { group: expect.objectContaining({ id: group.id, threadId: old }) } });
+    expect((await open("nope")).status).toBe(404);
+    expect(store.group(group.id)!.threadId).toBe(shared.threadId);
+    expect(store.messagesFor(old).map((message) => message.text)).toEqual(["private plan"]);
   });
 });
