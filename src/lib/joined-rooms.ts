@@ -1,0 +1,109 @@
+// Rooms this PC joined elsewhere. Each "joined" frame names the room that changed.
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+import { fetchResponse, responseBody } from "./api-request";
+import { openLiveEvents } from "./live-events";
+import type { JoinedEntry, JoinedView } from "./team-rooms";
+
+export type JoinedRoomDetail = JoinedView & { entries: JoinedEntry[] };
+
+type Listener = (roomId: string | null) => void;
+
+const listeners = new Set<Listener>();
+let stopLive: (() => void) | null = null;
+
+function follow(listener: Listener): () => void {
+  listeners.add(listener);
+  stopLive ??= openLiveEvents({
+    screens: false,
+    onFrame: (frame) => {
+      if (frame.kind !== "joined") return;
+      const roomId = (frame as { roomId?: unknown }).roomId;
+      for (const each of [...listeners]) each(typeof roomId === "string" ? roomId : null);
+    },
+    onSnapshotRequired: async () => {
+      for (const each of [...listeners]) each(null);
+      return true;
+    },
+  });
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size) return;
+    stopLive?.();
+    stopLive = null;
+  };
+}
+
+async function read(path: string): Promise<{ status: number; body: any }> {
+  const res = await fetchResponse(path);
+  return { status: res.status, body: await responseBody(res) };
+}
+
+const NONE: JoinedView[] = [];
+let rooms: JoinedView[] = NONE;
+const watchers = new Set<() => void>();
+let loads = 0;
+
+function publish(next: JoinedView[]) {
+  rooms = next;
+  for (const watcher of [...watchers]) watcher();
+}
+
+async function loadRooms() {
+  const load = ++loads;
+  try {
+    const { status, body } = await read("/api/joined/rooms");
+    if (load === loads && status === 200 && Array.isArray(body?.rooms)) publish(body.rooms);
+  } catch {
+    // the next frame or reconnect reloads
+  }
+}
+
+/** The room a join just returned, ahead of its first frame. */
+export function noteJoinedRoom(room: JoinedView) {
+  publish([...rooms.filter((each) => each.roomId !== room.roomId), room]);
+}
+
+const watch = (watcher: () => void) => {
+  watchers.add(watcher);
+  return () => void watchers.delete(watcher);
+};
+
+export function useJoinedRooms(on: boolean): JoinedView[] {
+  useEffect(() => {
+    if (!on) return;
+    void loadRooms();
+    return follow(() => void loadRooms());
+  }, [on]);
+  const list = useSyncExternalStore(watch, () => rooms);
+  return on ? list : NONE;
+}
+
+/** undefined while loading, null once this PC no longer holds the room. */
+export function useJoinedRoom(roomId: string): JoinedRoomDetail | null | undefined {
+  const [room, setRoom] = useState<{ roomId: string; detail: JoinedRoomDetail | null }>();
+  useEffect(() => {
+    let alive = true;
+    let loadsHere = 0;
+    const load = async () => {
+      const load = ++loadsHere;
+      try {
+        const { status, body } = await read(`/api/joined/rooms/${roomId}`);
+        if (!alive || load !== loadsHere) return;
+        if (status === 200 && body?.room) setRoom({ roomId, detail: body.room });
+        else if (status === 404) setRoom({ roomId, detail: null });
+      } catch {
+        // keep what is on screen; the next frame reloads
+      }
+    };
+    void load();
+    const stop = follow((changed) => {
+      if (changed === null || changed === roomId) void load();
+    });
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [roomId]);
+  return room?.roomId === roomId ? room.detail : undefined;
+}

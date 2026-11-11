@@ -81,12 +81,12 @@ function Thumbnail({ image, onPreview }: { image: PreviewImage; onPreview: (open
   );
 }
 
-export function AttachedImageGallery({ paths, className }: { paths: string[]; className?: string }) {
+export function AttachedImageGallery({ paths, pictures, className }: { paths?: string[]; pictures?: PreviewImage[]; className?: string }) {
   const viewer = useMediaViewer();
-  const images = useMemo(() => paths.flatMap((path) => {
+  const images = useMemo(() => pictures ?? (paths ?? []).flatMap((path) => {
     const image = previewImage(path);
     return image ? [image] : [];
-  }), [paths]);
+  }), [paths, pictures]);
   const [selected, setSelected] = useState<PreviewImage | null>(null);
   const preview = usePresence(selected);
   if (images.length === 0) return null;

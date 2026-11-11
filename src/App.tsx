@@ -24,6 +24,10 @@ import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { JoinedRoomView } from "@/components/JoinedRoomView";
+import { TeamRoomView } from "@/components/TeamRoomView";
+import { teamRoomsEnabled } from "@/lib/feature-flags";
+import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
 import { LazyView } from "@/components/LazyView";
@@ -136,7 +140,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
-  const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
+  const joinedId = teamRoomsEnabled(state.config) ? joinedRoomIdOf(state.selectedId) : null;
+  const bot = group || joinedId ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
@@ -695,6 +700,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
+      ) : joinedId ? (
+        <JoinedRoomView key={joinedId} roomId={joinedId} />
+      ) : group && isTeamRoom(group) && teamRoomsEnabled(state.config) ? (
+        <TeamRoomView key={group.id} group={group} />
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>

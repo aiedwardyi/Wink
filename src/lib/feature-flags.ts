@@ -1,5 +1,5 @@
 export interface FeatureFlagConfig {
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean; teamRooms?: boolean };
 }
 
 export function detailedRepliesEnabled(config: FeatureFlagConfig | null | undefined): boolean {
@@ -19,4 +19,8 @@ export function modelDialEnabled(config: FeatureFlagConfig | null | undefined): 
  * shows that work is happening. */
 export function showToolCallsEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.showToolCalls === true;
+}
+
+export function teamRoomsEnabled(config: FeatureFlagConfig | null | undefined): boolean {
+  return config?.features?.teamRooms === true;
 }

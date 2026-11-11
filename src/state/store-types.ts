@@ -122,6 +122,10 @@ export interface Message {
   sendId?: string;
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
+  /** Team rooms: the room log entry this line mirrors, its author and files. */
+  author?: { kind: "host" | "person" | "bot"; id: string; name: string };
+  roomEntryId?: string;
+  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number }>;
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
@@ -178,6 +182,9 @@ export interface Group {
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
+  /** A team room this PC hosts; `room` is its live roster. */
+  hosted?: { roomId: string };
+  room?: { name: string; people: Array<{ id: string; name: string }> } | { missing: true };
 }
 
 /** One of a channel's independent conversations. The channel's threadId
@@ -357,7 +364,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean; teamRooms?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<

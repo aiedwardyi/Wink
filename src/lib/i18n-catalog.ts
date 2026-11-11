@@ -2,6 +2,8 @@
 // complete phrases (never concatenated fragments). User messages, bot output,
 // filenames, and stored transcripts are not keys and must never pass through
 // translate().
+import { teamRoomsEn, teamRoomsKo } from "./i18n-team-rooms.js";
+
 export const en = {
   "errors.sendTaskChanged": "Not sent. The chat moved to another task. Send your message again.",
   "errors.stopTaskChanged": "Couldn't stop. The chat moved to another task. Try again.",
@@ -1591,6 +1593,7 @@ export const en = {
   "usage.wait.allUsage": "All usage in Settings",
   "usage.detail.withCached": "{input} in ({cached} cached) · {output} out",
   "usage.detail.plain": "{input} in · {output} out",
+  ...teamRoomsEn,
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -3184,6 +3187,7 @@ export const ko = {
   "usage.wait.allUsage": "설정의 전체 사용량",
   "usage.detail.withCached": "입력 {input}(캐시 {cached}) · 출력 {output}",
   "usage.detail.plain": "입력 {input} · 출력 {output}",
+  ...teamRoomsKo,
 } satisfies { [K in MessageKey]: string };
 
 export const catalogs = { en, ko } as const;
