@@ -185,6 +185,24 @@ async function joinedTeam(name = "Mina") {
 }
 
 describe("teammate and the real door", () => {
+  it("counts three remote lines, ignores own sends and shares the local read marker", async () => {
+    const { group, c, roomId } = await joinedTeam();
+    expect(c.read(roomId, c.room(roomId)!.lastEntry!.seq).ok).toBe(true);
+    hostSays(group, "first");
+    hostSays(group, "second");
+    const last = hostSays(group, "third");
+    await until(() => c.room(roomId)?.lastEntry?.id === last.id);
+    expect(c.rooms()[0].unread).toBe(3);
+    await c.send(roomId, "my own line");
+    expect(c.room(roomId)?.unread).toBe(3);
+    const other = new GuestClient({ bases: () => [BASE], joiner: () => ({ name: "Mina", device: "other" }) });
+    const read = await joinedRoute("POST", `/api/joined/rooms/${roomId}/read`, c, async () => ({ seq: c.room(roomId)!.lastEntry!.seq }));
+    expect(read?.status).toBe(200);
+    expect(c.room(roomId)?.unread).toBe(0);
+    expect(other.rooms()[0].unread).toBe(0);
+    expect(changes).toContainEqual(expect.objectContaining({ roomId }));
+  });
+
   it("joins from the pasted code alone and syncs the snapshot and state", async () => {
     const { group, c, roomId } = await joinedTeam();
     expect(texts(roomId)).toEqual(["welcome"]);

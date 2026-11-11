@@ -286,17 +286,19 @@ describe("Sidebar bot section drag", () => {
 });
 
 describe("Sidebar row time", () => {
-  it("keeps the active time visible and reveals inactive times on hover or focus", () => {
+  it("keeps hosted times visible and reveals other inactive times on hover or focus", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "SidebarConversations.tsx"), "utf8");
     const botTime = source.slice(source.indexOf("function BotListItem"), source.indexOf("function ArchivedBotsPanel"));
     const groupTime = source.slice(source.indexOf("function GroupListItem"), source.indexOf("type SidebarRowDrag"));
     for (const row of [botTime, groupTime]) {
-      expect(row).toContain('!selected && "hidden group-hover:inline group-focus-within:inline"');
       expect(row).not.toContain("group-hover:hidden");
       expect(row).not.toContain("group-focus-within:hidden");
       expect(row).toContain("@container/rowtext");
       expect(row).toContain("@max-[10rem]/rowtext:hidden!");
     }
+    expect(botTime).toContain('!selected && "hidden group-hover:inline group-focus-within:inline"');
+    expect(groupTime).toContain('!selected && !group.hosted && "hidden group-hover:inline group-focus-within:inline"');
+    expect(groupTime).toContain('!group.hosted && "@max-[10rem]/rowtext:hidden!"');
     expect(botTime).toContain("min-w-0 flex-1 truncate");
     expect(botTime).toContain("overflow-hidden");
   });
@@ -750,6 +752,47 @@ describe("Sidebar layout controls with phone collapse restored", () => {
       await act(async () => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       expect(aside().getAttribute("style")).toContain("width: 64px");
       expect(animate).not.toHaveBeenCalled();
+    } finally {
+      window.localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
+      window.localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it.each([
+    ["pointerup off the handle", () => window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1 })), "300"],
+    ["pointercancel off the handle", () => window.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1 })), "360"],
+    ["lost pointer capture", () => document.querySelector("[data-sidebar-resize]")!.dispatchEvent(new Event("lostpointercapture", { bubbles: true })), "300"],
+    ["window blur", () => window.dispatchEvent(new Event("blur")), "300"],
+    ["Escape", () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })), "360"],
+  ])("ends a drag on %s and frees the cursor", async (_name, end, saved) => {
+    vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(() => new Animation());
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "0");
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "360");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not in this test" }), { status: 404 })));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(createElement(StoreProvider, null, createElement(Sidebar, { open: false, onClose: () => {} }), createElement("main"))),
+      );
+      const handle = host.querySelector<HTMLElement>("[data-sidebar-resize]")!;
+      handle.setPointerCapture = () => {};
+      handle.releasePointerCapture = () => {};
+      const pointer = (type: string, clientX: number) =>
+        act(async () => handle.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX, pointerId: 1 })));
+      await pointer("pointerdown", 360);
+      await pointer("pointermove", 300);
+      expect(document.body.style.cursor).toBe("col-resize");
+      await act(async () => end());
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+      expect(window.localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe(saved);
+      await pointer("pointermove", 200);
+      expect(host.querySelector("aside")!.getAttribute("style")).toContain(`width: ${saved}px`);
     } finally {
       window.localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
       window.localStorage.removeItem(SIDEBAR_WIDTH_KEY);

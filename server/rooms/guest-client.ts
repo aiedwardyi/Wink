@@ -19,6 +19,8 @@ import {
   joinedKey,
   joinedRoom,
   joinedRooms,
+  joinedSummary,
+  readJoined,
   resetJoined,
   saveJoined,
   setJoinedState,
@@ -86,6 +88,8 @@ export interface JoinedView {
   link: JoinedLink | null;
   me: { id: string; name: string };
   state: JoinedState | null;
+  unread: number;
+  lastEntry?: JoinedEntry;
 }
 
 export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
@@ -162,6 +166,16 @@ export class GuestClient {
   room(roomId: string): (JoinedView & { entries: JoinedEntry[] }) | null {
     const room = joinedRoom(roomId);
     return room ? { ...this.view(room), entries: joinedEntries(roomId, VIEW_ENTRIES) } : null;
+  }
+
+  read(roomId: string, seq: unknown): GuestResult<JoinedView> {
+    const room = joinedRoom(roomId);
+    if (!room) return failed(404, "not found");
+    const last = joinedEntries(roomId, 1)[0]?.seq ?? 0;
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1 || seq > last) return failed(400, "bad-read");
+    const readSeq = Math.min(seq, joinedCursor(roomId));
+    if (readSeq > 0 && readJoined(roomId, readSeq)) this.changed(roomId);
+    return { ok: true, value: this.view(room) };
   }
 
   /** The whole join: the pasted code in, a synced room out. */
@@ -321,7 +335,7 @@ export class GuestClient {
 
   private view(room: JoinedRoom): JoinedView {
     const link = room.status === "joined" ? (this.syncs.get(room.roomId)?.link ?? "offline") : null;
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room) };
   }
 
   private changed(roomId: string): void {

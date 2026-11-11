@@ -112,6 +112,7 @@ import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -667,7 +668,8 @@ export function Sidebar({
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
-  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId) : 0;
+  const joinedRooms = useJoinedRooms();
+  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms) : 0;
   const collapsedUnreadBadge = formatCollapsedUnreadBadge(collapsedUnread);
   const collapsedChats = [...state.bots, ...listedGroups(state.groups)];
   const collapsedExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
@@ -778,11 +780,11 @@ export function Sidebar({
     }
     applySidebarLayout(next);
   };
-  const onSidebarResizeEnd = (event: PointerEvent<HTMLDivElement>) => {
+  const onSidebarResizeEnd = (event?: PointerEvent<HTMLDivElement>) => {
     if (!resizeFrom.current) return;
     resizeFrom.current = null;
     setResizing(false);
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    event?.currentTarget.releasePointerCapture(event.pointerId);
     saveSidebarWidth(sidebarWidthRef.current);
     saveSidebarCollapsed(sidebarCollapsedRef.current);
   };
@@ -820,7 +822,18 @@ export function Sidebar({
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
+    // A release over a window-drag region or another window never reaches the handle.
+    const end = () => onSidebarResizeEnd();
+    const cancel = (event: KeyboardEvent) => event.key === "Escape" && onSidebarResizeCancel();
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", onSidebarResizeCancel);
+    window.addEventListener("blur", end);
+    window.addEventListener("keydown", cancel);
     return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", onSidebarResizeCancel);
+      window.removeEventListener("blur", end);
+      window.removeEventListener("keydown", cancel);
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
     };
@@ -1534,6 +1547,7 @@ export function Sidebar({
         onPointerMove={onSidebarResizeMove}
         onPointerUp={onSidebarResizeEnd}
         onPointerCancel={onSidebarResizeCancel}
+        onLostPointerCapture={() => onSidebarResizeEnd()}
         onKeyDown={onSidebarResizeKeyDown}
         className={cn(
           "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60",
