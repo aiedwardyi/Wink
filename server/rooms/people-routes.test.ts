@@ -396,16 +396,21 @@ describe("who reaches them", () => {
   it("is 404 with team rooms off, for other rooms and other methods", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
-    const botRoom = store.createGroup("Bots", [], false, undefined, undefined, { roomId: createRoom("Bots").id }) as HostedGroup;
+    const loose = createRoom("Loose");
     const id = group.hosted.roomId;
     const misses: Array<[string, string]> = [
       ["GET", `/api/rooms/${id}/invites`], ["DELETE", `/api/rooms/${id}/invites`], ["POST", `/api/rooms/${id}/people/${mina.personId}`],
-      ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${botRoom.hosted.roomId}/invites`], ["POST", "/api/rooms/nope/invites"],
+      ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${loose.id}/invites`], ["POST", "/api/rooms/nope/invites"],
     ];
     for (const [method, path] of misses) expect([method, path, (await call(path, { method, body: { name: "Joon" } })).status]).toEqual([method, path, 404]);
     expect(roomInvites(id)).toEqual([]);
-    expect(roomInvites(botRoom.hosted.roomId)).toEqual([]);
+    expect(roomInvites(loose.id)).toEqual([]);
     expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
+  });
+
+  it("hands a hosted group with bots its code too", async () => {
+    const botRoom = store.createGroup("Bots", [], false, undefined, undefined, { roomId: createRoom("Bots").id }) as HostedGroup;
+    expect((await call(`/api/rooms/${botRoom.hosted.roomId}/invites`, { method: "POST" })).body.code).toMatch(CODE);
   });
 
   it("refuses a bot's comms token", async () => {

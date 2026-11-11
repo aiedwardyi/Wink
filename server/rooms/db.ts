@@ -132,6 +132,9 @@ function db(): DatabaseSync {
   return handle;
 }
 
+/** The open rooms.db handle, for tables kept beside the log in one transaction. */
+export const roomsDatabase = (): DatabaseSync => db();
+
 export function closeRoomsDb(): void {
   try {
     handle?.close();
@@ -232,8 +235,8 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
   return redactSecretsInText(clean.replace(/<(attached-)/gi, "[$1")).slice(0, BOT_TEXT_MAX);
 }
 
-/** The only insert into the room log. Entries are never updated. */
-export function appendRoomEntry(roomId: string, draft: RoomEntryDraft): RoomEntry {
+/** The only insert into the room log. Entries are never updated. `at` is set only for carried history. */
+export function appendRoomEntry(roomId: string, draft: RoomEntryDraft, at = Date.now()): RoomEntry {
   const text = committedRoomText(draft.author.kind, draft.text);
   if (!text && !draft.files?.length) throw new RoomError(400, "message is empty");
   if (!roomById(roomId)) throw new RoomError(404, "no such room");
@@ -243,7 +246,7 @@ export function appendRoomEntry(roomId: string, draft: RoomEntryDraft): RoomEntr
     VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${LOG_COLUMNS}
   `).get(
-    roomId, roomId, newId(), Date.now(), draft.author.kind, draft.author.id, draft.author.name, text,
+    roomId, roomId, newId(), at, draft.author.kind, draft.author.id, draft.author.name, text,
     draft.replyToId ?? null, draft.askId ?? null, draft.grant ?? null, draft.clean === undefined ? null : Number(draft.clean),
     draft.files?.length ? JSON.stringify(draft.files) : null,
   ) as LogRow;

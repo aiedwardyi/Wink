@@ -8,7 +8,6 @@ import type { HostedGroup } from "./asks.ts";
 import { committedRoomText, roomEntry } from "./db.ts";
 import { doorEntry } from "./door-streams.ts";
 import { MAX_MESSAGE_FILES, saveRoomFile, serveRoomFile } from "./files.ts";
-import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 
 export type FileAction = "upload" | "download" | "preview";
@@ -56,7 +55,7 @@ export async function hostFileRoute(
   if (!url.pathname.startsWith("/api/rooms/")) return false;
   const route = HOST_ROUTE.exec(url.pathname);
   const roomId = route?.[1];
-  const group = roomId && peopleOnlyRoom(roomId) ? deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) : undefined;
+  const group = roomId ? deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId) : undefined;
   const file = route?.[2] === "send" ? null : FILE_PATH.exec(url.pathname.slice("/api".length));
   const action = file ? fileAction(file) : "send";
   if (!route || !group || method !== (action === "upload" || action === "send" ? "POST" : "GET")) {

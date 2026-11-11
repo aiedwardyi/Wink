@@ -1,4 +1,4 @@
-// The host's People actions in a people-only team room: Invite, which hands back
+// The host's People actions in a hosted team room: Invite, which hands back
 // the room's one code, and Remove, which also keeps that PC from rejoining with
 // it. Local only (/api/rooms/), owner only.
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -7,7 +7,6 @@ import { json } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
 import { removeRoomPerson } from "./door.ts";
 import { barRoomPerson, roomCode } from "./invites.ts";
-import { peopleOnlyRoom } from "./people-only.ts";
 
 const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64}))$/;
 
@@ -24,7 +23,7 @@ export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, me
   const route = ROUTE.exec(path);
   if (!route) return false;
   const [, roomId, personId] = route as unknown as [string, string, string | undefined];
-  const served = peopleOnlyRoom(roomId) && deps.store.groups.some((group) => group.hosted?.roomId === roomId);
+  const served = deps.store.groups.some((group) => group.hosted?.roomId === roomId);
   if (!served || method !== (personId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
   else if (deps.botCaller) json(res, 403, { error: "forbidden" });
   else if (personId) {
