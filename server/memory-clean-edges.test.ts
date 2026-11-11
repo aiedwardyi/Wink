@@ -476,6 +476,33 @@ describe("memory cleanup edges", () => {
     expect(result).toMatchObject({ ok: true, topics: [{ file: "memory/details.md" }] });
   });
 
+  it.each(["sub-ids", "grounded repair", "ungrounded repair"])("routes with %s", async (kind) => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, `- Bob garage code 5531 ${"y".repeat(200)}`, ...kept].join("\n") + "\n";
+    const input = fixture(memory, [{ op: "file", ids: [1, 2], topic: "details", reason: "Details" }]);
+    const asks: string[] = [];
+    const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: async (prompt, opts) => {
+      if (!prompt.startsWith("[memory-clean:route-questions]")) return input.propose(prompt, opts);
+      asks.push(prompt);
+      const routes = JSON.parse(sleepReply(prompt)!) as Array<{ id: number; label: string }>;
+      const reply = kind === "sub-ids" ? routes.map((route, i) => ({ ...route, id: `${route.id}${["-1", ".2", "a"][i % 3]}` }))
+        : asks.length === 1 || kind === "ungrounded repair" ? routes.map((route) => ({ ...route, label: `${route.label} failure rate` })) : routes;
+      return `\`\`\`json\n${JSON.stringify(reply)}\n\`\`\``;
+    } });
+    expect(asks).toHaveLength(kind === "sub-ids" ? 1 : 2);
+    expect(result).toMatchObject(kind === "ungrounded repair" ? { ok: false, stage: "recall", detail: "route-contract" } : { ok: true, topics: [{ file: "memory/details.md" }] });
+    if (asks[1]) expect(JSON.parse(/^Rejected routes: (.*)\. One repair/m.exec(asks[1])![1]!)).toContainEqual({ route: 0, id: 1, reasons: ["label-words"], words: ["failure", "rate"] });
+  });
+
+  it("drops a sub-id whose leading number is not a supplied source", async () => {
+    const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
+    const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, ...kept].join("\n") + "\n";
+    const input = fixture(memory, [{ op: "file", ids: [1], topic: "details", reason: "Details" }]);
+    const result = await cleanFiles({ ...input, typed: new Set(kept.map(lineHash)), propose: async (prompt, opts) => prompt.startsWith("[memory-clean:route-questions]")
+      ? JSON.stringify((JSON.parse(sleepReply(prompt)!) as object[]).map((route) => ({ ...route, id: "9.1" }))) : input.propose(prompt, opts) });
+    expect(result).toMatchObject({ ok: false, stage: "recall" });
+  });
+
   it("gives a repair of an empty list the reserved floor, history pointer included", async () => {
     const kept = Array.from({ length: 198 }, (_, i) => `- kept ${i} ${"k".repeat(120)}`);
     const memory = [`- Alice locker code 4417 ${"x".repeat(200)}`, `- Bob garage code 5531 ${"y".repeat(200)}`, ...kept].join("\n") + "\n";
