@@ -26,10 +26,22 @@ export function sleepInput(messages: readonly Message[], through: number | null,
       lines.push({ text, at: message.at, kind, ...(reply && !secretLike(reply) ? { context: reply.slice(0, CONTEXT_CHARS) } : {}) });
     }
   });
+  const groups = new Map<number, SleepLine[]>();
+  for (const line of lines) {
+    const group = groups.get(line.at) ?? [];
+    group.push(line);
+    groups.set(line.at, group);
+  }
+  const user: SleepLine[] = [];
   let bytes = 0;
-  const user = lines.sort((a, b) => Number(a.kind === "said") - Number(b.kind === "said") || b.at - a.at).filter((line) => {
-    bytes += Buffer.byteLength(line.text) + Buffer.byteLength(line.context ?? "");
-    return bytes <= MAX_BYTES;
-  });
-  return { user, through: newest || (through ?? now) };
+  let processed = newest || (through ?? now);
+  for (const [at, group] of [...groups].sort(([a], [b]) => a - b)) {
+    const size = group.reduce((n, line) => n + Buffer.byteLength(line.text) + Buffer.byteLength(line.context ?? ""), 0);
+    if (bytes + size > MAX_BYTES && user.length) { processed = user.at(-1)!.at; break; }
+    user.push(...group);
+    bytes += size;
+    if (bytes > MAX_BYTES) { processed = at; break; }
+  }
+  user.sort((a, b) => Number(a.kind === "said") - Number(b.kind === "said") || b.at - a.at);
+  return { user, through: processed };
 }

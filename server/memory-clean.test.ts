@@ -8,7 +8,7 @@ import type { HomeInput } from "./memory-clean-home.ts";
 import { day } from "./memory-pass.ts";
 import { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
-import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
+import { sleepReply } from "./testing/sleep-verdicts.ts";
 import { withSystemChanges } from "./turn-context.ts";
 import { memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
@@ -126,6 +126,8 @@ describe("change list validation", () => {
 
 const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
 const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) => {
+  const staged = sleepReply(prompt);
+  if (staged !== null) return staged;
   if (prompt.startsWith("[memory-clean:questions]")) {
     const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
     return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? { ...q, file: topic, answer: topic } : q));
@@ -134,8 +136,10 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
   return JSON.stringify(list(changes()));
 });
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
+  const staged = sleepReply(prompt);
+  if (staged !== null) return staged;
   const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify([...quiz.map((q, i) => i === 0 && topic ? topic : q.answer), ...sleepVerdicts(prompt)]);
+  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
 });
 const night = (memory: string, changes: unknown[], extra: Partial<CleanInput> = {}): CleanInput =>
   ({ memory, history: null, typed: new Set(), now: Date.UTC(2026, 10, 7), propose: proposer(() => changes), recall: answerer(), ...extra });
@@ -211,11 +215,12 @@ describe("sleep", () => {
 
     it("fails the night unless the answerer finds each removed line superseded and each learned line supported", async () => {
       const { cleanFiles } = await load();
-      for (const [verdicts, ok] of [[["superseded", "supported"], true], [["live", "supported"], false], [["superseded", "unsupported"], false]] as const) {
-        const recall = vi.fn<TextCall>(async () => JSON.stringify([...quiz.map((q) => q.answer), ...verdicts]));
+      for (const [verdicts, ok] of [[[true, true], true], [[false, true], false], [[true, false], false]] as const) {
+        const recall = vi.fn<TextCall>(async (prompt) => prompt.startsWith("[memory-clean:organize]") ? JSON.stringify({ verdicts, corrections: [] }) : JSON.stringify(quiz.map((q) => q.answer)));
         const result = await cleanFiles(night("- kept\n- old plan done\n", [retire(2), learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user: [said("Jun moved to Jeju in May")], recall }));
-        expect(result).toMatchObject(ok ? { ok: true } : { ok: false, stage: "recall", detail: "Verify 1/2" });
-        expect(recall.mock.calls[0]![0]).toContain(`Checks: [{"removed":"- old plan done","reason":"Completed"},{"line":"- Jun moved to Jeju in May (noted ${local(150)})","quote":"Jun moved to Jeju"}]`);
+        expect(result).toMatchObject(ok ? { ok: true } : { ok: false, stage: "validate", detail: "source-coverage" });
+        expect(recall.mock.calls[0]![0]).toContain('"sources":["- old plan done"]');
+        expect(recall.mock.calls[0]![0]).toContain('"quote":"Jun moved to Jeju in May"');
       }
     });
 
@@ -238,7 +243,7 @@ describe("sleep", () => {
       const file = (pointer: string) => [{ op: "file", ids: [1, 2], topic: "trips", pointer, reason: "Detail" }];
       expect(await check(text, file("- memory/trips.md: early trips"))).toMatchObject(rejects("pointer"));
       expect(await check(text, file("- memory/trips.md: trips 0 and 1 via Harbor0, Harbor1"))).toMatchObject({ ok: true });
-      const mixed = ["- Storage unit at Paju: number 1252", "- Bike repair ticket: VG-8935", "- Locker at the Gimpo gym: 9285", "- Tailor Lorpellick: 5555 won per hem", filler(60, 280)].join("\n");
+      const mixed = ["- Storage unit at Paju: number 1252", "- Bike repair ticket: VG-8935", "- Locker at the Gimpo gym: 9285", "- Tailor Lorpellick: 5555 won per hem", (await load()).POINTER_LINE, filler(60, 280)].join("\n");
       const four = (pointer: string) => [{ op: "file", ids: [1, 2, 3, 4], topic: "personal-facts", pointer, reason: "Detail" }];
       expect(await check(mixed, four("- Personal facts: storage unit 1252, bike ticket VG-8935, Gimpo locker 9285 are in memory/personal-facts.md"))).toMatchObject(rejects("pointer"));
       expect(await check(mixed, four("- Storage unit 1252, bike ticket VG-8935, Gimpo locker 9285, tailor Lorpellick: memory/personal-facts.md"))).toMatchObject({ ok: true });
@@ -269,27 +274,28 @@ describe("sleep", () => {
       expect(result.ok && result.text).toContain("\n- Remember Mina's locker is 4417\n");
     });
 
-    it("lets a forced remember append grow a full file within 24 KB", async () => {
+    it("reserves forced remembers under the no-growth rule", async () => {
       const text = `${filler(70, 280)}- old plan done\n`;
       expect(Buffer.byteLength(text)).toBeGreaterThan(16 * 1024);
-      expect(await check(text, [retire(71)], [said("Remember the gate code is 4417", "remember")])).toMatchObject({ ok: true });
+      expect(await check(text, [retire(71)], [said("Remember the gate code is 4417", "remember")])).toMatchObject(rejects("budget"));
+      expect(await check(text, [retire(1)], [said("Remember the gate code is 4417", "remember")])).toMatchObject({ ok: true });
     });
 
     it("accepts a night that shrinks a file already over 24 KB, never one that grows it", async () => {
       const text = `${filler(84, 280)}- old plan done\n`;
       expect(Buffer.byteLength(text)).toBeGreaterThan(24_000);
-      expect(await check(text, [retire(85)])).toMatchObject({ ok: true });
+      expect(await check(text, [retire(85)])).toMatchObject(rejects("budget"));
+      expect(await check(text, [retire(1)])).toMatchObject({ ok: true });
       expect(await check(text, [learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], [said("Jun moved to Jeju in May")])).toMatchObject(rejects("budget"));
       expect(await check(text, [retire(1)], [said("Remember the gate code is 4417", "remember")])).toMatchObject({ ok: true });
     });
 
     it("asks a file over 24 KB only to end smaller tonight", async () => {
       const { cleanFiles } = await load();
-      for (const [memory, size] of [["- kept\n", "always <=24000 bytes and 200 lines."], [`${filler(84, 280)}- old plan done\n`,
-        "MEMORY.md is over 24000 bytes, so tonight it only has to end smaller than it started, remember appends and history pointer included; later nights bring it under 24000. Always <=200 lines."]] as const) {
+      for (const memory of ["- kept\n", `${filler(84, 280)}- old plan done\n`]) {
         const input = night(memory, []);
         await cleanFiles(input);
-        expect(vi.mocked(input.propose).mock.calls[0]![0]).toContain(`Aim MEMORY.md at 16000 bytes and 140 lines, ${size}`);
+        expect(vi.mocked(input.propose).mock.calls[0]![0]).toContain("above 24000, end strictly smaller");
       }
     });
 
@@ -327,19 +333,19 @@ describe("sleep", () => {
 
     it("files a pointer line only behind a pointer that names every path it held", async () => {
       const text = ["- see memory/alpha.md for Harbor0 trips", "- see memory/beta.md for Harbor1 trips", "- always read memory/gamma.md for Harbor2 first",
-        ...Array.from({ length: 60 }, (_, i) => `- trip ${i} ${"x".repeat(280)}`)].join("\n") + "\n";
+        (await load()).POINTER_LINE, ...Array.from({ length: 60 }, (_, i) => `- trip ${i} ${"x".repeat(280)}`)].join("\n") + "\n";
       const file = (ids: number[], pointer: string) => [{ op: "file", ids, topic: "pointers", pointer, reason: "Index" }];
       expect(await check(text, file([1, 2], "- memory/pointers.md: memory/alpha.md (Harbor0), memory/beta.md (Harbor1)"))).toMatchObject({ ok: true });
       expect(await check(text, file([1, 2], "- memory/pointers.md: memory/alpha.md, Harbor0, Harbor1"))).toMatchObject(rejects("pointer"));
       expect(await check(text, file([3], "- memory/pointers.md: always read memory/gamma.md for Harbor2 first"))).toMatchObject(rejects("protected"));
     });
 
-    it("caps net growth at 1 KB a night, remember appends aside", async () => {
+    it("caps net growth at 1 KB a night including remember appends", async () => {
       const lines = Array.from({ length: 4 }, (_, i) => `Jun route ${i} ${"walks along the river ".repeat(12).trim()}`);
       const user = lines.map((line) => said(line));
       expect(await check("- kept\n", lines.map((line) => learn(line, `- ${line}`)), user)).toMatchObject(rejects("cap-growth"));
       expect(await check("- kept\n", lines.slice(0, 3).map((line) => learn(line, `- ${line}`)), user)).toMatchObject({ ok: true });
-      expect(await check("- kept\n", lines.slice(0, 3).map((line) => learn(line, `- ${line}`)), [...user, said(`Remember the gate code is 4417 ${"by the north door ".repeat(8)}`, "remember")])).toMatchObject({ ok: true });
+      expect(await check("- kept\n", lines.slice(0, 3).map((line) => learn(line, `- ${line}`)), [...user, said(`Remember the gate code is 4417 ${"by the north door ".repeat(8)}`, "remember")])).toMatchObject(rejects("cap-growth"));
     });
 
     it("merges dated twins under their newest stamp and still fails a dropped date", async () => {
@@ -377,17 +383,19 @@ describe("sleep", () => {
       const { cleanFiles, POINTER_LINE } = await load();
       const user = [said("Remember the gate code is 4417", "remember")];
       const full = `${filler(84, 280)}- old plan done\n`;
-      for (const [memory, size] of [["- kept\n", ""], [full, ` but count toward size: MEMORY.md is over 24000 bytes, so the other changes must remove more than ${33 + Buffer.byteLength(POINTER_LINE) + 1} bytes, history pointer included`]] as const) {
+      for (const memory of ["- kept\n", full]) {
         const input = night(memory, [], { user });
         await cleanFiles(input);
         const ask = vi.mocked(input.propose).mock.calls[0]![0];
-        expect(ask).toContain(`Remember lines no learn or own covers are appended verbatim: 1 lines, 33 bytes now. They skip the line limit${size}.`);
-        expect(ask).toContain("At most 39 source lines.");
+        const reserved = JSON.parse(/Reserved complete candidate: ({.*})\. Protected floor:/.exec(ask)![1]!);
+        expect(reserved.forcedBytes).toBe(33);
+        expect(reserved.finalBytes).toBe(Buffer.byteLength(memory) + 33 + Buffer.byteLength(POINTER_LINE) + 1);
+        expect(ask).toContain("At most two packets of 12 source IDs");
       }
-      expect(await check(full, [], user)).toMatchObject({ ok: false, errors: [{ reason: "budget", over: 34 }] });
+      expect(await check(full, [], user)).toMatchObject({ ok: false, errors: [{ reason: "budget", over: 34 + Buffer.byteLength(POINTER_LINE) + 1 }] });
       const side = night("- kept\n", [], { user, side: { file: "memory/topic.md", text: "- topic\n" } });
       await cleanFiles(side);
-      expect(vi.mocked(side.propose).mock.calls.find(([prompt]) => prompt.includes('"file":"memory/topic.md"'))![0]).toContain("At most 39 source lines.");
+      expect(vi.mocked(side.propose).mock.calls.find(([prompt]) => prompt.includes('"file":"memory/topic.md"'))![0]).toContain("At most two packets of 12 source IDs");
     });
 
     it("reads apostrophes in contractions as words, not quotes", async () => {
@@ -399,19 +407,19 @@ describe("sleep", () => {
     it("leaves remember appends out of the line cap only", async () => {
       const { cleanFiles } = await load();
       const user = [said("Remember the gate code is 4417", "remember")];
-      const memory = filler(41, 10);
+      const memory = `${filler(41, 10)}${(await load()).POINTER_LINE}\n`;
       const retires = (n: number) => Array.from({ length: n }, (_, i) => retire(i + 1));
       expect(await check(memory, retires(40), user)).toMatchObject({ ok: true });
       expect(await check(memory, retires(41), user)).toMatchObject(rejects("cap-lines"));
-      const result = await cleanFiles(night(memory, retires(39), { user }));
+      const result = await cleanFiles(night(memory, retires(12), { user }));
       expect(result).toMatchObject({ ok: true });
       expect(result.ok && result.memory).toContain("- Remember the gate code is 4417");
-      expect(await cleanFiles(night(memory, retires(40), { user }))).toMatchObject({ ok: false, stage: "validate", detail: "cap-lines" });
+      expect(await cleanFiles(night(memory, retires(40), { user }))).toMatchObject({ ok: false, stage: "validate", detail: "packet" });
     });
 
-    it("leaves the side file for a later night when MEMORY.md used every line", async () => {
+    it("leaves the side file for a later night while MEMORY.md is heavy", async () => {
       const { cleanFiles } = await load();
-      const input = night(filler(41, 10), Array.from({ length: 39 }, (_, i) => retire(i + 1)), { side: { file: "memory/topic.md", text: "- topic\n" } });
+      const input = night(filler(60, 280), Array.from({ length: 12 }, (_, i) => retire(i + 1)), { side: { file: "memory/topic.md", text: "- topic\n" } });
       const result = await cleanFiles(input);
       expect(result).toMatchObject({ ok: true });
       expect(result.ok && result.side).toBeUndefined();
@@ -424,10 +432,10 @@ describe("sleep", () => {
       const input = night(memory, [{ op: "merge", ids: [2, 3], text: "- Dentist: Dr. Kasquilick, 2026-12-12 at 10:40", reason: "Same" }, retire(5)]);
       expect(await cleanFiles(input)).toMatchObject({ ok: true });
       const asked = vi.mocked(input.propose).mock.calls.map(([prompt]) => prompt).find((prompt) => prompt.startsWith("[memory-clean:questions]"))!;
-      const answered = vi.mocked(input.recall).mock.calls[0]![0];
+      const answered = vi.mocked(input.recall).mock.calls.find(([prompt]) => prompt.startsWith("[memory-clean:answers]"))![0];
       for (const line of ["- Dentist - Dr. Kasquilick, 2026-12-12", "- Never deploy on Fridays", "- old plan done"]) expect(asked.split(line)).toHaveLength(2);
       expect(answered).not.toContain("<!-- mc-");
-      expect(answered).toContain("History (removed lines):\n- old plan done\n");
+      expect(answered).toContain("History (removed lines):\n- old plan done");
     });
   });
 

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cleanFiles } from "./memory-clean-engine.ts";
 import type { Change, ChangeList, CleanFile, TextCall } from "./memory-clean-types.ts";
 import { pointerLine, protectedLines, validateChangeList } from "./memory-clean-validate.ts";
-import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
+import { sleepReply } from "./testing/sleep-verdicts.ts";
 
 const load = () => import("./memory-clean-recall.ts");
 const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
@@ -13,12 +13,14 @@ const pairs = (prompt: string) => JSON.parse(prompt.slice(prompt.indexOf("\n\n")
 
 function calls(lists: Partial<Record<CleanFile, Change[]>>, answers: unknown[] = keys, key = keys) {
   const propose = vi.fn<TextCall>(async (prompt) => {
+    const staged = sleepReply(prompt);
+    if (staged !== null) return staged;
     if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(questions(key));
     if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(pairs(prompt).map(() => true));
     const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
     return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
   });
-  const recall = vi.fn<TextCall>(async (prompt) => JSON.stringify([...answers, ...sleepVerdicts(prompt)]));
+  const recall = vi.fn<TextCall>(async (prompt) => sleepReply(prompt) ?? JSON.stringify([...answers]));
   const prompts = (tag: string) => [...propose.mock.calls, ...recall.mock.calls].map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));
   return { propose, recall, prompts };
 }
@@ -58,10 +60,11 @@ describe("recall scope", () => {
 
   it("keeps a side-file pair's recall prompts inside the scope and out of history", async () => {
     const { recallScope } = await load();
-    const memory = ["# Memory", ...Array.from({ length: 180 }, (_, i) => `- ${(i + 2) % 30 ? "" : "Never "}m${String(i + 2).padStart(4, "0")} ${"memo ".repeat(23)}`)].join("\n") + "\n";
+    const memory = ["# Memory", ...Array.from({ length: 120 }, (_, i) => `- ${(i + 2) % 30 ? "" : "Never "}m${String(i + 2).padStart(4, "0")} ${"memo ".repeat(5)}`)].join("\n") + "\n";
     const side = ["# Queue", ...Array.from({ length: 400 }, (_, i) => `- ${(i + 2) % 50 ? "" : "Never "}q${String(i + 2).padStart(4, "0")} ${"task ".repeat(39)}`)].join("\n") + "\n";
-    expect([Math.round(Buffer.byteLength(memory) / 1000), Math.round(Buffer.byteLength(side) / 1000)]).toEqual([22, 82]);
-    const lists = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text: "- m0109 m0110 merged", reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] } satisfies Partial<Record<CleanFile, Change[]>>;
+    expect(Buffer.byteLength(memory)).toBeLessThan(16000);
+    expect(Buffer.byteLength(side)).toBeGreaterThan(48000);
+    const lists = { "MEMORY.md": [{ op: "merge", ids: [2, 3], text: "- m0002 m0003 merged", reason: "Same subject" }], "memory/queued.md": [retire(2), retire(3), retire(4)] } satisfies Partial<Record<CleanFile, Change[]>>;
     const engine = calls(lists);
     const history = `HISTORY-MARKER ${"h".repeat(200_000)}`;
     expect(await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history, typed: new Set(), ...engine })).toMatchObject({ ok: true });
@@ -74,7 +77,7 @@ describe("recall scope", () => {
       expect(outside.filter((line) => prompt.includes(line))).toEqual([]);
     }
     expect(engine.prompts("answers")[0]).not.toContain("HISTORY-MARKER");
-    expect(engine.prompts("answers")[0]).toContain("- m0109 m0110 merged");
+    expect(engine.prompts("answers")[0]).toContain("- m0002 m0003 merged");
   });
 });
 
@@ -170,11 +173,13 @@ describe("recall grading", () => {
     expect(engine.prompts("grade")).toEqual([]);
   });
 
-  it("stops a 300 KB side file on budget before its propose call", async () => {
-    const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(2)] });
+  it("bounds work from a 300 KB side snapshot without truncating the file", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(3)] });
     const side = { file: "memory/queued.md" as const, text: `- kept\n- old\n${"- task line\n".repeat(25_000)}` };
-    expect(await cleanFiles({ ...input(engine), side })).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
-    expect(engine.prompts("propose").map((prompt) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md"]);
+    const result = await cleanFiles({ ...input(engine), side });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok && result.side?.text).toBe(side.text.replace("- task line\n", ""));
+    expect(engine.prompts("propose").every((prompt) => Buffer.byteLength(prompt) < 10_000)).toBe(true);
   });
 
   it("fails a filed fact the answerer cannot find from MEMORY.md alone", async () => {
@@ -183,19 +188,20 @@ describe("recall grading", () => {
     const asked = questions().map((q, i) => i === 0 ? { ...q, file: "memory/trips.md", answer: "memory/trips.md" } : q);
     const run = async (first: string | null) => {
       const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1)]);
-      engine.propose.mockImplementation(async (prompt) => prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(asked)
-        : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify(pairs(prompt).map(() => true)) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: filed }));
+      engine.propose.mockImplementation(async (prompt) => sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(asked)
+        : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify(pairs(prompt).map(() => true)) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: filed })));
       return { result: await cleanFiles({ memory: trips, history: null, typed: new Set(), propose: engine.propose, recall: engine.recall }), engine };
     };
     const missed = await run("harbor 0");
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
     const [asking] = missed.engine.prompts("questions");
-    expect(asking).toContain('"filedTo":"memory/trips.md","pointer":"- memory/trips.md: trip stops 0, 1 and 2"');
-    expect(asking).toContain("never ask their values; ask which file holds one of their facts, naming it as the pointer does");
+    expect(asking).toContain('"filedTo":"memory/trips.md"');
+    expect(asking).not.toContain("- memory/trips.md: trip stops 0, 1 and 2");
+    expect(asking).toContain("Derive routing questions only from the original entity and relation");
     const [answers] = missed.engine.prompts("answers");
     expect(answers).toContain("- memory/trips.md: trip stops 0, 1 and 2");
     expect(answers).not.toContain("trip 1 stop at harbor 1");
-    expect(missed.engine.prompts("grade")).toEqual([]);
+    expect(missed.engine.prompts("grade")).toHaveLength(1);
     const found = await run("memory/trips.md");
     expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }] });
   });
@@ -217,14 +223,18 @@ describe("pair.mjs sabotaged merge", () => {
   async function run(text: string) {
     const lists: Partial<Record<CleanFile, Change[]>> = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text, reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] };
     const propose = vi.fn<TextCall>(async (prompt) => {
+      const staged = sleepReply(prompt);
+      if (staged !== null) return staged;
       if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(asked);
       if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify((pairs(prompt) as Array<{ expected: string; actual: string }>).map((pair) => pair.actual === pair.expected));
       const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
       return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
     });
     const recall = vi.fn<TextCall>(async (prompt) => {
+      const staged = sleepReply(prompt);
+      if (staged !== null) return staged;
       const files = prompt.slice(prompt.indexOf("\n\n", prompt.indexOf("Questions: "))).split("\n\nChecks: ")[0]!;
-      return JSON.stringify([...cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null), ...sleepVerdicts(prompt)]);
+      return JSON.stringify([...cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null)]);
     });
     const result = await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history: null, typed: new Set(), propose, recall });
     const sent = (tag: string) => propose.mock.calls.map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));

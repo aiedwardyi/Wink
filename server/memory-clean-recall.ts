@@ -45,11 +45,12 @@ export function excerpt(text: string, ids: number[]): string {
 
 export function afterExcerpt(text: string, ids: number[], entries: ArchiveEntry[]): string {
   const lines = text.split("\n");
-  return render(lines, ids.map((id) => {
+  const leading = entries.flatMap((entry) => entry.header.after === 0 ? entry.header.wrote : []);
+  return [...leading, render(lines, ids.map((id) => {
     const entry = entries.find((item) => item.header.at.includes(id));
     const added = entries.flatMap((item) => item.header.after === id ? item.header.wrote : []);
     return [id, [...(!entry ? [lines[id - 1]!] : entry.header.at[0] === id ? entry.header.wrote : []), ...added]];
-  }));
+  }))].join("\n");
 }
 
 const normalize = (text: string) => text.toLowerCase().replace(/["'`“”‘’()[\]{}]/g, "").replace(/\s+/g, " ").replace(/[\s.,;:!?。]+$/, "").trim();

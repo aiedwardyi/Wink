@@ -4,11 +4,13 @@ import { appendBlock } from "./memory-clean-format.ts";
 import { cleanFiles, lineHash, parseHistory, sleepInput, type CleanFile, type CleanInput, type SleepLine, type TextCall } from "./memory-clean.ts";
 import { undoText } from "./memory-clean-undo.ts";
 import { day } from "./memory-pass.ts";
-import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
+import { sleepReply } from "./testing/sleep-verdicts.ts";
 
-const FLOOR = 16 * 1024;
+const FLOOR = 16000;
 const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
 const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) => {
+  const staged = sleepReply(prompt);
+  if (staged !== null) return staged;
   if (prompt.startsWith("[memory-clean:questions]")) {
     const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
     return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? { ...q, file: topic, answer: topic } : q));
@@ -17,8 +19,10 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
   return JSON.stringify({ version: 1, file: "MEMORY.md", changes: changes() });
 });
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
+  const staged = sleepReply(prompt);
+  if (staged !== null) return staged;
   const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify([...quiz.map((q, i) => i === 0 && topic ? topic : q.answer), ...sleepVerdicts(prompt)]);
+  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
 });
 const detail = (i: number) => `- detail ${i} ${"y".repeat(260)}`;
 const filed = (text: string, ids: number[]) => ({ op: "file", ids, topic: "details", reason: "Detail",
@@ -44,8 +48,10 @@ describe("sleep soak", () => {
       if (night === 3) user.push({ text: "Remember that the plumber is named Dae", at: night, kind: "remember" });
       const text = memory;
       const changes = () => [
-        ...[2 * night - 2, 2 * night - 1].map((k) => ({ op: "retire", id: ids(text, (line) => line === `- stale ${k} done`)[0], reason: "Done" })),
-        { op: "merge", ids: ids(text, (line) => line.startsWith(`- dup ${night - 1} alpha`)), text: `- dup ${night - 1} alpha beta`, reason: "Same subject" },
+        ...(Buffer.byteLength(text) <= FLOOR ? [
+          ...[2 * night - 2, 2 * night - 1].map((k) => ({ op: "retire", id: ids(text, (line) => line === `- stale ${k} done`)[0], reason: "Done" })),
+          { op: "merge", ids: ids(text, (line) => line.startsWith(`- dup ${night - 1} alpha`)), text: `- dup ${night - 1} alpha beta`, reason: "Same subject" },
+        ] : []),
         { op: "learn", text: `- Jun likes route ${night}`, quote: `Jun likes route ${night}`, lesson: false, reason: "User said it" },
         ...(night === 2 ? [{ op: "learn", text: "- Dentist is on Tuesday", quote: "the dentist is on Tuesday", lesson: true, reason: "Correction" }] : []),
         ...(Buffer.byteLength(text) > FLOOR ? [filed(text, ids(text, (line) => line.startsWith("- detail ")).slice(0, 6))] : []),
@@ -80,16 +86,16 @@ describe("sleep soak", () => {
     console.info(`[soak] tokens per night ${tokens.join(" ")}`);
   });
 
-  it("keeps the 22 KB heavy fixture under 65k tokens for the MEMORY.md pass", async () => {
+  it("checks every filed fact of the 22 KB fixture within the nightly cap", async () => {
     const memory = [...planted, ...Array.from({ length: 80 }, (_, i) => detail(i)), "- stale 0 done"].join("\n") + "\n";
     expect(Buffer.byteLength(memory)).toBeGreaterThan(22_000);
     const user = Array.from({ length: 40 }, (_, i): SleepLine => ({ text: `I moved the standup to slot ${i} this week`, at: i, kind: "said" }));
     const result = await cleanFiles({ memory, history: null, typed: new Set(), user, propose: proposer(() => [
-      { op: "retire", id: memory.split("\n").indexOf("- stale 0 done") + 1, reason: "Done" },
       filed(memory, [10, 11, 12, 13]),
     ]), recall: answerer() });
     expect(result).toMatchObject({ ok: true });
-    expect(result.tokens).toBeLessThan(65_000);
+    expect(result.tokens).toBeLessThan(150_000);
+    expect(result.ok && result.routeReads).toHaveLength(4);
     console.info(`[heavy] tokens ${result.tokens}`);
   });
 });

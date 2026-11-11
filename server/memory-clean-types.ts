@@ -10,7 +10,7 @@ export type Change =
   | { op: "own"; id: number; quote: string; reason: string }
   | { op: "file"; ids: number[]; topic: string; pointer: string; reason: string };
 export type RejectReason = "shape" | "unknown-id" | "reused-id" | "protected" | "fact-lost" | "too-long" |
-  "not-newer" | "not-verbatim" | "op-not-allowed" | "pointer" | "cap-lines" | "cap-chars" | "budget" | "not-quoted" | "secret" | "cap-learn" | "cap-file" | "cap-growth";
+  "not-newer" | "not-verbatim" | "op-not-allowed" | "pointer" | "cap-lines" | "cap-chars" | "budget" | "not-quoted" | "secret" | "cap-learn" | "cap-file" | "cap-growth" | "packet";
 type FileInfo = { beforeBytes: number; afterBytes: number; beforeHash: string; afterHash: string };
 export type SleepCounts = { kept: number; merged: number; forgot: number; learned: number; filed: number };
 export type RunHeader =
@@ -49,9 +49,10 @@ export type MemoryCleanUndoResult =
   | { ok: false; error: "no-run" | "not-newest" | "undone" | "busy" };
 export type MergeParkedInput = { file: string; kept: string; parked: string; history: string | null };
 export type ValidateInput = { file: CleanFile; text: string; list: unknown; typed: ReadonlySet<string>; user?: readonly SleepLine[]; side?: CleanFile };
+export type CleanBudget = { beforeBytes: number; finalBytes: number; maxBytes: number; forcedBytes: number; generatedBytes: number; touchedLines: number; changedChars: number; finalLines: number; maxLines: number; excessBytes: number };
 export type ValidateResult =
-  | { ok: true; text: string; entries: ArchiveEntry[]; counts: { merged: number; replaced: number; moved: number }; topics: Array<{ file: CleanFile; lines: string[]; reason: string }>; forced: number }
-  | { ok: false; errors: Array<{ reason: RejectReason; change?: number; over?: number }> };
+  | { ok: true; text: string; entries: ArchiveEntry[]; counts: { merged: number; replaced: number; moved: number }; topics: Array<{ file: CleanFile; lines: string[]; reason: string }>; forced: number; budget?: CleanBudget }
+  | { ok: false; errors: Array<{ reason: RejectReason; change?: number; over?: number }>; budget?: CleanBudget };
 export type TextCall = (prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<string | { text: string; tokens?: number }>;
 export type CleanInput = {
   memory: string;
@@ -68,5 +69,6 @@ export type CleanInput = {
 };
 export type CleanResult =
   | { ok: true; runId: string; memory: string; side?: { file: CleanFile; text: string }; topics: Array<{ file: CleanFile; before: string | null; text: string }>; owned: string[];
-    block: string; header: RunHeader; recall: { asked: number; passed: number; wrong: number }; tokens: number }
+    block: string; header: RunHeader; recall: { asked: number; passed: number; wrong: number }; tokens: number;
+    routeReads: Array<{ id: number; question: string; file: string; hash: string }>; budgets: Array<CleanBudget & { file: CleanFile }> }
   | { ok: false; stage: "nothing" | "propose" | "validate" | "recall" | "aborted"; detail: string; tokens?: number };

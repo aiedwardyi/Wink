@@ -1,100 +1,99 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { callTokens, cleanFiles } from "./memory-clean-engine.ts";
+import { callTokens, cleanFiles, NIGHT_TOKENS } from "./memory-clean-engine.ts";
 import type { TextCall } from "./memory-clean-types.ts";
+import { sleepReply } from "./testing/sleep-verdicts.ts";
 
 const lines = Array.from({ length: 175 }, (_, i) => `- task ${i} ${"memo ".repeat(23)}`);
 const memory = lines.join("\n").padEnd(22_899, "x") + "\n";
 const questions = Array.from({ length: 18 }, (_, i) => ({
   kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i === 0 ? "five" : i === 1 ? "6 days" : i < 16 ? `value ${i}` : null,
 }));
-const list = JSON.stringify({ version: 1, file: "MEMORY.md", changes: Array.from({ length: 30 }, (_, i) => ({ op: "retire", id: i + 1, reason: "Completed" })) });
-const used = [18_908, 17_184, 9_717, 12_280];
+const list = JSON.stringify({ version: 1, file: "MEMORY.md", changes: Array.from({ length: 24 }, (_, i) => ({ op: "retire", id: i + 1, reason: "Completed" })) });
+const used = [18_908, 5_000, 17_184, 9_717, 12_280];
 
 function run(tokens: Array<number | undefined> = used, grade = true, legacy = false, exact = false) {
-  const replies = [list, JSON.stringify(questions), JSON.stringify([...questions.map((q, i) => exact ? q.answer : i === 0 ? "5" : i === 1 ? "6" : q.answer), ...Array(30).fill("superseded")]), JSON.stringify([grade, grade])];
   let calls = 0;
-  const call = vi.fn<TextCall>(async () => {
+  const call = vi.fn<TextCall>(async (prompt) => {
     const at = calls++;
-    return legacy ? replies[at]! : { text: replies[at]!, tokens: tokens[at] };
+    const text = sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(questions)
+      : prompt.startsWith("[memory-clean:answers]") ? JSON.stringify(questions.map((q, i) => exact ? q.answer : i === 0 ? "5" : i === 1 ? "6" : q.answer))
+      : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify([grade, grade]) : list);
+    return legacy ? text : { text, tokens: tokens[at] };
   });
-  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall: (prompt, opts) => call(prompt, opts) }) };
+  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall: call }) };
 }
 
 describe("memory cleanup usage budget", () => {
-  it("reaches a sub-1 KB grade after the CLEAN-PARSE smoke's 45,809 actual tokens", async () => {
+  it("counts organization and grading in the nightly ledger", async () => {
     const engine = run();
-    expect(await engine.result).toMatchObject({ ok: true });
-    expect(engine.call).toHaveBeenCalledTimes(4);
-    const prompts = engine.call.mock.calls.map(([prompt]) => prompt);
-    expect(Buffer.byteLength(memory)).toBe(22_900);
-    expect(Buffer.byteLength(prompts[3]!)).toBeLessThan(1024);
-    expect(used.slice(0, 3).reduce((a, b) => a + b, 0)).toBe(45_809);
-    expect(45_809 + callTokens(prompts[3]!)).toBeLessThanOrEqual(60_000);
-    expect(prompts.reduce((sum, prompt) => sum + callTokens(prompt), 0)).toBeGreaterThan(60_000);
+    expect(await engine.result).toMatchObject({ ok: true, tokens: used.reduce((a, b) => a + b, 0) });
+    expect(engine.call).toHaveBeenCalledTimes(5);
+    expect(engine.call.mock.calls[1]![0]).toContain("[memory-clean:organize]");
+    expect(Buffer.byteLength(engine.call.mock.calls[4]![0])).toBeLessThan(1024);
   });
 
-  it("stops before the next call when actual usage plus its bound exceeds the cap", async () => {
-    const engine = run([59_000]);
+  it("reserves output before starting the next call", async () => {
+    const engine = run([NIGHT_TOKENS - 1]);
     expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(1);
   });
 
-  it("admits a call exactly at the cap and stops one token beyond it", async () => {
+  it("admits the final projected call exactly at the cap, but not one token beyond", async () => {
     const probe = run();
     expect(await probe.result).toMatchObject({ ok: true });
-    const bound = callTokens(probe.call.mock.calls[3]![0]);
+    const bound = callTokens(probe.call.mock.calls[4]![0], 0) + 4096;
     for (const extra of [0, 1]) {
-      const [first, second] = probe.call.mock.calls.map(([prompt]) => callTokens(prompt));
-      const engine = run([first!, second!, 60_000 - bound - first! - second! + extra, bound]);
+      const engine = run([1000, 1000, 1000, NIGHT_TOKENS - bound - 3000 + extra, 1000]);
       expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
-      expect(engine.call).toHaveBeenCalledTimes(extra ? 3 : 4);
+      expect(engine.call).toHaveBeenCalledTimes(extra ? 4 : 5);
     }
   });
 
-  it.each([false, true])("rejects an actual overrun on the final call, exact answers %s", async (exact) => {
-    const engine = run(exact ? [18_908, 17_184, 30_000] : [18_908, 17_184, 9_717, 14_192], true, false, exact);
+  it.each([false, true])("rejects an actual overrun on the final call, exact %s", async (exact) => {
+    const prior = exact ? used.slice(0, 3) : used.slice(0, 4);
+    const engine = run([...prior, NIGHT_TOKENS - prior.reduce((a, b) => a + b, 0) + 1], true, false, exact);
     expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
-    expect(engine.call).toHaveBeenCalledTimes(exact ? 3 : 4);
+    expect(engine.call).toHaveBeenCalledTimes(exact ? 4 : 5);
   });
 
-  it.each([false, true])("enforces the unchanged hard cap on a no-change reply, side %s", async (side) => {
-    const call = vi.fn<TextCall>(async (prompt) => ({ text: JSON.stringify({ version: 1, file: /"file":"([^"]+)"/.exec(prompt)![1], changes: [] }), tokens: (side ? 120_000 : 60_000) + 1 }));
-    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call })).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
+  it.each([false, true])("keeps no-change calls inside the hard cap, side %s", async (side) => {
+    const call = vi.fn<TextCall>(async (prompt) => ({ text: JSON.stringify({ version: 1, file: /"file":"([^"]+)"/.exec(prompt)![1], changes: [] }), tokens: NIGHT_TOKENS + 1 }));
+    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call }))
+      .toMatchObject({ ok: false, stage: "propose", detail: "budget" });
     expect(call).toHaveBeenCalledTimes(1);
   });
 
-  it.each([undefined, 0, -1, NaN, Infinity, 0.5])("falls back to the existing estimate for unusable usage %s", async (tokens) => {
-    const engine = run(Array(4).fill(tokens));
-    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
-    expect(engine.call).toHaveBeenCalledTimes(3);
-    expect(engine.call.mock.calls.reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(60_000);
+  it.each([undefined, 0, -1, NaN, Infinity, 0.5])("uses conservative estimates for unusable usage %s", async (tokens) => {
+    const engine = run(Array(5).fill(tokens));
+    const result = await engine.result;
+    expect(result).toMatchObject({ ok: true });
+    expect(result.tokens).toBeGreaterThan(engine.call.mock.calls.reduce((n, [prompt]) => n + callTokens(prompt), 0));
+    expect(result.tokens).toBeLessThanOrEqual(NIGHT_TOKENS);
   });
 
   it("keeps text-only engines bounded", async () => {
     const engine = run([], true, true);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
-    expect(engine.call).toHaveBeenCalledTimes(3);
+    const result = await engine.result;
+    expect(result).toMatchObject({ ok: true });
+    expect(result.tokens).toBeLessThanOrEqual(NIGHT_TOKENS);
+  });
+
+  it("rejects a response larger than its reserved output", async () => {
+    const call = vi.fn<TextCall>(async () => ({ text: "x".repeat(12_289), tokens: 10 }));
+    expect(await cleanFiles({ memory: "- kept\n", history: null, typed: new Set(), propose: call, recall: call }))
+      .toMatchObject({ ok: false, stage: "propose", detail: "budget" });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
   it("still rejects a bad grade after admitting the call", async () => {
-    const engine = run(used, false);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
-    expect(engine.call).toHaveBeenCalledTimes(4);
+    expect(await run(used, false).result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
   });
 
-  it("bounds each call by the smallest overhead its own engine has shown", async () => {
-    const probe = run();
-    await probe.result;
-    const prompts = probe.call.mock.calls.map(([prompt]) => prompt);
-    const measured = (prompt: string) => Math.ceil(Buffer.byteLength(prompt) / 3) + 3_000;
-    const answers = 60_000 - measured(prompts[0]!) - measured(prompts[1]!) - measured(prompts[3]!);
-    for (const over of [0, 1]) {
-      let at = 0;
-      const claude = vi.fn<TextCall>(async (prompt) => ({ text: [list, JSON.stringify(questions), "", JSON.stringify([true, true])][at++]!, tokens: measured(prompt) + (at === 1 ? 9_000 : 0) }));
-      const codex = vi.fn<TextCall>(async () => { at++; return { text: JSON.stringify([...questions.map((q, i) => i === 0 ? "5" : i === 1 ? "6" : q.answer), ...Array(30).fill("superseded")]), tokens: answers - 9_000 + over }; });
-      expect(await cleanFiles({ memory, history: null, typed: new Set(), propose: claude, recall: codex })).toMatchObject(over ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
-      expect(claude).toHaveBeenCalledTimes(over ? 2 : 3);
-    }
+  it("does not reset the token ledger for a repair", async () => {
+    const call = vi.fn<TextCall>(async () => ({ text: "{}", tokens: NIGHT_TOKENS - 1 }));
+    expect(await cleanFiles({ memory: "- kept\n", history: null, typed: new Set(), propose: call, recall: call }))
+      .toMatchObject({ ok: false, stage: "propose", detail: "budget" });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,6 +10,45 @@ export const hashText = (text: string) => createHash("sha256").update(text).dige
 export const lineHash = (line: string) => hashText(line.trim()).slice(0, 16);
 export const isHistory = (file: string) => /^memory\/memory-history(?:-[2-9]\d*|-1\d+)?\.md$/.test(file);
 export const cleanFileSchema = z.string().refine((file): file is CleanFile => file === "MEMORY.md" || /^memory\/[\w][\w .-]{0,199}\.md$/.test(file));
+export const pointerLine = (line: string) => /\bmemory\/[\w][\w .-]*\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/.test(line);
+
+export function loadedPrefix(text: string): string {
+  let prefix = text.split("\n").slice(0, 200).join("\n");
+  if (Buffer.byteLength(prefix) <= 24000) return prefix;
+  prefix = Buffer.from(prefix).subarray(0, 24000).toString("utf8").replace(/�+$/, "");
+  const last = prefix.lastIndexOf("\n");
+  return last > 0 ? prefix.slice(0, last).trimEnd() : prefix;
+}
+
+export function historyPointer(text: string, target = /memory\/memory-history(?:-\d+)?\.md/.exec(text)?.[0] ?? HISTORY_FILE): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => /memory\/memory-history(?:-\d+)?\.md/.test(line));
+  if (at >= 0) lines[at] = lines[at]!.replace(/memory\/memory-history(?:-\d+)?\.md/, target);
+  else {
+    const last = lines.findLastIndex(pointerLine);
+    let index = last >= 0 ? last + 1 : lines.at(-1) === "" ? lines.length - 1 : lines.length;
+    const wanted = POINTER_LINE.replace(HISTORY_FILE, target) + (text.includes("\r\n") ? "\r" : "");
+    if (index >= 199 || Buffer.byteLength([...lines.slice(0, index), wanted].join("\n")) > 23999) index = 0;
+    lines.splice(index, 0, wanted);
+  }
+  return lines.join("\n");
+}
+
+export function filePointers(pointer: string, topic: string): string[] | null {
+  const line = `- ${pointer.trim().replace(/^[-*+]\s+/, "")}`;
+  if (/[\r\n]/.test(line) || !line.includes(topic)) return null;
+  if (Buffer.byteLength(line) <= 300) return [line];
+  const prefix = `- ${topic}: `;
+  if (!line.startsWith(prefix)) return null;
+  const rows: string[] = [];
+  for (const label of line.slice(prefix.length).split(/;\s*/).filter(Boolean)) {
+    if (Buffer.byteLength(prefix + label) > 300) return null;
+    const previous = rows.at(-1);
+    if (previous && Buffer.byteLength(`${previous}; ${label}`) <= 300) rows[rows.length - 1] = `${previous}; ${label}`;
+    else rows.push(prefix + label);
+  }
+  return rows.length ? rows : null;
+}
 const time = z.number().finite().nonnegative();
 const runBase = {
   runId: z.string().regex(/^mc-\d{8}-[0-9a-f]{8}$/), at: time,
