@@ -6248,7 +6248,11 @@ configureRoomAsks({
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host" });
 sweepRoomFiles();
-const guestClient = new GuestClient({ bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)], onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }) });
+const guestClient = new GuestClient({
+  bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
+  joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
+  onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+});
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
@@ -8451,7 +8455,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, status);
     }
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);

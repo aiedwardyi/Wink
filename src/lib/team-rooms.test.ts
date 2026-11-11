@@ -73,14 +73,11 @@ describe("room codes", () => {
     expect(joinErrorKey(409, "room-full")).toBe("teamRoom.full");
     expect(joinErrorKey(429, "busy")).toBe("teamRoom.busy");
     expect(joinErrorKey(503, "unavailable")).toBe("teamRoom.unreachable");
-    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [404, "no-invite"], [409, "name-taken"]] as const) {
+    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "removed"], [404, "no-invite"], [409, "name-taken"]] as const) {
       expect(joinErrorKey(status, error)).toBe("teamRoom.badCode");
     }
-    expect(inviteErrorKey(409, "phone access is off")).toBe("teamRoom.phoneOff");
-    expect(inviteErrorKey(400, "someone in this room already has that name")).toBe("teamRoom.nameTaken");
-    expect(inviteErrorKey(400, "that name is reserved")).toBe("teamRoom.nameTaken");
-    expect(inviteErrorKey(400, "name must be 1-40 characters")).toBe("teamRoom.nameBad");
-    expect(inviteErrorKey(500, "")).toBe("errors.request");
+    expect(inviteErrorKey(409)).toBe("teamRoom.phoneOff");
+    expect(inviteErrorKey(500)).toBe("errors.request");
   });
 
   it("joins with the trimmed code and reads a dead link as unreachable", async () => {

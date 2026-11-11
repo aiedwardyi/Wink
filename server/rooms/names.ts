@@ -17,6 +17,16 @@ export function checkedRoomName(value: unknown, taken: readonly string[]): { ok:
   return { ok: true, name };
 }
 
+/** Someone joining by the room code never types a name: theirs, made to fit, numbered once taken. */
+export function joinerName(value: unknown, taken: readonly string[]): string {
+  const own = typeof value === "string" ? [...value.normalize("NFC").replace(/[@\r\n]/g, "").trim()].slice(0, NAME_MAX - 4).join("").trim() : "";
+  const base = own || "Guest";
+  for (let n = 1; ; n++) {
+    const checked = checkedRoomName(n === 1 ? base : `${base} ${n}`, taken);
+    if (checked.ok) return checked.name;
+  }
+}
+
 /** The first name in `names` that collides with another in it or in `taken`. */
 export function nameClash(names: readonly string[], taken: readonly string[] = []): string | null {
   const seen = new Set(taken.map(nameKey));

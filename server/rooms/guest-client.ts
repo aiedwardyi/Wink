@@ -28,6 +28,7 @@ import {
   type JoinedState,
 } from "./joined.ts";
 import { cachedJoinedFile, keepJoinedFile } from "./joined-files.ts";
+import { NAME_MAX } from "./names.ts";
 
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SEND_ID = /^[A-Za-z0-9_-]{16,80}$/;
@@ -92,6 +93,8 @@ export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: numbe
 export interface GuestClientDeps {
   /** Relay bases a code's host may sit under: the enrolled one and the baked team one. */
   bases(): ReadonlyArray<string | null>;
+  /** This PC as the host sees it: its own name and a steady id a Remove can bar. */
+  joiner(): { name: string; device: string };
   onChange?(roomId: string): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
@@ -166,7 +169,9 @@ export class GuestClient {
     const pasted = code.trim();
     const relayHost = roomCodeHost(pasted, this.deps.bases());
     if (!relayHost) return failed(400, "bad-code");
-    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted }));
+    const { name, device } = this.deps.joiner();
+    // The door refuses join bodies over 1 KB, and a profile name has no cap.
+    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted, name: [...name].slice(0, NAME_MAX).join(""), device }));
     if (!reply.ok) return reply;
     const joined = joinSchema.safeParse(reply.value);
     if (!joined.success) return unavailable();

@@ -42,6 +42,8 @@ const JOIN_STATUS = {
   "too-many-tries": 401,
   "room-full": 409,
   "name-taken": 409,
+  "bad-code": 400,
+  removed: 403,
 } satisfies Record<Extract<JoinResult, { ok: false }>["error"], number>;
 
 export interface RoomDoorDeps {
@@ -172,13 +174,14 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   if (!unauthenticated.take("door")) return send(res, 429, { error: "rate-limited" });
   const body = await readJson(req, JOIN_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
-  const code = record(body.value)?.code;
+  const fields = record(body.value);
+  const code = fields?.code;
   const parts = typeof code === "string" ? CODE.exec(code) : null;
   if (!parts || parts[1] !== relayHost) return send(res, 400, { error: "bad-code" });
   // An unknown invite still goes through joinRoom, so it spends the join limit.
   const roomId = inviteRoomId(parts[2]!);
   if (roomId && !doorGroup(roomId)) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()]);
+  const result = joinRoom(parts[2]!, parts[3]!, [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   pushRoomState(result.roomId);
   send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key });
