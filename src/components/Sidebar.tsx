@@ -55,8 +55,9 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
-import { JoinedRoomList } from "./JoinedRoomList";
-import { TeamRoomDialogs, TeamRoomMenuItems } from "./TeamRoomMenu";
+import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
+import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   displaySidebarWidth,
@@ -101,7 +102,7 @@ import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
-import { ArchivedBotsPanel, BotListItem, GroupListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
+import { ArchivedBotsPanel, BotListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
@@ -197,8 +198,9 @@ function RoomContextMenu({
   onMoveToSection: (groupId: string) => void;
 }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch } = useSidebarRooms();
   const group = state.groups.find((g) => g.id === menu.groupId);
+  const joined = joinedRoomIdOf(menu.groupId) !== null;
   const [renaming, setRenaming] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuHeight, setMenuHeight] = useState(240);
@@ -256,7 +258,7 @@ function RoomContextMenu({
         {group.pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
         {group.pinned ? t("chrome.unpin") : t("chrome.pin")}
       </button>
-      {renaming ? (
+      {!joined && (renaming ? (
         <div className="flex items-center gap-1 px-2 py-1">
           <input
             ref={renameRef}
@@ -308,7 +310,7 @@ function RoomContextMenu({
           <Pencil size={16} className="text-ink-secondary" />
           {t("chrome.renameChannel", { name: group.name })}
         </button>
-      )}
+      ))}
       <button
         onClick={() => {
           onClose();
@@ -320,7 +322,8 @@ function RoomContextMenu({
         {t("chrome.moveToContext")}
       </button>
 
-      <button
+      <TeamRoomSidebarActions group={group} onClose={onClose} />
+      {!joined && <button
         onClick={() => {
           dispatch({ type: "deleteGroup", groupId: group.id });
           onClose();
@@ -329,7 +332,7 @@ function RoomContextMenu({
       >
         <Trash2 size={16} />
         {t("chrome.deleteChannel")}
-      </button>
+      </button>}
     </div>,
     document.body,
   );
@@ -355,7 +358,7 @@ function SectionPicker({
   onAssign: (section: string) => void;
 }) {
   const { t } = useI18n();
-  const { state } = useStore();
+  const { state } = useSidebarRooms();
   const [name, setName] = useState("");
   const trimmed = name.trim();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -623,7 +626,7 @@ export function Sidebar({
   onUnfold?: () => void;
 }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch } = useSidebarRooms();
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -1100,6 +1103,7 @@ export function Sidebar({
       bot,
     })),
   ];
+  items.sort((a, b) => Number(joinedRoomIdOf(a.id) !== null) - Number(joinedRoomIdOf(b.id) !== null));
   const itemByKey = new Map(items.map((item) => [item.key, item]));
   const naturalItemsBySection: Record<string, string[]> = {};
   for (const item of items) (naturalItemsBySection[item.sectionId] ??= []).push(item.key);
@@ -1805,7 +1809,6 @@ export function Sidebar({
               </div>
             );
           })}
-          <JoinedRoomList density={density} />
           <SearchResults query={query} onLanded={() => setQuery("")} />
           <span className="sr-only" aria-live="polite">{reorderAnnouncement}</span>
         </div>

@@ -2,7 +2,7 @@
 // LOCAL_ONLY_PREFIXES), so no relay caller reaches them; no reply carries the guest key.
 import type { GuestClient, GuestResult } from "./guest-client.ts";
 
-const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|read))?$/;
+const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read))?$/;
 
 type Reply = { status: number; body: unknown };
 
@@ -17,7 +17,7 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "read">, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read">, body: () => Promise<unknown>,
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
   client.start();
@@ -29,13 +29,15 @@ export async function joinedRoute(
   }
   const route = ROOM.exec(path);
   if (!route) return notFound;
-  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "read" | undefined];
+  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | undefined];
   if (!action) {
+    if (method === "DELETE") return reply(await client.remove(roomId), "removed");
     const room = method === "GET" ? client.room(roomId) : null;
     return room ? { status: 200, body: { room } } : notFound;
   }
   if (method !== "POST") return notFound;
   if (action === "leave") return reply(await client.leave(roomId), "room");
+  if (action === "rejoin") return reply(await client.rejoin(roomId, field(await body(), "code")), "room");
   const fields = await body();
   if (action === "read") return reply(client.read(roomId, field(fields, "seq")), "room");
   return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId"), field(fields, "fileIds")), "entry");
