@@ -1,7 +1,7 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import { applyResolvedProjectFolder } from "./project-folder.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { agentRoster, Store, titleFromMessage, type BotRecord } from "./store.ts";
+import { nextWinkAvatar } from "../shared/bot-avatar.ts";
 import * as taskState from "./task-state.ts";
 import { readTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
 import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
@@ -303,19 +304,45 @@ describe("Store", () => {
     expect(new Store(selection).bot(bot.id)).toMatchObject({ color: "white", mascotStyle: "icon-31" });
   });
 
-  it("gives a bot created without an avatar the least-used Wink icon", () => {
+  it("gives each new bot the next Wink icon in picker order, then wraps", () => {
     const store = new Store(selection);
-    store.seedIfEmpty();
-    const seeded = store.bots[0]!;
-    const rest = Array.from({ length: 5 }, () => store.createBot().mascotStyle);
-    const styles = [seeded.mascotStyle, ...rest];
-    expect(styles).toEqual(["icon-31", "icon-33", "icon-34", "icon-35", "icon-32", "icon-31"]);
-    expect(new Set(styles.slice(0, 5)).size).toBe(5);
+    const styles = Array.from({ length: 7 }, () => {
+      const preview = nextWinkAvatar(store.bots);
+      const created = store.createBot().mascotStyle;
+      expect(created).toBe(preview);
+      return created;
+    });
+    expect(styles).toEqual(["icon-31", "icon-32", "icon-33", "icon-34", "icon-35", "icon-36", "icon-31"]);
+  });
+
+  it("stamps each new bot after the newest, even within one millisecond", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const store = new Store(selection);
+    const stamps = Array.from({ length: 3 }, () => store.createBot().createdAt);
+    now.mockRestore();
+    expect(stamps).toEqual([1_000, 1_001, 1_002]);
+  });
+
+  it("stamps a new bot even when an older bot has no createdAt", () => {
+    const store = new Store(selection);
+    delete (store.createBot() as Partial<BotRecord>).createdAt;
+    expect(Number.isFinite(store.createBot().createdAt)).toBe(true);
+  });
+
+  it("never repeats the newest Wink icon when older bots hold one of each", () => {
+    const store = new Store(selection);
+    for (const style of ["icon-36", "icon-31", "icon-32", "icon-33", "icon-34", "icon-35"] as const) store.createBot({ mascotStyle: style });
+    expect(store.createBot().mascotStyle).toBe("icon-36");
+    expect(store.createBot().mascotStyle).toBe("icon-31");
+  });
+
+  it("keeps a picked avatar and rotates from the last Wink one", () => {
+    const store = new Store(selection);
+    store.createBot();
     const chosen = store.createBot({ mascotStyle: "icon-11" });
     expect(chosen.mascotStyle).toBe("icon-11");
     expect(new Store(selection).bot(chosen.id)?.mascotStyle).toBe("icon-11");
-    for (const style of ["icon-33", "icon-34", "icon-35", "icon-32"] as const) store.createBot({ mascotStyle: style });
-    expect(store.createBot().mascotStyle).toBe("icon-31");
+    expect(store.createBot().mascotStyle).toBe("icon-32");
   });
 
   it("keeps an explicit stored green color instead of reminting white", () => {
@@ -1082,6 +1109,32 @@ describe("Store", () => {
     expect(readFileSync(path, "utf8")).toBe('[{"id": "bot-1"');
   });
 
+  it("sets an unreadable bots.json aside before the first save", () => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(join(DATA_DIR, "bots.json"), '[{"id": "bot-1"');
+    const store = new Store(selection);
+    store.createBot({ name: "First" }, { seedMessages: false });
+    store.createBot({ name: "Second" }, { seedMessages: false });
+    const kept = readdirSync(DATA_DIR).filter((name) => /^bots\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(DATA_DIR, kept[0]!), "utf8")).toBe('[{"id": "bot-1"');
+    expect(new Store(selection).bots.map((bot) => bot.name)).toEqual(["Second", "First"]);
+    expect(store.botsFile).toBe("unreadable");
+  });
+
+  it("sets an unreadable groups.json aside before the first save", () => {
+    const bot = new Store(selection).createBot({ name: "Member" }, { seedMessages: false });
+    writeFileSync(join(DATA_DIR, "groups.json"), '[{"id": "room-1"');
+    const store = new Store(selection);
+    expect(store.groups).toEqual([]);
+    expect(readFileSync(join(DATA_DIR, "groups.json"), "utf8")).toBe('[{"id": "room-1"');
+    store.createGroup("Team", [bot.id]);
+    const kept = readdirSync(DATA_DIR).filter((name) => /^groups\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(DATA_DIR, kept[0]!), "utf8")).toBe('[{"id": "room-1"');
+    expect(new Store(selection).groups.map((group) => group.name)).toEqual(["Team"]);
+  });
+
   it("createBot recreates a lost bot under its old id", () => {
     const store = new Store(selection);
     expect(store.createBot({ name: "Tutor" }, { seedMessages: false, id: "lost-bot" }).id).toBe("lost-bot");
@@ -1097,6 +1150,22 @@ describe("Store", () => {
     expect(user.parentId).toBe(messages[0].id); // follows the onboarding card
     expect(store.activeLeaf(bot.threadId)).toBe(user.id);
     expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
+  });
+
+  it("keeps the durable path after an append write fails", async () => {
+    const { closeMessageDb } = await import("./message-db.ts");
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "first" });
+    store.setSyncWriter(() => { throw new Error("disk full"); });
+    expect(() => store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "failed" })).toThrow("disk full");
+    store.setSyncWriter(undefined);
+    const last = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "last" });
+    closeMessageDb();
+    const reloaded = new Store(selection);
+    expect(reloaded.activePath(bot.threadId).map((row) => row.id)).toEqual([first.id, last.id]);
+    expect(store.messagesFor(bot.threadId).map((row) => row.text)).toEqual(["first", "last"]);
+    expect(reloaded.messagesFor(bot.threadId).map((row) => row.text)).toEqual(["first", "last"]);
   });
 
   it("branchMessage forks at the edited message and hides the old tail", () => {

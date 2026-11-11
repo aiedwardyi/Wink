@@ -59,7 +59,7 @@ beforeEach(() => {
   Object.assign(window, { ogb: { platform: "win32", openEngineInstall: vi.fn(async () => "running"),
     openEngineSignIn: vi.fn(async () => "running") } });
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
-  fetchMock = vi.fn(async () => new Response(JSON.stringify({ instances })));
+  fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url === "/api/bots?messages=0" ? { bots: [] } : { instances })));
   vi.stubGlobal("fetch", fetchMock);
   refreshInstances.mockClear();
 });
@@ -305,7 +305,7 @@ describe("first engine connection", () => {
     await click("Copy Command");
     expect(copy).toHaveBeenCalledWith("install-claude");
     await advance(30000);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/instances", "/api/bots?messages=0"]);
   });
 
   it("shares EngineConnect when an engine was installed before opening", async () => {

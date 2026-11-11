@@ -1,4 +1,4 @@
-const { DEVICE_WINDOW_PARTITION, deviceLinkedFileName } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkedFileName, deviceWindowUrl } = require("./device-window.cjs");
 const { desktopViewerWindowOptions } = require("./desktop-viewer.cjs");
 
 function handleDeviceLinkedFile(target, origin, { createWindow, webContents, openFile, log }) {
@@ -38,4 +38,20 @@ function handleDeviceLinkedFile(target, origin, { createWindow, webContents, ope
   return true;
 }
 
-module.exports = { handleDeviceLinkedFile };
+const PEER_TIMEOUT_MS = 8_000;
+
+/** Opens a linked file from the PC that has it; that PC's server decides whether the link may be read. */
+async function openPeerLinkedFile(rawHost, threadId, filePath, { tailnet, session, ...actions }) {
+  const { origin } = deviceWindowUrl(rawHost, tailnet);
+  const target = `${origin}/api/threads/${encodeURIComponent(threadId)}/linked-file?path=${encodeURIComponent(filePath)}`;
+  if (!deviceLinkedFileName(target, origin)) throw new Error("That file path is invalid");
+  // downloadURL and a new window fail without a word, so ask first.
+  const probe = await session.fetch(target, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) }).catch(() => null);
+  if (!probe?.ok && !(probe?.status === 416 && probe.headers.get("content-range") === "bytes */0")) {
+    const body = await probe?.json().catch(() => null);
+    throw new Error(body?.reason === "outside" ? "That file is outside the bot's folder" : "That file could not be opened");
+  }
+  handleDeviceLinkedFile(target, origin, { ...actions, webContents: session });
+}
+
+module.exports = { handleDeviceLinkedFile, openPeerLinkedFile };

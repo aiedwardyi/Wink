@@ -1,0 +1,232 @@
+/* Three dark skins with both sides in wide bubbles. Faces are Latin-subset, so Hangul falls through. */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/fonts/AtkinsonHyperlegibleNext-Variable.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lexend";
+  src: url("/fonts/Lexend-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* ── Inkwell ───────────────────────────────────────────────────────────────
+   Near-black for long sessions: body text near 12:1, never white, dim lines.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="inkwell"],
+[data-skin="inkwell"] {
+  --color-app: #0a0b0d;
+  --color-panel: #0f1013;
+  --color-raised: #1a1c21;
+  --color-raised-hover: #212429;
+  --color-card: #17191e;
+  --color-inset: #08090a;
+  --color-control: #1d1f24;
+  --color-hairline: #2e3138;
+
+  --color-ink: #d2d9e1;
+  --color-ink-secondary: #8a929e;
+
+  --color-accent: #7fa3d6;
+  --color-accent-border: #8eafdc;
+  --color-accent-text: #9cb9e2;
+  --color-focus: #8eafdc;
+  --color-accent-ink: #0a0b0d;
+  --color-bubble-user: #142030;
+
+  --color-success: #88c4a0;
+  --color-danger: #e2959b;
+  --color-danger-ink: #0a0b0d;
+  --color-warning: #d1ba82;
+  --color-scrollbar: #2d3138;
+  --color-maus-line: #8a929e;
+
+  --font-sans: "Atkinson Hyperlegible Next", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+}
+
+/* ── Graphite ──────────────────────────────────────────────────────────────
+   Neutral mid gray, no blue cast, with the Memory tab's blue as the accent.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="graphite"],
+[data-skin="graphite"] {
+  --color-app: #26282c;
+  --color-panel: #202225;
+  --color-raised: #35383d;
+  --color-raised-hover: #3e4147;
+  --color-card: #2f3236;
+  --color-inset: #1d1f22;
+  --color-control: #373a3f;
+  --color-hairline: #45494f;
+
+  --color-ink: #eaecef;
+  --color-ink-secondary: #abb0b7;
+
+  --color-accent: #60a5fa;
+  --color-accent-border: #7cb5fb;
+  --color-accent-text: #8cbffc;
+  --color-focus: #7cb5fb;
+  --color-accent-ink: #0f1724;
+  --color-bubble-user: #2c3a4d;
+
+  --color-success: #7cc6a0;
+  --color-danger: #f29a9a;
+  --color-danger-ink: #1d1f22;
+  --color-warning: #dcbf7a;
+  --color-scrollbar: #4a4e55;
+  --color-maus-line: #abb0b7;
+
+  --font-sans: "Lexend", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+}
+
+/* ── Moss ──────────────────────────────────────────────────────────────────
+   Deep forest floor, cream ink and a sage accent, in rounded Nunito.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="moss"],
+[data-skin="moss"] {
+  --color-app: #171c18;
+  --color-panel: #131714;
+  --color-raised: #262e27;
+  --color-raised-hover: #2d362e;
+  --color-card: #1f2620;
+  --color-inset: #111512;
+  --color-control: #283029;
+  --color-hairline: #343e35;
+
+  --color-ink: #e9e8de;
+  --color-ink-secondary: #adb3a4;
+
+  --color-accent: #a8c48c;
+  --color-accent-border: #b6cf9d;
+  --color-accent-text: #c0d6aa;
+  --color-focus: #b6cf9d;
+  --color-accent-ink: #151a14;
+  --color-bubble-user: #303d2b;
+
+  --color-success: #a8c48c;
+  --color-danger: #eb9f94;
+  --color-danger-ink: #171c18;
+  --color-warning: #e3c78a;
+  --color-scrollbar: #364038;
+  --color-maus-line: #adb3a4;
+
+  --font-sans: "Nunito", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 24px;
+  --radius-xl: 26px;
+}
+
+/* Shared: both sides bubbled, wide enough for pasted code and long replies. */
+@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {
+  [data-orbit-message-body] {
+    max-width: min(54rem, 94%);
+  }
+
+  [data-orbit-message-content] {
+    padding: 12px 16px;
+    border-radius: var(--radius-lg);
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
+  [data-orbit-message="bot"] [data-orbit-message-content] {
+    background: var(--color-card);
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    background: var(--color-bubble-user);
+  }
+
+  [data-orbit-message="bot"] .orbit-message-speaker {
+    display: block;
+    margin: 0 0 5px 16px;
+    color: var(--color-ink-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Rooms label each sender cluster already. */
+  [data-room-transcript] .orbit-message-speaker {
+    display: none;
+  }
+}
+
+@scope ([data-skin="inkwell"]) to ([data-skin]) {
+  [data-orbit-message-content] {
+    border: 1px solid var(--color-hairline);
+    line-height: 1.7;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    border-color: color-mix(in srgb, var(--color-accent) 22%, var(--color-hairline));
+  }
+
+  [data-orbit-composer-frame] {
+    border: 1px solid var(--color-hairline);
+  }
+}
+
+@scope ([data-skin="graphite"]) to ([data-skin]) {
+  [data-orbit-message-content] {
+    border: 1px solid var(--color-hairline);
+    font-size: 14.5px;
+    line-height: 1.7;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-hairline));
+  }
+}
+
+@scope ([data-skin="moss"]) to ([data-skin]) {
+  [data-orbit-message] {
+    padding-block: 0.25rem;
+  }
+
+  [data-orbit-message="bot"] .orbit-message-speaker {
+    margin-left: 22px;
+  }
+
+  [data-orbit-message-content] {
+    padding: 16px 22px;
+    font-size: 16px;
+    line-height: 1.7;
+    box-shadow: 0 3px 14px rgb(0 0 0 / 0.28);
+  }
+
+  .chat-md > div[class*="font-semibold"] {
+    color: var(--color-accent-text);
+  }
+
+  [data-orbit-composer-frame] {
+    border-radius: var(--radius-xl);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.25);
+  }
+}
+
+/* Last, so it beats each skin's roomier desktop padding. */
+@media (max-width: 767px) {
+  @scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {
+    [data-orbit-message-body] {
+      max-width: 96%;
+    }
+
+    [data-orbit-message-content] {
+      padding: 11px 14px;
+      font-size: 15px;
+    }
+
+    [data-orbit-message="bot"] .orbit-message-speaker {
+      margin-left: 14px;
+    }
+  }
+}

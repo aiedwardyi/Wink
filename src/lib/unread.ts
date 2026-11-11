@@ -1,4 +1,5 @@
 import { isShownMessage } from "./shown-message";
+import { isVoiceLine, type CallTag } from "../../shared/live-call";
 import { listedGroups } from "./sidebar-order";
 
 export function unreadConversationCount(
@@ -20,9 +21,9 @@ export function collapsedUnreadCount(
   );
 }
 
-type CountedMessage = { role?: string; kind?: string; summarized?: boolean; at?: number };
+type CountedMessage = { role?: string; kind?: string; summarized?: boolean; at?: number; call?: CallTag };
 
-const isReply = (message: CountedMessage) => message.role === "bot" && message.kind === "text" && isShownMessage(message);
+const isReply = (message: CountedMessage) => message.role === "bot" && message.kind === "text" && !isVoiceLine(message) && isShownMessage(message);
 
 /** Shown replies since the chat was last read (since your last message for records without readAt); unread with none still shows 1. */
 export function unreadReplyCount(

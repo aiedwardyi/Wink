@@ -7,6 +7,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { addedMemoryLines, MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
+import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import { MEMORY_MAX_BYTES, MEMORY_MAX_LINES, MEMORY_SEED, memoryFileRaw, readMemoryFile, saveMemoryFile } from "./workspace.ts";
 
 const IDLE_MS = 3 * 60_000;
@@ -27,7 +28,7 @@ const stateSchema = z.object({
   dropped: z.record(z.string(), droppedSchema).optional(),
 });
 
-export type NoteGenerator = (prompt: string, signal: AbortSignal) => Promise<string>;
+export type NoteGenerator = (prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>;
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string };
 export type DroppedNotes = z.infer<typeof droppedSchema>;
@@ -45,8 +46,8 @@ export interface MemoryPassDeps {
 }
 
 export interface MemoryPass {
-  /** Call when a 1:1 turn settles. */
-  onSettled(botId: string, threadId: string): void;
+  /** Call when a 1:1 turn settles; `flush` runs the pass now, before the engine compacts. */
+  onSettled(botId: string, threadId: string, flush?: boolean): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
@@ -63,7 +64,7 @@ export function noteGenerator(
 ): NoteGenerator | null {
   if (account && !account.available) return null;
   const claude = instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
-  return claude ? (prompt, signal) => claude.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true }) : null;
+  return claude ? (prompt, signal, onUsage) => claude.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true, ...(onUsage ? { onUsage } : {}) }) : null;
 }
 
 /** A user row typed on this PC into the chat, not a bot, routine, peer, draft or attachment. */
@@ -74,15 +75,15 @@ export function eligibleRow(message: Message | undefined): message is Message & 
   );
 }
 
-/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive. */
-export function userTyping(text: string): string {
+/** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
+export function userTyping(text: string, dropSensitive = true): string {
   const typed = text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
     .replace(/<attached-(?:image|file)\b[^>]*\/>/gi, "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
   // the whole message: a label and its value can sit in different paragraphs
-  if (secretLike(typed)) return "";
+  if (dropSensitive && secretLike(typed)) return "";
   const unwrapped = typed.replace(/"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
@@ -383,9 +384,17 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
     const started = now();
+    const trace = startTurnTrace(() => ({ engine: "claude", botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
+    const endPass = trace?.span("background_pass");
+    let request = 0;
+    let outcome = "helper-failed";
     let output: string;
     try {
-      output = await generate(notePrompt(memory.text, lines), signal);
+      output = await generate(notePrompt(memory.text, lines), signal, trace ? (usage, id) => {
+        request++;
+        trace.request(id ?? `helper:${request}`, usage);
+      } : undefined);
+      outcome = "helper-settled";
     } catch (error) {
       if (disposed || !deps.enabled(botId)) return;
       if (UNAVAILABLE.test(error instanceof Error ? error.message : String(error))) {
@@ -393,6 +402,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       }
       log({ botId, threadId, lines: lines.length, ms: now() - started, result: "error" });
       return;
+    } finally {
+      if (trace && !request) trace.request("helper:unknown", undefined);
+      endPass?.();
+      trace?.finish(signal.aborted ? "cancelled" : outcome);
     }
     // switched off mid-pass: write nothing, and the dropped ids stay dropped
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
@@ -467,10 +480,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   }
 
   return {
-    onSettled(botId, threadId) {
+    onSettled(botId, threadId, flush) {
       const count = pending.get(threadId)?.length ?? 0;
       if (disposed || !count || !deps.enabled(botId)) return;
-      if (count >= BATCH_MESSAGES || held.has(threadId)) enqueue(botId, threadId);
+      if (flush || count >= BATCH_MESSAGES || held.has(threadId)) enqueue(botId, threadId);
       else arm(botId, threadId);
     },
     onConfigChanged() {

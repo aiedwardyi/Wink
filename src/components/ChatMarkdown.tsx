@@ -10,13 +10,16 @@ import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy } from "lucide-react";
+import { LinkedFolderLink } from "./LinkedFolderSheet";
 import { ReadableImage } from "./MediaViewerProvider";
+import { PhoneVideo } from "./PhoneVideo";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
+import { unwrapUserTags } from "../../shared/user-tags";
 import { windowsPathLinks } from "../../shared/windows-path-links";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
@@ -366,11 +369,22 @@ const deviceListSchema = z.object({
     name: z.string().min(1),
     host: z.string().min(1),
     current: z.boolean().optional(),
+    offline: z.boolean().optional(),
   })).optional(),
 });
 
 function linkedFileSrc(threadId: string, filePath: string): string {
   return `/api/threads/${encodeURIComponent(threadId)}/linked-file?path=${encodeURIComponent(filePath)}`;
+}
+
+/** The other PC the server named for a file it does not have, when the device list knows it. */
+async function otherPc(deviceId: string | undefined): Promise<{ name: string; host: string; offline: boolean } | null> {
+  if (!deviceId) return null;
+  const listed = deviceListSchema.safeParse(await fetch("/api/devices").then((response) => response.json()).catch(() => null));
+  const device = listed.success
+    ? listed.data.devices?.find((item) => item.deviceId === deviceId && !item.current && item.host && item.name)
+    : undefined;
+  return device ? { name: device.name, host: device.host, offline: device.offline === true } : null;
 }
 
 // Texts from the desktop app's file opening, shown in the active language.
@@ -391,9 +405,10 @@ const FILE_LINK_MESSAGES = new Map<string, MessageKey>([
 // (http://127.0.0.1:8799<path>, a second chat UI in the browser), and an
 // <a href="file://…"> would still reach setWindowOpenHandler on a middle or
 // modifier click. The shell decides whether to open or only reveal the file.
-function DesktopFileLink({ filePath, base, children }: { filePath: string; base?: string; children?: ReactNode }) {
+function DesktopFileLink({ filePath, base, threadId, children }: { filePath: string; base?: string; threadId?: string; children?: ReactNode }) {
   const { t } = useI18n();
   const [reason, setReason] = useState("");
+  const [onPc, setOnPc] = useState("");
   const ref = useRef<HTMLButtonElement>(null);
   const terminal = isTerminalSkin(useSkin());
   const text = useContext(MarkdownTextContext);
@@ -408,6 +423,21 @@ function DesktopFileLink({ filePath, base, children }: { filePath: string; base?
     return () => link?.removeAttribute("data-file-line");
   }, [terminal, text, children]);
 
+  // False when no other PC is named for the file, so the first reason stands.
+  const fromOtherPc = async (thread: string) => {
+    const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
+    const body = res && !res.ok ? missingFileSchema.safeParse(await res.json().catch(() => null)) : null;
+    const pc = await otherPc(body?.success ? body.data.deviceId : undefined);
+    if (!pc) return false;
+    const openPeerFile = pc.offline ? undefined : window.ogb?.openPeerFile;
+    const refused = openPeerFile
+      ? await openPeerFile(pc.host, thread, filePath).then(() => null, (error: unknown) => (error instanceof Error ? error.message : ""))
+      : "";
+    if (refused === "That file is outside the bot's folder") setReason(refused);
+    else if (refused !== null) setOnPc(pc.name);
+    return true;
+  };
+
   const open = async () => {
     const openFile = window.ogb?.openFile;
     if (!openFile) {
@@ -416,9 +446,14 @@ function DesktopFileLink({ filePath, base, children }: { filePath: string; base?
     }
     try {
       setReason("");
+      setOnPc("");
       await openFile(filePath, base);
     } catch (error) {
-      setReason(error instanceof Error ? error.message : "That file could not be opened");
+      const message = error instanceof Error ? error.message : "That file could not be opened";
+      // A plain drive path is invalid only on a Mac or Linux desktop, where another PC wrote it.
+      const foreign = message === "That file path is invalid" && WINDOWS_PATH.test(filePath) && !filePath.slice(2).includes(":");
+      if ((foreign || message === "That file no longer exists") && threadId && (await fromOtherPc(threadId))) return;
+      setReason(message);
     }
   };
 
@@ -443,7 +478,9 @@ function DesktopFileLink({ filePath, base, children }: { filePath: string; base?
       >
         {children}
       </button>
-      {reason && <span className={`ml-1.5 text-[12px] ${desktop ? "text-danger" : "text-ink-secondary"}`}>{reasonKey ? t(reasonKey) : reason}</span>}
+      {onPc
+        ? <span data-file-on-pc className="block break-keep [overflow-wrap:anywhere]">{t("chat.fileLink.onOtherPc", { name: onPc })}</span>
+        : reason && <span className={`ml-1.5 text-[12px] ${desktop ? "text-danger" : "text-ink-secondary"}`}>{reasonKey ? t(reasonKey) : reason}</span>}
     </>
   );
 }
@@ -463,6 +500,7 @@ function PhoneFile({
   const src = linkedFileSrc(threadId, filePath);
   const [phase, setPhase] = useState<"pending" | "local" | "remote" | "desktop" | "outside">("pending");
   const [remote, setRemote] = useState<{ name: string; host: string } | null>(null);
+  const [asked, setAsked] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -478,15 +516,7 @@ function PhoneFile({
           setPhase("outside");
           return;
         }
-        const deviceId = body.success ? body.data.deviceId : undefined;
-        if (!deviceId) {
-          setPhase("desktop");
-          return;
-        }
-        const listed = deviceListSchema.safeParse(await fetch("/api/devices").then((response) => response.json()).catch(() => null));
-        const device = listed.success
-          ? listed.data.devices?.find((item) => item.deviceId === deviceId && !item.current && item.host && item.name)
-          : undefined;
+        const device = await otherPc(body.success ? body.data.deviceId : undefined);
         if (!alive) return;
         if (!device) {
           setPhase("desktop");
@@ -511,7 +541,11 @@ function PhoneFile({
       </span>
     );
   }
-  if (phase === "desktop") return <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>;
+  if (phase === "desktop") {
+    return kind
+      ? <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>
+      : <LinkedFolderLink folderPath={filePath} threadId={threadId} fileSrc={(path) => linkedFileSrc(threadId, path)}>{children}</LinkedFolderLink>;
+  }
   if (phase === "remote" && remote) {
     return (
       <a
@@ -526,9 +560,12 @@ function PhoneFile({
   }
   if (phase !== "local") {
     return (
-      <button type="button" title={filePath} className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
-        {children}
-      </button>
+      <>
+        <button type="button" onClick={() => setAsked(true)} title={filePath} className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
+          {children}
+        </button>
+        {asked && <span className="ml-1.5 text-[12px] text-ink-secondary">{t("chat.fileLink.checking")}</span>}
+      </>
     );
   }
   if (kind === "image") {
@@ -549,23 +586,7 @@ function PhoneFile({
       </a>
     );
   }
-  return (
-    <video
-      src={src}
-      controls
-      preload="metadata"
-      playsInline
-      // Chromium keeps focus in the seek bar after a scrub and it swallows Space; refocusing the video restores play/pause.
-      onSeeked={(e) => {
-        const video = e.currentTarget;
-        if (document.activeElement !== video) return;
-        video.blur();
-        video.focus({ preventScroll: true });
-      }}
-      data-phone-media="video"
-      className="max-h-96 max-w-full rounded-lg border border-hairline/30"
-    />
-  );
+  return <PhoneVideo src={src} />;
 }
 
 function LocalFileLink({
@@ -581,7 +602,7 @@ function LocalFileLink({
 }) {
   const streaming = useContext(StreamingContext);
   if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
-  return <DesktopFileLink filePath={filePath} base={base}>{children}</DesktopFileLink>;
+  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId}>{children}</DesktopFileLink>;
 }
 
 // Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content
@@ -627,7 +648,7 @@ function Spoiler({ children }: { children?: ReactNode }) {
 }
 
 function ChatMarkdownComponent({
-  text,
+  text: source,
   streaming = false,
   whole = 0,
   baseDir,
@@ -639,6 +660,7 @@ function ChatMarkdownComponent({
   baseDir?: string | null;
   threadId?: string;
 }) {
+  const text = useMemo(() => unwrapUserTags(source), [source]);
   const style = useReplyStyle();
   const root = useRef<HTMLDivElement>(null);
   const seen = useRef(new WeakSet<Element>());
@@ -648,7 +670,7 @@ function ChatMarkdownComponent({
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
   const blocks = useMemo(() => {
-    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole) : [text];
+    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole, settleStreamTail) : [text];
     if (!split) return [text];
     const parts = streamBlocks(text);
     if (streaming) parts[parts.length - 1] = settleStreamTail(parts[parts.length - 1]);
@@ -656,7 +678,8 @@ function ChatMarkdownComponent({
   }, [split, text, streaming, style, whole]);
   useLayoutEffect(() => {
     const catchup = whole > previousWhole.current || whole >= text.length;
-    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup
+    const typing = blocks.length === 1 && !/\n[ \t]*\r?\n/.test(text);
+    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup && !typing
       && document.visibilityState === "visible" && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     for (const child of root.current?.children ?? []) {
       if (!seen.current.has(child) && fade) child.animate?.(

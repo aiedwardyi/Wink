@@ -9,11 +9,12 @@
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
 
@@ -30,7 +31,7 @@ export const MEMORY_MAX_BYTES = 24_000;
 /** Either budget this full puts a trim notice in the prompt, before anything is cut. */
 const MEMORY_WARN_SHARE = 0.8;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
-const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
 
 export const MEMORY_SEED = `# Memory
 
@@ -53,6 +54,29 @@ export function workspaceDir(botId: string): string {
   return join(WORKSPACES_DIR, botId);
 }
 
+function unlinkLinks(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) unlinkSync(path);
+    else if (stat.isDirectory()) unlinkLinks(path);
+  }
+}
+
+export function removeWorkspace(botId: string): void {
+  removeWorkspaceDir(workspaceDir(botId));
+}
+
+/** Electron's recursive rmSync empties the folder a junction points to, so links go first, as links. */
+export function removeWorkspaceDir(dir: string): void {
+  const stat = lstatSync(dir, { throwIfNoEntry: false });
+  if (!stat) return;
+  if (stat.isSymbolicLink()) return unlinkSync(dir);
+  unlinkLinks(dir);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 /** MEMORY.md under the load budget: first MEMORY_MAX_LINES lines or
  * MEMORY_MAX_BYTES bytes, whichever cuts first. Returns null when the file
  * is missing or effectively empty (seed-only counts as empty). `bytes` and
@@ -61,9 +85,12 @@ export function loadMemory(
   botId: string,
 ): { text: string; truncated: boolean; bytes: number; lines: number } | null {
   let raw: string;
+  const end = currentTurnTrace()?.span("memory_read", "MEMORY.md");
   try {
     raw = readFileSync(join(workspaceDir(botId), "MEMORY.md"), "utf8");
-  } catch {
+    end?.("read");
+  } catch (error) {
+    end?.((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error");
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
@@ -119,7 +146,7 @@ export function memoryRevision(text: string): string {
  * run a turn, and the write must not depend on that ordering. */
 export function writeMemoryFile(botId: string, text: string): void {
   ensureWorkspace(botId);
-  writeFileSync(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+  writeFileAtomic(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
 }
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
@@ -159,12 +186,14 @@ export function isMemoryTopicName(name: string): boolean {
  * one at a time so listing stays cheap however large the notes grow. */
 export function listMemoryTopics(botId: string): Array<{ name: string; bytes: number }> {
   let entries: string[];
+  const end = currentTurnTrace()?.span("memory_read", "topics");
   try {
     entries = readdirSync(join(workspaceDir(botId), "memory"));
-  } catch {
+  } catch (error) {
+    end?.((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error");
     return [];
   }
-  return entries
+  const topics = entries
     .filter(isMemoryTopicName)
     .flatMap((name) => {
       try {
@@ -175,6 +204,8 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
       }
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+  end?.(topics.length ? "listed" : "absent");
+  return topics;
 }
 
 export const MEMORY_LINE_MAX_BYTES = 300;
@@ -273,7 +304,8 @@ export function memorySystemPrompt(botId: string): string {
     ? `\n\n[Memory sync set aside a copy of your notes when two PCs changed them at once: ${parked.join(", ")}. Your file is the copy that won. The set-aside one may hold a note missing here, or an old one removed on purpose; its first line says when it was last edited. Copy back only notes that are still true and still wanted, then delete the copy.]`
     : "";
   if (!memory) return `${guidance}${conflicts}`;
-  const size = `MEMORY.md is ${memory.bytes} bytes in ${memory.lines} lines`;
+  // rounded up: a small edit keeps the pinned system text, and over budget never reads as under
+  const size = `MEMORY.md is about ${Math.ceil(memory.bytes / 1_000) * 1_000} bytes in about ${Math.ceil(memory.lines / 10) * 10} lines`;
   const budget = `the ${MEMORY_MAX_LINES}-line/${MEMORY_MAX_BYTES}-byte budget`;
   const trim = "move long notes into memory/<topic>.md files and leave one-line pointers.";
   const near =

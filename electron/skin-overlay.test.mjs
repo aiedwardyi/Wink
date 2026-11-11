@@ -18,7 +18,7 @@ const {
 } = require("./skin-overlay.cjs");
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(join(here, "../src/styles.css"), "utf8");
+const css = ["../src/styles.css", "../src/skins/fresh-dark.css"].map((file) => readFileSync(join(here, file), "utf8")).join("\n");
 const skinIds = readFileSync(join(here, "../src/lib/skins.ts"), "utf8");
 
 const scratchDirs = [];

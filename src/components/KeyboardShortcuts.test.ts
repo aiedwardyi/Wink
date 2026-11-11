@@ -80,7 +80,7 @@ describe("KeyboardShortcuts", () => {
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
       expect(html).toContain(">Cycle Model Index Tab (in Model Index)<");
-      expect(html).not.toContain(">Refresh Usage");
+      expect(html).toContain(">Refresh Usage (in Usage)<");
       expect(html).toContain(">Toggle Terminal<");
 
       persistPreference("ko");
@@ -88,7 +88,7 @@ describe("KeyboardShortcuts", () => {
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
       expect(ko).toContain(">모델 지표 탭 전환 (모델 지표 화면에서)<");
-      expect(ko).not.toContain(">사용량 새로 고침");
+      expect(ko).toContain(">사용량 새로고침 (사용량 화면에서)<");
       expect(ko).toContain(">터미널 열기 / 닫기<");
     } finally {
       delete win.ogb;
@@ -111,8 +111,8 @@ describe("KeyboardShortcuts", () => {
 
     expect(html).toContain(">Toggle Themes<");
     expect(html).toContain(">Toggle Usage<");
-    expect(html).not.toContain(">Refresh Usage");
-    expect(html).not.toContain('aria-label="Alt + R"');
+    expect(html).toContain(">Refresh Usage (in Usage)<");
+    expect(html).toContain('aria-label="Alt + R"');
     expect(html).not.toContain("New bot");
     expect(html).toContain("Switch to bot 1–9");
     expect(html).not.toContain("Previous bot");

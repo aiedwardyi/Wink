@@ -57,19 +57,19 @@ export function turnSummaries(hide?: (threadId: string, ids: string[]) => void) 
       if (phase === "commentary") turn.commentary.push(messageId);
       else if (phase === "final_answer") turn.final = true;
     },
-    settle(threadId: string, turnId: string | undefined): string[] {
+    settle(threadId: string, turnId: string | undefined, quiet = false): string[] {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
       if (turn.final && turn.commentary.length) hide?.(threadId, turn.commentary);
-      return turn.replied ? [] : turn.ids;
+      return turn.replied || quiet ? [] : turn.ids;
     },
   };
 }
 
 export function turnAddedMessage(messages: readonly Message[], start: number): boolean {
   return messages.slice(start).some((message) => {
-    if (message.role !== "bot" || message.summarized || message.kind === "compaction") return false;
+    if (message.role !== "bot" || message.summarized || message.kind === "compaction" || message.quick) return false;
     if (message.kind === "activity") {
       return Boolean(message.comm || message.tool?.ok === false || message.tool?.name.startsWith("error:") || message.tool?.name === "memory.save");
     }

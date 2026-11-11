@@ -6,6 +6,7 @@
 // readable.
 
 import type { ToolDetail } from "../shared/tool-detail.ts";
+import type { TurnTrace, UsageObserver } from "./turn-timing.ts";
 
 export type DriverKind = string;
 export type InstanceId = string;
@@ -121,9 +122,11 @@ export type RuntimeEvent = RuntimeEventBase &
         inputDigest?: string;
         /** Claude Code tool name, when the engine says the kind. */
         verb?: string;
+        /** files the call is changing, when the engine names them before it finishes */
+        writes?: string[];
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
-    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail }
+    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[] }
     | { type: "item.completed"; itemType: "assistant_text"; text: string; summarized?: boolean; phase?: "commentary" | "partial_answer" | "final_answer" }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {
@@ -159,7 +162,8 @@ export type RuntimeEvent = RuntimeEventBase &
     // the snapshot has no authenticated field.
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
+    // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider
@@ -188,6 +192,7 @@ export type RequestOutcome = "allowed-once" | "rejected" | "answered" | "unavail
 // the first turn (the agentcal per-turn-process model) with resumeCursor
 // carrying the provider-native continuation (e.g. a claude session id).
 export interface SendTurnInput {
+  trace?: TurnTrace;
   threadId: ThreadId;
   text: string;
   model?: string;
@@ -197,6 +202,8 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
+  /** A team room ask: its native session ends with the turn. */
+  hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
@@ -259,6 +266,9 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   depth: 0 | 1 | 2;
   captured: import("./drivers/warm-pool.ts").Captured;
 };
+
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it. */
+export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval">;
 
 export interface TurnStartResult {
   turnId: TurnId;
@@ -330,6 +340,9 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** End this running turn as a clean finish, through the driver's own
+   * interrupt. Absent = the turn runs on to its natural end. */
+  endTurn?(threadId: ThreadId, turnId: TurnId): Promise<void>;
   /** Answer a pending ask. Resolves with what actually happened — never
    * throws for an ask that is no longer there: `unavailable` means nobody
    * could take the answer (the turn ended, the broker died, the driver
@@ -364,6 +377,8 @@ export interface ProviderAdapter {
   /** True while the thread's live session still runs background work (a
    * backgrounded subagent or command) that would die with it. Absent = false. */
   hasBackgroundWork?(threadId: ThreadId): boolean;
+  /** Ends the thread's native session and resolves once it has exited. Only team room asks call it. */
+  endSession?(threadId: ThreadId): Promise<void>;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
 }
@@ -438,6 +453,30 @@ export interface DriverCreateInput<Config> {
   config: Config;
 }
 
+// ── read-only side fork (quick helper) ─────────────────────────────────
+export interface SideInput {
+  threadId: ThreadId;
+  text: string;
+  /** the main turn's open tools and written files (side-live-state.ts); a fork sends it ahead of `text` */
+  live?: string;
+}
+
+export type SideEvent =
+  | { type: "session"; id: string }
+  | { type: "text"; delta: string }
+  | { type: "tool"; name: string; path?: string }
+  /** files a Grep or Glob result listed */
+  | { type: "found"; paths: string[] }
+  | { type: "done"; ok: boolean; text: string; usage?: { input: number; output: number; cachedInput?: number } };
+
+/** One live fork process. What `live` names is swept at boot if Wink dies first. */
+export interface SideHandle {
+  readonly live: { pid: number; procStart: number; cwd: string; tempDir: string; forkSessionId?: string; configDir?: string; mcpLogDir?: string };
+  onEvent(listener: (event: SideEvent) => void): () => void;
+  /** Ends stdin, kills the tree after `graceMs` (0 = now); resolves once it exited and its temp dir is gone. */
+  close(graceMs?: number): Promise<void>;
+}
+
 export interface ProviderInstance {
   readonly account?: import("./account-policy.ts").AccountContext;
   accountBusy?(): boolean;
@@ -460,16 +499,18 @@ export interface ProviderInstance {
   snapshot(opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
   /** `ephemeral` asks the CLI not to keep a session transcript, `lean` to skip the owner's customizations, where it can. */
-  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; onUsage?: (tokens: number) => void }): Promise<string>;
+  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; onUsage?: UsageObserver }): Promise<string>;
   /** the model and default deadline generateText runs on, for telemetry */
   readonly textModel?: string;
   readonly textTimeoutMs?: number;
+  /** A read-only copy of the thread's live session answering one ask; null before the thread ever spawned. */
+  fork?(input: SideInput): SideHandle | null;
   /** Isolated, tool-free permission review on this same provider. Kept
    * separate from generateText so the UI never infers a security capability
    * from a generic helper that may expose prompts in argv or lack approvals. */
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
-  prepare?(turn?: PrepareTurn): Promise<void>;
+  prepare?(turn?: PrepareTurn, focus?: PrepareFocus): Promise<void>;
   /** The Captured this instance last computed itself (snapshot or capture), only while still current:
    *  same pool generation, non-empty identity, enabled, not disposed; otherwise null.
    *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.

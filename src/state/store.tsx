@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { sameModelSelection } from "../../shared/model-selection";
+import { isVoiceLine } from "../../shared/live-call";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -33,8 +34,9 @@ import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstC
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
-import { openLiveEvents } from "@/lib/live-events";
+import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -172,7 +174,7 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null;
       const selectedId =
         state.selectedId && known(state.selectedId)
           ? state.selectedId
@@ -205,6 +207,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...holdStopping({ ...hydrated, bots: applyOptimisticBusy(hydrated.bots, acceptedSends) }, action.bots),
         hydrated: true,
+        botsUnreadable: Boolean(action.botsUnreadable),
         acceptedSends,
         dismissedTaskRecovery: {
           ...hydrated.dismissedTaskRecovery,
@@ -288,6 +291,8 @@ export function reducer(state: AppState, action: Action): AppState {
         config: action.config,
       };
     case "select": {
+      // the slot's panels belong to the chat being left
+      if (action.id !== state.selectedId) state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
       // reselecting the conversation a workspace covers does not reveal it
       const covered = state.workspaceOpen && state.selectedId === action.id;
       if (state.groups.some((g) => g.id === action.id)) {
@@ -502,7 +507,7 @@ export function reducer(state: AppState, action: Action): AppState {
               : action.message.tool?.ok === true
                 ? "success"
                 : "working"
-            : action.message.role === "bot" && action.message.kind === "text"
+            : action.message.role === "bot" && action.message.kind === "text" && !isVoiceLine(action.message)
               ? "blink"
               : null;
       const animated = motion ? withMascotMotion(next, bot.id, motion) : next;
@@ -992,6 +997,7 @@ export const initialState: AppState = {
   connected: false,
   hasConnected: false,
   hydrated: false,
+  botsUnreadable: false,
   error: null,
   mascotMotion: null,
   pendingQueued: {},
@@ -2017,6 +2023,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           type: "hydrate",
           bots,
           groups: groups ?? [],
+          botsUnreadable: snapshot.botsUnreadable,
           sidebarOrder: loadSidebarOrder(),
         });
         // Snapshot has busy, not StreamState.signal. Without SSE replay a
@@ -2152,7 +2159,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (frame.message && streamResetFor(frame.message) === "reasoning") {
             clearReasoning(frame.threadId);
           }
-          if (frame.message?.role === "bot" && frame.message?.kind === "text") {
+          if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) {
             clearStream(frame.threadId);
             buzzOnReply(frame, stateRef.current, document.visibilityState === "visible");
             // Auto-speak lives HERE rather than in the chat view so a bot
@@ -2363,6 +2370,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
+      wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();

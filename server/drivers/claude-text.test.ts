@@ -32,7 +32,8 @@ describe("Claude text usage", () => {
     await create();
     const onUsage = vi.fn();
     await expect(instance.generateText!("cleanup", { lean: kind !== "plain", ephemeral: true, onUsage })).resolves.toBe("reply");
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith(9_717);
+    expect(onUsage).toHaveBeenLastCalledWith({ input: 8_665, output: 1_052, cachedInput: 2_238, cacheCreation: 6_425 });
+    expect(onUsage.mock.calls.filter(([usage]) => usage)).toHaveLength(1);
     for (const [, argv] of spawn.mock.calls) expect(argv[argv.indexOf("--output-format") + 1]).toBe("json");
   });
 

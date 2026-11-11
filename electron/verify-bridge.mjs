@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { VERIFY_BODY_LIMIT, VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_MAX_MS, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS } from "./verify-protocol.mjs";
+import { VERIFY_BODY_LIMIT, VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_MAX_MS, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, verifyLoopbackUrl } from "./verify-protocol.mjs";
 
 const botPattern = /^[a-zA-Z0-9_-]{1,128}$/;
 const runPattern = /^[a-z0-9-]{8,64}$/;
@@ -16,11 +16,13 @@ function relativeEntry(value) {
 }
 
 function canonicalRoot(root) {
+  if (verifyLoopbackUrl(root)?.href === root) return true;
   return typeof root === "string" && path.isAbsolute(root) && !/^[\\/]{2}/.test(root) && !/[\x00-\x1f%]/.test(root) && !root.includes(":", 2)
     && path.normalize(root) === root && path.parse(root).root !== root && root.slice(path.parse(root).root.length).split(/[\\/]/).every((p) => p && p !== "." && p !== ".." && !/[. ]$/.test(p));
 }
 
 function canonicalSite(root, entry) {
+  if (verifyLoopbackUrl(root)?.href === root) return entry === "index.html";
   if (!canonicalRoot(root) || !relativeEntry(entry)) return false;
   try {
     if (fs.realpathSync.native(root) !== root || !fs.statSync(root).isDirectory()) return false;

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
+import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -288,6 +289,8 @@ export class RoutineManager {
   private routines: Routine[] = [];
   private runs: RoutineRun[] = [];
   private routineRequestReceipts: RoutineRequestReceipt[] = [];
+  /** The file was there but did not load; the first save moves it aside instead of writing over it. */
+  private unloaded = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
 
@@ -324,10 +327,11 @@ export class RoutineManager {
             Number.isFinite(receipt?.appliedAt)
           )
         : [];
-    } catch {
+    } catch (error) {
       this.routines = [];
       this.runs = [];
       this.routineRequestReceipts = [];
+      this.unloaded = !(error instanceof Error && "code" in error && error.code === "ENOENT");
     }
     // A local process cannot still own these turns after a full restart.
     const recovered: RoutineRun[] = [];
@@ -934,13 +938,15 @@ export class RoutineManager {
 
   private save() {
     mkdirSync(dirname(this.file), { recursive: true });
-    const temp = `${this.file}.tmp`;
-    writeFileSync(temp, JSON.stringify({
+    if (this.unloaded) {
+      setAsideFile(this.file);
+      this.unloaded = false;
+    }
+    writeFileAtomic(this.file, JSON.stringify({
       version: 1,
       routines: this.routines,
       runs: this.runs,
       routineRequestReceipts: this.routineRequestReceipts,
     } satisfies RoutineFile, null, 2));
-    renameSync(temp, this.file);
   }
 }

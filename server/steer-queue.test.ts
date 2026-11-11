@@ -70,6 +70,7 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
   return {
     messages,
     bot: (id) => bots.find((b) => b.id === id) ?? null,
+    messagesFor: () => messages,
     appendMessage: (threadId, message) => {
       const full: Message = { id: `m${(nextId += 1)}-${threadId}`, at: Date.now(), ...message };
       messages.push(full);

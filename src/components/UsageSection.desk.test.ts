@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeIdentityCanary, scanForCanary, type IdentityCanary } from "@/lib/identity-canary";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardSample } from "@/lib/usage-board";
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 
 const h = vi.hoisted(() => ({
   state: { bots: [] as unknown[], instances: [] as unknown[], terminalPanes: {} as Record<string, string[]> },
@@ -108,7 +108,7 @@ const live = (node: Element) => !node.closest("[aria-hidden]");
 const visible = (engine = "claude") => [...section(engine)?.querySelectorAll("[data-account-row]") ?? []].filter(live).map((node) => node.getAttribute("data-account-row") ?? "");
 const viewed = (engine = "claude") => visible(engine).at(-1) ?? null;
 const column = (name: string, engine = "claude") => section(engine)?.querySelector(`[data-account-column="${name}"]`) ?? null;
-const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold]):not([data-usage-grip])") ?? []];
+const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold])") ?? []];
 const picker = (engine = "claude") => [...section(engine)?.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? []].find(live) ?? null;
 const fold = (engine = "claude") => section(engine)?.querySelector<HTMLButtonElement>("button[data-engine-fold]") ?? null;
 // The phrases sit apart by a CSS gap, not a space, so join them as they read.
@@ -229,6 +229,16 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it.each(["en", "ko"] as const)("omits the OpenAI credit row from Usage in %s", async (locale) => {
+  const codex = engineOf(server.board, "codex");
+  codex.accounts.push({ ...codex.accounts[0]!, id: "codex-credit", name: "OpenAI credit", number: 3,
+    main: false, credit: true, windows: [], bots: [], workers: [] });
+  await mount({ locale });
+  expect(row("codex-credit")).toBeNull();
+  expect(host.textContent).not.toContain("OpenAI credit");
+  expect(row("codex")).not.toBeNull();
+});
+
 // Points every 5 minutes ending at `end`, used % climbing by `rate` per minute.
 function trail(end: number, count: number, endUsed: number, rate: number, step = 5): UsageBoardSample[] {
   return Array.from({ length: count }, (_, i) => {
@@ -293,7 +303,7 @@ describe("Usage desk", () => {
     const folds = [...host.querySelectorAll("button[data-engine-fold]")];
     expect(folds).toHaveLength(4);
     for (const node of folds) await click(node);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect(host.querySelectorAll("[data-engine-summary]")).toHaveLength(4);
     expect(q("[data-account-row]")).toBeNull();
     scan("every engine folded");
@@ -372,6 +382,14 @@ describe("Usage desk", () => {
     await click(useButton(CODEX_2));
     expect(mainPosts()).toHaveLength(2);
     expect(mainPosts()[1]).toBe(`POST /api/accounts/${encodeURIComponent(CODEX_2)}/default`);
+  });
+
+  it.each([["main-model", "usage.desk.mainModel"], ["main-effort", "usage.desk.mainEffort"], ["main-unavailable", "usage.desk.mainUnavailable"]])("says why the save was refused (%s)", async (code, key) => {
+    server.post = async () => { throw Object.assign(new Error("raw server text"), { code, bot: "Atlas" }); };
+    await mount();
+    await click(useButton(CLAUDE_3));
+    expect(text(q('[role="alert"]'))).toBe(i18n.translate("en", key as never, { bot: "Atlas" }));
+    expect(checkRow()).toBe("claude");
   });
 
   it.each(["500 Internal Server Error", "409 Conflict"])("keeps Main and shows a safe error when the save fails (%s)", async (status) => {
@@ -678,6 +696,97 @@ describe("Usage desk", () => {
     }],
   });
 
+  it.each([false, true])("checks Muse once after a manual refresh has no observation (phone=%s)", async (phone) => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    await mount({ phone });
+    const api = h.api;
+    const check = deferred<unknown>();
+    const report = { observedAt: new Date(usageBoardNow).toISOString(), windows: [
+      { ...accountOf(server.board, "muse").windows[0]!, usedPercent: 0 },
+      { ...accountOf(server.board, "muse").windows[1]!, usedPercent: 20 },
+    ] };
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse" || path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        return path.includes("/check/") ? check.promise : { status: "no_observation" };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(true);
+    accountOf(server.board, "muse").windows = report.windows;
+    accountOf(server.board, "muse").observedAt = usageBoardNow;
+    server.board.revision++;
+    await act(async () => {
+      check.resolve({ status: "fresh", report });
+      (await client()).usageBoardFrame(server.board.revision);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(h.dispatched).toContainEqual({ type: "rateLimits", instanceId: "muse", report, identity: canary.address });
+    expect(left("muse", "five_hour")).toBe("100% left");
+    expect(left("muse", "seven_day")).toBe("80% left");
+    expect(q("[role=alert]")).toBeNull();
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("spends no Muse turn when manual refresh returns a fresh reading", async () => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount();
+    const api = h.api;
+    h.api = async (path, init) => path === "/api/usage/refresh/muse" ? { status: "fresh" } : api(path, init);
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it("never checks Muse automatically on mount, tab return or reopen", async () => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (!path.startsWith("/api/usage/refresh/")) return api(path, init);
+      server.calls.push(`${init?.method} ${path}`);
+      return { status: "no_observation" };
+    };
+    await mount();
+    const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
+    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    await act(async () => root.render(createElement(QuickRefresh)));
+    await settle();
+    expect(server.calls).toContain("POST /api/usage/refresh/muse");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await unmount();
+    await mount();
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it.each(["transport_error", "auth_error", "no_observation", "limit_reached", "reject", "auth_error_ko"])("keeps Muse's reading when its check returns %s", async (outcome) => {
+    const locale = outcome === "auth_error_ko" ? "ko" : "en";
+    const status = outcome === "auth_error_ko" ? "auth_error" : outcome;
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount({ locale });
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse") return { status: "no_observation" };
+      if (path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        if (status === "reject") throw new Error("offline");
+        return { status, ...(status.endsWith("error") ? { error: status === "auth_error" ? "Sign in again in Muse" : "Could not refresh Muse limits" } : {}) };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(left("muse", "seven_day")).toBe(locale === "ko" ? "39% 남음" : "39% left");
+    expect(h.dispatched).toEqual([]);
+    expect(Boolean(q("[role=alert]"))).toBe(status.endsWith("error") || status === "reject");
+    if (status === "auth_error") expect(text(q("[role=alert]"))).toBe(locale === "ko" ? "Muse에서 다시 로그인하세요" : "Sign in again in Muse");
+  });
+
   it("keeps every reported window and Muse", async () => {
     const board = fresh();
     accountOf(board, "claude").windows.push({ id: "seven_day_opus", kind: "week", usedPercent: 75, resetsAt: usageBoardNow + 2 * 1440 * MIN, windowMinutes: 10080 });
@@ -824,28 +933,61 @@ describe("Usage desk", () => {
     expect(row("claude")?.querySelector('[data-window="session"] [data-cells]')?.getAttribute("data-cells")).toBe("3");
   });
 
-  it.each(["en", "ko"] as const)("drops Refresh All, Used/Remaining and Alt+R in both languages (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("keeps Refresh All and Used/Remaining gone and refreshes on Alt+R in both languages (%s)", async (locale) => {
     await mount({ locale });
     expect(q("[data-usage-desk]")).not.toBeNull();
     const labels = [...host.querySelectorAll("button")].map((button) => `${text(button)}|${button.getAttribute("aria-label") ?? ""}`);
     for (const key of ["usage.limits.countUp", "usage.limits.countDown"]) {
       expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(true);
     }
-    expect(host.querySelector('[aria-keyshortcuts="Alt+R"]')).toBeNull();
-    const before = server.calls.length;
-    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true })); });
-    expect(server.calls.slice(before).filter((call) => call.startsWith("POST /api/usage/"))).toEqual([]);
+    const button = q("[data-usage-refresh]");
+    expect(button?.getAttribute("aria-keyshortcuts")).toBe("Alt+R");
+    expect(button?.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
+    const gate = deferred<unknown>();
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (!path.startsWith("/api/usage/refresh/")) return api(path, init);
+      server.calls.push(`${init?.method} ${path}`);
+      return gate.promise;
+    };
+    const posts = () => server.calls.filter((call) => call.startsWith("POST /api/usage/"));
+    const altR = async (init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key: "r", code: "KeyR", altKey: true, bubbles: true, cancelable: true, ...init });
+      await act(async () => { window.dispatchEvent(event); await vi.advanceTimersByTimeAsync(0); });
+      return event.defaultPrevented;
+    };
+    const before = posts().length;
+    for (const init of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: false }, { code: "AltRight", key: "Alt" }]) {
+      expect(await altR(init), JSON.stringify(init)).toBe(false);
+    }
+    expect(posts().length, "ignored keys").toBe(before);
+    expect(await altR()).toBe(true);
+    const pressed = posts().slice(before);
+    expect(pressed.length).toBeGreaterThan(0);
+    expect(button?.hasAttribute("disabled")).toBe(true);
+    expect(button?.querySelector("svg")?.classList.contains("motion-safe:animate-spin")).toBe(true);
+    expect(await altR(), "ignored while pending").toBe(false);
+    await act(async () => { gate.reject(new Error("offline")); await vi.advanceTimersByTimeAsync(0); });
+    expect(text(q("[role=alert]"))).toBe(i18n.translate(locale, "usage.desk.refreshFailed"));
+    const clicked = posts().length;
+    h.api = async (path, init) => path.startsWith("/api/usage/refresh/") ? (server.calls.push(`${init?.method} ${path}`), {}) : api(path, init);
+    await click(button);
+    expect(posts().slice(clicked), "same accounts as the button").toEqual(pressed);
+    await unmount();
+    const shut = posts().length;
+    expect(await altR(), "Usage shut").toBe(false);
+    expect(posts().length).toBe(shut);
     const { en, ko } = await import("@/lib/i18n-catalog");
     for (const catalog of [en, ko]) {
-      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll"]) {
-        expect(key in catalog, key).toBe(false);
-      }
+      expect("usage.limits.refreshAll" in catalog).toBe(false);
+      expect("shortcuts.usageRefresh" in catalog).toBe(true);
     }
     const { KeyboardShortcuts } = await import("./KeyboardShortcuts");
     const shortcuts = document.createElement("div");
     const shortcutsRoot = createRoot(shortcuts);
     await act(async () => shortcutsRoot.render(createElement(i18n.I18nProvider, null, createElement(KeyboardShortcuts))));
-    expect(text(shortcuts)).not.toContain(locale === "en" ? "Refresh Usage" : "사용량 새로 고침");
+    expect(text(shortcuts)).toContain(locale === "en" ? "Refresh Usage (in Usage)" : "사용량 새로고침 (사용량 화면에서)");
+    expect(shortcuts.querySelector('[aria-label="Alt + R"]')).not.toBeNull();
     expect(text(shortcuts)).toContain(locale === "en" ? "Toggle Usage" : "사용량 열기");
     await act(async () => shortcutsRoot.unmount());
   });
@@ -908,7 +1050,7 @@ describe("Usage desk", () => {
       ? [[2, true], [2, true], [0, false], [0, false]]
       : [[2, true], [0, false], [0, false], [0, false]]);
     for (const engine of engines) {
-      const box = section(engine)?.querySelector('[role="group"]');
+      const box = section(engine)?.querySelector('[role="group"]:not([data-engine-head])');
       const grid = box?.querySelector("[data-account-column]")?.parentElement ?? box;
       expect(grid?.classList.contains("grid-cols-2"), engine).toBe(!phone && (engine === "claude" || engine === "codex"));
       expect([...grid?.children ?? []].map((node) => node.getAttribute("data-account-column")), engine)
@@ -1072,7 +1214,7 @@ describe("Usage desk", () => {
     expect(stored()).toEqual({ "codex-work": true, claude: true });
     expect(arrows()).toHaveLength(0);
     expect([content("codex")?.getAttribute("data-fold"), content("codex")?.hasAttribute("inert"), content("codex")?.contains(row("codex"))]).toEqual(["closing", true, true]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect([content("codex")?.hidden, content("codex")?.childElementCount, content("claude")?.hidden]).toEqual([true, 0, true]);
     expect([row("codex"), row(CODEX_2), row("claude")]).toEqual([null, null, null]);
     expect([summary("codex"), summary()]).toEqual(["7d 62% left", "5h 34% left · 7d 59% left"]);

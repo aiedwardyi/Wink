@@ -13,14 +13,19 @@ export interface TeamTokenSource {
 
 const denied = { status: 403, body: { owner: false } };
 
-/** Enrolled base wins. A baked value may be a base or an https relay origin. */
-export function teamRelayOrigin(enrolledBase: string | null, baked: string | null): string | null {
-  const chosen = (enrolledBase || baked || "").trim().toLowerCase();
+/** A base or an https relay origin, as baked, to its base. */
+export function teamRelayBase(value: string | null): string | null {
+  const chosen = (value || "").trim().toLowerCase();
   if (!chosen || chosen.startsWith("http://")) return null;
   const host = (chosen.startsWith("https://") ? chosen.slice("https://".length) : chosen).split("/")[0] ?? "";
   const base = host.startsWith("relay.") ? host.slice("relay.".length) : host;
-  if (!RELAY_BASE_RE.test(base)) return null;
-  return `https://${relayHostFor(base)}`;
+  return RELAY_BASE_RE.test(base) ? base : null;
+}
+
+/** Enrolled base wins. A baked value may be a base or an https relay origin. */
+export function teamRelayOrigin(enrolledBase: string | null, baked: string | null): string | null {
+  const base = teamRelayBase(enrolledBase || baked);
+  return base ? `https://${relayHostFor(base)}` : null;
 }
 
 /** sha256 hex of the trimmed lowercase email. The bake stores this, never the email. */

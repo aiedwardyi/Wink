@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,7 +91,7 @@ describe("Usage account cap", () => {
     expect(rows()).toEqual(ids());
     expect(button()?.textContent).toBe(locale === "ko" ? "접기" : "Show less");
     expect(button()?.getAttribute("aria-expanded")).toBe("true");
-    expect(section().querySelector("[role=group]")?.lastElementChild?.contains(button())).toBe(true);
+    expect(section().querySelector("[role=group]:not([data-engine-head])")?.lastElementChild?.contains(button())).toBe(true);
     await click(button());
     expect(rows()).toEqual(ids().slice(0, 3));
   });
@@ -181,5 +184,48 @@ describe("Usage account cap", () => {
     const quick = document.querySelector("[data-usage-quick]")!;
     expect([...quick.querySelectorAll("[data-account-row]")].map((each) => each.getAttribute("data-account-row"))).toEqual(ids());
     expect(quick.querySelector("[data-accounts-cap]")).toBeNull();
+  });
+});
+
+describe("motion", () => {
+  const quick = (closing: boolean) => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    return act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose: vi.fn(), closing,
+    }))));
+  };
+  const scrim = () => document.querySelector<HTMLElement>('body > div[aria-hidden="true"].bg-black\\/45');
+
+  it("fades the phone scrim in, and out with the view, taking no taps while it goes", async () => {
+    await quick(false);
+    expect(scrim()?.classList.contains("animate-fade-in")).toBe(true);
+    expect(scrim()?.hasAttribute("data-closing")).toBe(false);
+    await quick(true);
+    for (const part of [scrim(), document.querySelector("[data-usage-quick]")]) {
+      expect(part?.hasAttribute("data-closing")).toBe(true);
+      expect(part?.hasAttribute("inert")).toBe(true);
+    }
+  });
+
+  it("fades the desk in when the board arrives after loading, not when it is already there", async () => {
+    const desk = () => host.querySelector("[data-usage-desk]")!;
+    h.state = { board: null, status: "loading", pending: {}, failed: new Set() } as unknown as UsageBoardState;
+    await render();
+    expect(desk().classList.contains("animate-fade-in")).toBe(false);
+    h.state = { board, status: "ready", pending: {}, failed: new Set() };
+    await render();
+    expect(desk().classList.contains("animate-fade-in")).toBe(true);
+    await reopen();
+    expect(desk().classList.contains("animate-fade-in")).toBe(false);
+  });
+});
+
+describe("show more row", () => {
+  it("is clickable across the whole row", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "UsageDesk.css"), "utf8");
+    expect(css).toMatch(/^\.usage-cap \{ padding: 0; \}$/m);
+    expect(css).toMatch(/^\.usage-cap button \{ width: 100%;[^}]*padding: 6px 12px 8px;/m);
   });
 });

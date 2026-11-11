@@ -17,13 +17,13 @@ it("L6: the Korean weekly line says the limit is still reached", () => {
   expect(translate("ko", "chat.usageWaitWeekly", { time: "금 3:40" })).toContain("아직");
 });
 
-async function mount(locale: LocaleId, view?: UsageWaitView, onRetry?: () => void) {
+async function mount(locale: LocaleId, view?: UsageWaitView, onRetry?: () => void, model?: boolean) {
   localStorage.setItem("omb-locale", locale);
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   const reset = Date.now() + 60 * 60_000;
   const render = async (usageWait?: UsageWaitView) => act(async () => root.render(createElement(I18nProvider, null,
-    createElement(ErrorRow, { botId: "bot", message: "Provider detail", usageLimit: { resetsAt: reset }, usageWait, onRetry }))));
+    createElement(ErrorRow, { botId: "bot", message: "Provider detail", usageLimit: { resetsAt: reset, model }, usageWait, onRetry }))));
   await render(view);
   return { host, render, reset, close: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
@@ -78,6 +78,15 @@ it.each(["en", "ko"] as const)("M5: untracked and ACP limits retain their reset 
   } finally { await view.close(); }
 });
 
+it.each([["en", false], ["en", true], ["ko", false], ["ko", true]] as const)("a per-model cap gets its own body in %s (model %s)", async (locale, model) => {
+  const view = await mount(locale, undefined, undefined, model);
+  try {
+    const [shown, hidden] = model ? ["chat.usageLimitModelBody", "chat.usageLimitBody"] as const : ["chat.usageLimitBody", "chat.usageLimitModelBody"] as const;
+    expect(view.host.textContent).toContain(translate(locale, shown));
+    expect(view.host.textContent).not.toContain(translate(locale, hidden));
+  } finally { await view.close(); }
+});
+
 it("Cancel calls the scoped route and a foreign owner's projection stays read-only", async () => {
   const fetch = vi.fn(async () => Response.json({ ok: true }));
   vi.stubGlobal("fetch", fetch);
@@ -91,5 +100,12 @@ it("Cancel calls the scoped route and a foreign owner's projection stays read-on
     expect(view.host.textContent).toContain("Resumes at");
     expect(view.host.textContent).not.toContain(translate("en", "chat.cancelQueuedAction"));
     expect(actions(view.host)).toHaveLength(0);
+  } finally { await view.close(); }
+});
+
+it("fades the wait card in as it arrives", async () => {
+  const view = await mount("en", base);
+  try {
+    expect(view.host.querySelector("[data-usage-wait]")!.parentElement!.classList.contains("animate-fade-in")).toBe(true);
   } finally { await view.close(); }
 });

@@ -55,6 +55,8 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
+import { JoinedRoomList } from "./JoinedRoomList";
+import { TeamRoomDialogs, TeamRoomMenuItems } from "./TeamRoomMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   displaySidebarWidth,
@@ -104,6 +106,7 @@ import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { DeviceSwitcher } from "./DeviceSwitcher";
+import { ChoosePcLink } from "./ChoosePcLink";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
@@ -605,6 +608,8 @@ export function Sidebar({
   onOverlayChange,
   onTerminalAttention,
   rigidView = false,
+  folded = false,
+  onUnfold,
 }: {
   open: boolean;
   onClose: () => void;
@@ -612,6 +617,9 @@ export function Sidebar({
   onTerminalAttention?: (attention: TerminalAttention) => void;
   /** The view beside the sidebar must not resize mid-animation (terminal PTYs, native views). */
   rigidView?: boolean;
+  /** A right slot panel is open: show faces only, leaving the saved layout as it is. */
+  folded?: boolean;
+  onUnfold?: () => void;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -654,7 +662,8 @@ export function Sidebar({
   const roomSectionPickerPresence = usePresence(roomSectionPicker);
   const wizardPresence = usePresence(wizard);
   const [query, setQuery] = useState("");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [savedCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const sidebarCollapsed = savedCollapsed || folded;
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
@@ -707,7 +716,7 @@ export function Sidebar({
   }, [open]);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const sidebarWidthRef = useRef(sidebarWidth);
-  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  const sidebarCollapsedRef = useRef(savedCollapsed);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const focusSearchAfterExpand = useRef(false);
   const resizeFrom = useRef<{ x: number; width: number; collapsed: boolean; query: string } | null>(null);
@@ -902,6 +911,7 @@ export function Sidebar({
   }, [sidebarCollapsed]);
 
   const toggleCollapsed = () => {
+    if (folded) return onUnfold?.();
     if (sidebarCollapsed) focusSearchAfterExpand.current = true;
     const next = { width: sidebarWidthRef.current, collapsed: !sidebarCollapsed };
     applySidebarLayout(next);
@@ -1526,7 +1536,8 @@ export function Sidebar({
         onPointerCancel={onSidebarResizeCancel}
         onKeyDown={onSidebarResizeKeyDown}
         className={cn(
-          "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60 md:block",
+          "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60",
+          !folded && "md:block",
           sidebarOnRight ? "left-0" : "right-0",
         )}
       />
@@ -1635,6 +1646,7 @@ export function Sidebar({
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
                   </button>
+                  <TeamRoomMenuItems onPick={() => setPlusOpen(false)} />
                   {showNewMenuExport() && <button
                     onClick={() => {
                       setPlusOpen(false);
@@ -1673,6 +1685,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={() => {
+              if (folded) onUnfold?.();
               const next = { width: sidebarWidthRef.current, collapsed: false };
               applySidebarLayout(next);
               persistSidebarLayout(next);
@@ -1778,6 +1791,7 @@ export function Sidebar({
               </div>
             );
           })}
+          <JoinedRoomList density={density} />
           <SearchResults query={query} onLanded={() => setQuery("")} />
           <span className="sr-only" aria-live="polite">{reorderAnnouncement}</span>
         </div>
@@ -1785,6 +1799,7 @@ export function Sidebar({
 
       {/* Footer */}
       <div className={cn("min-w-0 overflow-x-hidden pb-3 pt-2", density === "icons" ? "px-2" : "px-3")} data-sidebar-footer>
+        <ChoosePcLink iconOnly={density === "icons"} />
         {density === "icons" && (
           <div className="flex min-h-10 items-center justify-center" data-sidebar-update>
             <UpdateButton />
@@ -1885,6 +1900,7 @@ export function Sidebar({
       {wizardPresence.value && (
         <GroupWizard closing={wizardPresence.closing} onClose={() => setWizard(false)} />
       )}
+      <TeamRoomDialogs />
       <Presence open={archivedBotsOpen}>
         {(closing) => (
           <ArchivedBotsPanel

@@ -118,14 +118,14 @@ describe("harness playbook", () => {
     expect(prompt).toContain("CURRENT gets at most one short follow-up on");
     expect(prompt).toContain("anything more goes to a FRESH worker in the same worktree");
     expect(prompt).toContain("Default workers to high effort");
-    expect(prompt.replace(/\s+/g, " ")).toContain("Only when the user turns max mode on, use max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code audits only.");
+    expect(prompt.replace(/\s+/g, " ")).toContain("Only when the user turns max mode on, use max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code audits only, at xhigh.");
     expect(prompt.replace(/\s+/g, " ")).toContain("Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
   });
 
   it("writes the built list before building and quotes it in cards", () => {
     const prompt = harnessPlaybookPrompt(true).replace(/\s+/g, " ");
     expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
-    expect(prompt).toContain("## Already built - The built.md lines this touches and the live files to open first.");
+    expect(prompt).toContain("## Already built - The built.md lines and status-board decisions this touches, and the live files to open first.");
   });
 
   it("logs every walk snag to one shared list", () => {

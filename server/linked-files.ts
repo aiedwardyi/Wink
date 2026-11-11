@@ -1,6 +1,6 @@
 // Linked media may leave the bot's output roots, excluding private and system folders.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, realpathSync, statSync } from "node:fs";
+import { createReadStream, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { basename, dirname, isAbsolute, join, parse, relative } from "node:path";
 import { pipeline } from "node:stream";
@@ -41,6 +41,8 @@ const SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const GRANT_KEY = randomBytes(32);
 const GRANT_MS = 60 * 60_000;
+const FOLDER_FILES = 200;
+const SYSTEM_NAMES = new Set(["desktop.ini", "thumbs.db"]);
 
 export interface LinkedMessage {
   id: string;
@@ -61,7 +63,14 @@ export interface ServeLinkedFileOptions {
   rootsFor(message: LinkedMessage): readonly string[];
 }
 
-function sendJson(res: ServerResponse, status: number, body: { error: string; deviceId?: string; reason?: "outside" }): void {
+interface LinkedFolderFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: number;
+}
+
+function sendJson(res: ServerResponse, status: number, body: { error: string; deviceId?: string; reason?: "outside" } | { files: LinkedFolderFile[]; more: number }): void {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -105,7 +114,7 @@ function localFilePath(href: string): string | null {
       return null;
     }
   }
-  return absolutePath(decodeHref(href));
+  return absolutePath(decodeHref(href.replace(/[#?].*$/, "")));
 }
 
 function resolveRelativePath(href: string, base: string): string | null {
@@ -178,6 +187,11 @@ function nameForms(filePath: string): string[] {
   return name ? [...new Set([name, encodeURI(name), encodeURIComponent(name)])] : [];
 }
 
+// A bot may escape only the spaces of a Korean name, which is none of nameForms.
+function decodedRuns(text: string): string {
+  return text.includes("%") ? text.replace(/(?:%[0-9a-f]{2})+/gi, decodeHref) : text;
+}
+
 function contentDisposition(name: string, attachment: boolean): string {
   const fallback = name.replace(/[^\x20-\x7E]/g, "_").replaceAll("\\", "_").replaceAll("\"", "") || "file";
   const encoded = encodeURIComponent(name).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -208,17 +222,55 @@ function outsideMedia(real: string): boolean {
   if (!mediaType(real) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
+  return !systemFolder(real);
+}
+
+function systemFolder(real: string): boolean {
+  const normalized = real.replaceAll("\\", "/").toLowerCase();
   const system = [
     process.env.WINDIR, process.env.SystemRoot, process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.ProgramData,
     ...["Windows", "Program Files", "Program Files (x86)", "ProgramData"].map((folder) => join(parse(real).root, folder)),
   ];
-  return !system.some((root) => {
+  return system.some((root) => {
     if (!root) return false;
     let canonical = root;
     try { canonical = realpathSync(root); } catch { /* folder may not exist */ }
     const prefix = canonical.replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
     return normalized === prefix || normalized.startsWith(`${prefix}/`);
   });
+}
+
+function listable(name: string): boolean {
+  return name !== "" && !name.startsWith(".") && !name.startsWith("~$") && !SYSTEM_NAMES.has(name.toLowerCase());
+}
+
+/** The real path of a linked folder inside one of its message's roots, or null. */
+function folderGrant(folder: string, roots: readonly string[]): string | null {
+  try {
+    const real = realpathSync(folder);
+    const root = roots.find((root) => insideRoot(real, [root]));
+    if (!root || !statSync(real).isDirectory() || systemFolder(real)) return null;
+    // A root may be a whole home folder, whose dot folders and AppData stay private.
+    const from = relative(realpathSync(root), real).split(/[\\/]/);
+    return from.some((part) => part.startsWith(".") || part.toLowerCase() === "appdata") ? null : real;
+  } catch {
+    return null;
+  }
+}
+
+function linkingMessages(options: ServeLinkedFileOptions, target: string, folder = false): { id: string; roots: readonly string[] }[] {
+  const forms = nameForms(target);
+  const hits: { id: string; roots: readonly string[] }[] = [];
+  for (const message of options.messages) {
+    if (message.role !== undefined && message.role !== "bot") continue;
+    const text = message.text ?? "";
+    // Parsing every message of a long chat took seconds; only a message naming the file can link it.
+    if (!forms.some((form) => text.includes(form)) && !(forms[0] && decodedRuns(text).includes(forms[0]))) continue;
+    const roots = options.rootsFor(message);
+    if (!linkTargets(text, roots).some((link) => samePath(folder ? link.replace(/[\\/]+$/, "") : link, target))) continue;
+    hits.push({ id: message.id, roots });
+  }
+  return hits;
 }
 
 function byteRange(header: string | undefined, size: number): { start: number; end: number } | "all" | "bad" {
@@ -330,17 +382,10 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     sendJson(res, 404, { error: "not found" });
     return;
   }
-  const forms = nameForms(requested);
-  const hits: { id: string; roots: readonly string[] }[] = [];
-  for (const message of options.messages) {
-    if (message.role !== undefined && message.role !== "bot") continue;
-    const text = message.text ?? "";
-    // Parsing every message of a long chat took seconds; only a message naming the file can link it.
-    if (!forms.some((form) => text.includes(form))) continue;
-    const roots = options.rootsFor(message);
-    if (!linkTargets(text, roots).some((target) => samePath(target, requested))) continue;
-    hits.push({ id: message.id, roots });
-  }
+  let hits = linkingMessages(options, requested);
+  // A file directly inside a linked folder counts as linked.
+  const folder = hits.length || !listable(basename(requested)) ? "" : dirname(requested);
+  if (folder) hits = linkingMessages(options, folder, true);
   if (!hits.length) {
     sendJson(res, 404, { error: "not found" });
     return;
@@ -360,6 +405,13 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   const roots = hits.flatMap((hit) => hit.roots);
+  if (folder) {
+    const parent = folderGrant(folder, roots);
+    if (!parent || !samePath(dirname(real), parent) || !listable(basename(real))) {
+      sendJson(res, 404, { error: "not found" });
+      return;
+    }
+  }
   const inRoot = insideRoot(real, roots);
   if (!inRoot && !outsideMedia(real)) {
     let file = false;
@@ -383,7 +435,8 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
         sendJson(res, 404, { error: "not found" });
         return;
       }
-      if (!insideRoot(real, [folder]) || !insideRoot(real, roots)) {
+      if (!insideRoot(real, [folder]) || !insideRoot(real, roots) ||
+          relative(folder, real).split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".pnpm")) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -409,6 +462,36 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
   const filePath = asset || requested;
   const mime = (inRoot ? mediaType(filePath) : mediaType(real)) ?? (html || asset ? assetType(filePath) : null);
   sendFile(req, res, real, size, mime ?? "application/octet-stream", mime === null, scoped ? `${prefix}${encodeURIComponent(requested)}/${key}/` : undefined);
+}
+
+export function serveLinkedFolder(req: IncomingMessage, res: ServerResponse, options: ServeLinkedFileOptions): void {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (!options.phoneSession && !apiRequestAuthorized(options.bearerOk, header(req.headers.cookie), options.remoteKey, url.pathname)) {
+    sendJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+  const requested = (url.searchParams.get("path") ?? "").replace(/(?<=.)[\\/]+$/, "");
+  // UNC and device paths can block realpath on a network share.
+  const roots = /^[\\/]{2}/.test(requested) ? [] : linkingMessages(options, requested, true).flatMap((hit) => hit.roots);
+  const real = roots.length ? folderGrant(requested, roots) : null;
+  let entries: Dirent[] | null = null;
+  try {
+    if (real) entries = readdirSync(real, { withFileTypes: true });
+  } catch { /* folder disappeared */ }
+  if (!real || !entries) {
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  const files: LinkedFolderFile[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !listable(entry.name)) continue;
+    try {
+      const stat = statSync(join(real, entry.name));
+      files.push({ name: entry.name, path: join(requested, entry.name), size: stat.size, modified: stat.mtimeMs });
+    } catch { /* file disappeared */ }
+  }
+  files.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
+  sendJson(res, 200, { files: files.slice(0, FOLDER_FILES), more: Math.max(0, files.length - FOLDER_FILES) });
 }
 
 function htmlPolicy(req: IncomingMessage, scope: string): string {

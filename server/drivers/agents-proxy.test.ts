@@ -39,6 +39,7 @@ let lastShowImageBody: any = null;
 let lastAskUserBody: any = null;
 let lastGenerateImageBody: any = null;
 let lastCallApiBody: any = null;
+let lastReactBody: any = null;
 let lastRoutineQuery = "";
 let routinesResponse: unknown = {
   now: "2026-08-28T10:30:00.000Z",
@@ -172,6 +173,16 @@ beforeAll(async () => {
           return res.end(JSON.stringify({ alreadyConfigured: true, label: "OpenAI API Key" }));
         }
         res.end(JSON.stringify({ messageId: "msg-key", label: "Gemini API Key" }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/react") {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        lastReactBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
       });
       return;
     }
@@ -366,7 +377,19 @@ describe("agents-proxy MCP surface", () => {
       "propose_routine",
       "propose_routine_action",
       "set_keep_going",
+      "no_reply_needed",
     ]);
+  });
+
+  it("ends a quiet turn with no_reply_needed without calling Wink", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "no_reply_needed");
+    expect(tool.inputSchema).toEqual({ type: "object", additionalProperties: false, properties: {} });
+    lastKeepGoingBody = null;
+    const result = await callTool("no_reply_needed", {});
+    expect(result.result.isError).toBe(false);
+    expect(result.result.content[0].text).toBe("ok");
+    expect(lastKeepGoingBody).toBeNull();
   });
 
   it("sets keep going through the harness and passes its refusal back", async () => {
@@ -980,6 +1003,32 @@ describe("agents-proxy MCP surface", () => {
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("lists one short row per routine and the full record for routine_id", async () => {
+    const routine = (id: string, extra: object) => ({
+      id, name: `Brief ${id}`, instructions: "Summarize today's priorities. ".repeat(40), instructionsTruncated: false, enabled: true, runOn: "local", durationMinutes: 30,
+      schedule: { type: "weekly", time: "09:00", weekdays: ["monday", "friday"] }, nextRunAt: "2026-08-31T03:30:00.000Z", latestRun: null, ...extra,
+    });
+    routinesResponse = {
+      now: "2026-08-28T10:30:00.000Z",
+      timeZone: "Asia/Kolkata",
+      routines: [routine("r1", {}), routine("r2", { enabled: false, nextRunAt: null, schedule: { type: "once", at: "2026-09-01T04:00:00.000Z" } })],
+    };
+    const list = await callTool("list_routines", {});
+    expect(list.result.content[0].text).toBe([
+      "This bot's routines (current time: 2026-08-28T10:30:00.000Z; timezone: Asia/Kolkata), as id | name | schedule | status | next run:",
+      "- r1 | Brief r1 | weekly 09:00 monday,friday | enabled | 2026-08-31T03:30:00.000Z",
+      "- r2 | Brief r2 | once 2026-09-01T04:00:00.000Z | paused | none",
+    ].join("\n"));
+    const one = await callTool("list_routines", { routine_id: "r2" });
+    expect(one.result.content[0].text).toBe(`Routine r2 (current time: 2026-08-28T10:30:00.000Z; timezone: Asia/Kolkata):\n${JSON.stringify(routine("r2", { enabled: false, nextRunAt: null, schedule: { type: "once", at: "2026-09-01T04:00:00.000Z" } }), null, 2)}`);
+    const missing = await callTool("list_routines", { routine_id: "nope" });
+    expect(missing.result.isError).toBe(true);
+    const tools = await rpc("tools/list");
+    const tool = tools.result.tools.find((entry: { name: string }) => entry.name === "list_routines");
+    expect(tool.description).toContain("up to 2,000 characters of its instructions");
+    expect(tool.inputSchema.properties.routine_id.type).toBe("string");
+  });
+
   it("proposes a weekly routine through a confirmation-only request", async () => {
     lastRoutineRequestBody = null;
     const res = await callTool("propose_routine", {
@@ -1179,7 +1228,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(18);
+    expect(list.result.tools).toHaveLength(19);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1205,6 +1254,73 @@ describe("agents-proxy identity gate", () => {
     expect(call.result.isError).toBeFalsy();
   });});
 
+describe("agents-proxy catalog", () => {
+  const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
+  const names = (list: any): string[] => list.result.tools.map((tool: { name: string }) => tool.name);
+
+  it("replaces only the ten optional definitions with the bounded pair", async () => {
+    const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
+    expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
+    expect(17 + names(list).length).toBe(28);
+  });
+
+  it.each([
+    ["create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
+    ["create_channel", { name: "Design", member_ids: ["bot-helper"] }],
+    ["react", { emoji: "👍" }],
+    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
+    ["generate_image", { prompt: "A test image", show: true }],
+    ["call_api", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
+    ["request_credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
+    ["list_routines", {}],
+    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
+    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
+  ])("runs %s through its original handler and returns the same artifact or card", async (name, args) => {
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name as string, args);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
+    expect(gateway.call.result.isError).toBeFalsy();
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+    if (name === "react") expect(lastReactBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", emoji: "👍" });
+  });
+
+  it("retains the original routine argument normalization", async () => {
+    const args = { name: "Brief", instructions: "Check things.", schedule: JSON.stringify({ type: "daily", time: "09:00" }) };
+    const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name: "propose_routine", arguments: args });
+    expect(call.result.isError).toBeFalsy();
+    expect(lastRoutineRequestBody.routine.schedule.type).toBe("weekly");
+  });
+
+  it.each(["create_bot", "create_channel", "react", "show_image", "generate_image", "request_credential", "propose_routine", "propose_routine_action"])("preserves %s argument refusals", async (name) => {
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, {});
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
+    expect(gateway.call.result.content).toEqual(direct.call.result.content);
+    expect(gateway.call.result.isError).toBe(true);
+  });
+
+  it.each([1, 2])("reveals only list_routines among optional tools at depth %s", async (depth) => {
+    const { list, call } = await probeWithIdentity(identity(depth), "find_wink_tool", { query: "routine bot image api credential" });
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "find_wink_tool", "call_wink_tool"].sort());
+    expect(JSON.parse(call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toEqual(["list_routines"]);
+    const refused = await probeWithIdentity(identity(depth), "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
+    expect(refused.call.result.isError).toBe(true);
+  });
+
+  it("keeps missing grants, unknown names and recursive calls closed", async () => {
+    const missing = await probeWithIdentity({ OMB_WINK_TOOL_CATALOG: "1" }, "find_wink_tool", { query: "images" });
+    expect(missing.list.result.tools).toEqual([]);
+    expect(missing.call.error.code).toBe(-32602);
+    for (const name of ["missing", "find_wink_tool", "call_wink_tool", "ask_user", "__proto__"]) {
+      const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
+      expect(call.result.isError).toBe(true);
+    }
+    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "list_routines", arguments: {} });
+    expect(unauthorized.call.result.isError).toBe(true);
+    expect(unauthorized.call.result.content[0].text).toContain("unauthorized");
+  });
+});
+
 describe("agents-proxy verify_site", () => {
   let verifyProxy: string;
   let enabledRoot: string;
@@ -1214,28 +1330,48 @@ describe("agents-proxy verify_site", () => {
     mkdirSync(root, { recursive: true });
     enabledRoot = mkdtempSync(join(root, "proxy-"));
     verifyProxy = join(enabledRoot, "agents-proxy.mjs");
-    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm", plugins: [{ name: "verify-enabled-fixture", setup(builder) {
-      builder.onLoad({ filter: /shared[\\/]live-verify\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, "utf8").replace("LIVE_VERIFY_V0: boolean = false", "LIVE_VERIFY_V0: boolean = true"), loader: "ts" }));
-    } }] });
+    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm" });
   });
   afterAll(() => rmSync(enabledRoot, { recursive: true, force: true }));
 
-  it("keeps the shipped flag off even when the tool env is set", async () => {
+  it("ships the done-check for browser changes unless the user opts out", async () => {
     lastVerify = null;
     const { list, call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
-    expect(names(list)).not.toContain("verify_site");
-    expect(call.error).toBeTruthy();
-    expect(lastVerify).toBeNull();
+    expect(names(list)).toContain("verify_site");
+    expect(call.error).toBeUndefined();
+    expect(lastVerify).not.toBeNull();
+  });
+
+  it("describes every browser change in any folder", async () => {
+    const { list } = await probe(identity(0, { OMB_LIVE_VERIFY: "1" }));
+    const tool = list.result.tools.find((row: { name: string }) => row.name === "verify_site");
+    expect(tool.description).toContain("every change that renders in a browser");
+    expect(tool.description).toContain("unless the user says not to");
+    expect(tool.description).toContain("any folder");
+    expect(tool.inputSchema.properties.entry.description).toContain("loopback");
   });
 
   const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });
   const names = (list: any): string[] => list.result.tools.map((t: { name: string }) => t.name);
 
+  it("adds zero tools/list bytes on production turns", async () => {
+    const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    const verify = await import("../verify-site.ts") as { verifyToolEnv?: (desktop: boolean, platform: NodeJS.Platform) => Record<string, string> };
+    const { list } = await probe(identity(0, verify.verifyToolEnv?.(true, "win32") ?? {}));
+    expect(names(list)).not.toContain("verify_site");
+    expect(Buffer.byteLength(JSON.stringify(list.result.tools.filter((tool: { name: string }) => tool.name === "verify_site"))) - 2).toBe(0);
+    expect(source.includes("verifyToolEnv")).toBe(false);
+  });
+
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 18, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 19, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 19, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 20, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 20, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 21, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 13, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);
@@ -1267,10 +1403,10 @@ describe("agents-proxy verify_site", () => {
     expect(Boolean(call.result.isError)).toBe(isError);
   });
 
-  it("drops the harness request on notifications/cancelled and sends no reply", async () => {
+  it.each(["0", "1"])("preserves cancellation with catalog flag %s", async (catalog) => {
     lastVerify = null;
     const dropped = new Promise<boolean>((resolve) => (verifyHold = resolve));
-    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
+    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: catalog }) }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     proxy.stdout!.on("data", (chunk) => (out += chunk));
     try {

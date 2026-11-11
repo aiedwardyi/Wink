@@ -117,6 +117,31 @@ describe("ModelPicker cross navigation", () => {
     }
   });
 
+  it.each([["en", "$9.08/Task", "$26.54/Task"], ["ko", "$9.08/작업", "$26.54/작업"]] as const)("shows the run cost at the picked effort in %s", async (locale, high, max) => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    persistPreference(locale);
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2"], ["low", "medium", "high", "xhigh", "max"])];
+    const runCost = () => document.querySelector('[aria-live="polite"] [data-model-run-cost]')?.textContent;
+    try {
+      await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "high" });
+      expect(runCost()).toBe(high);
+      await key("ArrowRight");
+      await key("ArrowRight");
+      expect(runCost()).toBe(max);
+      expect(document.querySelector("[data-model-price]")).not.toBeNull();
+    } finally {
+      persistPreference("en");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows only the per-1M price when the effort has no run cost", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7"], ["low", "medium", "high", "xhigh"])];
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned", effort: "medium" });
+    expect(document.querySelector('[aria-live="polite"] [data-model-price]')?.textContent).toBe("$2 / $6 per 1M");
+    expect(document.querySelector("[data-model-run-cost]")).toBeNull();
+  });
+
   it.each([".model-cross-options", ".model-cross-custom"])("preserves native wheel scrolling over %s", async (selector) => {
     const instance = engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"]);
     instance.models.options.push({ id: "provider::custom-model", label: "Custom model", custom: true });
@@ -142,40 +167,40 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it.each([120, -120])("moves one model per wheel notch %s and keeps effort", async (deltaY) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high", "xhigh", "max"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high", "xhigh", "max"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     const event = new window.WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
     await act(async () => document.querySelector(".model-cross-stage")!.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
     await key("Enter");
     expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({
-      instanceId: "claude", model: deltaY > 0 ? "claude-opus-5-5" : "claude-fable-5-1", mode: "pinned", effort: "medium",
+      instanceId: "claude", model: deltaY > 0 ? "claude-opus-5-5" : "claude-fable-5-2", mode: "pinned", effort: "medium",
     });
   });
 
-  it.each([[-80, "claude-opus-5-5"], [80, "claude-fable-5-1"]])("moves one model per vertical flick %s", async (dy, model) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+  it.each([[-80, "claude-opus-5-5"], [80, "claude-fable-5-2"]])("moves one model per vertical flick %s", async (dy, model) => {
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     await swipe(0, dy);
     await key("Enter");
     expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model, mode: "pinned", effort: "medium" });
   });
 
   it.each([[-80, "high"], [80, "low"]])("moves one effort per horizontal flick %s", async (dx, effort) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     await swipe(dx, 20);
     await key("Enter");
-    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort });
+    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort });
   });
 
   it("steps once for a long vertical drag", async () => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "medium" });
     await swipe(0, -400);
     await swipe(10, -30);
     await key("Enter");
-    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
   });
 
   it("labels Alt+M Open/Close and cancels the draft", async () => {
@@ -201,8 +226,8 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it("counts wheel notches delivered before the next render", async () => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "medium" });
     await act(async () => {
       for (let notch = 0; notch < 2; notch++) {
         document.querySelector(".model-cross-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
@@ -213,6 +238,7 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it.each([
+    ["claudeAgent", "claude-fable-5-2", "high"],
     ["claudeAgent", "claude-fable-5-1", "high"],
     ["codex", "gpt-6-astra", "low"],
     ["codex", "gpt-6.1-sol", "low"],
@@ -372,8 +398,11 @@ describe("ModelPicker cross navigation", () => {
     expect(document.querySelector('[data-model-cell="grok-4.7"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("returns focus to the trigger after a pointer model commit", async () => {
+  it("focuses the composer after a pointer model commit", async () => {
     mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
     await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
     await act(async () => {
       const trigger = document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
@@ -386,7 +415,46 @@ describe("ModelPicker cross navigation", () => {
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
     });
-    expect(document.activeElement).toBe(document.querySelector('[aria-haspopup="dialog"]'));
+    await nextFrame();
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("gives focus back to the opener when Settings blocks the composer", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    const settings = document.createElement("div");
+    settings.setAttribute("data-settings-panel", "");
+    const opener = document.createElement("button");
+    document.body.append(composer, settings, opener);
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
+    await act(async () => {
+      opener.focus();
+      document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click();
+    });
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
+    });
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
+    });
+    await nextFrame();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("focuses the composer after a mouse-opened picker commits with Enter", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+    await act(async () => { trigger.focus(); trigger.click(); });
+    await key("ArrowDown");
+    await key("Enter");
+    await nextFrame();
+    expect(mock.dispatch).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(composer);
   });
 
   it("opens with Alt+M even when a foreign dialog (Settings) is open", async () => {

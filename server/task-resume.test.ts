@@ -9,6 +9,7 @@ import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { rootForStart } from "./comms-root.ts";
 import { watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, cancelPeerUserReplies, drainPeerUserReplies, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { cancelQuickAsks } from "./quick-ask.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -20,6 +21,7 @@ import {
   queueSteeredMessage,
 } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { traceClaimedTurn } from "./turn-timing.ts";
 
 // Windows CI checks out CRLF; the slice markers below are written with \n.
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8").replace(/\r\n/g, "\n");
@@ -128,6 +130,8 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     group: () => group,
     groups: [],
     patchBot: (_id: string, patch: Partial<BotRecord>) => Object.assign(bot, patch),
+    messagesFor: () => messages,
+    activePath: () => messages,
     appendMessage: (_threadId: string, message: Omit<Message, "id" | "at">) => {
       const appended = { ...message, id: `m${messages.length}`, at: 0 };
       messages.push(appended);
@@ -142,6 +146,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   let rejectBusy = options.rejectBusy ?? false;
   const startTurn = load("startTurn", {
     store,
+    traceClaimedTurn,
     tryClaimTurnStart: (botId: string, threadId: string) => {
       if (claims.has(botId)) return false;
       claims.set(botId, threadId);
@@ -200,7 +205,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
   });
   const startGroupCardContinuation = load("startGroupCardContinuation", {
-    groupTaskResumes, groupQueues,
+    store, groupTaskResumes, groupQueues,
     beginGroupTurnOperation: () => { const operation = { cancelled: false }; operations.push(operation); return operation; },
     finishGroupTurnOperation: () => {},
     drainQueuedSends: () => drainQueuedSends(),
@@ -218,7 +223,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   };
   const invoke = route('/^\\/api\\/bots\\/([\\w-]+)\\/tasks\\/([\\w-]+)\\/resume$/', { ...resumeDeps, botChatRoutes: { resumeTask: botChatRoute("resumeTask", resumeDeps) } });
   const stopDeps = {
-    store, taskResumes, botHasActiveTurn, cancelPeerUserReplies, cancelQueuedSends,
+    store, taskResumes, botHasActiveTurn, cancelPeerUserReplies, cancelQueuedSends, cancelQuickAsks,
     broadcast: (frame: Record<string, unknown>) => frames.push(frame),
     readBody: async () => ({}),
     routines: {

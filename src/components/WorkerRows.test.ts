@@ -286,9 +286,10 @@ describe("WorkerChip", () => {
         gap: true,
         overlap: false,
         stacked: [],
-        phone: "relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex",
+        phone: "relative flex items-center gap-1 md:hidden md:p-1.5 @max-4xl/chathead:!flex",
       });
       expect(klass).toContain("md:flex @max-4xl/chathead:!hidden");
+      expect(phone.querySelector("svg")?.getAttribute("class")).toContain("md:size-[18px]");
     } finally {
       await unmount();
     }
@@ -714,7 +715,7 @@ describe("WorkerChip", () => {
 
   it("closes the open desktop list when the phone breakpoint flips", async () => {
     let flip: (() => void) | undefined;
-    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip = listener; } });
+    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip ??= listener; } });
     const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1)]);
     try {
       await act(async () => chip()!.click());
@@ -976,6 +977,25 @@ describe("WorkerChip", () => {
         list.scrollTop = 0;
         await drag(row, [300, 360, 420, 490], 200);
         expect(chip()!.getAttribute("aria-expanded")).toBe("false");
+      } finally {
+        await unmount();
+      }
+    });
+
+    it("keeps the list scrolling into itself from its top after scrolling back up", async () => {
+      const { sheet, unmount } = await openSheet(13);
+      const list = sheet.querySelector("ul")!;
+      const scrollTo = async (top: number) => {
+        list.scrollTop = top;
+        await act(async () => { list.dispatchEvent(new Event("scroll")); });
+      };
+      try {
+        expect(list.className).toMatch(/(^|\s)touch-pan-down(\s|$)/);
+        expect(list.className).toMatch(/(^|\s)touch-pinch-zoom(\s|$)/);
+        await scrollTo(40);
+        expect(list.style.touchAction).toBe("pan-y pinch-zoom");
+        await scrollTo(0);
+        expect(list.style.touchAction).toBe("pan-down pinch-zoom");
       } finally {
         await unmount();
       }

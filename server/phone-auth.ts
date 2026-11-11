@@ -30,6 +30,7 @@ export type RelayVerdict =
   | { kind: "pair" }
   | { kind: "google-start" }
   | { kind: "google" }
+  | { kind: "room" }
   | { kind: "app" };
 
 function headerValues(rawHeaders: string[], name: string): string[] {
@@ -62,6 +63,7 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   const read = method === "GET" || method === "HEAD";
   if (!origins.length && !read) return { kind: "deny", status: 403, error: "forbidden: origin required" };
   if (localOnly(path)) return { kind: "deny", status: 404, error: "not found" };
+  if (roomDoorPath(path)) return { kind: "room" };
   if (path === "/api/health" && read) return { kind: "health" };
   if (path === "/pair" && read) return { kind: "pair-page" };
   if (path === "/api/phone/pair") return method === "POST" ? { kind: "pair" } : { kind: "deny", status: 404, error: "not found" };
@@ -69,6 +71,9 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   if (path === "/api/phone/google") return method === "POST" ? { kind: "google" } : { kind: "deny", status: 404, error: "not found" };
   return { kind: "app" };
 }
+
+/** The team room door's prefix. Only relay traffic may reach it. */
+export const roomDoorPath = (path: string) => path === "/room" || path.startsWith("/room/");
 
 /** An app page (not a file) that an unpaired phone should see as the pair page instead. */
 export function shellNavigation(method: string, path: string): boolean {

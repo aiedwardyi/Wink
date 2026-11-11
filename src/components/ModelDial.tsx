@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type
 import { ArrowDown, ArrowUp, Lock, Square } from "lucide-react";
 import type { ModelSelection } from "@/state/store";
 import { pickerEfforts, pickerModels, selectPickerEffort, selectPickerModel, type PickerRow } from "@/lib/cross-model-picker";
-import { DIAL_DIGITS, dialFind, dialPrice, dialScore, dialShift, dialSource, dialStep, dialTier, type DialStat } from "@/lib/model-dial";
+import { DIAL_DIGITS, dialFind, dialPrice, dialRunCost, dialScore, dialShift, dialSource, dialStep, dialTier, type DialStat } from "@/lib/model-dial";
 import { formatUsd, pickerPrice } from "@/lib/model-index";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
 import { engineBadgeText, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
@@ -184,6 +184,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const intel = item ? dialScore(draft.model, effort?.effort, "intelligence") : undefined;
   const coding = item ? dialScore(draft.model, effort?.effort, "coding") : undefined;
   const price = item ? dialPrice(draft.model) : undefined;
+  const runCost = item ? dialRunCost(draft.model, effort?.effort) : undefined;
+  const bigCost = runCost ?? price?.blend;
   const ms = 170;
 
   // Turn counters only grow, so the bezel and lab ring always take the short way round.
@@ -216,7 +218,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const bar = useRef<{ timer: number; anims: Animation[] }>({ timer: 0, anims: [] });
   const ring = useRef({ from: 0, to: 0, start: 0, ms: 0, anims: [] as Animation[] });
   const wave = useRef(0);
-  const shown = useRef<{ i?: number; effort?: string; blend?: number }>({});
+  const shown = useRef<{ i?: number; effort?: string; cost?: number }>({});
 
   useEffect(() => {
     let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setBoot(false)); });
@@ -324,12 +326,12 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     quench();
     if (landed && !reducedMotion()) overdrive();
     if (intel != null && intel * 3.6 !== ring.current.to) sweep(intel * 3.6);
-    if (shown.current.blend !== undefined && price?.blend !== shown.current.blend) {
+    if (shown.current.cost !== undefined && bigCost !== shown.current.cost) {
       wave.current = (wave.current + 14) % 40;
       squiggle.current?.style.setProperty("--wave", `${-wave.current}px`);
       flip(squiggle.current, "w");
     }
-    shown.current = { i: index, effort: effort?.label, blend: price?.blend };
+    shown.current = { i: index, effort: effort?.label, cost: bigCost };
     const settle = window.setTimeout(() => setLive(`${item?.label ?? ""} ${names[index]?.name ?? ""}, ${t("model.effort")}: ${effort ? modelEffortLabel(effort.label, t) : "-"}`), 220);
     return () => clearTimeout(settle);
   }, [index, effort?.id, labLocked]);
@@ -354,7 +356,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   };
 
   const commit = (fromKeyboard = false, button = stage.current?.querySelector("[data-dial-pick]")) => {
-    if (!pickable || !onSave(draft, fromKeyboard, 140)) return;
+    if (!pickable || !onSave(draft, fromKeyboard, fromKeyboard ? 0 : 140)) return;
     quench();
     if (phone && window.matchMedia(PHONE_DIAL_QUERY).matches) hapticTick();
     const face = stage.current!;
@@ -445,7 +447,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           {rows.map((row, j) => <div key={row.instance.instanceId} className="dial-layer dial-scene-lab" data-on={j === lab || undefined} style={{ "--c": modelFamilyAccent(row.instance.driverKind) } as CSSProperties} />)}
         </div>
         <svg className="dial-orbits" viewBox="0 0 1200 1200" aria-hidden>
-          <g fill="none" stroke="#ffffff" strokeOpacity=".05">
+          <g fill="none" stroke="var(--dial-line, #ffffff)" strokeOpacity=".05">
             <circle cx="600" cy="600" r="262" />
             <circle cx="600" cy="600" r="380" strokeDasharray="2 10" />
             <circle cx="600" cy="600" r="560" />
@@ -462,9 +464,9 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           <svg className="dial-layer dial-spin dial-ticks" viewBox="0 0 480 480" aria-hidden>
             {models.map((model, j) => {
               const d = sector(212, 226, j * step - (step / 2 - 1), j * step + (step / 2 - 1));
-              return <g key={`${model.instance.instanceId}:${model.cell.options[0]!.id}`} className="dial-chamber" data-on={j === index || undefined} style={{ "--c": modelFamilyAccent(model.instance.driverKind) } as CSSProperties}><path d={d} fill="#fff" fillOpacity=".07" /><path className="lit" d={d} /></g>;
+              return <g key={`${model.instance.instanceId}:${model.cell.options[0]!.id}`} className="dial-chamber" data-on={j === index || undefined} style={{ "--c": modelFamilyAccent(model.instance.driverKind) } as CSSProperties}><path d={d} fill="var(--dial-line, #fff)" fillOpacity=".07" /><path className="lit" d={d} /></g>;
             })}
-            <g stroke="#fff" strokeOpacity=".35" strokeWidth="1.2">
+            <g stroke="var(--dial-line, #fff)" strokeOpacity=".35" strokeWidth="1.2">
               {models.map((_, j) => {
                 if (count < 2 || labOf[j] === labOf[wrap(j + 1, count)]) return null;
                 const [x0, y0] = point(208, j * step + step / 2);
@@ -472,11 +474,11 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                 return <line key={j} x1={x0} y1={y0} x2={x1} y2={y1} />;
               })}
             </g>
-            <circle cx="240" cy="240" r="232" fill="none" stroke="#fff" strokeOpacity=".06" />
+            <circle cx="240" cy="240" r="232" fill="none" stroke="var(--dial-line, #fff)" strokeOpacity=".06" />
           </svg>
           <svg className="dial-layer dial-spin dial-labring" viewBox="0 0 480 480" aria-hidden>
-            <defs><radialGradient id="dial-seg-fill" cx="240" cy="240" r="206" gradientUnits="userSpaceOnUse"><stop offset=".68" stopColor="#16181f" /><stop offset="1" stopColor="#0d0f13" /></radialGradient></defs>
-            {rows.map((row, j) => <path key={row.instance.instanceId} d={sector(142, 206, j * labStep - (labStep / 2 - 1), j * labStep + (labStep / 2 - 1))} fill="url(#dial-seg-fill)" stroke="#fff" strokeOpacity=".07" />)}
+            <defs><radialGradient id="dial-seg-fill" cx="240" cy="240" r="206" gradientUnits="userSpaceOnUse"><stop offset=".68" stopColor="var(--dial-seg-a, #16181f)" /><stop offset="1" stopColor="var(--dial-seg-b, #0d0f13)" /></radialGradient></defs>
+            {rows.map((row, j) => <path key={row.instance.instanceId} d={sector(142, 206, j * labStep - (labStep / 2 - 1), j * labStep + (labStep / 2 - 1))} fill="url(#dial-seg-fill)" stroke="var(--dial-line, #fff)" strokeOpacity=".07" />)}
           </svg>
           {rows.map((row, j) => (
             <svg key={row.instance.instanceId} className="dial-layer dial-wedge" viewBox="0 0 480 480" data-on={j === lab || undefined} style={{ "--c": modelFamilyAccent(row.instance.driverKind), "--j": j } as CSSProperties} aria-hidden>
@@ -514,7 +516,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
               <svg key={n} className="dial-layer dial-gauge" viewBox="0 0 480 480" data-on={on || undefined} aria-hidden>
                 {notches.map((d, j) => (
                   <g key={j} className="dial-notch" data-lit={(on && j <= level) || undefined} style={{ "--p": j / Math.max(n - 1, 1) } as CSSProperties} onClick={() => on && efforts[j] && onDraft(selectPickerEffort(draft, efforts[j]!))}>
-                    <path d={d} fill="#fff" fillOpacity=".07" />
+                    <path d={d} fill="var(--dial-line, #fff)" fillOpacity=".07" />
                     <path className="lit" d={d} fill="var(--accent)" />
                   </g>
                 ))}
@@ -604,7 +606,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           <div className="dial-stat-text">
             <span className="dial-label">{t("modelIndex.index.cost")}</span>
             <span className="dial-big dial-cost">
-              $<Odometer value={price?.blend} int={DIAL_DIGITS.cost} dec={2} /><span className="unit">/1M</span>
+              $<Odometer value={bigCost} int={DIAL_DIGITS.cost} dec={2} /><span className="unit">{runCost != null ? t("model.dial.perTask") : "/1M"}</span>
               <span ref={squiggle} className="dial-squiggle" aria-hidden><span className="wipe"><svg viewBox="0 -3 240 16"><path d={`M1 5${SQUIGGLE}`} /></svg></span></span>
             </span>
             <span className="dial-src">{pickerPrice(draft.model) ? `${pickerPrice(draft.model)} ${t("model.pricePerMillion")}` : "-"}</span>

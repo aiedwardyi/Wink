@@ -1,9 +1,10 @@
 // The ask_user endpoint: sender and thread checks, the marked card it posts,
 // choice capping, and exactly one alert per question.
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, postAskUser, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
+import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
 import type { MausColor, Message } from "./store.ts";
 
 type Bot = { id: string; name: string; color: MausColor };
@@ -105,5 +106,67 @@ describe("ask-user endpoint", () => {
     expect(guard).toMatch(/^m = path\.match\(.+\);\s+if \(m && method === "PATCH"\) \{\s+return await groupRoutes\.patchCard\(req, res, m\);\s+\}\s+$/);
     expect(askUserCardPatchSchema.parse({ answered: "Prod", dismissed: "yes", requestId: "r1" })).toEqual({ answered: "Prod" });
     expect(askUserCardPatchSchema.parse({ dismissed: true })).toEqual({ dismissed: true });
+  });
+});
+
+const askCard = (id: string, question: string, extra: Partial<Message> = {}, card: Partial<NonNullable<Message["card"]>> = {}): Message => ({
+  id, at: 1, role: "bot", kind: "options", ...extra,
+  card: { title: "Your bot has a question", subtitle: question, options: ["Yes", "No"], askUser: true, ...card },
+});
+const said = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, at: 2, role: "user", kind: "text", text, ...extra });
+const CLOSED = '[Your question card ("Ship it?") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]';
+
+describe("closed ask_user card note", () => {
+  // startTurn's notes block, run on its own with the real helper.
+  const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const from = index.indexOf("  const recallNotes = turnStartedByUser(opts)");
+  const notes = index.slice(from, index.indexOf("\n  let turnTranscript", from));
+  const run = new Function(`${ts.transpileModule(`function run(scope) { with (scope) { ${notes}\n return turnPrompt; } }`, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
+  }).outputText}\nreturn run;`)() as (scope: object) => string;
+  const turnPrompt = (activeMessages: Message[], userMessage: Message) => run({
+    activeMessages, userMessage, text: userMessage.text, closedAskNotes, currentPrompt: userMessage.text,
+    turnStartedByUser: () => true, opts: undefined, supportsWorkspaceFiles: () => false, instance: {}, threadSyncV2: null,
+    mailForTurn: () => [], store: {}, threadId: "t1", paneNoteIds: [], modelContextWindow: 200_000, paneTokens: 0,
+    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], callLines: [], bot: { id: "bot-a" },
+  });
+
+  it("tells the bot its open card closed when the user typed past it", () => {
+    const typed = said("u1", "what's for lunch?");
+    expect(turnPrompt([said("u0", "hi"), askCard("c1", "Ship it?"), typed], typed)).toBe(`${CLOSED}\n\nCurrent message:\n\nwhat's for lunch?`);
+  });
+
+  it("adds nothing once the card was answered, dismissed, superseded or already closed", () => {
+    const typed = said("u2", "ok");
+    expect(turnPrompt([askCard("c1", "Ship it?", {}, { answered: "Yes" }), typed], typed)).toBe("ok");
+    expect(turnPrompt([askCard("c1", "Ship it?", {}, { dismissed: true }), typed], typed)).toBe("ok");
+    expect(turnPrompt([askCard("c1", "Ship it?"), said("u1", "later"), typed], typed)).toBe("ok");
+    expect(turnPrompt([said("u0", "hi"), typed], typed)).toBe("ok");
+  });
+
+  it("treats a tapped choice as the answer even before its patch lands", () => {
+    expect(closedAskNotes([askCard("c1", "Ship it?"), said("u1", "Yes")], "Yes", "u1")).toEqual([]);
+  });
+
+  it("reads only the newest card, never approvals, and only for a message the person sent", () => {
+    expect(closedAskNotes([askCard("c0", "Old?"), askCard("c1", "Ship it?"), said("u1", "hm")], "hm", "u1")).toEqual([CLOSED]);
+    expect(closedAskNotes([askCard("c1", "Ship it?", {}, { askUser: undefined, requestId: "r1", tool: "Bash" }), said("u1", "hm")], "hm", "u1")).toEqual([]);
+    expect(closedAskNotes([askCard("c1", "Ship it?"), said("u1", "hm", { from: { botId: "b", name: "B", color: "teal" } })], "hm", "u1")).toEqual([]);
+    expect(closedAskNotes([askCard("c1", "Ship it?"), said("u1", "hm")], "hm", "missing")).toEqual([]);
+  });
+
+  it("covers a steered message not yet in the transcript, with the question bounded", () => {
+    expect(closedAskNotes([askCard("c1", "Ship it?")], "hm")).toEqual([CLOSED]);
+    const [line] = closedAskNotes([askCard("c1", "q".repeat(ASK_USER_QUESTION_MAX))], "hm");
+    expect(line).toContain(`("${"q".repeat(199)}…")`);
+  });
+
+  it("tells only the asking room member, until it next speaks", () => {
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    const card = askCard("c1", "Ship it?", { from: ada });
+    expect(memberClosedAskNotes([card, said("u1", "hm")], "bot-a")).toEqual([CLOSED]);
+    expect(memberClosedAskNotes([card, said("u1", "hm")], "bot-b")).toEqual([]);
+    expect(memberClosedAskNotes([card, said("u1", "hm"), { id: "r1", at: 3, role: "bot", kind: "text", text: "ok", from: ada }], "bot-a")).toEqual([]);
+    expect(memberClosedAskNotes([card], "bot-a")).toEqual([]);
   });
 });

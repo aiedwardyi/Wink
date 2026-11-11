@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, RefreshCw, Webhook } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -286,6 +286,7 @@ const Bubble = memo(function Bubble({
   const quoted = useThreadMessage(threadId, hasMore ? message.replyToId : undefined, replyTarget);
   const members = useMemo(() => [{ id: botId, name: botName }], [botId, botName]);
   const user = message.role === "user";
+  const quick = !user && message.quick?.state === "answer";
   const [expanded, setExpanded] = useState(false);
   const dockShown = useDockFade(dock?.live ?? false) && Boolean(dock);
   const text = message.text ?? "";
@@ -390,7 +391,7 @@ const Bubble = memo(function Bubble({
         className="relative w-fit max-w-[min(42rem,78%)] pb-8"
         style={dock?.wrap && !hasReactions ? { paddingBottom: "2.5rem" } : undefined}
       >
-        <div className="orbit-message-speaker hidden">{user ? (message.from?.name ?? t("chat.you")) : botName}</div>
+        {!user && <div className="orbit-message-speaker hidden">{botName}</div>}
         {user && !message.placeholder && (
           <div
             data-message-hover-actions
@@ -513,15 +514,17 @@ const Bubble = memo(function Bubble({
                 <RefreshCw size={14} />
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => onReply(message)}
-              aria-label={t("chat.replyToMessage")}
-              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-              title={t("chat.replyToMessage")}
-            >
-              <MessageSquareReply size={14} />
-            </button>
+            {!quick && (
+              <button
+                type="button"
+                onClick={() => onReply(message)}
+                aria-label={t("chat.replyToMessage")}
+                className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+                title={t("chat.replyToMessage")}
+              >
+                <MessageSquareReply size={14} />
+              </button>
+            )}
 
           </div>
         )}
@@ -543,7 +546,14 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      <TimestampLabel at={message.at} hidden={streaming} />
+      {message.call ? (
+        <div className="flex items-center gap-1">
+          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
+          <TimestampLabel at={message.at} hidden={streaming} />
+        </div>
+      ) : (
+        <TimestampLabel at={message.at} hidden={streaming} />
+      )}
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

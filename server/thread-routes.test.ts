@@ -1,7 +1,12 @@
+import { rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BotTrash } from "./bot-trash.ts";
 import { DATA_DIR } from "./config.ts";
+import { RoutineManager } from "./routines.ts";
+import { Store } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 
 function pager() {
@@ -47,5 +52,47 @@ describe("older message batches", () => {
     const { request, error } = pager();
     expect(await request(query)).toBe(400);
     expect(error()).toBe("before and around cannot be combined");
+  });
+});
+
+describe("search", () => {
+  it("returns live hits past a trashed bot's", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const routines = new RoutineManager({
+      file: join(DATA_DIR, "routines.json"),
+      botState: () => "ready",
+      createTask: () => null,
+      startTurn: async () => {},
+      startChatTurn: async () => {},
+    });
+    const live = store.createBot({ name: "Live" }, { seedMessages: false });
+    const trashed = store.createBot({ name: "Trashed" }, { seedMessages: false });
+    for (let i = 0; i < 3; i++) store.appendMessage(live.threadId, { role: "user", kind: "text", text: `kiwi live ${i}`, at: 1_000 + i });
+    for (let i = 0; i < 50; i++) store.appendMessage(trashed.threadId, { role: "user", kind: "text", text: `kiwi trashed ${i}`, at: 2_000 + i });
+    new BotTrash(store, routines).trash(trashed.id);
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+
+    await route.search(res, new URL("http://localhost/search?q=kiwi"));
+
+    expect(JSON.parse(body).hits.map((hit: { botId: string }) => hit.botId)).toEqual([live.id, live.id, live.id]);
+  });
+
+  it("leaves out the threads it is told to hide", async () => {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot({ name: "Live" }, { seedMessages: false });
+    const room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi here", at: 1_000 });
+    store.appendMessage(room.threadId, { role: "user", kind: "text", text: "kiwi in the room", at: 2_000 });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+
+    await route.search(res, new URL("http://localhost/search?q=kiwi"), [room.threadId]);
+
+    expect(JSON.parse(body).hits.map((hit: { threadId: string }) => hit.threadId)).toEqual([bot.threadId]);
   });
 });

@@ -1,0 +1,63 @@
+.verify-doc-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 16px; list-style: none; margin: 10px 0 0; padding: 0; color: var(--color-ink-secondary); }
+.verify-doc-kinds li { display: flex; align-items: center; gap: 8px; min-width: 0; transition: color .3s; }
+.verify-doc-kinds li span { flex: 1; min-width: 0; }
+.verify-doc-kinds li b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.verify-doc-kinds li b[data-issues], .verify-doc-tally b[data-issues] { color: var(--color-danger); }
+.verify-doc-kinds li[data-state="running"] { color: var(--color-ink); }
+.verify-doc-kinds li[data-state="running"] i { animation: verify-card-pulse 2s ease-in-out infinite; }
+.verify-doc-kinds i, .verify-doc-kind i, .verify-doc-tally i { width: 6px; height: 6px; flex: none; border-radius: 999px; background: var(--role); }
+.verify-doc-bar { height: 4px; margin-top: 12px; overflow: hidden; border-radius: 2px; background: var(--color-inset); }
+.verify-doc-bar i { display: block; height: 100%; border-radius: 2px; background: var(--color-accent); transition: width .6s ease-out; }
+.verify-doc-progress { margin-top: 6px; color: var(--color-ink-secondary); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.verify-doc-findings { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--verify-line); }
+.verify-doc-findings-rest { margin-top: 0; border-top: 0; }
+.verify-doc-findings li { display: grid; grid-template-columns: 116px 92px minmax(0, 1fr); align-items: baseline; column-gap: 12px; border-bottom: 1px solid var(--verify-line); padding: 6px 0; }
+:lang(ko) .verify-doc-findings li { grid-template-columns: 84px 84px minmax(0, 1fr); }
+.verify-doc-kind { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--color-ink-secondary); font-size: 12px; }
+.verify-doc-at { color: var(--color-ink-secondary); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.verify-doc-text { min-width: 0; }
+.verify-doc-text q { quotes: none; text-decoration: underline wavy var(--color-danger); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.verify-doc-text b { font-weight: 600; }
+.verify-doc-text small { display: block; color: var(--color-ink-secondary); font-size: 12px; }
+.verify-doc-group { margin-top: 12px; color: var(--color-ink-secondary); font-size: 12px; font-weight: 500; }
+.verify-doc-group + .verify-doc-findings { margin-top: 4px; }
+.verify-doc-findings[data-fixed] .verify-doc-text q { text-decoration: line-through var(--color-ink-secondary); }
+
+.verify-doc-stage { position: relative; flex: 1 1 auto; min-height: 220px; max-height: 62vh; overflow: auto; overscroll-behavior: contain; padding: 12px; background: var(--color-inset); }
+.verify-watch-frame[data-maximized] .verify-doc-stage { max-height: none; }
+.verify-watch-frame[data-inline] .verify-doc-stage { max-height: min(56vh, 460px); }
+.verify-doc-sheet { position: relative; margin: 0 auto 12px; max-width: 720px; padding: 18px 0 14px; border: 1px solid var(--color-hairline); border-radius: 6px; background: var(--color-card); color: var(--color-ink); font-size: 12.5px; line-height: 1.6; content-visibility: auto; contain-intrinsic-size: auto 720px; }
+.verify-doc-page { position: absolute; top: 4px; right: 10px; color: var(--color-ink-secondary); font-size: 10.5px; line-height: 14px; font-variant-numeric: tabular-nums; }
+.verify-doc-line { position: relative; min-height: 1.6em; padding: 0 16px 0 46px; white-space: pre-wrap; overflow-wrap: anywhere; transition: background-color .4s; }
+.verify-doc-line::before { content: attr(data-n); position: absolute; left: 0; width: 34px; text-align: right; color: var(--color-ink-secondary); opacity: .55; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.verify-doc-line[data-on] { background: color-mix(in oklab, var(--color-accent) 5%, transparent); }
+.verify-doc-pages { position: relative; overflow: hidden; }
+.verify-doc-cursors { position: absolute; inset: 0; pointer-events: none; }
+.verify-doc-line[data-hit] { background: rgb(240 93 93 / .08); }
+.verify-doc-line mark { border-radius: 2px; background: rgb(240 93 93 / .2); color: inherit; text-decoration: underline wavy #f05d5d; text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.verify-doc-wait { padding: 40px 0; color: var(--color-ink-secondary); text-align: center; }
+.verify-doc-tally { list-style: none; margin: 0; padding: 0 12px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 14px; color: var(--color-ink-secondary); }
+.verify-doc-tally li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.verify-doc-tally span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verify-doc-tally b { font-weight: 400; font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.verify-doc-tally b[data-issues] { animation: verify-doc-tick .3s ease-out; }
+@keyframes verify-doc-tick { from { transform: scale(1.7); } }
+@media (max-width: 767px) {
+  .verify-doc-findings li, :lang(ko) .verify-doc-findings li { grid-template-columns: auto minmax(0, 1fr); row-gap: 2px; }
+  .verify-doc-text { grid-column: 1 / -1; }
+  .verify-doc .verify-card-strip { margin-top: 10px; }
+  .verify-doc .verify-card-more { min-height: 44px; margin-top: 0; }
+  .verify-doc-stage { padding: 8px; }
+  .verify-doc-line { padding-left: 38px; }
+  .verify-doc-line::before { width: 28px; }
+}
+/* No cursors to follow, so the chunk being checked keeps its strong tint and bar. */
+@media (prefers-reduced-motion: reduce) {
+  .verify-doc-kinds li, .verify-doc-bar i, .verify-doc-line { transition: none; }
+  .verify-doc-kinds li[data-state="running"] i, .verify-doc-tally b[data-issues] { animation: none; }
+  .verify-doc-line[data-on]:not([data-hit]) { background: color-mix(in oklab, var(--color-accent) 14%, transparent); }
+  .verify-doc-line[data-on]::after { content: ""; position: absolute; top: 0; bottom: 0; left: 40px; width: 2px; background: var(--color-accent); }
+}
+@media (prefers-reduced-motion: reduce) and (max-width: 767px) {
+  .verify-doc-line[data-on]::after { left: 33px; }
+}

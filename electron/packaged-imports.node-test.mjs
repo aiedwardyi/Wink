@@ -12,7 +12,7 @@ const files = readdirSync(path.join(root, "electron"), { recursive: true, withFi
   .filter((entry) => entry.isFile())
   .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
   .filter((file) => !isTest(file));
-const shipped = new Set([...files, "shared/error-report.mjs", "package.json"].filter((file) => !file.includes("/node_modules/")
+const shipped = new Set([...files, "shared/error-report.mjs", "shared/update-error.mjs", "package.json"].filter((file) => !file.includes("/node_modules/")
   && !/^electron\/resources\/(?:speech-helper(?:\.swift|-Info\.plist)?$|OpenMausBot Speech\.app\/)/.test(file)
   && statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile()));
 // These SDK imports only load in cua.mjs when !app.isPackaged.

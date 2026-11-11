@@ -1,17 +1,21 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { credentialIsConfigured, credentialResumeOutcome } from "../shared/credential-request.ts";
+import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { closedAskNotes } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { parseCallTag } from "./live-call.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
+import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -36,6 +40,7 @@ type BotChatRouteDeps = {
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   store: Store;
+  clientMessage: (message: Message) => Message;
   sendSequencer: SendSequencer;
   ensureChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }) => void;
   markChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }, stage: "post.received" | "queue.decided" | "post.receipt", ids?: { queueId?: string; turnId?: string; assistantMessageId?: string }) => void;
@@ -62,7 +67,7 @@ type BotChatRouteDeps = {
   turnStartClaims: Map<string, string | undefined>;
   botHasActiveTurn: (botId: string, threadId?: string) => boolean;
   taskResumes: TaskResumeScheduler;
-  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string }) => Promise<StartedTurn>;
+  startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag }) => Promise<StartedTurn>;
   resolveAndSendRoutine: (res: ServerResponse, args: { botId: string; botName?: string; threadId: string; requestId: string; behavior: string }) => boolean;
   approvalBus: ApprovalBus;
   startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string) => void;
@@ -71,7 +76,10 @@ type BotChatRouteDeps = {
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
   secretMessage: (botId: string, threadId: string, messageId: string) => Message | null;
   resumeSecretCard: (botId: string, threadId: string, messageId: string, outcome: "provided" | "dismissed") => void;
+  quick?: QuickRouting;
 };
+
+type QuickRouting = { ask: QuickAsk; accountReady: (bot: BotRecord, threadId: string) => boolean; usage?: QuickDeps["usage"] };
 
 export function createBotChatRoutes(deps: BotChatRouteDeps) {
   const instanceForBot = deps.instanceForBot ?? ((bot: BotRecord) => deps.registry.get(bot.modelSelection.instanceId));
@@ -79,6 +87,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     cfg,
     threadSyncGate,
     store,
+    clientMessage,
     sendSequencer,
     ensureChatLatency,
     markChatLatency,
@@ -115,6 +124,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     secretMessage,
     resumeSecretCard,
     cancelUsageWait,
+    quick,
   } = deps;
   const threadReleased = async (bot: BotRecord) => {
     const deadline = Date.now() + STOP_RELEASE_MS;
@@ -123,6 +133,129 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     return true;
+  };
+  // Today's busy send: steer into the live turn, else queue for after it. A quick ask row stands in for the new line.
+  const deliverBusy = async (
+    bot: BotRecord,
+    threadId: string,
+    text: string,
+    { adapter, replyTo, sendId, queueId, after, ask, call }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag },
+  ) => {
+    let steered = false;
+    let dropped = false;
+    let recorded = false;
+    let peerInput: ReturnType<typeof beginPeerUserReply>;
+    if (steersSend(adapter, bot.busy, after)) {
+      const turnOpts = {
+        replyTo,
+        messages: store.activePath(threadId),
+        userName: cfg.profile?.name?.trim() || "User",
+        delivered: store.taskByThread(bot.id, threadId)?.reactionsDelivered,
+      };
+      // Reactions count only once the model took them in; an engine
+      // that cannot tell leaves them to the next turn's prompt.
+      const consumable = adapter.capabilities.steerConsumed === true;
+      const prompt = [
+        ...closedAskNotes(turnOpts.messages, text, ask?.id),
+        consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
+      ].join("\n\n");
+      peerInput = beginPeerUserReply(bot.id, threadId, prompt);
+      const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
+      steered = await adapter
+        .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
+          if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
+          // a drop after the ask was recorded as delivered goes once down the queue
+          else if (ask && recorded) requeueDroppedAsk(store, bot.id, threadId, ask, drainQueuedSends);
+          else dropped = true;
+        }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
+        .catch(() => false);
+      // an ask the engine already dropped goes once down the idle or queue path
+      if (ask && dropped) steered = false;
+      if (!steered) peerInput?.cancel();
+    }
+    // steer() is awaited adapter work. The turn can settle, the task can
+    // switch, or the whole bot can be deleted before its acknowledgement
+    // arrives. Re-read every ownership invariant before appending even a
+    // successful steer; otherwise that late acknowledgement writes a user
+    // message into a task the bot no longer owns. A conflict leaves the
+    // text in the client's composer/outbox to resend deliberately.
+    const current = store.bot(bot.id);
+    if (!current) throw Object.assign(new Error("no such bot"), { status: 404 });
+    if (!store.taskByThread(bot.id, threadId)) {
+      throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
+    }
+    if (current.threadId !== threadId) {
+      throw Object.assign(new Error("the bot switched tasks before it could receive the message"), {
+        status: 409,
+      });
+    }
+    // a Stop during the steer await already handed a Send now back
+    if (isSendCancelled(sendId) || (ask && askStopped(ask))) return { ok: true as const, cancelled: true as const, threadId };
+    if (steered) {
+      // an ask the engine accepted counts as delivered: a replay would answer it twice
+      if (!current.busy && !ask) {
+        throw Object.assign(
+          new Error("the running turn ended before the steered message could be recorded"),
+          { status: 409 },
+        );
+      }
+      clearUnattended(current.id);
+      resumePaneWakes(current.id);
+      // the user joined this turn, so its finish alerts
+      paneNoteTurnThreads.delete(threadId);
+      recorded = true;
+      const message = ask
+        ? store.patchMessage(threadId, ask.id, { steered: true, quick: { state: "handoff" } }) ?? ask
+        : store.appendMessage(threadId, {
+          role: "user",
+          kind: "text",
+          text,
+          replyToId: replyTo?.id,
+          sendId,
+          steered: true,
+          call,
+        });
+      peerInput?.accept(message);
+      cancelUsageWait?.(bot.id, undefined, true);
+      markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
+      return { ok: true as const, steered: true as const, threadId, message };
+    }
+    // an edit or rewind during the steer await drops the ask
+    if (ask && !pending(store, threadId, ask)) return { ok: true as const, cancelled: true as const, threadId };
+    cancelUsageWait?.(bot.id);
+    if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
+      // an idle bot takes the ask as an ordinary turn
+      const userMessage = (ask && store.patchMessage(threadId, ask.id, { quick: undefined })) || undefined;
+      const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, userMessage, call });
+      return sendPostReceipt(started, threadId);
+    }
+    const queued = queueId ? { id: queueId, skipped: false } : queueSteeredMessage(current.id, threadId, text, {
+      replyToId: replyTo?.id,
+      sendId,
+      after,
+      call,
+      // Reply quote only - startTurn wraps reactions when this drains.
+      prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
+    });
+    if (queued.skipped) {
+      return { ok: true as const, cancelled: true as const, threadId };
+    }
+    if (ask) store.patchMessage(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
+    if (busyResumeThreads.has(threadId)) void adapter?.interruptTurn(threadId).catch(() => {});
+    markChatLatency({ sendId, threadId }, "queue.decided", { queueId: queued.id });
+    return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+  };
+  const startQuick = (quick: QuickRouting, botId: string, threadId: string, ask: Message) => {
+    const settle = trackQuickAsk(botId, threadId, ask.id);
+    void answerQuick({
+      store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage,
+      handoff: async (row) => {
+        const current = store.bot(botId);
+        if (current?.threadId !== threadId) throw new Error("the bot switched tasks before it could receive the message");
+        await deliverBusy(current, threadId, row.text ?? "", { adapter: instanceForBot(current, threadId)?.adapter, after: false, ask: row });
+      },
+      drain: drainQueuedSends,
+    }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
@@ -143,7 +276,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
         },
       });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: patched && clientMessage(patched) });
     },
     send: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const body = await readBody(req);
@@ -174,6 +307,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         markChatLatency({ sendId, threadId }, "post.received");
       }
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      const call = parseCallTag(body.call);
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -191,7 +325,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               };
               return accepted.message.steered
                 ? { ...canonical, steered: true as const }
-                : canonical;
+                : accepted.message.quick ? { ...canonical, quick: true as const } : canonical;
             }
             const queued = queuedSteeredMessage(bot.id, threadId, sendId);
             if (queued) {
@@ -227,88 +361,18 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           // busy flips only after preparation, so without this check rapid
           // sends race the claim and receive a false busy rejection.
           if (currentAtStart.busy || botHasActiveTurn(bot.id, threadId)) {
-            let steered = false;
-            let peerInput: ReturnType<typeof beginPeerUserReply>;
-            if (steersSend(adapter, currentAtStart.busy, body.deliver === "after")) {
-              const turnOpts = {
-                replyTo,
-                messages: store.activePath(threadId),
-                userName: cfg.profile?.name?.trim() || "User",
-                delivered: store.taskByThread(bot.id, threadId)?.reactionsDelivered,
-              };
-              // Reactions count only once the model took them in; an engine
-              // that cannot tell leaves them to the next turn's prompt.
-              const consumable = adapter.capabilities.steerConsumed === true;
-              const prompt = consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName);
-              peerInput = beginPeerUserReply(bot.id, threadId, prompt);
-              const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
-              steered = await adapter
-                .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
-                  if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
-                }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
-                .catch(() => false);
-              if (!steered) peerInput?.cancel();
-            }
-            // steer() is awaited adapter work. The turn can settle, the task can
-            // switch, or the whole bot can be deleted before its acknowledgement
-            // arrives. Re-read every ownership invariant before appending even a
-            // successful steer; otherwise that late acknowledgement writes a user
-            // message into a task the bot no longer owns. A conflict leaves the
-            // text in the client's composer/outbox to resend deliberately.
-            const current = store.bot(bot.id);
-            if (!current) throw Object.assign(new Error("no such bot"), { status: 404 });
-            if (!store.taskByThread(bot.id, threadId)) {
-              throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
-            }
-            if (current.threadId !== threadId) {
-              throw Object.assign(new Error("the bot switched tasks before it could receive the message"), {
-                status: 409,
-              });
-            }
-            // a Stop during the steer await already handed a Send now back
-            if (sendId && isSendCancelled(sendId)) return { ok: true as const, cancelled: true as const, threadId };
-            if (steered) {
-              if (!current.busy) {
-                throw Object.assign(
-                  new Error("the running turn ended before the steered message could be recorded"),
-                  { status: 409 },
-                );
-              }
-              clearUnattended(current.id);
-              resumePaneWakes(current.id);
-              // the user joined this turn, so its finish alerts
-              paneNoteTurnThreads.delete(threadId);
-              const message = store.appendMessage(threadId, {
-                role: "user",
-                kind: "text",
-                text,
-                replyToId: replyTo?.id,
-                sendId,
-                steered: true,
-              });
-              peerInput?.accept(message);
-              cancelUsageWait?.(bot.id, undefined, true);
+            const after = body.deliver === "after";
+            // a call order waited for a yes; it goes to the bot, never to Quick answers
+            if (!call?.order && quick && routesQuick({
+              bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
+              deliverAfter: after, replyTo, queueId, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
+            })) {
+              const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
-              return { ok: true as const, steered: true as const, threadId, message };
+              startQuick(quick, bot.id, threadId, message);
+              return { ok: true as const, quick: true as const, threadId, message };
             }
-            cancelUsageWait?.(bot.id);
-            if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
-              const started = await startTurn(bot.id, text, { threadId, replyTo, sendId });
-              return sendPostReceipt(started, threadId);
-            }
-            const queued = queueId ? { id: queueId, skipped: false } : queueSteeredMessage(current.id, threadId, text, {
-              replyToId: replyTo?.id,
-              sendId,
-              after: body.deliver === "after",
-              // Reply quote only - startTurn wraps reactions when this drains.
-              prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
-            });
-            if (queued.skipped) {
-              return { ok: true as const, cancelled: true as const, threadId };
-            }
-            if (busyResumeThreads.has(threadId)) void adapter?.interruptTurn(threadId).catch(() => {});
-            markChatLatency({ sendId, threadId }, "queue.decided", { queueId: queued.id });
-            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+            return await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call });
           }
           // Stop cleared `busy`, but the driver holds the thread for up to
           // the cancel grace and would refuse the dispatch. Queue it - that
@@ -322,6 +386,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               replyToId: replyTo?.id,
               sendId,
               after: body.deliver === "after",
+              call,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             if (held.skipped) return { ok: true as const, cancelled: true as const, threadId };
@@ -331,13 +396,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           const syncUntil = !queueId && threadSyncGate.enabled ? syncHold.until(threadId) : undefined;
           if (syncUntil !== undefined) {
             const held = queueSteeredMessage(bot.id, threadId, text, {
-              replyToId: replyTo?.id, sendId, syncUntil,
+              replyToId: replyTo?.id, sendId, syncUntil, call,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             markChatLatency({ sendId, threadId }, "queue.decided", { queueId: held.id });
             return { ok: true as const, queued: true as const, reason: "sync" as const, queueId: held.id, threadId };
           }
-          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId });
+          const started = await startTurn(bot.id, text, { threadId, replyTo, sendId, call });
           return sendPostReceipt(started, threadId);
         }),
       ).finally(() => { if (queueId) drainQueuedSends(); });
@@ -430,7 +495,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (typeof instance.prepare !== "function") {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
       }
-      void instance.prepare().catch(() => {});
+      const { model, effort } = bot.modelSelection;
+      void instance.prepare(undefined, { threadId: bot.threadId, model, effort, approval: bot.autoApprove ? "auto" : "ask" }).catch(() => {});
       return json(res, 200, { ok: true, prepared: true });
     },
     interrupt: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -455,6 +521,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         taskResumes.forgetBot(bot.id);
         cancelPeerUserReplies(bot.id);
         const returned = cancelQueuedSends(bot.id);
+        cancelQuickAsks(store, bot.id, [bot.threadId, runThread(routineRun) ?? bot.threadId]);
         if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
         store.patchBot(bot.id, { paneWakePaused: true });
         // a turn still preparing has no session to interrupt yet
@@ -483,6 +550,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       taskResumes.forgetBot(bot.id);
       cancelPeerUserReplies(bot.id);
       const returned = cancelQueuedSends(bot.id);
+      cancelQuickAsks(store, bot.id, [bot.threadId, bot.activeThreadId ?? bot.threadId]);
       if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
       store.patchBot(bot.id, { paneWakePaused: true });
       const stoppedThreadId = busyGroup?.threadId ?? bot.activeThreadId ?? bot.threadId;
@@ -511,6 +579,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const conversation = store.conversationForBot(bot.id, m[2]);
       if (!conversation) return json(res, 404, { error: "no such task" });
       if (conversation.group) {
+        if (conversation.group.hosted) return json(res, 409, { error: "team rooms don't continue tasks" });
         if (conversation.group.threadId !== m[2]) {
           return json(res, 409, { error: "switch to this channel task before continuing it" });
         }

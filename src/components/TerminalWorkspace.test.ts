@@ -2185,3 +2185,40 @@ it("shows Alt+N row titles only for workers 1 to 9 with 16 workers", async () =>
   expect(rows[9].title).toBe("");
   expect(rows[15].title).toBe("");
 });
+
+it("runs on a web bridge prop with no preload, without new-shell controls, and hands xterm the parse callback", async () => {
+  vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  let receive!: (event: { id: string; data: string; seq: number; done?: () => void }) => void;
+  let exit!: (event: { id: string; exitCode: number }) => void;
+  const write = vi.fn(async () => {});
+  const readBot = vi.fn(async () => ({ botId: "bot-web", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes: [{ sessionId: "pane-1", generation: 1, label: "codex-1", cwd: "C:\\work", main: false, exited: false }] }));
+  const webBridge: TerminalBridge = {
+    appearance: vi.fn(async () => null),
+    readBot,
+    open: vi.fn(async () => ({ id: "session-web", cwd: "", shell: "", output: "web snapshot", seq: 3, exitCode: null })),
+    write,
+    resize: vi.fn(async () => {}),
+    onData: (cb) => { receive = cb; return vi.fn(); },
+    onExit: (cb) => { exit = cb; return vi.fn(); },
+  };
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web", cwd: "C:\\work" }, visible: true, focusBlocked: false, onClose: vi.fn(), webBridge })));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(window.ogb).toBeUndefined();
+  expect(readBot).toHaveBeenCalledWith("bot-web");
+  expect(webBridge.open).toHaveBeenCalledTimes(1);
+  expect(host.querySelector('[aria-label="Choose a folder"]')).toBeNull();
+  expect(host.textContent).toContain("work");
+  const done = vi.fn();
+  await act(async () => { receive({ id: "session-web", data: "live", seq: 4, done }); });
+  expect(terminal.write).toHaveBeenLastCalledWith("live", done);
+  terminal.__emitData("\x1b[A");
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(write).toHaveBeenCalledWith("session-web", "\x1b[A");
+  await act(async () => { exit({ id: "session-web", exitCode: 1 }); });
+  expect(host.textContent).toMatch(/exited/i);
+  expect([...host.querySelectorAll("button")].some((el) => /New shell|Restart|새 셸/i.test(el.textContent ?? ""))).toBe(false);
+});

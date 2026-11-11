@@ -74,6 +74,19 @@ function db(): DatabaseSync {
 
 export { db as messageDatabase };
 
+/** Its own read-only handle, for the backup worker: no import, no schema change, no write. */
+export function openThreadExport(file: string) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  const rows = database.prepare("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid");
+  const leaf = database.prepare("SELECT active_leaf_id AS id FROM thread_state WHERE thread_id = ?");
+  return {
+    threadIds: () => (database.prepare("SELECT DISTINCT thread_id AS id FROM messages").all() as Array<{ id: string }>).map((row) => row.id),
+    rows: (threadId: string) => rows.iterate(threadId) as Iterable<{ json: string }>,
+    activeLeafId: (threadId: string) => (leaf.get(threadId) as { id: string | null } | undefined)?.id ?? null,
+    close: () => database.close(),
+  };
+}
+
 // SAFETY: Stored rows use the Message envelope; preview fields are scrubbed on every read.
 const rowToMessage = (row: { json: string }): Message => redactToolMessage(JSON.parse(row.json) as Message);
 
@@ -259,6 +272,13 @@ export function botRepliesPerDay(bounds: readonly number[]): number[] {
   return rows.map((row) => row.count);
 }
 
+/** Time of the first bot text reply, or null before any. */
+export function firstBotReplyAt(): number | null {
+  // SAFETY: This SELECT list is one MIN over an INTEGER column.
+  const row = db().prepare("SELECT MIN(at) AS at FROM messages WHERE role = 'bot' AND kind = 'text'").get() as { at: number | null } | undefined;
+  return row?.at ?? null;
+}
+
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
@@ -354,12 +374,13 @@ export function searchSnippet(haystack: string, needle: string): Pick<SearchHit,
  * repeat it; inside one chat (find bar) it stays newest first, so next and
  * previous follow the transcript. One ordered LIKE scan, deliberately: local
  * transcripts are megabytes at most, a scan is milliseconds, and it needs
- * no FTS extension to exist. In one chat, `before` pages past that hit. */
+ * no FTS extension to exist. In one chat, `before` pages past that hit.
+ * `skip` threads never count toward `limit`. */
 export function searchMessages(
   query: string,
   limit = 40,
   threadId?: string,
-  { before, chips = false }: { before?: string; chips?: boolean } = {},
+  { before, chips = false, skip }: { before?: string; chips?: boolean; skip?: ReadonlySet<string> } = {},
 ): SearchHit[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -394,7 +415,7 @@ export function searchMessages(
     : `lower(json_extract(json, '$.tool.name', '$.tool.summary', '$.tool.detail.input', '$.tool.detail.output', '$.tool.detail.diff')) LIKE ?2 ESCAPE '\\'${decoded}`;
   // Sorts row ids only; the hit loop reads each row once it needs it.
   const ordered = db().prepare(
-    "SELECT rowid AS row FROM messages " +
+    "SELECT rowid AS row, thread_id FROM messages " +
       `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\' AND json_extract(json, '$.summarized') IS NOT 1) ` +
       "   OR (kind = 'activity' AND ((text IS NOT NULL AND json_extract(json, '$.comm') IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\') " +
       `     OR (lower(json) LIKE ?2 ESCAPE '\\' AND ${gate})))) ORDER BY ${order}at DESC, rowid DESC`,
@@ -416,7 +437,8 @@ export function searchMessages(
   const hits: SearchHit[] = [];
   const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : [])];
   const rows = ordered.iterate(...args);
-  for (const { row: rowid } of rows) {
+  for (const { row: rowid, thread_id } of rows) {
+    if (skip?.has(String(thread_id))) continue;
     // SAFETY: This SELECT list is thread_id, id, at, role, kind, text, tool_json, from_name.
     const row = fetch.get(rowid) as Row;
     const haystack = row.kind === "activity" ? activityHaystack(row.tool_json, row.text, chips) : (row.text ?? "");

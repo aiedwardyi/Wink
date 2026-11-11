@@ -90,13 +90,16 @@ export interface Message {
     signIn?: boolean;
     accountId?: string;
     folder?: string;
-    usageLimit?: { resetsAt: number | null };
+    usageLimit?: { resetsAt: number | null; model?: boolean };
     usageWait?: import("../../server/limit-wait-store").UsageWaitView;
   };
   /** user messages sent into a running turn - the model saw it mid-turn */
   steered?: boolean;
+  /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
+  quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
   streamWhole?: number;
@@ -119,6 +122,10 @@ export interface Message {
   sendId?: string;
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
+  /** Team rooms: the room log entry this line mirrors, its author and files. */
+  author?: { kind: "host" | "person" | "bot"; id: string; name: string };
+  roomEntryId?: string;
+  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number }>;
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
@@ -175,6 +182,9 @@ export interface Group {
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
+  /** A team room this PC hosts; `room` is its live roster. */
+  hosted?: { roomId: string };
+  room?: { name: string; people: Array<{ id: string; name: string }> } | { missing: true };
 }
 
 /** One of a channel's independent conversations. The channel's threadId
@@ -252,6 +262,7 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
+  createdAt?: number;
   color: MausColor;
   mascotExpression?: string | null;
   /** A legacy recolorable face or a fixed built-in pack icon. */
@@ -353,7 +364,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; terminalLive?: boolean; modelDial?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<
@@ -486,6 +497,8 @@ export interface AppState {
   hasConnected: boolean;
   /** true once the first `hydrate` action has landed and state.bots reflects the real snapshot */
   hydrated: boolean;
+  /** The server's bot list file is there but did not load: an empty `bots` is not a first run. */
+  botsUnreadable: boolean;
   error: string | null;
   mascotMotion: {
     botId: string;
@@ -538,6 +551,7 @@ export type Action =
       type: "hydrate";
       bots: Bot[];
       groups: Group[];
+      botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
       sidebarOrder: SidebarOrder;
     }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { acceptedSendMatch, parseSendId, SendSequencer, sendFingerprint } from "./send-idempotency.ts";
 import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
+import { parseCallTag } from "./live-call.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -14,7 +15,8 @@ import type { BotRecord, Message } from "./store.ts";
 const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
 const start = source.indexOf('      const body = await readBody(req);', source.indexOf('    send: async ('));
 const end = source.indexOf('      return json(res, 202, receipt);', start) + '      return json(res, 202, receipt);'.length;
-const route = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+const busy = source.slice(source.indexOf("  const deliverBusy = async ("), source.indexOf("  const startQuick = "));
+const route = ts.transpileModule(busy + source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
 // Run only the POST body; importing the server would boot its listeners.
 const runPost = new Function("scope", `return (async () => { with (scope) { ${route} } })();`) as (scope: object) => Promise<{ status: number; body: any }>;
 
@@ -39,7 +41,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, sendPostReceipt,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,
@@ -47,9 +49,9 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
     instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
     beginPeerUserReply, cfg: {},
-    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text,
+    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [],
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
-    resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain,
+    resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
   };
   const hold = (text: string) => {
     const sendId = `send-now-${text.padEnd(16, "0")}`;

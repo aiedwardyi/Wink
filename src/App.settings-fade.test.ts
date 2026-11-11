@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { SIDEBAR_COLLAPSED_KEY } from "@/lib/sidebar-preferences";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 let host: HTMLDivElement;
@@ -61,6 +62,11 @@ describe("Settings fade", () => {
   });
 
   it("keeps phone bot details mounted and inert while it fades out, then unmounts", async () => {
+    // a collapsed list has no fold to animate, and happy-dom reports a canceled one as unhandled
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
     vi.stubGlobal("innerWidth", 390);
     await act(async () => window.dispatchEvent(new Event("resize")));
     await act(async () => button("Open Scout's profile")!.click());

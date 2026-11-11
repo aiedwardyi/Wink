@@ -107,7 +107,7 @@ describe("Codex summaries", () => {
     mode = "usage";
     const onUsage = vi.fn();
     await expect(instance.generateText!("cleanup", { onUsage })).resolves.toBe(SUMMARY);
-    expect(onUsage).toHaveBeenLastCalledWith(18_908);
+    expect(onUsage).toHaveBeenLastCalledWith({ input: 17_879, output: 1_029 });
   });
 
   it("leaves absent text usage unreported", async () => {
@@ -124,7 +124,7 @@ describe("Codex summaries", () => {
       return message;
     });
     const build = createSummaryBuild({
-      store: { activePath: () => [...messages], activeLeaf: () => messages.at(-1)!.id, messagesFor: () => messages, appendCompaction },
+      store: { activePath: () => [...messages], activeLeaf: () => messages.at(-1)!.id, messagesFor: () => messages, appendCompaction, taskByThread: () => undefined },
       sendInputs: async () => ({ instance, contextWindow: 200_000, taskRecordText: "Verify the pending research" }),
       busy: () => false, userName: () => "User",
     });

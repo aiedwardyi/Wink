@@ -287,16 +287,16 @@ describe("provider session recycle after Wink compaction", () => {
   });
 
   it("leaves the native budget off for a driver whose input is an invocation total", () => {
-    // Claude's catalog now states 200k, but its turn `input` sums every tool
+    // Claude's catalog now states 1M, but its turn `input` sums every tool
     // round's cache read, so the window comparison stays gated off.
     const knownWindow = knownCatalogContextWindow(STATIC_CLAUDE_MODELS, "claude-sonnet-5-5");
-    expect(knownWindow).toBe(200_000);
+    expect(knownWindow).toBe(1_000_000);
     const gated = (turnInputIsPromptSize: boolean) =>
       shouldRecycleProviderSession({
         compacted: false,
         lastTurnToolRounds: 2,
         sessionToolRounds: 2,
-        lastTurnInputTokens: 300_000,
+        lastTurnInputTokens: 600_000,
         nativeTokenBudget:
           turnInputIsPromptSize && knownWindow ? nativeSessionTokenBudget(knownWindow) : 0,
       });
@@ -452,6 +452,16 @@ describe("provider session recycle by native prompt size", () => {
     store.setResumeCursor(bot.id, "claude", "replay-2", bot.threadId);
     store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 112_000, last: 118_000 }, 200_000);
     expect(recycleOnSend(store, bot.id, bot.threadId, send("four"), "claude", model)).toBe(false);
+  });
+
+  it("records each report's growth over the session's last call", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.setResumeCursor(bot.id, "claude", "session-1", bot.threadId);
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 33_741, last: 33_741 })).toMatchObject({ last: 33_741, growth: 0 });
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 40_000, last: 58_114 })).toMatchObject({ first: 33_741, last: 58_114, growth: 24_373 });
+    store.setResumeCursor(bot.id, "claude", "session-2", bot.threadId);
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 20_000, last: 26_000 })).toMatchObject({ first: 20_000, last: 26_000, growth: 6_000 });
   });
 
   it("keeps the 24/48 tool rules for an engine that reports no prompt size", () => {

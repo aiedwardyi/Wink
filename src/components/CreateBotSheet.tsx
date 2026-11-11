@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Loader2 } from "lucide-react";
 
+import { nextWinkAvatar } from "../../shared/bot-avatar";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { api, useStore, type Bot } from "@/state/store";
 import { defaultModelSelection } from "@/lib/default-engine";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
-import { OrbitMark } from "./OrbitMark";
+import { BotAvatar } from "./Avatar";
 import { useI18n } from "@/lib/i18n";
 
 export function CreateBotSheet({
@@ -23,7 +24,7 @@ export function CreateBotSheet({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
-  const [name, setName] = useState(() => t("createBot.namePlaceholder"));
+  const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,8 +81,8 @@ export function CreateBotSheet({
   };
 
   const submit = async () => {
-    const normalized = name.trim();
-    if (saving || !normalized) return;
+    const normalized = name.trim() || t("createBot.namePlaceholder");
+    if (saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -127,7 +128,7 @@ export function CreateBotSheet({
         <div className="flex items-center gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-3">
           <div className="relative shrink-0">
             <div className="absolute inset-1 rounded-full bg-accent/20 blur-xl" />
-            <OrbitMark size={54} />
+            <BotAvatar bot={{ color: "white", mascotStyle: nextWinkAvatar(state.bots) }} size={54} />
           </div>
           <h1 id="create-bot-title" className="text-[20px] font-semibold tracking-[-0.02em] text-ink">
             {t("createBot.title")}
@@ -183,8 +184,8 @@ export function CreateBotSheet({
                   id="create-bot-folder"
                   value={folder}
                   onChange={(event) => setFolder(event.target.value)}
-                  placeholder={t("createBot.folderPlaceholder")}
-                  className="min-w-0 flex-1 rounded-xl border border-hairline/50 bg-inset px-4 py-2.5 font-mono text-[13px] text-ink placeholder:text-ink-secondary focus:border-accent/70 focus:outline-none"
+                  placeholder={t(canPick ? "createBot.folderPlaceholder" : "createBot.folderTypePlaceholder")}
+                  className="min-w-0 flex-1 rounded-xl border border-hairline/50 bg-inset px-4 py-2.5 font-mono text-[13px] text-ink placeholder:font-sans placeholder:text-[15px] placeholder:text-ink-secondary focus:border-accent/70 focus:outline-none"
                 />
                 {canPick && (
                   <button
@@ -222,7 +223,7 @@ export function CreateBotSheet({
               )}
               <button
                 type="submit"
-                disabled={saving || !name.trim()}
+                disabled={saving}
                 className="flex min-w-[140px] items-center justify-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 max-sm:min-w-0 max-sm:flex-1"
               >
                 {saving && <Loader2 size={15} className="animate-spin" />}

@@ -4,6 +4,7 @@ export interface FocusComposerOptions {
   targetDocument?: Document;
   settingsOpen?: boolean;
   terminalOpen?: boolean;
+  onDeclined?: () => void;
 }
 
 export function composerNeedsTap(doc: Document = document): boolean {
@@ -71,7 +72,7 @@ export function focusComposer(doc: Document = document, target?: HTMLTextAreaEle
     if (!target || target.disabled || target.ownerDocument !== doc) return false;
     composer = target;
   } else {
-    const composers = [...doc.querySelectorAll<HTMLTextAreaElement>("[data-orbit-composer]:not(:disabled)")];
+    const composers = [...doc.querySelectorAll<HTMLTextAreaElement>("[data-orbit-composer]:not(:disabled), [data-team-room] textarea:not(:disabled)")];
     composer = composers.find((candidate) => candidate.getClientRects().length > 0) ?? composers[0];
   }
   if (!composer) return false;
@@ -123,12 +124,13 @@ export function shouldFocusComposerOnTranscriptClick(
 let scheduledFrame: number | null = null;
 
 export function focusComposerOnActivation(options: FocusComposerOptions = {}): void {
+  const { onDeclined } = options;
   const doc = options.targetDocument ?? (typeof document !== "undefined" ? document : null);
-  if (!doc || composerNeedsTap(doc)) return;
+  if (!doc || composerNeedsTap(doc)) return onDeclined?.();
 
   const raf = doc.defaultView?.requestAnimationFrame ?? (typeof requestAnimationFrame !== "undefined" ? requestAnimationFrame : null);
   const caf = doc.defaultView?.cancelAnimationFrame ?? (typeof cancelAnimationFrame !== "undefined" ? cancelAnimationFrame : null);
-  if (typeof raf !== "function") return;
+  if (typeof raf !== "function") return onDeclined?.();
 
   if (scheduledFrame !== null && typeof caf === "function") {
     caf(scheduledFrame);
@@ -137,13 +139,14 @@ export function focusComposerOnActivation(options: FocusComposerOptions = {}): v
 
   scheduledFrame = raf(() => {
     scheduledFrame = null;
-    if (composerNeedsTap(doc)) return;
-    if (isDialogActive(doc)) return;
-    if (isSettingsActive(doc, options.settingsOpen)) return;
-    if (isTerminalActive(doc, options.terminalOpen)) return;
-    if (isSearchActive(doc)) return;
-    if (isSidebarNavigationActive(doc, options.activatedElement)) return;
-
-    focusComposer(doc, options.composer);
+    if (
+      composerNeedsTap(doc) ||
+      isDialogActive(doc) ||
+      isSettingsActive(doc, options.settingsOpen) ||
+      isTerminalActive(doc, options.terminalOpen) ||
+      isSearchActive(doc) ||
+      isSidebarNavigationActive(doc, options.activatedElement) ||
+      !focusComposer(doc, options.composer)
+    ) onDeclined?.();
   });
 }

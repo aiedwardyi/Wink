@@ -6,13 +6,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-import { SKINS, SKIN_IDS, DEFAULT_SKIN, LIGHT_SKIN_IDS, applySkin, isTerminalSkin, isTerminalToolSkin, readSkin, type SkinId } from "./skins";
+import { SKINS, SKIN_IDS, DEFAULT_SKIN, LIGHT_SKIN_IDS, applySkin, isTerminalSkin, isTerminalToolSkin, readSkin, readTriedSkins, type SkinId } from "./skins";
 import { terminalTheme } from "./terminal-appearance";
 
-const css = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../styles.css"),
-  "utf8",
-).replace(/\r\n/g, "\n");
+const css = ["../styles.css", "../skins/fresh-dark.css"]
+  .map((file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), "utf8"))
+  .join("\n")
+  .replace(/\r\n/g, "\n");
 
 const blocks = new Set(
   [...css.matchAll(/\[data-skin="([a-z-]+)"\]/g)].map(([, id]) => id),
@@ -214,6 +214,16 @@ describe("skins", () => {
     expect(SKIN_IDS).not.toContain("letelier");
   });
 
+  it("sets Precision in Space Grotesk with bubbles on both sides, wide, and no side line", () => {
+    expect(css.match(/\[data-skin="precision"\]\s*\{([^}]*)\}/)![1]).toMatch(/--font-sans:\s*"Space Grotesk"/);
+    expect(css).toMatch(/\[data-skin="precision"\]:lang\(ko\) \{\s*--font-sans: "Inter"/);
+    const own = css.match(/@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
+    expect(own).toContain("max-width: min(54rem, 94%);");
+    expect(own).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
+    expect(own).toMatch(/\[data-orbit-message="user"\] \[data-orbit-message-content\] \{\s*box-shadow: none;/);
+    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
+  });
+
   it("gives every non-Midnight skin its own focus and control tokens", () => {
     // Midnight inherits Grok-blue --color-focus from @theme. A light skin
     // that skips the token wears that blue on stone, paper, or porcelain.
@@ -406,9 +416,8 @@ describe("Ledger", () => {
       expect(SKIN_IDS).toContain(id);
     }
     const ids: readonly string[] = SKIN_IDS;
-    expect(ids).not.toContain("graphite");
     expect(ids).not.toContain("boreal");
-    expect(css).not.toMatch(/\[data-skin="graphite"\]/);
+    expect(css).not.toMatch(/\[data-skin="boreal"\]/);
   });
 
   it("is a neutral gray, distinct from Atelier's paper and Lagoon's porcelain", () => {
@@ -698,6 +707,109 @@ describe("bundled-face skins", () => {
       expect(spread(cssToken(skin.id, "--color-accent")!), skin.id).toBeLessThanOrEqual(64);
       expect(spread(cssToken(skin.id, "--color-app")!), skin.id).toBeLessThanOrEqual(12);
     }
+  });
+});
+
+const FRESH_SKINS = [
+  { id: "inkwell", name: "Inkwell", face: "Atkinson Hyperlegible Next", file: "AtkinsonHyperlegibleNext-Variable.woff2", ratios: [12.4, 11.5, 1.12, 1.2] },
+  { id: "graphite", name: "Graphite", face: "Lexend", file: "Lexend-Variable.woff2", ratios: [10.9, 9.8, 1.15, 1.28] },
+  { id: "moss", name: "Moss", face: "Nunito", file: "Nunito-Variable.woff2", ratios: [12.6, 9.3, 1.12, 1.5] },
+] as const;
+
+describe("Inkwell, Graphite and Moss", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
+
+  it("registers the three dark skins and keeps Wink Violet, Wink Black, Pewter and the default", () => {
+    for (const skin of FRESH_SKINS) {
+      expect(SKINS.some((entry) => entry.id === skin.id && entry.name === skin.name)).toBe(true);
+      expect(LIGHT_SKIN_IDS.has(skin.id)).toBe(false);
+    }
+    for (const id of ["wink-violet", "wink-black", "pewter"]) expect(SKIN_IDS).toContain(id);
+    expect(DEFAULT_SKIN).toBe("precision");
+  });
+
+  it("keeps the picked bot text, user text and bubble contrast", () => {
+    for (const { id, ratios } of FRESH_SKINS) {
+      const [ink, app, card, user] = ["--color-ink", "--color-app", "--color-card", "--color-bubble-user"].map((name) => cssToken(id, name)!);
+      [contrast(ink, card), contrast(ink, user), contrast(card, app), contrast(user, app)].forEach((ratio, i) => {
+        expect(Math.abs(ratio - ratios[i]), `${id} ${i}`).toBeLessThan(0.06);
+      });
+    }
+  });
+
+  it.each(FRESH_SKINS)("lets $id's root-level tokens outrank the :root defaults", ({ id }) => {
+    const rule = css.match(new RegExp(`:root\\[data-skin="${id}"\\],\\s*\\[data-skin="${id}"\\]\\s*\\{([^}]*)\\}`));
+    expect(rule?.[1]).toContain("--color-accent-ink");
+  });
+
+  it("puts both sides in wide bubbles", () => {
+    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {';
+    const body = css.slice(css.indexOf(scope), css.indexOf("\n}\n", css.indexOf(scope)));
+    expect(body).toContain("max-width: min(54rem, 94%);");
+    expect(body).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
+    expect(body).toMatch(/\[data-orbit-message="user"\] \[data-orbit-message-content\] \{\s*background: var\(--color-bubble-user\);/);
+  });
+
+  it("names each face only in its own skin and preloads it only for that skin", () => {
+    const html = readFileSync(join(root, "index.html"), "utf8");
+    const map = html.match(/var font = \{([^}]*)\}/)![1];
+    const preload = [...map.matchAll(/"?([a-z-]+)"?: "(\w+)"/g)].map(([, id, font]) => [id, `${font}-Variable.woff2`]);
+    for (const { id, face, file } of FRESH_SKINS) {
+      expect(readdirSync(join(root, "public/fonts"))).toContain(file);
+      const body = css.match(new RegExp(`\\[data-skin="${id}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+      expect(body, id).toMatch(new RegExp(`--font-sans:\\s*"${face}"`));
+      expect(preload.find(([skin]) => skin === id)?.[1]).toBe(file);
+    }
+    for (const { id, face, file } of FRESH_SKINS.slice(0, 2)) {
+      expect(css).toContain(`font-family: "${face}";\n  src: url("/fonts/${file}") format("woff2");`);
+      expect(css.split(`"${face}"`).length - 1, face).toBe(2);
+      expect(preload.filter(([, font]) => font === file).map(([skin]) => skin)).toEqual([id]);
+    }
+  });
+});
+
+describe("Bot name on wide bubbles", () => {
+  const WIDE = ["precision", "inkwell", "graphite", "moss"];
+  const NAMED_ALREADY = [
+    "wink", "wink-cyber", "wink-violet", "wink-black", "wink-day", "community", "community-light", "code-review",
+    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
+  ];
+
+  function scopeBodies(id: string): string {
+    const bodies: string[] = [];
+    for (const match of css.matchAll(/@scope \(([^{]*)\) to \(\[data-skin\]\) \{/g)) {
+      if (!match[1].includes(`[data-skin="${id}"]`)) continue;
+      let depth = 0;
+      for (let i = match.index! + match[0].length - 1; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        else if (css[i] === "}" && --depth === 0) {
+          bodies.push(css.slice(match.index!, i));
+          break;
+        }
+      }
+    }
+    return bodies.join("\n");
+  }
+
+  const showsBotName = (id: string) =>
+    /(?:\[data-orbit-message="bot"\] )?\.orbit-message-speaker \{[^}]*display: block/.test(scopeBodies(id)) ||
+    new RegExp(String.raw`\[data-skin="${id}"\] \.orbit-message-speaker \{[^}]*display: block`).test(css);
+
+  it("shows the name on bot replies in each wide skin and no other skin gains it", () => {
+    for (const id of WIDE) {
+      expect(scopeBodies(id), id).toMatch(/\[data-orbit-message="bot"\] \.orbit-message-speaker \{[^}]*display: block/);
+      expect(scopeBodies(id), id).toMatch(/max-width: (?:min\(54rem, )?9[46]%/);
+    }
+    expect(SKIN_IDS.filter(showsBotName).sort()).toEqual([...NAMED_ALREADY, ...WIDE].sort());
+  });
+
+  it("hides the narrow skins' name and never names the user side", () => {
+    for (const id of SKIN_IDS.filter((skin) => !WIDE.includes(skin) && !NAMED_ALREADY.includes(skin))) expect(showsBotName(id), id).toBe(false);
+    for (const id of WIDE) expect(scopeBodies(id), id).not.toMatch(/\[data-orbit-message="user"\] \.orbit-message-speaker/);
+  });
+
+  it("leaves the name to the room's cluster label", () => {
+    for (const id of WIDE) expect(scopeBodies(id), id).toMatch(/\[data-room-transcript\] \.orbit-message-speaker \{\s*display: none;/);
   });
 });
 
@@ -1473,7 +1585,7 @@ describe("skin persistence", () => {
   });
 
   it("falls back to Precision for an unknown stored value", () => {
-    store.set("omb-skin", "graphite");
+    store.set("omb-skin", "boreal");
     expect(readSkin()).toBe("precision");
     expect(readSkin()).toBe(DEFAULT_SKIN);
   });
@@ -1487,6 +1599,21 @@ describe("skin persistence", () => {
     store.set("omb-skin", "midnight");
     expect(readSkin()).toBe("midnight");
     expect(readSkin()).not.toBe(DEFAULT_SKIN);
+  });
+
+  it("records every applied skin once as tried", () => {
+    applySkin("inkwell");
+    applySkin("precision");
+    applySkin("inkwell");
+    expect(readTriedSkins()).toEqual(["inkwell", "precision"]);
+    store.set("omb-skins-tried", "not json");
+    expect(readTriedSkins()).toEqual([]);
+  });
+
+  it.each(["wink-violet", "wink-black", "pewter"] as const)("applies and restores %s", (id) => {
+    applySkin(id);
+    expect(dataset.skin).toBe(id);
+    expect(readSkin()).toBe(id);
   });
 
   it("migrates a stored Catppuccin Mocha to Catppuccin Frappe", () => {

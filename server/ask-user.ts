@@ -6,12 +6,14 @@
 // bot's activity is never set to waiting-on-you.
 import { z } from "zod";
 
+import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 export const ASK_USER_TITLE = "Your bot has a question";
 export const ASK_USER_QUESTION_MAX = 2_000;
 export const ASK_USER_MAX_CHOICES = 5;
 const CHOICE_MAX = 200;
+const CLOSED_QUESTION_CHARS = 200;
 
 /** Anything malformed reads as empty, so the handler answers with a 4xx. */
 export const askUserRequestSchema = z
@@ -88,4 +90,34 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     deps.notifyQuestion(from, target, question);
   });
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
+}
+
+const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
+const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
+
+/** The bot's note when the person's message closed its open ask_user card unanswered. No `closerId`: a steer not yet in `messages`. */
+export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
+  const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
+  if (end < 0 || (closerId !== undefined && !sentByPerson(messages[end]!))) return [];
+  for (let i = end - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (sentByPerson(message)) return [];
+    if (!isAskUserCard(message)) continue;
+    const card = message.card!;
+    // a tapped choice can arrive before its answered patch
+    if (card.answered || card.dismissed || card.options.includes(text.trim())) return [];
+    if (botId && message.from?.botId !== botId) return [];
+    return [`[Your question card ("${replyExcerpt(card.subtitle, CLOSED_QUESTION_CHARS)}") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]`];
+  }
+  return [];
+}
+
+/** A room member's note, until it first speaks after the message that closed its card. */
+export function memberClosedAskNotes(messages: readonly Message[], botId: string): string[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.from?.botId === botId) return [];
+    if (sentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
+  }
+  return [];
 }

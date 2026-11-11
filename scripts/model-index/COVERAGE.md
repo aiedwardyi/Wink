@@ -1,3 +1,54 @@
+# Claude Fable 5.2, 2026-11-10
+
+40 published values added for Fable 5.2, read 2026-11-09 UTC. No other value changed.
+
+- AA: Intelligence Index 5.0.1 (with cost), FrontierCode 2.0, Terminal-Bench 4.0 and GDPval-AA 2.1 at low, medium, high, xhigh and max, from the [public model pages](https://artificialanalysis.ai/models/claude-fable-5-2). Terminal-Bench cost is the `terminalbench-4-0` cost per task in the same record. GDPval cost is the rendered Total Cost bar, rounded as AA shows it.
+- [Vals Legal Research Bench](https://www.vals.ai/benchmarks/legal_research): 46.154 at $3.956441 per test, board dated 2026-11-09.
+- [Anthropic list price](https://platform.claude.com/docs/en/about-claude/pricing): $8 input, $0.20 cache hit, $40 output per 1M tokens.
+- Gaps: Rams Index 0.6.1 and CyberBench 1.1 publish no Fable 5.2 score.
+- Meta's pricing page swapped its Standard and Contributor columns; the parser reads the header order. Prices did not change.
+
+Claude Fable 5 left the picker but stays charted for comparison. Picker model/chart gaps went from 13 to 12.
+
+| Chart | Missing before | Missing after | Filled | Newly missing |
+| --- | ---: | ---: | --- | --- |
+| Intelligence Index 5.0.1 | 2 | 1 | - | - |
+| FrontierCode 2.0 | 2 | 1 | - | - |
+| Terminal-Bench 4.0 | 1 | 1 | - | - |
+| GDPval-AA 2.1 | 1 | 1 | - | - |
+| Rams Index 0.6.1 | 3 | 4 | - | Claude Fable 5.2 |
+| CyberBench 1.1 | 3 | 3 | - | Claude Fable 5.2 (Claude Fable 5 left the picker) |
+| Legal Research Bench 1 | 1 | 1 | - | - |
+| List prices | 0 | 0 | - | - |
+| Total model/chart gaps | 13 | 12 | | |
+
+# Model Index refresh, 2026-11-09
+
+Each chart uses the newest version its source publishes, quoted, and a model the source does not publish stays a gap. 256 values changed and 35 were added. Older versions stay as inactive history, byte-for-byte apart from `active: false`.
+
+- Intelligence Index moved from v4.3.2 to [v5.0.1](https://artificialanalysis.ai/models), with cost per task from the same record. AA no longer publishes v4.3.2.
+- FrontierCode moved from 1.1 to [2.0](https://artificialanalysis.ai/evaluations/frontiercode-2-0). Costs were not backfilled. [1.1](https://artificialanalysis.ai/evaluations/frontiercode) is still published alongside it, and Cognition publishes 1.1 at most, so those rows and fills stay in the 1.1 history.
+- [GDPval-AA v2.1](https://artificialanalysis.ai/evaluations/gdpval-aa) Elos moved and GPT-6.1 Terra gained four efforts. Costs are the Cost per Task bar totals on the same page, rounded as AA shows them. Claude Haiku 5.5 costs carry AA's refusal estimate footnote.
+- Rams Index 0.6.1 republished its scores under the same edition and date. The previous numbers are in `rams-index-2026-11-03.json`.
+- Vals moved to 2026-11-05: Opus 5.5 and Sonnet 5.5 costs changed on both boards, scores did not.
+- Terminal-Bench 4.0 and list prices were re-read with no change. Google's pricing page is now Markdoc, which the parser reads.
+
+AA numbers come from its public model pages, one per effort. The keyed weekly run now reads the Intelligence Index version from the public page and stops that chart on a mismatch.
+
+| Chart | Missing before | Missing after | Newly missing | Still missing |
+| --- | ---: | ---: | --- | --- |
+| Intelligence Index 4.3.2 -> 5.0.1 | 1 | 2 | Claude Fable 5 | Claude Fable 5, Muse Spark 1.3 Contributor |
+| FrontierCode 1.1 -> 2.0 | 1 | 2 | Claude Fable 5 | Claude Fable 5, Muse Spark 1.3 Contributor |
+| Terminal-Bench 4.0 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| GDPval-AA 2.1 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| Rams Index 0.6.1 | 3 | 3 | - | Grok 4.6, Muse Spark 1.3, Muse Spark 1.3 Contributor |
+| CyberBench 1.1 | 3 | 3 | - | Claude Fable 5, GPT-6.1 Terra, Muse Spark 1.3 Contributor |
+| Legal Research Bench 1 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| List prices | 0 | 0 | - | - |
+| Total model/chart gaps | 11 | 13 | | |
+
+Counts use the 15 picker models and active charts only. GPT-6.1 Terra and Sol both show on 6 of 7 score charts. Sol alone shows on 7 of 7; Vals publishes no CyberBench score for Terra.
+
 # Model Index fill, 2026-11-03
 
 Design now uses [Rams Index 0.6.1](https://www.rams.ai/index), published 2026-10-29 and checked 2026-11-03: 12/15 picker models with published generation cost per page and 95% intervals. WebDev's 14/15 snapshot and filled Terra row remain inactive history, byte-for-byte apart from `active: false`. Security stays CyberBench 1.1 at 12/15: no verified 14/15 alternative or compatible missing-model fill was found. See `SEC-DESIGN.coverage.md` beside the card for the wider source audit.

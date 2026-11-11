@@ -227,7 +227,7 @@ describe("phone Back with the workers list", () => {
     expect(window.getSelection()?.toString()).toBe("");
     expect(index).toBe(1);
     for (let count = 0; count < 3; count++) {
-      await act(async () => startSelectMode(row, { x: 0, y: 0 }));
+      await act(async () => startSelectMode(row, { x: 0, y: 0 }, "Copy"));
       expect(index).toBe(2);
       await act(async () => document.body.dispatchEvent(new Event("touchstart", { bubbles: true })));
       await settle();

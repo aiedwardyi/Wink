@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Smartphone, Tablet } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 import { useI18n, type Translate } from "@/lib/i18n";
@@ -160,11 +160,6 @@ export function ConnectDevices() {
 
   return (
     <div data-devices-settings className="animate-fade-in">
-      {phoneOpened && <ul data-phone-list className="mb-3 flex flex-col gap-1.5">
-        {phones.map((item) => <li key={item.id} className="text-[13px] text-ink">
-          {t(`settings.phone.kind.${item.kind}`)}<span className="text-ink-secondary"> · {activeText(item.lastSeen, Date.now(), t)}</span>
-        </li>)}
-      </ul>}
       <p className="break-keep text-[13px] leading-relaxed text-ink-secondary">{t("settings.devices.b.intro")}</p>
       {ready ? <div data-pc-ready data-complete className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-secondary">
         <StepMark done step={1} label={t("settings.phone.pcReady")} />
@@ -200,6 +195,15 @@ export function ConnectDevices() {
           </> : <p className={help}>{t(setup.help)}</p>)}
         </Step>
       </ol>}
+      {phoneOpened && <ul data-phone-list className="mt-2 flex flex-col gap-2">
+        {phones.map((item) => <li key={item.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-secondary">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-control text-ink-secondary">
+            {item.kind === "ipad" ? <Tablet size={15} aria-hidden /> : <Smartphone size={15} aria-hidden />}
+          </span>
+          <span className="text-ink">{t(`settings.phone.kind.${item.kind}`)}</span>{" "}
+          <span>· {activeText(item.lastSeen, Date.now(), t)}</span>
+        </li>)}
+      </ul>}
       <div className="mt-3 border-t border-hairline/40 pt-3">
         <SegmentedRow
           label={t("settings.devices.add")}

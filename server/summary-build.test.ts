@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
+import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 const MINUTE = 60_000;
@@ -28,11 +29,16 @@ function overBudgetThread(prefix: string, turns = 70): Message[] {
   ]).flat();
 }
 
+const day = `${String(new Date(1_000).getMonth() + 1).padStart(2, "0")}-${String(new Date(1_000).getDate()).padStart(2, "0")}`;
+const valuesBlock = (typed: string[]) => [TYPED_VALUES_HEADER, ...typed.map((text) => `- ${day} ${text}`)].join("\n");
+const requestBlock = valuesBlock(Array.from({ length: 36 }, (_, index) => `request ${index + 10}`));
+
 function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>) {
   const threads = new Map<string, Message[]>();
   const appended: Array<{ threadId: string; id: string; compaction: ContextCompactionV1 }> = [];
-  const state = { busy: false, generateText };
+  const state = { busy: false, generateText, window: WINDOW, nativeAt: undefined as number | null | undefined, nativePrompt: undefined as { last: number; growth: number } | undefined, cursor: "session" };
   const store = {
+    taskByThread: () => ({ nativePrompt: state.nativePrompt && { cursor: "session", first: 1_000, ...state.nativePrompt } }) as never,
     activePath: (threadId: string) => [...(threads.get(threadId) ?? [])],
     activeLeaf: (threadId: string) => threads.get(threadId)?.at(-1)?.id ?? null,
     messagesFor: (threadId: string) => threads.get(threadId) ?? [],
@@ -47,8 +53,10 @@ function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) 
     store,
     sendInputs: async () => ({
       instance: { driverKind: "claude", generateText: state.generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 },
-      contextWindow: WINDOW,
+      contextWindow: state.window,
       taskRecordText: "Goal: build",
+      nativeAt: state.nativeAt,
+      cursor: state.cursor,
     }),
     busy: () => state.busy,
     userName: () => "User",
@@ -97,6 +105,9 @@ const graceInputs = (messages: Message[]) => ({
   taskRecordText: "Goal: build",
   grace,
 });
+const nativeTurn = (id: string, text: string) => [message(`${id}-u`, text), message(`${id}-b`, "noted", { role: "bot" })];
+const harbor = (tokens: number) => "the harbor lights came on early and the tide was calm.\n".repeat(Math.ceil((tokens * 3) / 55));
+const gate = { window: 100_000, nativeAt: 67_000 };
 
 describe("summary build after settle", () => {
   beforeEach(() => {
@@ -120,7 +131,7 @@ describe("summary build after settle", () => {
 
     expect(generateText).toHaveBeenCalledOnce();
     expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction).toMatchObject({ summary: "built", contextWindow: WINDOW });
+    expect(appended[0]!.compaction).toMatchObject({ summary: `built\n\n${requestBlock}`, contextWindow: WINDOW });
     const lines = vi.mocked(console.info).mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[summary] "));
     expect(JSON.parse(lines[0]!.slice("[summary] ".length))).toMatchObject({ botId: "bot", threadId: "t", phase: "build", run: 1, deadlineMs: 240_000, result: "ok" });
 
@@ -128,6 +139,16 @@ describe("summary build after settle", () => {
     const { prepared, summarize } = await sendPrepares("t", "next");
     expect(summarize).not.toHaveBeenCalled();
     expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
+  });
+
+  it("builds a summary equal to the model text when the chat has no typed values", async () => {
+    const { threads, appended, build } = setup(vi.fn(async () => "SUMMARY\nbuilt"));
+    threads.set("t", overBudgetThread("a").map((item) => ({ ...item, text: item.role === "bot" ? "an outcome" : "a request" })));
+
+    build.onSettled("bot", "t");
+    await build.idle();
+
+    expect(appended.map((item) => item.compaction.summary)).toEqual(["built"]);
   });
 
   it("lands an oversized build trimmed to fit", async () => {
@@ -139,7 +160,9 @@ describe("summary build after settle", () => {
     await build.idle();
 
     expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction.summary).toMatch(/^built line 0\n[\s\S]*\nbuilt line \d+\n\[summary trimmed to fit\]$/);
+    const [text, ...blocks] = appended[0]!.compaction.summary.split("\n\n");
+    expect(text).toMatch(/^built line 0\n[\s\S]*\nbuilt line \d+\n\[summary trimmed to fit\]$/);
+    expect(blocks).toEqual([requestBlock]);
     const lines = vi.mocked(console.warn).mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[summary] "));
     expect(JSON.parse(lines[0]!.slice("[summary] ".length))).toMatchObject({ phase: "build", result: "trimmed" });
   });
@@ -219,7 +242,7 @@ describe("summary build after settle", () => {
     await build.idle();
 
     expect(calls).toHaveLength(1);
-    expect(appended.map((item) => item.compaction.summary)).toEqual(["built"]);
+    expect(appended.map((item) => item.compaction.summary)).toEqual([`built\n\n${requestBlock}`]);
   });
 
   it("send during build waits then reuses the row without a second summarize call", async () => {
@@ -348,6 +371,72 @@ describe("summary build after settle", () => {
       threadId: "t", sendId: "unsafe-send", mode: "waited", waitedMs: 5_000, reason: "headroom",
     });
     expect(lines.join("\n")).not.toContain("large request");
+  });
+
+  it("a native engine's resumed send skips the build and lets it finish", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build } = setup(generateText);
+    threads.set("t", overBudgetThread("a"));
+    build.onSettled("bot", "t");
+    await tick();
+    state.busy = true;
+    const inputs = graceInputs(threads.get("t")!);
+    let waited: number | undefined;
+    void build.settle("t", claudeSend, 90_000, () => true, { grace: { ...inputs, grace: { ...grace, nativeAt: 967_000 } } })
+      .then((ms) => { waited = ms; });
+    await tick();
+    expect(waited).toBe(0);
+    expect(calls[0]!.signal?.aborted).toBe(false);
+    calls[0]!.resolve("SUMMARY\nbuilt");
+    await build.idle();
+    const lines = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-wait] "));
+    expect(lines.join("\n")).not.toContain("\"mode\":\"waited\"");
+  });
+
+  it.each([
+    ["fresh", { fresh: true }, "session-recycle"],
+    ["unseeded", { native: { ...grace.native, seed: undefined } }, "unseeded"],
+  ])("a native engine's %s send waits on the running build, so one call covers the history", async (_label, patch, reason) => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build, sendPrepares } = setup(generateText);
+    threads.set("t", overBudgetThread("a"));
+    build.onSettled("bot", "t");
+    await tick();
+    state.busy = true;
+    threads.get("t")!.push(message("send", "next request"));
+    const inline = vi.fn(async () => "SUMMARY\ninline");
+    const inputs = graceInputs(threads.get("t")!);
+    const sent = build.settle("t", claudeSend, 90_000, () => true, { grace: { ...inputs, grace: { ...grace, ...patch, nativeAt: 967_000 } } })
+      .then(() => sendPrepares("t", "send", { summarize: inline }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls[0]!.signal?.aborted).toBe(false);
+    calls[0]!.resolve("SUMMARY\nbuilt");
+    const { prepared } = await sent;
+    expect(calls.length + inline.mock.calls.length).toBe(1);
+    expect(appended).toHaveLength(1);
+    expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
+    const lines = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-wait] "));
+    expect(JSON.parse(lines.at(-1)!.slice("[summary-wait] ".length))).toMatchObject({ mode: "waited", reason });
+  });
+
+  it("a native engine's fresh send drops its queued build, so its inline summary is the only call", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, build, sendPrepares } = setup(generateText);
+    threads.set("other", overBudgetThread("o"));
+    threads.set("t", overBudgetThread("a"));
+    build.onSettled("bot", "other");
+    await tick();
+    build.onSettled("bot", "t");
+    threads.get("t")!.push(message("send", "next request"));
+    const inline = vi.fn(async () => "SUMMARY\ninline");
+    const inputs = graceInputs(threads.get("t")!);
+    expect(await build.settle("t", claudeSend, 90_000, () => true, { grace: { ...inputs, grace: { ...grace, fresh: true, nativeAt: 967_000 } } })).toBe(0);
+    await sendPrepares("t", "send", { summarize: inline });
+    calls[0]!.resolve("SUMMARY\nother");
+    await build.idle();
+    expect(calls).toHaveLength(1);
+    expect(inline).toHaveBeenCalledOnce();
+    expect(appended.map((row) => row.threadId)).toEqual(["other"]);
   });
 
   it.each(["rewind", "covered edit", "prior compaction"])("summary grace drops a build after %s", async (change) => {
@@ -566,6 +655,230 @@ describe("summary build after settle", () => {
     expect(summarize).not.toHaveBeenCalled();
     expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
   });
+
+  it("builds from the real prompt and saves the row before the engine's next turn compacts", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: { last: 33_741, growth: 0 } });
+    threads.set("t", nativeTurn("plant", "remember BISON-5861"));
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(0);
+
+    threads.get("t")!.push(...nativeTurn("fill1", harbor(22_800)));
+    state.nativePrompt = { last: 58_114, growth: 24_373 };
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.prompt).toContain("BISON-5861");
+    expect(calls[0]!.prompt).not.toContain("harbor lights");
+
+    state.busy = true;
+    threads.get("t")!.push(message("fill2-u", harbor(22_800)));
+    calls[0]!.resolve("SUMMARY\nBISON-5861 kept");
+    await build.idle();
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction).toMatchObject({ summary: `BISON-5861 kept\n\n${valuesBlock(["remember BISON-5861"])}`, coveredThroughId: "plant-b", firstKeptId: "fill1-u" });
+    expect(threads.get("t")!.map((row) => row.id)).toEqual(["plant-u", "plant-b", "fill1-u", "fill1-b", "fill2-u", "build-0"]);
+  });
+
+  it.each([
+    ["normal text", { last: 900_000, growth: 20_000 }],
+    ["dense text", { last: 960_000, growth: 5_000 }],
+  ])("lands first near the default point on %s", async (_label, nativePrompt) => {
+    let onCall = () => {};
+    const { threads, appended, state, build } = setup(async () => {
+      onCall();
+      return "SUMMARY\nbuilt";
+    });
+    onCall = () => {
+      state.busy = true;
+    };
+    const messages = Array.from({ length: 40 }, (_, index) => nativeTurn(`t${index}`, harbor(20_000))).flat();
+    expect(planCompaction({ messages, contextWindow: 1_000_000, nativeAt: 967_000 })).toMatchObject({ needed: false });
+    Object.assign(state, { window: 1_000_000, nativeAt: 967_000, nativePrompt });
+    threads.set("t", messages);
+
+    build.onSettled("bot", "t");
+    await build.idle();
+
+    expect(state.busy).toBe(true);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction).toMatchObject({ coveredThroughId: "t15-b", firstKeptId: "t16-u" });
+  });
+
+  it("builds once per native cycle until a boundary or real new growth", async () => {
+    const { threads, appended, state, build } = setup(async () => "SUMMARY\nbuilt");
+    Object.assign(state, gate);
+    threads.set("t", nativeTurn("a", harbor(9_000)));
+    const settle = async (id: string, last: number, growth: number) => {
+      threads.get("t")!.push(...nativeTurn(id, harbor(9_000)));
+      state.nativePrompt = { last, growth };
+      build.onSettled("bot", "t");
+      await build.idle();
+      return appended.length;
+    };
+
+    expect(await settle("b", 58_114, 24_373)).toBe(1);
+    expect(await settle("c", 59_500, 1_386)).toBe(1);
+    expect(await settle("d", 60_900, 1_400)).toBe(1);
+    expect(await settle("e", 20_245, -40_655)).toBe(1);
+    expect(await settle("f", 60_000, 39_755)).toBe(2);
+    expect(await settle("g", 61_000, 1_000)).toBe(2);
+    expect(await settle("h", 66_800, 5_800)).toBe(3);
+  });
+
+  it("never builds a no-op near the engine's point", async () => {
+    const generateText = vi.fn(async () => "SUMMARY\nbuilt");
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: { last: 58_114, growth: 24_373 } });
+    threads.set("t", nativeTurn("a", harbor(9_000)));
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(generateText).not.toHaveBeenCalled();
+
+    threads.get("t")!.push(...nativeTurn("b", harbor(9_000)));
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction).toMatchObject({ coveredThroughId: "a-b", firstKeptId: "b-u" });
+
+    generateText.mockClear();
+    state.nativePrompt = { last: 20_245, growth: -37_869 };
+    build.onSettled("bot", "t");
+    await build.idle();
+    state.nativePrompt = { last: 59_000, growth: 38_755 };
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(generateText).not.toHaveBeenCalled();
+    expect(appended).toHaveLength(1);
+  });
+
+  describe("a build queued behind another bot", () => {
+    // The turn after the snapshot compacts: the send resumes, then settles on a small prompt.
+    const queuedThenCompacted = async (history: Message[]) => {
+      const { calls, generateText } = deferred();
+      const harness = setup(generateText);
+      const { threads, state, build } = harness;
+      threads.set("other", overBudgetThread("o"));
+      build.onSettled("bot", "other");
+      await tick();
+      Object.assign(state, gate, { nativePrompt: { last: 58_114, growth: 24_373 } });
+      threads.set("t", history);
+      build.onSettled("bot", "t");
+      threads.get("t")!.push(message("next-u", "next request"));
+      const inputs = { plan: planCompaction({ messages: threads.get("t")!, contextWindow: gate.window, nativeAt: gate.nativeAt }), taskRecordText: "Goal: build" };
+      expect(await build.settle("t", claudeSend, 90_000, () => false, { grace: { ...inputs, grace: { ...grace, nativeAt: gate.nativeAt } } })).toBe(0);
+      threads.get("t")!.push(message("next-b", "noted", { role: "bot" }));
+      state.nativePrompt = { last: 12_000, growth: -46_114 };
+      build.onSettled("bot", "t");
+      return { ...harness, calls };
+    };
+    const near = () => [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))];
+
+    it("still builds its checkpoint after the engine compacts", async () => {
+      const { calls, appended, build } = await queuedThenCompacted(near());
+      calls[0]!.resolve("SUMMARY\nother");
+      await tick();
+      expect(calls).toHaveLength(2);
+      calls[1]!.resolve("SUMMARY\nkept");
+      await build.idle();
+      expect(appended.filter((row) => row.threadId === "t").map((row) => row.compaction)).toMatchObject([{ summary: "kept", coveredThroughId: "a-b", firstKeptId: "b-u" }]);
+    });
+
+    it("does not reuse a replaced session's reading", async () => {
+      const { calls, appended, state, build } = await queuedThenCompacted(near());
+      state.cursor = "replaced";
+      calls[0]!.resolve("SUMMARY\nother");
+      await build.idle();
+      expect(calls).toHaveLength(1);
+      expect(appended.map((row) => row.threadId)).toEqual(["other"]);
+    });
+
+    it("goes by the estimate once its session is replaced", async () => {
+      const { calls, appended, state, build } = await queuedThenCompacted([...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(70_000))]);
+      const estimated = vi.fn(async () => "SUMMARY\nestimated");
+      Object.assign(state, { cursor: "replaced", generateText: estimated });
+      calls[0]!.resolve("SUMMARY\nother");
+      await build.idle();
+      expect(estimated).toHaveBeenCalled();
+      expect(appended.filter((row) => row.threadId === "t")).toHaveLength(1);
+    });
+  });
+
+  it("keeps the per-leaf budget when near builds fail", async () => {
+    const generateText = vi.fn(async () => {
+      throw new Error("provider unavailable");
+    });
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: { last: 58_114, growth: 24_373 } });
+    threads.set("t", [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))]);
+
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(generateText).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    await build.idle();
+    expect(generateText).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60 * MINUTE);
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(appended).toEqual([]);
+  });
+
+  it("drops a native build whose leaf was rewound mid-turn", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: { last: 58_114, growth: 24_373 } });
+    threads.set("t", [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))]);
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(1);
+
+    state.busy = true;
+    threads.set("t", [...nativeTurn("a", harbor(9_000)), message("edit", "edited")]);
+    calls[0]!.resolve("SUMMARY\nbuilt");
+    await build.idle();
+    expect(appended).toEqual([]);
+  });
+
+  it("ignores the real prompt on an engine with no native point", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, { nativeAt: null, nativePrompt: { last: 900_000, growth: 50_000 } });
+    threads.set("t", [...nativeTurn("a", harbor(100)), ...nativeTurn("b", harbor(100))]);
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(0);
+
+    threads.set("t", overBudgetThread("c"));
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(1);
+    state.busy = true;
+    calls[0]!.resolve("SUMMARY\nbuilt");
+    await build.idle();
+    expect(appended).toEqual([]);
+  });
+
+  it("falls back to the estimate when a native engine has reported no size", async () => {
+    const generateText = vi.fn(async () => "SUMMARY\nbuilt");
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate);
+    threads.set("t", [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))]);
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(generateText).not.toHaveBeenCalled();
+
+    threads.get("t")!.push(...nativeTurn("c", harbor(50_000)));
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(appended).toHaveLength(1);
+  });
 });
 
 describe("inline summarizer after a build wait", () => {
@@ -670,10 +983,12 @@ describe("summary build wiring", () => {
 
   it("builds first in the main fold, settles before prepare, and disposes on shutdown", () => {
     expect(index).toMatch(/summaryBuild\.onSettled\(bot\.id, event\.threadId\);\s*summaryRepair\.onSettled\(bot\.id, event\.threadId\);/);
-    expect(index).toContain("const summarySkipped = summaryBuild.inflight(threadId) && planSummaryGrace(graceInputs).safe;");
+    expect(index).toContain("const sessionResumes = planSummaryGrace(graceInputs).safe;");
+    expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
+    expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
     expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
-    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);");
+    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);

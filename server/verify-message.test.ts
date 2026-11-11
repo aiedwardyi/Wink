@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { verifyReplyText } from "./verify-message.ts";
+import { redactVerifyCard, verifyCardText, verifyReplyText } from "./verify-message.ts";
 import type { VerifyResult } from "../shared/live-verify.ts";
 
 it("caps bot feedback and excludes design details from defects", () => {
@@ -31,4 +31,18 @@ it("keeps long Korean problem text within the feedback budget", () => {
   expect(text).toMatch(/20 items|\d+ more not checked/);
   expect(text.length).toBeLessThanOrEqual(1200);
   expect([...text].reduce((n, c) => n + (c.charCodeAt(0) < 128 ? 1 / 3 : 2), 0)).toBeLessThanOrEqual(400);
+});
+
+it("keeps valid per-checker tallies on a card and drops malformed ones", () => {
+  const counts = { planned: 5, completed: 3, passed: 3, failed: 0, blocked: 0, notRun: 2 };
+  const card = { v: 1, runId: "run-123456", owner: "bot", site: "index.html", status: "running", mode: "auto", decisionNonce: "nonce", offeredAt: 1, counts };
+  expect(redactVerifyCard({ ...card, counts: { ...counts, by: { LINKS: { desktop: [3, 5], tablet: [1, 1] }, NOPE: { desktop: [1, 1] }, FIT: { phone: [4, 2] } } } })?.counts).toEqual({ ...counts, by: { LINKS: { desktop: [3, 5] } } });
+  expect(redactVerifyCard(card)?.counts).toEqual(counts);
+});
+
+it("keeps a doc card's fix state through redaction and says what is left", () => {
+  const finding = { kind: "spelling" as const, line: 50, page: 2, quote: "되요", fix: "돼요" };
+  const card = redactVerifyCard({ v: 1, runId: "run-123456", owner: "bot", site: "script.md", entry: "C:\docs\script.md", status: "completed", mode: "auto", decisionNonce: "nonce", offeredAt: 1, fixed: 1, doc: { pages: 2, lines: 60, chunks: [1, 1], by: { numbering: 1 }, findings: [{ ...finding, kind: "numbering", quote: "제7조", fix: "" }], findingTotal: 1, fixing: true, fixedFindings: [finding] } })!;
+  expect(card.doc).toMatchObject({ fixing: true, fixedFindings: [finding] });
+  expect(verifyCardText(card)).toBe("Live Verify checked script.md: fixed 1 problem, 1 left (1 numbering).");
 });

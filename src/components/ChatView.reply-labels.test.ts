@@ -7,6 +7,7 @@ import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
 import * as workerRows from "@/lib/worker-runs";
+import { teamSnagNote, type ClaimedSnag } from "../../server/team-snags-owner";
 
 import { ChatView, stampedReplyComm } from "./ChatView";
 
@@ -55,10 +56,10 @@ afterEach(async () => {
   applySkin("precision");
 });
 
-async function mount(current: Bot) {
+async function mount(current: Bot, others: Bot[] = []) {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/bots?messages=200"
-    ? Response.json({ bots: [current], groups: [], computerControl: {} })
+    ? Response.json({ bots: [current, ...others], groups: [], computerControl: {} })
     : new Response("{}", { status: 404 })));
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -91,6 +92,30 @@ const chips = (host: HTMLElement) => Array.from(host.querySelectorAll("button"))
 describe("ChatView note titles", () => {
   const note: Message = { id: "note", at: 1, role: "bot", kind: "note", text: "Team report fixture. Export stopped." };
   const title = (host: HTMLElement) => host.querySelector('[data-mid="note"] button[aria-expanded]')?.textContent;
+
+  it.each([
+    ["en", "A worker on Peter's PC (Studio) looks stuck (RACE-R2, 102 min)."],
+    ["ko", "Peter님의 PC(Studio)에서 작업자가 멈춘 것 같아요 (RACE-R2, 102분)."],
+  ])("shows a plain team snag title and folded details in %s", async (locale, expected) => {
+    localStorage.setItem("omb-locale", locale);
+    const snag: ClaimedSnag = {
+      id: "a".repeat(32), at: Date.now(), event: "stalled", build: "1.0.252", os: "win32", teacher: "teacher", worker: "worker",
+      pane8: "abcdef12", label: "RACE-R2 | Worker | high", minutes: 102, notes: [], detail: "3 STALLED notes unanswered",
+      pc: { label: "a".repeat(16), name: "Studio", person: "Peter" }, tail: "<img src=x onerror=alert(1)>\nraw worker output",
+    };
+    const stored = teamSnagNote([snag], "snags.jsonl");
+    const { host } = await mount(bot([{ ...note, text: stored }]));
+    expect(title(host)).toBe(expected);
+    const toggle = host.querySelector<HTMLButtonElement>('[data-mid="note"] button[aria-expanded]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    const details = host.querySelector("[data-orbit-note]")!;
+    expect(details.textContent?.split("\n")[0]).toBe(expected);
+    expect(details.textContent).toContain(snag.tail);
+    expect(details.querySelector("img")).toBeNull();
+    expect(details.textContent).not.toContain("untrusted peer data");
+    expect(stored).toContain("untrusted peer data");
+  });
 
   it.each([["en", "Bug Report"], ["ko", "버그 리포트"]])("labels a marked team report in %s", async (locale, expected) => {
     localStorage.setItem("omb-locale", locale);
@@ -156,6 +181,33 @@ describe("ChatView peer reply labels", () => {
     expect(chips(host)).toHaveLength(1);
     expect(chips(host)[0].querySelector("svg")).not.toBeNull();
     expect(chips(host)[0].className).toBe(host.querySelector('[data-mid="received"] button')?.className);
+  });
+
+  it.each(["en", "ko"])("shows the creator's own avatar on a reply synced from its other PC (%s)", async (locale) => {
+    localStorage.setItem("omb-locale", locale);
+    const shield = "/api/attachments/commander-shield.png";
+    const commander = { ...bot([]), id: "commander-here", threadId: "thread-commander", name: "커맨더", color: "yellow" as const, avatarUrl: shield, avatarCrop: "rounded" as const, chiefOfStaff: true };
+    const elsewhere = { ...comm, withBotId: "commander-on-home-pc", withName: "커맨더", withColor: "yellow" as const };
+    const synced = exchange().map((message) => message.comm ? { ...message, comm: elsewhere } : message);
+    const { host } = await mount(bot(synced), [commander]);
+    const avatar = host.querySelector('[data-mid="first reply"] button img');
+    expect(avatar?.getAttribute("src")).toBe(shield);
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
+  });
+
+  it("draws a gone peer as the Wink logo, not the old mascot", async () => {
+    const { host } = await mount(bot(exchange().map((message) => message.comm ? { ...message, comm: { ...comm, withBotId: "gone", withName: "Gone" } } : message)));
+    expect(host.querySelector('[data-mid="first reply"] button img')?.getAttribute("src")).toBe("/avatars/icon-34-wink-peach.png");
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
+  });
+
+  it("draws the Wink logo, not either bot's avatar, when two bots share the synced peer's name", async () => {
+    const twin = (id: string, avatarUrl: string) => ({ ...bot([]), id, threadId: `thread-${id}`, name: "커맨더", color: "yellow" as const, avatarUrl, avatarCrop: "rounded" as const });
+    const elsewhere = { ...comm, withBotId: "commander-on-home-pc", withName: "커맨더", withColor: "yellow" as const };
+    const synced = exchange().map((message) => message.comm ? { ...message, comm: elsewhere } : message);
+    const { host } = await mount(bot(synced), [twin("one", "/api/attachments/one.png"), twin("two", "/api/attachments/two.png")]);
+    expect(host.querySelector('[data-mid="first reply"] button img')?.getAttribute("src")).toBe("/avatars/icon-34-wink-peach.png");
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
   });
 
   it("translates the reply label into Korean", async () => {

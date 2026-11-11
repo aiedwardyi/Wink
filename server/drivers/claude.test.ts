@@ -21,7 +21,10 @@ import type { ProviderInstance } from "../contracts.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ClaudeDriver, claudeToolSummary, claudeUserContent, permissionSocketPath, type ClaudeConfig } from "./claude.ts";
+import { warmPool } from "./warm-pool.ts";
+import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
+import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
@@ -414,6 +417,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.OMB_CLAUDE_EFFORT_REPLY_MS;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_SILENT_TURN_REMINDER;
+    delete process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
     delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     delete process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT;
     delete process.env.XAI_API_KEY;
@@ -427,6 +431,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
+  });
+
+  it("keeps prompt bytes identical with tracing on and off", async () => {
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const requests: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        const log = join(scratch, `timing-${flag}.jsonl`);
+        await create("bench-quiet", { FAKE_CLAUDE_PROMPT_LOG: log });
+        await instance.adapter.sendTurn({ threadId: "t-timing", text: "current", system: "memory and task", resumeCursor: "remembered", resumeFallback: { text: "history and current" } });
+        await recorder.until((event) => event.type === "turn.completed");
+        const rows = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        requests.push(JSON.stringify(rows.map((row) => ({ text: row.text, system: row.systemPrompt }))));
+        recorder.stop();
+        await instance.dispose();
+      }
+      expect(requests[1]).toBe(requests[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
   });
 
   it("normalizes a full turn into the canonical event sequence", async () => {
@@ -500,8 +526,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(recorder.events.filter((e) => e.type === "runtime.error" && e.usageLimit)).toHaveLength(0);
   });
 
-  const capture = async (name: string, input: unknown, content: unknown, is_error = false) => {
-    saveConfig({ features: { toolDetailCapture: true } });
+  const capture = async (name: string, input: unknown, content: unknown, is_error = false, detail = true) => {
+    saveConfig({ features: { toolDetailCapture: detail } });
     const path = join(scratch, "tool-detail.json");
     writeFileSync(path, JSON.stringify([{ name, input, content, is_error }]));
     process.env.FAKE_CLAUDE_TOOL_FIXTURE = path;
@@ -512,6 +538,21 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     if (event?.type !== "item.completed" || event.itemType !== "tool") throw new Error("missing tool completion");
     return event;
   };
+
+  it.each(["Write", "Edit", "MultiEdit", "NotebookEdit"])("emits raw %s writes with tool detail off", async name => {
+    const path = `src/${"long-".repeat(60)}page.html`;
+    const event = await capture(name, name === "NotebookEdit" ? { notebook_path: path } : { file_path: path }, "ok", false, false);
+    expect(event.writes).toEqual([path]);
+    expect(event.detail).toBeUndefined();
+  });
+
+  it.each(["Read", "Bash"])("does not report %s as a native write", async name => {
+    expect((await capture(name, { file_path: "page.html" }, "ok", false, false)).writes).toBeUndefined();
+  });
+
+  it("does not report a failed native write", async () => {
+    expect((await capture("Write", { file_path: "page.html" }, "failed", true, false)).writes).toBeUndefined();
+  });
 
   it("tool detail captures Bash input and three capped lines with more", async () => {
     const command = `echo ${"build ".repeat(12).trim()}`;
@@ -885,6 +926,29 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_SILENT_TURN_REMINDER).toBe("1");
   });
 
+  it("lists only no_reply_needed as a terminal tool when agents is mounted", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
+    await instance.adapter.sendTurn({
+      threadId: "t-terminal-tools", text: "hi",
+      integrations: { agents: { command: process.execPath, args: ["/fake/agents-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_TERMINAL_MCP_TOOLS).toBe("mcp__agents__no_reply_needed");
+  });
+
+  it("clears inherited terminal tools when agents is not mounted", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
+    await instance.adapter.sendTurn({ threadId: "t-terminal-tools", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env).not.toHaveProperty("CLAUDE_CODE_TERMINAL_MCP_TOOLS");
+  });
+
   it("turns Claude Code auto memory off on every turn", async () => {
     await create();
     const dump = join(scratch, "auto-memory.json");
@@ -1080,7 +1144,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(readFileSync(dump, "utf8")).toBe(before);
   });
 
-  it("mounts the agents comms proxy as an MCP server and pre-allows its tools", async () => {
+  it.each(["0", "1"])("mounts the agents proxy with catalog flag %s and preserves permissions", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
@@ -1109,6 +1174,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.stringify(seen.argv)).not.toContain("tok");
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
+    expect(seen.mcpConfig.mcpServers.agents.env.OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    vi.unstubAllEnvs();
   });
 
   it("pre-allows terminal_read but leaves terminal_send to the permission prompt", async () => {
@@ -1511,6 +1578,83 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await vi.waitFor(() => expect(consumed).toHaveBeenCalled());
     await vi.waitFor(() => expect(instance.adapter.hasSession("t-taken")).toBe(false));
     expect(consumed.mock.calls).toEqual([[taken]]);
+  });
+
+  describe("a turn that called no_reply_needed", () => {
+    const quietCli = async () => {
+      const cli = join(scratch, "quiet-loop.mjs");
+      const log = join(scratch, "quiet-prompts.jsonl");
+      writeFileSync(cli, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const argv = process.argv.slice(2);
+const session = argv[argv.indexOf(argv.includes("--resume") ? "--resume" : "--session-id") + 1];
+const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const quiet = (id) => {
+  out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "mcp__agents__no_reply_needed", input: {} }] } });
+  out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+};
+let onInterrupt = null;
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.type === "control_request") {
+    out({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
+    onInterrupt?.();
+    return;
+  }
+  const text = message.message.content;
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, text }) + "\\n");
+  out({ type: "system", subtype: "init", session_id: session });
+  if (text !== "wake") {
+    out({ type: "assistant", message: { content: [{ type: "text", text: "reply to: " + text }] } });
+    out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01 });
+    return;
+  }
+  quiet("q1");
+  const loop = setTimeout(() => {
+    onInterrupt = null;
+    quiet("q2");
+    out({ type: "assistant", message: { content: [{ type: "text", text: "No response requested." }] } });
+    out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.02 });
+  }, 500);
+  onInterrupt = () => {
+    clearTimeout(loop);
+    onInterrupt = null;
+    out({ type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
+    out({ type: "result", subtype: "error_during_execution", is_error: true, stop_reason: null, total_cost_usd: 0.01 });
+  };
+});
+`);
+      chmodSync(cli, 0o755);
+      await create(undefined, {}, { cli });
+      return () => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    };
+    const quietCalls = (turnId: string) =>
+      recorder.events.filter((e) => e.type === "item.started" && e.turnId === turnId && e.title === "mcp__agents__no_reply_needed");
+
+    it("ends at the first call as a clean finish and the session takes the next turn", async () => {
+      const prompts = await quietCli();
+      instance.adapter.onEvent(createQuietEnd(() => [], () => instance.adapter));
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+      const session = await recorder.until((e) => e.type === "session.started");
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(done).toMatchObject({ ok: true, stopReason: "end_turn", cost: 0.01 });
+      expect(quietCalls(turnId)).toHaveLength(1);
+      expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toBe(false);
+      expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello", resumeCursor: (session as { sessionId: string }).sessionId });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId)).resolves.toMatchObject({ ok: true });
+      expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text").map((e) => (e as { text: string }).text)).toEqual(["reply to: hello"]);
+      expect(prompts().map((p) => p.pid)).toEqual([prompts()[0]!.pid, prompts()[0]!.pid]);
+    });
+
+    it("runs on when the user typed into that turn", async () => {
+      await quietCli();
+      instance.adapter.onEvent(createQuietEnd(() => [{ id: "m1", role: "user", kind: "text", text: "wake", at: Date.now() }] as Message[], () => instance.adapter));
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-typed", text: "wake" });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).resolves.toMatchObject({ ok: true, cost: 0.02 });
+      expect(quietCalls(turnId)).toHaveLength(2);
+    });
   });
 
   describe("a user steer into a turn that showed nothing", () => {
@@ -1932,6 +2076,63 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(done).toMatchObject({ turnId, ok: false });
   });
 
+  it("marks a confirmed auth result as a sign-out of that account", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/signed-out.json", import.meta.url), "utf8"));
+    const fixture = join(scratch, "signed-out-flag.json");
+    writeFileSync(fixture, JSON.stringify(recorded.reply.messages));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-signed-out-flag", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
+    ]);
+  });
+
+  it.each([
+    ["network", "Network error: connection reset after 401 files", undefined],
+    ["usage", "Invalid API key: usage limit reached", undefined],
+    ["rate", "HTTP 429 Too Many Requests", undefined],
+    ["forbidden", "HTTP 403 Forbidden by organization policy", undefined],
+    ["tool", "tool unauthorized to read this directory", undefined],
+    ["custom", "unexpected status 401 Unauthorized", "unsloth::local-model"],
+  ])("does not mark a Claude account signed out for a %s error", async (_kind, result, model) => {
+    const fixture = join(scratch, "ordinary-auth-error.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "fixture" });
+    await instance.adapter.sendTurn({ threadId: "ordinary-auth-error", text: "hi", model });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
+  });
+
+  it("refuses a turn on a blocked base Claude instance", async () => {
+    process.env.FAKE_CLAUDE_DUMP = join(scratch, "healthy.json");
+    const inputs = () => {
+      const { pid: _pid, ...rest } = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_DUMP!, "utf8"));
+      rmSync(process.env.FAKE_CLAUDE_DUMP!);
+      return JSON.stringify(rest).replace(/omb-mcp-\w+/g, "omb-mcp").replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, "uuid")
+        .replace(/openmausbot-perm-[^"\\]+/g, "openmausbot-perm");
+    };
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const before = inputs();
+    recorder.stop();
+    await instance.dispose();
+
+    await create();
+    expect(instance.accountBusy).toBeUndefined();
+    expect(instance.invalidateAccount).toBeUndefined();
+    instance.setAccountBlocked?.(true);
+    await expect(instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" })).rejects.toThrow("Sign in");
+    expect(recorder.events.some((e) => e.type === "turn.started")).toBe(false);
+    instance.setAccountBlocked?.(false);
+    await instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(inputs()).toBe(before);
+  });
+
   describe("API error that ends the turn", () => {
     const overloaded = "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check https://status.claude.com.";
     const serverError = "API Error: Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.";
@@ -2263,6 +2464,115 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     return false;
   };
+
+  describe("prepare", () => {
+    const focus = { threadId: "t-prep", approval: "ask" as const };
+    const prompts = () => readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    // a turn per thread, then their idle close: what prepare re-opens
+    const closed = async (threadIds = [focus.threadId], idleMs = "300") => {
+      process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
+      process.env.OMB_CLAUDE_SESSION_IDLE_MS = idleMs;
+      process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+      await create();
+      const spawn = vi.spyOn(procs, "spawnCli");
+      for (const threadId of threadIds) {
+        const { turnId } = await instance.adapter.sendTurn({ threadId, text: "one", approval: "ask" });
+        await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      }
+      for (const { value } of spawn.mock.results) expect(await exited(value.pid!)).toBe(true);
+      const cursor = (recorder.events.find((e) => e.type === "session.started" && e.threadId === focus.threadId) as { sessionId: string }).sessionId;
+      return { spawn, cursor };
+    };
+    const next = async (cursor: string, change: { effort?: "high"; resumeCursor?: undefined } = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, ...change });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env.FAKE_CLAUDE_EAGER_INIT;
+    });
+
+    it("re-opens the closed session before Send and hands it to the next turn", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const argv = spawn.mock.calls[1]![1];
+      expect(argv[argv.indexOf("--resume") + 1]).toBe(cursor);
+      expect(warmPool.stats().reserved).toBe(1);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(prompts().at(-1)).toMatchObject({ pid: spawn.mock.results[1]!.value.pid, text: "two" });
+      expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
+      expect(warmPool.stats().reserved).toBe(0);
+    });
+
+    it.each([
+      ["a changed contract", { effort: "high" as const }],
+      ["a fresh session", { resumeCursor: undefined }],
+    ])("throws the prepared process away for %s", async (_name, change) => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      const prepared = spawn.mock.results[1]!.value.pid!;
+
+      await next(cursor, change);
+      expect(spawn).toHaveBeenCalledTimes(3);
+      expect(prompts().map((prompt) => prompt.pid)).not.toContain(prepared);
+      expect(prompts().at(-1)!.pid).toBe(spawn.mock.results[2]!.value.pid);
+      expect(await exited(prepared)).toBe(true);
+    });
+
+    it("prepares nothing without a closed session, once the bot's settings moved, or twice", async () => {
+      const { spawn } = await closed();
+      await instance.prepare!(undefined, { ...focus, threadId: "t-never" });
+      await instance.prepare!(undefined, { ...focus, effort: "high" });
+      await instance.prepare!(undefined, { ...focus, approval: "auto" });
+      await instance.prepare!(undefined, { ...focus, model: "claude-other" });
+      await instance.prepare!();
+      const release = warmPool.barrier({ instanceId: "claude-test" }, "test");
+      await instance.prepare!(undefined, focus);
+      release();
+      expect(spawn).toHaveBeenCalledOnce();
+
+      await Promise.all([instance.prepare!(undefined, focus), instance.prepare!(undefined, focus)]);
+      await instance.prepare!(undefined, focus);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("opens no turn from a prepared process's own output", async () => {
+      const { spawn, cursor } = await closed(undefined, "2000");
+      const eager = join(scratch, "eager-init");
+      process.env.FAKE_CLAUDE_EAGER_INIT = eager;
+      await instance.prepare!(undefined, focus);
+      while (!existsSync(eager)) await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(recorder.events.filter((e) => e.type === "turn.started" || e.type === "session.started")).toHaveLength(2);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps one prepared process per instance, the focused bot's", async () => {
+      const { spawn } = await closed([focus.threadId, "t-prep-b"]);
+      await instance.prepare!(undefined, focus);
+      const first = spawn.mock.results[2]!.value.pid!;
+      await instance.prepare!(undefined, { ...focus, threadId: "t-prep-b" });
+      expect(spawn).toHaveBeenCalledTimes(4);
+      expect(await exited(first)).toBe(true);
+    });
+
+    it("closes a prepared process the warm pool drops", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      const prepared = spawn.mock.results[1]!.value.pid!;
+      warmPool.invalidate({ instanceId: "claude-test" }, "reload");
+      expect(await exited(prepared)).toBe(true);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(3);
+    });
+  });
 
   it("keeps a session with live background work for the next resumed turn", async () => {
     await create("background-task");

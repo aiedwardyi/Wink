@@ -28,7 +28,7 @@ export function DetailsSwitch({ on, label, disabled, className, onToggle }: {
   );
 }
 
-export function DetailsLabel({ label, hint }: { label: string; hint?: ReactNode }) {
+export function DetailsLabel({ label, hint }: { label: ReactNode; hint?: ReactNode }) {
   return (
     <div className="min-w-0">
       <div className="text-[14px] font-medium text-ink">{label}</div>
@@ -126,7 +126,8 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
     if (!watchMetrics || !ref.current) return;
     const box = ref.current;
     const scroller = box.closest<HTMLElement>(".overflow-y-auto");
-    const refit = () => fit(box);
+    // a box in a hidden tab would force layout of the tab being opened; its ResizeObserver fits it on show
+    const refit = () => { if (!box.closest("[hidden]")) fit(box); };
     const check = () => { if (box.scrollHeight > box.clientHeight) fit(box); };
     const unwatch = watchStyleMetrics(refit);
     scroller?.addEventListener("scroll", check, { passive: true });

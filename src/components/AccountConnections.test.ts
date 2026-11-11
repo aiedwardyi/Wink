@@ -54,6 +54,48 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("keeps each Connections email bound to its account id when Main and order change", async () => {
+  await render(5);
+  const labels = ["hitecledtx", "getwinkdev", "aiedwardyi", "mredwardyi", "rocknblock.official"];
+  state.instances = state.instances.map((account, index) => ({ ...account,
+    snapshot: { ...account.snapshot, account: `${labels[index]}@example.test` },
+    pickerSnapshot: { state: "available" as const, authenticated: true, account: "mredwardyi@example.test" },
+    accountMain: index === 3,
+  })).reverse();
+  await update();
+  for (const account of state.instances) {
+    const row = host.querySelector(`[data-connection-account="${account.instanceId}"]`);
+    expect(row?.querySelector("[data-account-email]")?.textContent).toBe(account.snapshot.account);
+  }
+});
+
+it.each(["en", "ko"] as const)("points a duplicate add to its existing row in %s", async (locale) => {
+  persistPreference(locale);
+  await render(2);
+  request.mockImplementation(async (path: string) => path === "/api/accounts" ? { id: "duplicate" }
+    : path === "/api/accounts/duplicate/sign-in" ? { state: "duplicate", existingId: "account-1" } : {});
+  await act(async () => buttons(locale === "en" ? "Add Account" : "계정 추가")[0]!.click());
+  expect(host.querySelector('[role="status"]')?.textContent).toContain(locale === "en" ? "Already added" : "이미 추가된 계정");
+  const link = host.querySelector<HTMLButtonElement>("[data-existing-account]");
+  expect(link).not.toBeNull();
+  await act(async () => link!.click());
+  expect(document.activeElement?.getAttribute("data-connection-account")).toBe("account-1");
+  expect(host.querySelectorAll("[data-connection-account]")).toHaveLength(2);
+});
+
+it("points a duplicate add to another profile of the same engine", async () => {
+  await render(2);
+  state.instances = [...state.instances, { ...engine("work"), accountOf: "work", accountMain: true }];
+  await update();
+  request.mockImplementation(async (path: string) => path === "/api/accounts" ? { id: "duplicate" }
+    : path === "/api/accounts/duplicate/sign-in" ? { state: "duplicate", existingId: "work" } : {});
+  await act(async () => buttons("Add Account")[0]!.click());
+  const link = host.querySelector<HTMLButtonElement>("[data-existing-account]");
+  expect(link?.textContent).toContain("work@example.com");
+  await act(async () => link!.click());
+  expect(document.activeElement?.getAttribute("data-connection-account")).toBe("work");
+});
+
 it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", async (locale) => {
   persistPreference(locale);
   await render(3);
@@ -77,26 +119,25 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it.each([false, true])("keeps a long email on one line with row disclosure and phone %s", async (phone) => {
+it.each([false, true])("shows a long email whole as plain text with phone %s", async (phone) => {
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone } as MediaQueryList);
   await render();
   const label = "averyveryverylongname@example-company.com";
   state.instances[0]!.snapshot.account = label;
   await update();
-  const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
-  expect(identity.innerHTML).toBe(label);
-  expect(identity.title).toBe("");
-  expect([...identity.classList]).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
-  expect(identity.classList.contains("break-words")).toBe(false);
-  const disclosure = identity.closest<HTMLButtonElement>("button")!;
-  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-  await act(async () => disclosure.click());
-  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-  expect(disclosure.closest("[data-connection-account]")!.querySelector("[data-connection-identity-body]")?.textContent).toBe(label);
+  const email = host.querySelector<HTMLElement>("[data-account-email]")!;
+  expect(email.innerHTML).toBe(label);
+  expect(email.title).toBe("");
+  expect([...email.classList]).toEqual(expect.arrayContaining(["min-w-0", "break-words"]));
+  expect(email.classList.contains("truncate")).toBe(false);
+  expect(email.closest("button")).toBeNull();
+  await act(async () => email.click());
+  expect(host.querySelectorAll("[data-account-email]")).toHaveLength(2);
+  expect(host.textContent!.split(label)).toHaveLength(2);
   expect(host.textContent).not.toContain("Main");
 });
 
-it.each([1, 2])("heads the engine above %i account rows, with Add Account only on the engine header row", async (count) => {
+it.each([1, 2])("heads the engine above a card of %i account rows, with Add Account only on the engine header row", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
   const [header] = [...group.children];
@@ -104,10 +145,11 @@ it.each([1, 2])("heads the engine above %i account rows, with Add Account only o
   expect(header!.querySelector("svg")).not.toBeNull();
   expect(header!.textContent).toBe("ClaudeAdd Account");
   expect(header!.textContent).not.toContain("@");
-  expect([...group.querySelectorAll("svg")].filter((node) => !node.closest("[data-usage-grip]"))).toHaveLength(count + 1);
+  expect(group.querySelectorAll("svg")).toHaveLength(1);
   expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
   expect(rows).toHaveLength(count);
-  expect(group.lastElementChild!.hasAttribute("data-connection-account")).toBe(true);
+  expect(group.lastElementChild!.getAttribute("role")).toBe("group");
+  expect([...group.lastElementChild!.children]).toEqual(rows);
   for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
@@ -386,31 +428,28 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
   await update();
   expect(buttons("Add Account")).toHaveLength(0);
-  expect(host.textContent).toContain("Sign in on a computer");
+  expect(host.textContent).toContain("Add on computer");
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
 });
 
-it("puts computer-only guidance under the engine name, never beside it, and keeps action words on one line", async () => {
+it.each([
+  ["en", "Add on computer", "Sign in on computer"],
+  ["ko", "컴퓨터에서 추가", "컴퓨터에서 로그인"],
+] as const)("puts a computer-only action in the engine header's slot as a muted label, never a line below, in %s", async (locale, add, signIn) => {
+  persistPreference(locale);
   await render(2);
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  state.instances.push({ ...engine("gemini", false), accountOf: undefined, accountMain: undefined, accountState: undefined, driverKind: "antigravityAgent", displayName: "Gemini" });
   await update();
-  const header = host.querySelector('[data-engine-row="claude"]')!.firstElementChild!;
-  const [line, under] = [...header.children];
-  expect(line!.textContent).toBe("Claude");
-  expect(under!.textContent).toBe("Sign in on a computer");
-  expect(under!.className).toContain("pl-6");
+  for (const [id, label] of [["claude", add], ["gemini", signIn]] as const) {
+    const group = host.querySelector(`[data-engine-row="${id}"]`)!;
+    const slot = group.querySelector("[data-engine-head] [data-engine-slot]");
+    expect(slot?.textContent, id).toBe(label);
+    expect(slot!.querySelector("button")).toBeNull();
+    expect(group.textContent!.split(label)).toHaveLength(2);
+  }
   for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
-});
-
-it("shows an opened identity on single lines, never broken mid-address", async () => {
-  await render(1);
-  const disclosure = host.querySelector<HTMLButtonElement>("[data-connection-identity]")!;
-  await act(async () => disclosure.click());
-  const body = host.querySelector("[data-connection-identity-body]")!;
-  expect(body.className).not.toMatch(/break-all|break-words|wrap-anywhere|wrap-break-word/);
-  expect(body.textContent).toContain("claude@example.com");
-  for (const line of body.children) expect(line.classList.contains("truncate")).toBe(true);
 });
 
 it("offers recovery for a stopped account whose credentials remain valid", async () => {
@@ -446,4 +485,19 @@ it("shows an accepted account as soon as the server pushes its signed-in row", a
   await update();
   expect(host.textContent).toContain("new@example.com");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
+});
+
+it("swaps the header slot between the computer-only label and Add Account, with no fold", async () => {
+  await render(2);
+  let phone = true;
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width") }) as MediaQueryList);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  const slot = () => host.querySelector('[data-engine-row="claude"] [data-engine-slot]');
+  expect(slot()?.textContent).toBe("Add on computer");
+  expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
+  phone = false;
+  await update();
+  expect(slot()?.textContent).toBe("Add Account");
+  expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
 });

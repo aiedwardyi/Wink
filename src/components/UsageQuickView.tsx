@@ -1,7 +1,7 @@
 // The compact desk for one chat's engine, grown out of the line that opened it.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, X } from "lucide-react";
+import { ChevronRight, RefreshCw, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
@@ -11,12 +11,13 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usag
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { ordered, readUsageOrder } from "@/lib/use-usage-drag";
+import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
+import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
-import { useAutoRefresh } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
-import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
+import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
 
@@ -29,6 +30,8 @@ const FOOTER_KEPT = 51;
 const SHOW_QUICK_HERO = false;
 /** Phone heights under this drop the header and seat Close beside All usage. */
 const TIGHT = 320;
+/** Phone heights from this up are limited by the 60% cap alone; the last message may sit under the view. */
+const ROOMY = 600;
 
 type Spot = { left: number; bottom: number; width: number; maxHeight: number; dimBottom: number };
 
@@ -64,7 +67,7 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   const bottom = window.innerHeight - rect.top + gap;
   if (phone) {
     const cap = height * 0.6;
-    const room = rect.top - gap - keptTop(top);
+    const room = rect.top - gap - (height >= ROOMY ? top : keptTop(top));
     const maxHeight = Math.max(FOOTER_KEPT, Math.floor(Math.min(cap, room)));
     const edge = terminal ? 0 : 16;
     return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };
@@ -74,9 +77,9 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   return { left, bottom, width, maxHeight: Math.max(0, Math.floor(rect.top - gap - top - 12)), dimBottom: 0 };
 }
 
-export function UsageQuickView({ engine, account, board, state, anchor, onClose }: {
+export function UsageQuickView({ engine, account, board, state, anchor, onClose, closing = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState;
-  anchor: RefObject<HTMLElement | null>; onClose: () => void;
+  anchor: RefObject<HTMLElement | null>; onClose: () => void; closing?: boolean;
 }) {
   const { t, locale } = useI18n();
   useAutoRefresh(board);
@@ -91,7 +94,22 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
   const checked = checkedMain(state, engine.base);
-  const accountOrder = readUsageOrder(engine.base);
+  const drag = useUsageDrag([engine]);
+  const accountOrder = drag.orders[engine.base];
+  const shown = new Set(usageAccounts(engine).map((each) => each.id));
+  const refreshing = [...useRefreshPending()].some((id) => shown.has(id));
+  const spin = useSpinUntilTurnEnds(refreshing);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [museAuthFailed, setMuseAuthFailed] = useState(false);
+
+  const refresh = async () => {
+    setRefreshFailed(false);
+    setMuseAuthFailed(false);
+    const outcome = await refreshUsage(store.instances, board, dispatch, shown);
+    setMuseAuthFailed(outcome.museAuthFailed);
+    setRefreshFailed(outcome.failed);
+  };
+  useRefreshKey(refreshing || closing ? null : () => void refresh());
 
   const close = (focus = true) => {
     onClose();
@@ -99,7 +117,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   };
   const closeRef = useRef(close);
   useLayoutEffect(() => { closeRef.current = close; });
-  useBackLayer(true, close);
+  useBackLayer(!closing, close);
 
   useLayoutEffect(() => {
     const update = () => {
@@ -129,6 +147,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   }, [Boolean(spot)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (closing) return;
     const away = (event: PointerEvent) => {
       const target = event.target as Node;
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
@@ -147,7 +166,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
       document.removeEventListener("pointerdown", away, true);
       document.removeEventListener("keydown", key);
     };
-  }, [anchor]);
+  }, [anchor, closing]);
 
   const settings = (section: "usage" | "connections") => {
     close(false);
@@ -164,26 +183,34 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
       <X size={15} aria-hidden="true" />
     </button>
   );
+  const buttons = <>
+    <button type="button" data-usage-refresh="" disabled={refreshing} aria-busy={refreshing} aria-label={t("usage.desk.refresh")} title={t("usage.desk.refreshKey")} aria-keyshortcuts="Alt+R" onClick={() => void refresh()}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
+      <RefreshCw size={14} aria-hidden="true" className={cn(spin.spinning && "motion-safe:animate-spin")} onAnimationIteration={spin.onAnimationIteration} />
+    </button>
+    {closeButton}
+  </>;
   return createPortal(
     <>
-      {phone && <div aria-hidden="true" className="fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
-      <div ref={box} role="dialog" aria-label={t("usage.chat.quickTitle")} data-usage-quick="" data-usage-desk=""
+      {phone && <div aria-hidden="true" data-closing={closing || undefined} inert={closing || undefined} className="animate-fade-in fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
+      <div ref={box} role="dialog" aria-label={t("usage.chat.quickTitle")} data-usage-quick="" data-usage-desk="" data-closing={closing || undefined} inert={closing || undefined}
         className={cn("fixed z-50 flex flex-col overflow-hidden border border-hairline/60 bg-panel shadow-2xl",
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
           <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
-          {closeButton}
+          {buttons}
         </div>}
-        <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
+        <div data-quick-scroll="" data-usage-engine={engine.engine} data-usage-base={engine.base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
             {ordered(usageAccounts(engine), accountOrder, (each) => each.id).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
-          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{mainFailedText(state, engine.base, t)}</div>}
+          {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
           <button type="button" data-all-usage="" onClick={() => settings("usage")}
@@ -193,7 +220,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
             {phone ? <ChevronRight size={16} aria-hidden="true" className="-mr-1 text-ink-secondary" />
               : <kbd className="usage-num rounded-[3px] border border-hairline px-1.5 py-0.5 font-sans text-[10.5px] leading-none text-ink-secondary">Alt U</kbd>}
           </button>
-          {tight && <span className="flex shrink-0 border-l border-hairline/50 px-0.5">{closeButton}</span>}
+          {tight && <span className="flex shrink-0 border-l border-hairline/50 px-0.5">{buttons}</span>}
         </div>
       </div>
     </>,

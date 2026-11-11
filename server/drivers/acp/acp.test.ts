@@ -16,6 +16,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import type { PrepareTurn, ProviderDriver, ProviderInstance, SendTurnInput } from "../../contracts.ts";
+import { createQuietEnd } from "../../quiet-end.ts";
+import type { Message } from "../../store.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { createAcpDriver, probeCliVersion, skipSubscriptionAuthForLocalInject, wslSessionPaths, type AcpSupport } from "./core.ts";
 import { toWslPath } from "../../env-path.ts";
@@ -451,6 +453,26 @@ describe("Grok warm leases (recorded transport)", () => {
     expect(prompts()).toHaveLength(0);
     expect(pool.stats().reserved).toBe(0);
     expect(peers.every((peer) => peer.child.killed)).toBe(true);
+  });
+
+  it.each([8, 1])("a sign-in that changes under a starting turn says so instead of ending as a Stop (%i cores)", async (cores) => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array<os.CpuInfo>(cores).fill({} as os.CpuInfo));
+    vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 ** 3);
+    held.add("0:initialize");
+    held.add("1:initialize");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    const sending = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    pool.barrier({ instanceId: instance.instanceId }, "sign out")();
+    peers[1].pending.get("initialize")!();
+    await drain();
+    await Promise.all([preparing, sending]);
+    expect(recorder.events.slice(-2)).toMatchObject([
+      { type: "runtime.error", message: "the sign-in changed while the reply was starting" },
+      { type: "turn.completed", ok: false, stopReason: "sign_in_changed" },
+    ]);
   });
 
   it.each(["auth hash", "generation"])("a returned old-account turn is closed, not offered (%s)", async (change) => {
@@ -1382,6 +1404,7 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
+    delete process.env.FAKE_ACP_PROMPT_META;
     delete process.env.FAKE_ACP_PERMISSION_KINDS;
     delete process.env.FAKE_ACP_BILLING_PERCENT;
     delete process.env.FAKE_ACP_BILLING_END;
@@ -1528,6 +1551,23 @@ describe("ACP turns (fake CLI)", () => {
 
     const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
     expect(usage).toMatchObject({ input: 10, output: 5 });
+  });
+
+  it("records Grok cachedReadTokens as cachedInput", async () => {
+    process.env.FAKE_ACP_PROMPT_META = JSON.stringify({
+      modelId: "grok-4.7-build-fast",
+      inputTokens: 31831,
+      outputTokens: 42,
+      cachedReadTokens: 31104,
+      reasoningTokens: 41,
+      usage: { inputTokens: 31831, outputTokens: 42, totalTokens: 31873, cachedReadTokens: 31104, cacheCreationTokens: 0, reasoningTokens: 41 },
+    });
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-cached", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
+    expect(usage).toMatchObject({ input: 31831, output: 42, cachedInput: 31104 });
   });
 
   it("passes ACP stdio flags and strips foreign provider keys from the child env", async () => {
@@ -2071,6 +2111,61 @@ describe("ACP turns (fake CLI)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
     expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
+  it("a cancel nobody asked for becomes a plain error, not a quiet Stop", async () => {
+    await create(GrokAgentDriver, "self-cancel");
+    await instance.adapter.sendTurn({ threadId: "t-self-cancel", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own" });
+  });
+
+  it("a prompt a Grok hook denied fails naming the hook and its reason, on every resend", async () => {
+    await create(GrokAgentDriver, "hook-denied");
+    for (const text of ["hi", "hi again"]) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-hook", text });
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(done).toMatchObject({ ok: false, stopReason: "hook_denied" });
+      expect(recorder.events.find((e) => e.type === "runtime.error" && e.turnId === turnId)).toMatchObject({
+        message: expect.stringMatching(/^Grok hook failed \(재판기록_대화기록\): (?=.{200}$)~\\scoop\\apps\\python\\current\\python\.exe: can't open file 'G:\\내 드라이브\\대화기록_게이트\.py': \[Errno 2\] No such file or directory x+…$/),
+      });
+    }
+  });
+
+  it("an unknown cancel category stays a plain error and names the category", async () => {
+    await create(GrokAgentDriver, "cancel-category");
+    await instance.adapter.sendTurn({ threadId: "t-category", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own (QuotaGuard)" });
+  });
+
+  it("a Stop stays a quiet Stop whatever category the cancel carries", async () => {
+    await create(GrokAgentDriver, "stop-replies");
+    await instance.adapter.sendTurn({ threadId: "t-stop-category", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+    await instance.adapter.interruptTurn("t-stop-category");
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
+  it.each([
+    ["ends at the first no_reply_needed result as a clean finish", [], 1],
+    ["runs on past no_reply_needed when the user typed into the turn", [{ id: "m1", role: "user", kind: "text", text: "wake", at: Number.MAX_SAFE_INTEGER }], 2],
+  ] as const)("%s", async (_name, typed, calls) => {
+    await create(GrokAgentDriver, "quiet-loop");
+    instance.adapter.onEvent(createQuietEnd(() => typed as unknown as Message[], () => instance.adapter));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+    const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    expect(done).toMatchObject({ ok: true, stopReason: null });
+    expect(recorder.events.filter((e) => e.type === "item.started" && e.title === "no_reply_needed")).toHaveLength(calls);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+    if (calls === 1) {
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello" });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId)).resolves.toMatchObject({ ok: true, stopReason: null });
+    }
   });
 
   it("an exit before result becomes runtime.error + failed turn", async () => {

@@ -34,7 +34,8 @@ export interface AccountRecord extends AccountContext {
 export class AccountError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(message: string, status = 409, code?: string) { super(message); this.status = status; this.code = code; }
+  readonly bot?: string;
+  constructor(message: string, status = 409, code?: string, bot?: string) { super(message); this.status = status; this.code = code; this.bot = bot; }
 }
 
 function plainDirectory(path: string, create: boolean) {
@@ -103,7 +104,7 @@ export class AccountService {
       this.base(of);
       const account = this.get(accountId);
       if (this.drains[accountId] || (accountId !== of && (account?.of !== of || account.state !== "ready"))) {
-        throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
+        throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections", 409, "main-unavailable");
       }
       if (accountId === of && !this.defaultFor(of)) return;
       const defaults = { ...this.state.defaults };

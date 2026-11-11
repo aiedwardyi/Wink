@@ -1,4 +1,5 @@
 import { en } from "./i18n-catalog.ts";
+import { isVoiceLine, type CallTag } from "../../shared/live-call.ts";
 
 /** The persisted message fields this pure projection needs. Keeping this
  * structural avoids pulling the renderer's TSX store into server tests. */
@@ -7,6 +8,7 @@ export interface TimelineMessage {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  call?: CallTag;
   tool?: { name: string; ok?: boolean };
   png?: string;
   at: number;
@@ -49,7 +51,7 @@ export function timelineEvents(messages: TimelineMessage[], localize: (line: str
       });
     } else if (message.kind === "screen") {
       events.push({ id: message.id, at: message.at, label: localize(en["chat.timeline.screenObserved"]), state: "observed", kind: "screen" });
-    } else if (message.kind === "text" && message.role === "bot" && message.text?.trim()) {
+    } else if (message.kind === "text" && message.role === "bot" && !isVoiceLine(message) && message.text?.trim()) {
       events.push({ id: message.id, at: message.at, label: localize(en["chat.timeline.responseRecorded"]), state: "complete", kind: "result" });
     }
   }

@@ -95,6 +95,8 @@ export interface PhoneAccessOptions {
   loadClient?(): Promise<RelayClient>;
   /** Phone sign-in with Google. Without it, or without a Web client id, the Google button stays hidden. */
   google?: PhoneGoogleAccount;
+  /** The team room door. Without it, every /room path is 404. */
+  room?(req: IncomingMessage, res: ServerResponse, relay: { host: string; peer: string | null }): Promise<void>;
 }
 
 /** This PC's Google sign-in, as phone sign-in needs it. */
@@ -306,6 +308,10 @@ export class PhoneAccess {
     return this.relay?.sendSnag?.(snag) ?? Promise.resolve(false);
   }
 
+  sendActive(): void {
+    this.relay?.sendActive?.();
+  }
+
   /** The name phones see changed, so the relay authenticates again. */
   nameChanged(): void {
     this.relay?.reauth?.();
@@ -352,6 +358,11 @@ export class PhoneAccess {
       return HANDLED;
     }
     const verdict = relayVerdict(req, host);
+    if ((verdict.kind === "pair-page" || verdict.kind === "google-start") && this.session(req, res)) {
+      res.writeHead(302, { location: "/", "cache-control": "no-store" });
+      res.end();
+      return HANDLED;
+    }
     switch (verdict.kind) {
       case "deny":
         send(res, verdict.status, { error: verdict.error });
@@ -370,6 +381,10 @@ export class PhoneAccess {
         return HANDLED;
       case "google":
         await this.googleSignIn(req, res, host);
+        return HANDLED;
+      case "room":
+        if (this.options.room) await this.options.room(req, res, { host, peer: this.client?.peer(req) ?? null });
+        else send(res, 404, { error: "not found" });
         return HANDLED;
     }
     const phone = this.session(req, res);

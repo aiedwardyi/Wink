@@ -195,6 +195,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       if (result.ticket) ready.ticket = result.ticket;
       if (result.account?.refreshed) ready.account = result.account.refreshed;
       if (ctx.snags) ready.snags = true;
+      if (hub.recordsTeam) ready.active = true;
       if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
       send(socket, ready);
       const waiting = hub.waitingCount(result.label);
@@ -211,6 +212,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
     }
     if (msg.type === "ping") send(socket, { type: "pong" });
     else if (msg.type === "snag") onSnag(session.label, msg);
+    else if (msg.type === "active") hub.active(session);
     else if (msg.type !== "pong") return false;
     hub.seen(session);
     return true;

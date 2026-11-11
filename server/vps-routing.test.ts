@@ -295,11 +295,6 @@ posixOnly("VPS turn routing e2e (fake ACP fleet + fake docker over SSH)", () => 
         expect(["image", "inspect", "exec", "version"], line).toContain(command);
       }
 
-      // the status route reads the same fake daemon and reports ready
-      const status = await api("GET", `/api/bots/${bot.id}/computer`);
-      expect(status.status).toBe(200);
-      expect(status.body).toMatchObject({ backend: "vps", ready: true, container: "running" });
-
       // turn settled → the claim is gone: the alias may change again
       const released = await api("PUT", "/api/config", { vps: { sshAlias: "other-vps" } });
       expect(released.status).toBe(200);

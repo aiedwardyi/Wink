@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -13,7 +13,7 @@ import { openBlankTerminal } from "./terminal-launch.mjs";
 import { openEngineSignIn } from "./engine-signin.mjs";
 import { registerEngineInstall } from "./engine-install.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, watchDevServer } from "./google-signin.mjs";
-import { createTerminalHost, trustedTerminalSender } from "./terminal-host.mjs";
+import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./terminal-host.mjs";
 import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
@@ -111,9 +111,10 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
-const { handleDeviceLinkedFile } = require("./linked-file-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
+const { setMainPermissions } = require("./main-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,8 @@ const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const BRAND = readBrandOverride(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"));
 const WINDOW_ICON = BRAND?.iconPath ?? APP_ICON;
 const deviceWindows = new Map();
+const deviceOrigin = (contents) => [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents === contents)?.[0];
+const micAllowed = () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone"));
 const deviceLinkPages = new WeakMap();
 const deviceLoads = new WeakMap();
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
@@ -317,6 +320,7 @@ async function paneMailbox() {
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
+const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
@@ -328,7 +332,9 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
-  paneCleanup: createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
+  scratchRoot,
+  processes: paneProcesses,
+  paneCleanup: createPaneCleanup({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
     require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
@@ -1176,6 +1182,11 @@ async function openDeviceLinkedFile(devices, target, name) {
 }
 
 async function openDeviceWindow(rawHost, rawName) {
+  const relayUrl = relayDeviceUrl(rawHost, GOOGLE_CLIENT?.teamRelay);
+  if (relayUrl) {
+    await shell.openExternal(relayUrl);
+    return true;
+  }
   const tailnet = await localTailnet();
   if (!tailnet) return false;
   const url = deviceWindowUrl(rawHost, tailnet);
@@ -1207,7 +1218,7 @@ async function openDeviceWindow(rawHost, rawName) {
     }));
     const devices = win.webContents.session;
     const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
-    setDevicePermissions(devices);
+    setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
     // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
       if (statusCode !== 401 && !(statusCode === 403 && resourceType === "mainFrame")) return;
@@ -1226,6 +1237,21 @@ async function openDeviceWindow(rawHost, rawName) {
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
       return { action: "deny" };
+    });
+    win.webContents.on("context-menu", (_event, params) => {
+      if (params.mediaType !== "image") return;
+      const menuItems = contextMenuTemplate(params, nativeText, {
+        copyLink: (href) => clipboard.writeText(href),
+        copyImage: () => win.webContents.copyImageAt(params.x, params.y),
+        saveImage: () => saveImageCopy(params.srcURL, {
+          dialog,
+          downloads: app.getPath("downloads"),
+          window: win,
+          // The remote PC's login cookie belongs to this session, not node fetch.
+          fetchImpl: (href) => devices.fetch(href),
+        }).catch((error) => dialog.showErrorBox(nativeText("native.saveCopyFailed"), error?.message ?? String(error))),
+      });
+      Menu.buildFromTemplate(menuItems).popup({ window: win, frame: params.frame });
     });
     win.webContents.on("before-input-event", (event, input) => {
       routeWindowZoomKeys(event, input, win.webContents);
@@ -1721,6 +1747,14 @@ ipcMain.handle("desktop:open-file", async (_event, rawPath, rawBase) => {
   await openLocalFile(rawPath, { base: rawBase, shell });
 });
 
+// A chat link whose file is on another of the user's PCs, read with that PC's sign-in.
+ipcMain.handle("desktop:open-peer-file", async (event, host, threadId, filePath) => {
+  if (!trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())) throw new Error("Untrusted file caller");
+  const devices = session.fromPartition(DEVICE_WINDOW_PARTITION);
+  setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
+  await openPeerLinkedFile(host, threadId, filePath, { tailnet: await localTailnet(), session: devices, createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
+});
+
 // Right-click on a file link. open-file.mjs resolves the path before any menu exists.
 ipcMain.handle("desktop:file-menu", async (event, rawPath, rawBase) => {
   const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
@@ -1798,6 +1832,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
+  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -1975,6 +2010,11 @@ app.whenReady().then(async () => {
   if (!verifyProbe) registerCuaIpc();
   if (!verifyProbe) registerUpdaterIpc();
   if (!verifyProbe) errorReports.start();
+  setMainPermissions(session.defaultSession, {
+    contents: () => mainWindow?.webContents,
+    origin: rendererOrigin,
+    micAllowed,
+  });
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
   // The handler binds that request to the same frame/origin, rejects audio,

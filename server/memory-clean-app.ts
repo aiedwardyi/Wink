@@ -1,4 +1,5 @@
 import type { ModelSelection, ProviderInstance, RateLimitWindow } from "./contracts.ts";
+import { usageTokens } from "./drivers/text-usage.ts";
 import { createMemoryClean, type MemoryCleanDeps } from "./memory-clean.ts";
 import type { TextCall } from "./memory-clean-types.ts";
 import { summaryInstance } from "./summary-instance.ts";
@@ -26,7 +27,7 @@ export function memoryCleanEngine(deps: EngineDeps): MemoryCleanDeps["engine"] {
     const summary = summaryInstance(instance, model);
     return async (prompt, opts) => {
       let tokens: number | undefined;
-      const text = await summary.generateText!(prompt, { ...opts, timeoutMs: opts?.timeoutMs ?? 120_000, model, ephemeral: true, lean: true, onUsage: (used) => { tokens = used; } });
+      const text = await summary.generateText!(prompt, { ...opts, timeoutMs: opts?.timeoutMs ?? 120_000, model, ephemeral: true, lean: true, onUsage: (used) => { tokens = usageTokens(used) ?? tokens; } });
       return { text, tokens };
     };
   };

@@ -9,7 +9,7 @@ export const PRESENCE_EXIT_MS = MOTION_FAST_MS;
 export type Presence<T> = { mounted: boolean; closing: boolean; value: T };
 
 /** Keeps a closed surface mounted, marked closing, for its exit fade; `value` holds the last open one until it unmounts. */
-export function usePresence<T>(when: T): Presence<T> {
+export function usePresence<T>(when: T, exitMs = PRESENCE_EXIT_MS): Presence<T> {
   const open = Boolean(when);
   const [shown, setShown] = useState(open);
   const last = useRef(when);
@@ -18,9 +18,9 @@ export function usePresence<T>(when: T): Presence<T> {
   if (!open && shown && reducedMotion()) setShown(false);
   useEffect(() => {
     if (open || !shown) return;
-    const timer = setTimeout(() => setShown(false), PRESENCE_EXIT_MS);
+    const timer = setTimeout(() => setShown(false), exitMs);
     return () => clearTimeout(timer);
-  }, [open, shown]);
+  }, [open, shown, exitMs]);
   return { mounted: open || shown, closing: !open && shown, value: open || !shown ? when : last.current };
 }
 

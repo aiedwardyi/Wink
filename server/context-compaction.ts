@@ -5,6 +5,7 @@ import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
+import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
 import type { ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
@@ -19,6 +20,13 @@ export const MODEL_CONTEXT_FALLBACK = 128_000;
 export const LOCAL_MODEL_CONTEXT_FALLBACK = 16_384;
 
 const CONTEXT_BUDGET_SHARE = 0.5;
+// Claude Code's own point on a 1M window; CLAUDE_CODE_AUTO_COMPACT_WINDOW moves the window within 100k..window.
+const CLAUDE_NATIVE_COMPACT_AT = 967_000;
+const CLAUDE_NATIVE_WINDOW = 1_000_000;
+const CLAUDE_COMPACT_WINDOW_MIN = 100_000;
+const NATIVE_SUMMARY_SHARE = 0.9;
+// Summary calls and flat room replays keep the sizing they had at 200k; only the trigger moves.
+export const NATIVE_SUMMARY_WINDOW = 200_000;
 // A grace turn leaves a quarter window for output and further native growth.
 const SUMMARY_GRACE_INPUT_SHARE = 0.75;
 const SUMMARY_BUDGET_SHARE = 0.35;
@@ -36,6 +44,13 @@ const SUMMARY_FLOOR_SHARE = 0.4;
 const SUMMARY_PREVIOUS_SHARE = 0.75;
 const FALLBACK_SUMMARY_NOTICE = "Model summary unavailable; full transcript retained by Wink.";
 const SUMMARY_TRIMMED = "[summary trimmed to fit]";
+const SUMMARY_MAX_CHARS = 32_000;
+const VALUES_CAP_TOKENS = 4_000;
+// The block's own room, taken from the tail so the summary text is never cut for it.
+const VALUES_ROOM_TOKENS = 2_400;
+const VALUES_ROOM_SHARE = 0.04;
+// A stand-in is rebuilt to fit, so there the block takes its share first.
+const VALUES_FALLBACK_SHARE = 0.4;
 const FALLBACK_EXCERPTS = 4;
 const FALLBACK_EXCERPT_TOKENS = 100;
 const CARD_TEXT_CHARS = 200;
@@ -134,9 +149,41 @@ export function knownCatalogContextWindow(catalog: ModelCatalog, model: string):
   return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-export function contextWindowFor(catalog: ModelCatalog, model: string): number {
-  return knownCatalogContextWindow(catalog, model) ??
+export function contextWindowFor(catalog: ModelCatalog, model: string, reported?: number | null): number {
+  const window = knownCatalogContextWindow(catalog, model) ??
     (decodeInjectId(model) ? LOCAL_MODEL_CONTEXT_FALLBACK : MODEL_CONTEXT_FALLBACK);
+  return Math.min(window, reported ?? window);
+}
+
+/** Where the engine compacts its own session; null leaves compaction to Wink. */
+export function nativeCompactAt(
+  driverKind: string,
+  model: string,
+  contextWindow: number,
+  env: Record<string, string | undefined> = process.env,
+): number | null {
+  if (driverKind !== "claudeAgent" || decodeInjectId(model) || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return null;
+  const set = /^(\d+)(k?)$/i.exec(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW?.trim() ?? "");
+  if (!set) return contextWindow >= CLAUDE_NATIVE_WINDOW ? CLAUDE_NATIVE_COMPACT_AT : null;
+  const window = Math.min(contextWindow, Math.max(CLAUDE_COMPACT_WINDOW_MIN, Number(set[1]) * (set[2] ? 1_000 : 1)));
+  return Math.max(contextBudget(window), window - (CLAUDE_NATIVE_WINDOW - CLAUDE_NATIVE_COMPACT_AT));
+}
+
+export interface NativePromptSize {
+  last: number;
+  growth?: number;
+}
+
+const nextPromptSize = ({ last, growth }: NativePromptSize) => last + Math.max(0, growth ?? 0);
+
+/** The turn after this one would pass Wink's summary point. */
+export function nearNativeCompact(input: NativePromptSize & { nativeAt: number | null }): boolean {
+  return input.nativeAt !== null && nextPromptSize(input) >= Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
+}
+
+/** The prompt moved past the gap to the engine's point: it compacted or really grew. */
+export function nativeCycleMoved(input: { last: number; builtAt: number; nativeAt: number }): boolean {
+  return Math.abs(input.last - input.builtAt) >= input.nativeAt - Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
 }
 
 function textTokens(text: string): number {
@@ -277,6 +324,18 @@ function trimSummary(summary: string, summaryBudget: number): string {
   return `${fittingHead(summary, fits).trimEnd()}\n${SUMMARY_TRIMMED}`;
 }
 
+function valuesRoomFor(lines: readonly TypedLine[], budgetTokens: number): number {
+  return lines.length ? Math.min(VALUES_ROOM_TOKENS, Math.floor(budgetTokens * VALUES_ROOM_SHARE)) : 0;
+}
+
+/** The text, then the values block in what the text leaves of maxTokens and of the row's length limit. */
+function withTypedValues(text: string, lines: readonly TypedLine[], maxTokens: number): string {
+  if (!lines.length) return text;
+  const room = Math.min(VALUES_CAP_TOKENS, maxTokens - messageTokens(summaryMessage(`${text}\n\n`, 0)));
+  const block = typedValuesBlock(lines, Math.min(room * 3, SUMMARY_MAX_CHARS - text.length - 2));
+  return block ? `${text}\n\n${block}` : text;
+}
+
 /** Pane notes are worker output: replayed as untrusted user-side data, never the bot's own words. */
 export function paneNoteText(text: string): string {
   const tagged = /^\[(pane [^\]]*)\] ([\s\S]*)$/.exec(text);
@@ -335,7 +394,7 @@ export function routineCardsSinceLastUserTurn(messages: Message[], excludeIds: R
       break;
     }
     if (excludeIds.has(message.id)) continue;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) {
+    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered && !message.quick) {
       since = message.at;
       break;
     }
@@ -514,9 +573,11 @@ function replayUnits(
     if (excludeIds.has(message.id)) return [];
     const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
     if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
+    // a queued handoff's drained line carries the same words
+    if (message.quick?.state === "handoff" && message.queueId) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
-      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : body;
+      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : body;
       const speaker = message.role === "user" ? userName : (message.from?.name ?? "Bot");
       return [{
         id: message.id,
@@ -721,6 +782,12 @@ function summaryMessage(summary: string, coveredAt: number): ModelContextMessage
     role: "assistant",
     text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${summary}`,
   };
+}
+
+/** The estimate misses the CLI's own prompt, so scale the tail by the transcript's real share. */
+function nativeTailBudget(units: ReplayUnit[], tailBudget: number, estimate: number, prompt: NativePromptSize): number {
+  const lastTurn = estimateContextTokens(units.slice(units.findLastIndex((unit) => unit.turn)));
+  return Math.max(lastTurn, Math.floor(tailBudget * Math.min(1, estimate / nextPromptSize(prompt))));
 }
 
 function selectTail(units: ReplayUnit[], budgetTokens: number): TailSelection {
@@ -945,6 +1012,9 @@ export type CompactionPlan =
       estimatedTokensBefore: number;
       transcript: ModelContextMessage[];
       deferredMail?: ContextCompactionV1["deferredMail"];
+      /** value lines of the covered rows; the block is rebuilt from them at every write */
+      typedLines: TypedLine[];
+      valuesRoom: number;
     }
   | {
       needed: false;
@@ -968,17 +1038,27 @@ export function planCompaction(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  /** the engine's own compaction point; Wink's summary lands just before it */
+  nativeAt?: number | null;
+  /** the engine's last reported prompt; with nativeAt it replaces the estimate */
+  nativePrompt?: NativePromptSize;
+  /** this native cycle already has its summary */
+  nativeCycleBuilt?: boolean;
 }): CompactionPlan {
-  const contextWindow = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
+  const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
     : MODEL_CONTEXT_FALLBACK;
-  const budgetTokens = Math.max(1, contextBudget(contextWindow) - (input.reserveTokens ?? 0));
+  const contextWindow = input.nativeAt ? Math.min(window, NATIVE_SUMMARY_WINDOW) : window;
+  const budgetTokens = Math.max(
+    1,
+    (input.nativeAt ? Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE) : contextBudget(contextWindow)) - (input.reserveTokens ?? 0),
+  );
   const found = applicableCompaction(input.messages);
   if (found && "unsupported" in found) {
     return { needed: false, status: "unsupported", messageId: found.messageId, version: found.version };
   }
   const previous = found;
-  const previousSummary = previous ? redactSecretsInText(previous.value.summary) : "";
+  const storedSummary = previous ? redactSecretsInText(previous.value.summary) : "";
   const tailUnits = replayUnits(
     input.messages,
     input.excludeIds ?? new Set(),
@@ -996,22 +1076,26 @@ export function planCompaction(input: {
     input.includeSpeakers ?? false,
   );
   const currentTranscript = [
-    ...(previous ? [summaryMessage(previousSummary, input.messages[previous.coveredIndex]!.at)] : []),
+    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
     ...units.map(({ role, text }) => ({ role, text })),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
   // Counting bot bubbles made compaction a function of the bot's chattiness;
   // ack-first doubled it overnight.
   const currentTurns = units.filter((unit) => unit.turn).length;
-  if (currentTokens <= budgetTokens && currentTurns <= MAX_CONTEXT_MESSAGES) {
-    return { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
-  }
+  const real = input.nativeAt ? input.nativePrompt : undefined;
+  const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
+  const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
+  if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
-  const tailBudget = budgetTokens - summaryBudget;
-  let { old, tail } = selectTail(units, tailBudget);
+  const typedLines = typedValueLines(input.messages, input.excludeIds);
+  const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
+  const tailBudget = budgetTokens - summaryBudget - valuesRoom;
+  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
+  if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
     old = units;
     tail = [];
@@ -1031,7 +1115,7 @@ export function planCompaction(input: {
   return {
     needed: true,
     previous,
-    previousSummary,
+    previousSummary: withoutTypedValues(storedSummary),
     old,
     tail,
     coveredThrough: input.messages[coveredThroughIndex]!,
@@ -1041,6 +1125,8 @@ export function planCompaction(input: {
     estimatedTokensBefore: Math.max(1, currentTokens),
     transcript: currentTranscript,
     ...(deferredMail.length ? { deferredMail } : {}),
+    typedLines: typedLines.filter((line) => line.index <= coveredThroughIndex),
+    valuesRoom,
   };
 }
 
@@ -1052,6 +1138,8 @@ export interface SummaryGrace {
   recycle: boolean;
   local: boolean;
   overheadTokens?: number | null;
+  /** the engine compacts its own session here; a resumed one never waits on Wink */
+  nativeAt?: number | null;
   native?: {
     instanceId: string;
     cursor: unknown;
@@ -1067,6 +1155,13 @@ export function planSummaryGrace(input: {
   reserveTokens?: number;
 }): { safe: true; budgetTokens: number } | { safe: false; reason: string } {
   const { plan, grace } = input;
+  if (grace.nativeAt) {
+    if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
+    if (!plan.needed && plan.status !== "fits") return { safe: false, reason: "invalid-context" };
+    const { instanceId, cursor, seed } = grace.native ?? {};
+    if (cursor === undefined || !seed || seed.instanceId !== instanceId || seed.cursor !== cursor) return { safe: false, reason: "unseeded" };
+    return { safe: true, budgetTokens: plan.budgetTokens };
+  }
   if (!grace.knownWindow || !Number.isSafeInteger(grace.knownWindow)) return { safe: false, reason: "unknown-window" };
   if (grace.local || grace.knownWindow <= MODEL_CONTEXT_FALLBACK) return { safe: false, reason: "small-or-local" };
   if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
@@ -1092,10 +1187,29 @@ export function planSummaryGrace(input: {
   return tokens <= budgetTokens ? { safe: true, budgetTokens } : { safe: false, reason: "headroom" };
 }
 
+/** The real prompt cleared what the estimate alone would have summarized. */
+export function fitsOnNativePrompt(plan: CompactionPlan): boolean {
+  return !plan.needed && plan.status === "fits" && plan.estimatedTokens > plan.budgetTokens;
+}
+
+/** A send that cannot resume replans on the estimate, which the real size may have cleared. */
+export function summarizesOnEstimate(plan: CompactionPlan): boolean {
+  return plan.needed || fitsOnNativePrompt(plan);
+}
+
+// A rejected resume replays this transcript, so it has to fit even when the real prompt does.
+function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, summarized: boolean): ModelContextMessage[] {
+  const head = transcript.slice(0, summarized ? 1 : 0);
+  let left = budgetTokens - estimateContextTokens(head);
+  let start = transcript.length;
+  while (start > head.length && left >= messageTokens(transcript[start - 1]!)) left -= messageTokens(transcript[--start]!);
+  return [...head, ...transcript.slice(start)];
+}
+
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary,
+    summary: withTypedValues(summary, plan.typedLines, plan.summaryBudget + plan.valuesRoom),
     coveredThroughId: plan.coveredThrough.id,
     firstKeptId: plan.tail.find((unit) => !plan.deferredMail?.some((row) => row.id === unit.id))?.id ?? null,
     contextWindow: plan.contextWindow,
@@ -1118,6 +1232,9 @@ export async function prepareModelContext(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  nativeAt?: number | null;
+  nativePrompt?: NativePromptSize;
+  nativeCycleBuilt?: boolean;
   summaryGrace?: SummaryGrace;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
@@ -1126,7 +1243,7 @@ export async function prepareModelContext(input: {
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {
       status: "ready",
-      transcript: plan.transcript,
+      transcript: newestWithin(plan.transcript, grace.budgetTokens, Boolean(plan.previous)),
       budgetTokens: grace.budgetTokens,
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),
@@ -1145,7 +1262,7 @@ export async function prepareModelContext(input: {
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
     };
   }
-  const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow } = plan;
+  const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow, typedLines, valuesRoom } = plan;
   let summary = previousSummary;
   try {
     await input.beforeSummarize?.();
@@ -1156,24 +1273,28 @@ export async function prepareModelContext(input: {
     );
   }
   // A fallback on a fallback restarts from the last model summary, so notices never nest.
-  const fallbackFrom = (chain: string) => {
+  const fallbackFrom = (chain: string, reason: "no-summarizer" | SummaryCallResult) => {
     let previousText = chain;
     let history = old;
     if (isFallbackSummary(chain)) {
       const good = repairTarget(input.messages)?.good ?? null;
-      previousText = good ? redactSecretsInText(good.value.summary) : "";
+      previousText = good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "";
       history = spanUnits(input, good?.coveredIndex ?? -1, Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1), good?.value.deferredMail, plan.deferredMail);
     }
-    return fallbackSummary({
+    // Sizes the text only: compactionRecord rebuilds the block in what the text leaves of summaryBudget + valuesRoom, so the two never overflow it.
+    const block = typedValuesBlock(typedLines, Math.min(VALUES_CAP_TOKENS, Math.floor((summaryBudget + valuesRoom) * VALUES_FALLBACK_SHARE)) * 3);
+    const text = fallbackSummary({
       previousSummary: previousText,
       history,
       taskRecordText: input.taskRecordText,
-      summaryTokens: summaryBudget,
+      summaryTokens: block ? summaryBudget - Math.max(0, textTokens(block) + 1 - valuesRoom) : summaryBudget,
     });
+    console.info(`[summary-stand-in] ${JSON.stringify({ reason, contextWindow, coveredThroughId: coveredThrough.id })}`);
+    return text;
   };
   if (!input.summarize) {
     try {
-      summary = fallbackFrom(previousSummary);
+      summary = fallbackFrom(previousSummary, "no-summarizer");
     } catch (error) {
       return failedContext(
         `Context summarization failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1198,7 +1319,7 @@ export async function prepareModelContext(input: {
         `context compaction: summarizer failed (${redactSecretsInText(segment.error instanceof Error ? segment.error.message : String(segment.error))}); using deterministic fallback`,
       );
       try {
-        summary = fallbackFrom(segment.summary || previousSummary);
+        summary = fallbackFrom(segment.summary || previousSummary, segment.result);
       } catch (error) {
         return failedContext(
           `Context summarization failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1208,12 +1329,13 @@ export async function prepareModelContext(input: {
     }
   }
 
-  const transcript = [summaryMessage(summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
+  const record = compactionRecord(plan, summary);
+  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);
   }
-  const validated = readContextCompaction({ value: compactionRecord(plan, summary) });
+  const validated = readContextCompaction({ value: record });
   if (validated.status !== "valid") {
     return failedContext("Context summarization produced invalid durable state.", previous);
   }
@@ -1255,9 +1377,10 @@ export async function buildCompaction(input: {
   });
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
-  const transcript = [summaryMessage(segment.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
+  const record = compactionRecord(plan, segment.summary);
+  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
-  const validated = readContextCompaction({ value: compactionRecord(plan, segment.summary) });
+  const validated = readContextCompaction({ value: record });
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };
 }
 
@@ -1286,7 +1409,7 @@ export async function repairModelContext(input: {
   const segment = await summarizeSegment({
     messages: input.messages,
     previous: good,
-    previousSummary: good ? redactSecretsInText(good.value.summary) : "",
+    previousSummary: good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "",
     history,
     taskRecordText: input.taskRecordText,
     contextWindow,
@@ -1298,9 +1421,10 @@ export async function repairModelContext(input: {
   });
   if (segment.status === "too-large") return segment;
   if (segment.status === "error") return { status: "failed", result: segment.result };
+  const typedLines = typedValueLines(input.messages.slice(0, target.coveredIndex + 1), input.excludeIds);
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary: segment.summary,
+    summary: withTypedValues(segment.summary, typedLines, summaryBudget + valuesRoomFor(typedLines, budgetTokens)),
     coveredThroughId: target.value.coveredThroughId,
     firstKeptId: target.value.firstKeptId,
     contextWindow,

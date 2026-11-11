@@ -108,6 +108,14 @@ describe("cold-open diagnostics", () => {
     expect(lines(dir)[0].server).toEqual({ uptimeS: expect.any(Number) });
   });
 
+  it("stores a phone's resume row", async () => {
+    const dir = freshDir();
+    const { label, nav, firstPaint, bots, jsCached, navigationType, t0, ...meta } = record;
+    const resume = { ...meta, label: "resume", hiddenMs: 300_000, sseOpen: 3_000, hello: 3_010, chatPaint: 3_030 };
+    expect(await receiveColdOpen(post(JSON.stringify(resume)), dir)).toEqual({ status: 200 });
+    expect(JSON.parse(readFileSync(join(dir, COLD_OPEN_FILE), "utf8"))).toMatchObject({ label: "resume", hiddenMs: 300_000, chatPaint: 3_030 });
+  });
+
   it("keeps a typical traced record under the body cap", () => {
     expect(Buffer.byteLength(JSON.stringify({ ...traced, nav: { fetchStart: 3, connectStart: 10, connectEnd: 120, secureConnectionStart: 40, requestStart: 121, responseStart: 300, responseEnd: 310, domInteractive: 900, domContentLoadedEventEnd: 951 } }))).toBeLessThan(COLD_OPEN_MAX_BYTES);
   });

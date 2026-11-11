@@ -44,7 +44,7 @@ describe("memory cleanup engines", () => {
 
   it.each(["claudeAgent", "codex"])("returns %s usage with the text and keeps the latest cumulative report", async (kind) => {
     const own = instance(kind);
-    own.generateText = vi.fn(async (_prompt, opts) => { opts?.onUsage?.(18_500); opts?.onUsage?.(18_908); return "reply"; });
+    own.generateText = vi.fn(async (_prompt, opts) => { opts?.onUsage?.({ input: 18_000, output: 500 }); opts?.onUsage?.({ input: 18_000, output: 908 }); opts?.onUsage?.(undefined); return "reply"; });
     const engine = await memoryCleanEngine({ selection: async () => ({ instanceId: kind, model: "chosen" }), instances: () => [own], available: () => true, usage: () => [] })("b");
     expect(await engine!.propose("proposal")).toEqual({ text: "reply", tokens: 18_908 });
     expect(await engine!.recall("blind")).toEqual({ text: "reply", tokens: 18_908 });

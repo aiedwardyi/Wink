@@ -76,3 +76,11 @@ it("drops backed-up live frames, seeds late readers and ends without Watch", () 
   const rows = [], decoder = decodeChunks(row => rows.push(row)); decoder.push(Buffer.concat(first.values)); decoder.end();
   expect(rows.at(-1)).toMatchObject({ kind: 3, ms: 140 });
 });
+
+it("captures a frame on demand for the scroll stop it was asked at", async () => {
+  const frame = vi.fn(), capturePage = vi.fn(async () => ({ resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
+  const cast = startCast({ cdp: { send: async () => {}, on: () => () => {} }, page: { capturePage }, tile: "desktop", started: Date.now(), frame });
+  await cast.shot();
+  expect(frame).toHaveBeenCalledWith(expect.objectContaining({ tile: "desktop", data: "/9j/2Q==" }));
+  cast.stop();
+});

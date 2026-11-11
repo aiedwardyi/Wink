@@ -8,6 +8,7 @@ import App from "./App";
 let host: HTMLDivElement;
 let root: Root;
 let fetchMock: ReturnType<typeof vi.fn>;
+let bots: { id: string }[];
 
 const claude = {
   instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
@@ -33,9 +34,11 @@ async function toFinalStep() {
 
 beforeEach(() => {
   localStorage.clear();
+  bots = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.startsWith("/api/instances")) return Promise.resolve(new Response(JSON.stringify({ instances: [claude] })));
+    if (url === "/api/bots?messages=0") return Promise.resolve(new Response(JSON.stringify({ bots })));
     if (url === "/api/analytics") return Promise.resolve(new Response(init?.method === "PUT" ? String(init.body) : JSON.stringify({ enabled: false })));
     return new Promise<Response>(() => {});
   });
@@ -53,6 +56,19 @@ afterEach(async () => {
 });
 
 describe("first run end", () => {
+  it("skips setup for a configured browser and remembers completion", async () => {
+    bots = [{ id: "existing" }];
+    await act(async () => root.render(createElement(App)));
+    expect(await until(() => localStorage.getItem("omb-onboarding-done"))).toBe("true");
+    expect(document.querySelector('[aria-labelledby="onboarding-title"]')).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
+    await wait(300);
+    expect(document.querySelector('[aria-labelledby="onboarding-title"]')).toBeNull();
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/bots?messages=0")).toHaveLength(1);
+  });
+
   it("shows Star on GitHub once, then never again", async () => {
     await toFinalStep();
     expect(star()!.href).toBe("https://github.com/aiedwardyi/Wink");

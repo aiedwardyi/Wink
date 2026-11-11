@@ -92,27 +92,28 @@ describe("paragraph reply reveal", () => {
     const host = await mount(room);
     await emit(started);
     await delta("First thought");
-    expect(host.querySelector(".chat-md")?.textContent ?? "").toBe("");
-    expect(host.querySelector('[data-turn-mascot][aria-hidden="false"], .turn-mascot-in')).not.toBeNull();
-    await delta(".\n\nSecond");
     const first = host.querySelector(".chat-md > :first-child");
-    expect(first?.textContent).toBe("First thought.");
+    expect(first?.textContent).toBe("First thought");
+    expect(animate).not.toHaveBeenCalled();
+    await delta(".\n\nSecond");
+    expect(host.querySelector(".chat-md > :first-child")).toBe(first);
+    expect(host.querySelector(".chat-md")?.textContent).toBe("First thought.");
+    expect(animate).not.toHaveBeenCalled();
+    await emit({ kind: "bot", bot: { id: "b1", name: "Helper updated" } });
+    expect(animate).not.toHaveBeenCalled();
+    await delta(" thought.\n\nTail");
+    expect(host.querySelector(".chat-md")?.textContent).toBe("First thought.Second thought.");
     expect(animate).toHaveBeenCalledTimes(1);
     expect(animate).toHaveBeenLastCalledWith(
       [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }],
       { duration: 400, easing: "ease-out" },
     );
-    await emit({ kind: "bot", bot: { id: "b1", name: "Helper updated" } });
-    expect(animate).toHaveBeenCalledTimes(1);
-    await delta(" thought.\n\nTail");
-    expect(host.querySelector(".chat-md")?.textContent).toBe("First thought.Second thought.");
-    expect(animate).toHaveBeenCalledTimes(2);
     await emit({ kind: "message", threadId: "t1", message: reply("First thought.\n\nSecond thought.\n\nTail") });
     expect(host.querySelector(".chat-md > :first-child")).toBe(first);
     expect(host.querySelector(".chat-md")?.textContent).toBe("First thought.\nSecond thought.\nTail");
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
     await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn1" } });
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
   });
 
   it("lands history and synced replies without a fade", async () => {

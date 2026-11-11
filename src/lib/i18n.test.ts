@@ -93,13 +93,17 @@ describe("catalogs", () => {
   it("names Agentic Mode in both locales and title cases settings labels", () => {
     expect.soft(en["bot.keepGoing"]).toBe("Agentic Mode");
     expect.soft(ko["bot.keepGoing"]).toBe("에이전트 모드");
-    expect.soft(en["bot.keepGoingHelp"]).toBe("Keeps working on the task until it's done, without stopping to ask.");
-    expect.soft(ko["bot.keepGoingHelp"]).toBe("멈춰서 묻지 않고, 작업이 끝날 때까지 계속 진행해요.");
+    expect.soft(en["bot.keepGoingHelp"]).toBe("On: keeps going alone for nights, days, even weeks.\nOff: answers and waits.");
+    expect.soft(ko["bot.keepGoingHelp"]).toBe("켜면 밤낮으로 며칠, 몇 주도 혼자 계속해요.\n끄면 답하고 기다려요.");
     expect.soft(en["chat.keepGoingPaused"]).toBe("Agentic Mode paused: two tries made no progress");
     expect.soft(en["bot.keepGoingOnMark"]).toBe("Agentic Mode on");
     expect.soft(en["bot.keepGoingPausedMark"]).toBe("Agentic Mode paused");
     expect.soft(ko["bot.keepGoingOnMark"]).toBe("에이전트 모드 켜짐");
     expect.soft(ko["bot.keepGoingPausedMark"]).toBe("에이전트 모드 일시 중지됨");
+    expect.soft(en["bot.keepGoingOnMarkHint"]).toBe("Agentic Mode on. Turn it off in Bot Details.");
+    expect.soft(en["bot.keepGoingPausedMarkHint"]).toBe("Agentic Mode paused. Turn it off in Bot Details.");
+    expect.soft(ko["bot.keepGoingOnMarkHint"]).toBe("에이전트 모드 켜짐. 봇 세부 정보에서 끌 수 있어요.");
+    expect.soft(ko["bot.keepGoingPausedMarkHint"]).toBe("에이전트 모드 일시 중지됨. 봇 세부 정보에서 끌 수 있어요.");
     expect.soft(en["bot.leanStartup"]).toBe("Load Skills & Plugins");
     expect.soft(en["settings.replyStyle.title"]).toBe("Reply Style");
   });
@@ -117,15 +121,15 @@ describe("catalogs", () => {
   it("says Main as 기본 in Korean, as the account rows do", () => {
     expect(ko["accounts.main"]).toBe("기본");
     expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
-    for (const key of ["usage.desk.mainFailed", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
+    for (const key of ["usage.desk.mainFailed", "usage.desk.mainModel", "usage.desk.mainEffort", "usage.desk.mainUnavailable", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
       expect(en[key], key).toMatch(/\bMain\b/);
       expect(ko[key], key).toContain("기본");
     }
   });
 
-  it("drops the retired Alt+R refresh from the shortcuts help in both languages", () => {
-    expect(en["shortcuts.help"]).not.toContain("Alt+R");
-    expect(ko["shortcuts.help"]).not.toContain("Alt+R");
+  it("names the Alt+R refresh in the shortcuts help in both languages", () => {
+    expect(en["shortcuts.help"]).toContain("Alt+R refreshes Usage while it is open");
+    expect(ko["shortcuts.help"]).toContain("Alt+R로 새로고침");
     expect(en["shortcuts.help"]).toMatch(/shell/);
   });
 

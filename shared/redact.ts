@@ -57,6 +57,7 @@ const KEY_PREFIXES: RegExp[] = [
   /\bak_[A-Za-z0-9_-]{16,}/g, // composio
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
   /\b[a-f0-9]{8}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, // mailbox pane grant
+  /\bwk[pdig]_[A-Za-z0-9_-]{43,}/g, // wink phone pairing / device token, team room invite / guest key
 ];
 const BEARER = /(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})/gi;
 const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
@@ -73,6 +74,29 @@ const PEM_END = /-----END [A-Z ]*PRIVATE KEY-----/;
  * ("password: leave blank…") has spaces and does not match. */
 const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
+
+const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const ENV_REF = /^\$[A-Z_][A-Z0-9_]*$/;
+/** Dotted words with nothing called after them pass only off one of these. */
+const CODE_RECEIVER =
+  /^(?:process|os|env|import|window|globalThis|self|this|localStorage|sessionStorage|config|settings|options|opts|props|ctx|req|request|res|args|params|secrets|vault|credentials|creds)\??\./;
+
+/** Long digit runs, letter-digit churn, or scattered single-letter case runs. */
+function looksRandom(value: string): boolean {
+  if (/\d/.test(value) && (/\d{4}/.test(value) || (value.match(/(?=[A-Za-z]\d|\d[A-Za-z])/g)?.length ?? 0) >= 3)) return true;
+  let singles = 0;
+  for (const word of value.match(/[A-Z]{2,}(?![a-z])|[A-Z]?[a-z]+|[A-Z]|\d+/g) ?? []) if (word.length === 1 && ++singles >= 2) return true;
+  return false;
+}
+
+/** A KEY_VALUE value that reads a credential instead of holding one:
+ * `localStorage.getItem(`, `process.env.API_KEY`, `$API_KEY`, `Hasher::new`. */
+function isCodeValue(quote: string, value: string, text: string, end: number): boolean {
+  if (ENV_REF.test(value)) return !looksRandom(value);
+  if (quote) return false;
+  if (text[end] !== "(" && text[end] !== "[" && !text.startsWith("::", end) && !CODE_RECEIVER.test(value)) return false;
+  return CODE_NAME.test(value) && !looksRandom(value);
+}
 
 /** A config dump's own `key` field, both sides quoted. Bare `key` stays out of
  * KEY_VALUE: unquoted it is prose ("the primary key: customer_id"). No
@@ -94,7 +118,7 @@ const PEM_TAIL_HOLD = 96;
 const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
 /** A literal every content pattern above needs; text with none has nothing to mask. */
-const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pdig]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
 
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
@@ -141,6 +165,10 @@ const KEY_STARTERS: Array<readonly [string, RegExp]> = [
   ["sk_", /[A-Za-z0-9]/],
   ["rk_", /[A-Za-z0-9]/],
   ["ak_", /[A-Za-z0-9_-]/],
+  ["wkp_", /[A-Za-z0-9_-]/],
+  ["wkd_", /[A-Za-z0-9_-]/],
+  ["wki_", /[A-Za-z0-9_-]/],
+  ["wkg_", /[A-Za-z0-9_-]/],
 ];
 
 function atWordBoundary(text: string, i: number): boolean {
@@ -262,7 +290,8 @@ function couldBeKeyValue(s: string): boolean {
   if (s[i] === '"' || s[i] === "'") i += 1;
   if (i >= s.length) return true;
   while (i < s.length && KV_VALUE_CHAR.test(s[i]!)) i += 1;
-  return i >= s.length;
+  // A lone trailing ":" may still become "::", which isCodeValue lets through.
+  return i >= s.length || (i === s.length - 1 && s[i] === ":");
 }
 
 /** Leftmost index of a suffix that could still complete into a secret match. */
@@ -451,7 +480,8 @@ export function redactSecretsInText(text: string): string {
   });
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
-  out = out.replace(KEY_VALUE, (_m, key: string, sep: string, quote: string, value: string) => `${key}${sep}${quote}${mask(value)}${quote}`);
+  out = out.replace(KEY_VALUE, (m: string, key: string, sep: string, quote: string, value: string, at: number, all: string) =>
+    isCodeValue(quote, value, all, at + m.length) ? m : `${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
   return out;
 }

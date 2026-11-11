@@ -120,7 +120,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       });
       return res.end(bytes);
     },
-    search: async (res: ServerResponse, url: URL) => {
+    search: async (res: ServerResponse, url: URL, hidden: readonly string[] = []) => {
       const q = url.searchParams.get("q") ?? "";
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
@@ -146,7 +146,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
         return rows.get(messageId);
       };
       const needle = q.trim().toLowerCase();
-      const found = searchMessages(q, limit + 1, threadId, { before, chips });
+      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set([...store.trash.threadIds(), ...hidden]) });
       const hits = found.slice(0, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
@@ -216,7 +216,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!emoji) return json(res, 400, { error: "emoji required" });
       const patched = store.toggleReaction(m[1], m[2], emoji, typeof body.by === "string" ? body.by : "user");
       if (!patched) return json(res, 404, { error: "no such message" });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: clientMessage(patched) });
     },
     respond: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const threadId = m[1];

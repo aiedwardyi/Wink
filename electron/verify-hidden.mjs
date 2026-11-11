@@ -12,12 +12,15 @@ import { blockedGuard } from "./verify-rules/blocked.mjs";
 
 const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule];
 const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeout"]);
+const SHOT_MS = 2000;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
 
 export function runHiddenVerify(input) {
   const started = Date.now(), adapters = {}, disposers = [], problems = [], notChecked = new Set(), details = [];
   const counts = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
+  // [done, planned] per checker and tile; planned grows when a rule's list is known, so it rides on the next progress.
+  const by = {}, tally = (checker, tile) => (by[checker] ??= {})[tile] ??= [0, 0];
   const casts = {};
   let batch = [];
   let rejectFailure, ended = false, seq = 0, eventBytes = 0, runFailure;
@@ -28,6 +31,13 @@ export function runHiddenVerify(input) {
   const deadline = setTimeout(() => stop("timeout"), VERIFY_RUN_MS - 2500);
   input.signal.addEventListener("abort", abort, { once: true });
   const race = promise => Promise.race([promise, failed]);
+  const shots = new Set();
+  // Awaited so the frame shows this scroll stop; a fast run leaves the screencast no time to.
+  async function shot(tile, y) {
+    if (!casts[tile] || shots.has(`${tile}:${y}`)) return;
+    shots.add(`${tile}:${y}`);
+    await race(Promise.race([casts[tile].shot().catch(() => {}), new Promise(resolve => setTimeout(resolve, SHOT_MS))]));
+  }
   const emit = value => {
     const event = { ...value, seq: seq + 1, emittedAt: performance.timeOrigin + performance.now() }, size = Buffer.byteLength(JSON.stringify(event));
     if (seq >= 1998 && value.kind !== "end" || eventBytes + size > 2 * 1024 * 1024 - (value.kind === "end" ? 0 : 32768)) return;
@@ -44,10 +54,12 @@ export function runHiddenVerify(input) {
     counts.completed++;
     counts[blocked ? "blocked" : count ? "failed" : "passed"]++;
     if (event) {
+      const row = tally(event.checker, event.tile);
+      row[1] = Math.max(row[1], ++row[0]);
       batch.push({ ...event, result: blocked ? "blocked" : count ? "issue" : "ok", count: counts.completed });
       if (batch.length === 32) flushChecks();
     }
-    input.progress({ ...counts });
+    input.progress({ ...counts, by: structuredClone(by) });
   }
   async function observe(cdp, rule, tile) {
     if (ended) throw fault("cancelled");
@@ -75,7 +87,7 @@ export function runHiddenVerify(input) {
   }
   async function setup(tile) {
     const page = input.pages[tile], cdp = adapters[tile] = attach(page), events = [], loads = [], aborted = [], requests = new Map();
-    const blocked = [], origin = new URL(input.url).origin;
+    const blocked = [], hmr = new Set(), origin = new URL(input.url).origin;
     for (const event of ["render-process-gone", "destroyed", "unresponsive"]) {
       const handler = () => { if (!ended) stop("page-failed"); };
       page.on(event, handler);
@@ -86,6 +98,14 @@ export function runHiddenVerify(input) {
       events.push({ where: plain(`${e.url?.replace(origin, "") || "page"}:${(e.lineNumber ?? 0) + 1}`, 120), measured: plain(`${message}; reload the page`.replaceAll(origin, ""), 160) });
     }));
     disposers.push(cdp.on("Network.requestWillBeSent", e => requests.set(e.requestId, { url: e.request.url, type: e.type })));
+    disposers.push(cdp.on("Network.webSocketCreated", e => {
+      for (let stack = e.initiator?.stack; stack; stack = stack.parent) {
+        if (stack.callFrames.some(frame => {
+          try { const url = new URL(frame.url); return url.origin === origin && url.pathname === "/@vite/client"; }
+          catch { return false; }
+        })) { hmr.add(e.url); break; }
+      }
+    }));
     disposers.push(cdp.on("Network.responseReceived", e => {
       if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where: plain(new URL(e.response.url).pathname, 120), measured: `HTTP ${e.response.status}; reload the page` });
     }));
@@ -116,7 +136,8 @@ export function runHiddenVerify(input) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
       notChecked.add(`fonts (${tile})`);
     }
-    return { cdp, events, loads, aborted, blocked, requests };
+    await shot(tile, 0);
+    return { cdp, events, loads, aborted, blocked, requests, hmr };
   }
   async function head(urls) {
     const statuses = new Map();
@@ -135,6 +156,11 @@ export function runHiddenVerify(input) {
   }
   async function pageErrors(data, state, scriptsBlocked) {
     const origin = new URL(input.url).origin, aborted = state.aborted.splice(0);
+    const blocked = new Set(input.blockedUrls());
+    data.images = data.images.filter(img => {
+      if (!blocked.has(img.src) || !img.src.startsWith(origin + "/")) return true;
+      notChecked.add("images blocked in the check"); return false;
+    });
     const statuses = await head([...new Set(aborted.map(r => r.url))]);
     for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, origin)) state.loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
     Object.assign(data, { origin, scriptsBlocked, errors: [...new Map(state.events.splice(0).map(e => [e.where, e])).values()] });
@@ -175,9 +201,9 @@ export function runHiddenVerify(input) {
     emit({ kind: "part", part: "loads" });
     const nav = {};
     for (const [i, tile] of ["desktop", "phone"].entries()) {
-      const { cdp, blocked, requests } = tiles[i];
+      const { cdp, blocked, requests, hmr } = tiles[i];
       const types = new Map([...requests.values()].map(r => [r.url, r.type]));
-      const guard = blockedGuard([...blocked, ...input.blockedUrls().map(url => ({ url, type: types.get(url) }))]);
+      const guard = blockedGuard([...blocked, ...input.blockedUrls().map(url => ({ url, type: types.get(url) }))].filter(row => !hmr.has(row.url)));
       const forms = await race(cdp.ev("!!document.querySelector('form,input:not([type=hidden]):not([type=checkbox]):not([type=radio]),textarea,button[type=submit]') || [...document.querySelectorAll('a,button')].some(n => /sign[ -]?up|register|신청|가입/i.test(n.textContent))")).catch(error => {
         if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
         notChecked.add(`form delivery (${tile})`);
@@ -201,6 +227,7 @@ export function runHiddenVerify(input) {
           const checked = rule === menuRule ? tile === "phone" && nav.desktop ? rule.check(data, nav.desktop) : { problems: [], notChecked: [] } : rule.check(data);
           if (rule === menuRule && tile === "phone" && !nav.desktop) notChecked.add("phone menu (desktop navigation unavailable)");
           const candidates = rule === errorsRule ? [...data.images, ...data.errors, ...data.loads] : rule === linksRule ? data.links : rule === copyRule ? checked.checks.map(row => ({ ...data.texts.find(item => item.where === row.where), ...row })) : rule === menuRule ? data.links : rule === detailsRule ? data.rows : [data];
+          tally(rule.id, tile)[1] += candidates.length;
           const decorate = row => {
             const element = candidates.find(item => item.where === row.where) ?? (rule === menuRule ? data : null);
             return { checker: rule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160), ...(element?.box ? { box: element.box, scrollY: element.scrollY ?? 0 } : {}) };
@@ -220,7 +247,7 @@ export function runHiddenVerify(input) {
                 flushChecks();
                 y = await race(cdp.ev(`(() => { scrollTo({ top: ${target}, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()`));
                 lastTarget = target;
-                emit({ kind: "scroll", tile, y }); casts[tile]?.readerStop();
+                emit({ kind: "scroll", tile, y }); await shot(tile, y);
               }
               element.box = [element.box[0], documentY - y, element.box[2], element.box[3]];
               element.scrollY = y;
@@ -246,7 +273,7 @@ export function runHiddenVerify(input) {
       }
       await interact(cdp, tile);
       const data = { images: [] };
-      await pageErrors(data, tiles[i], blockedGuard(blocked).scripts || guard.scripts);
+      await pageErrors(data, tiles[i], blockedGuard(blocked.filter(row => !hmr.has(row.url))).scripts || guard.scripts);
       const checked = errorsRule.check(data);
       for (const row of checked.problems) {
         const issue = { checker: errorsRule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) };

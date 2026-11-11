@@ -87,6 +87,52 @@ const typingSnapshot = async (path: string) =>
   path.endsWith("/send") ? { screenText: "$ sent", sessionId: "s1", generation: 2 } : { screenText: "$", sessionId: "s1", generation: 2 };
 
 describe("RemoteTerminalView", () => {
+  it.each([false, true])("opens at the prompt above trailing blank rows (styled %s)", async (styled) => {
+    const lines = ["PS C:\\work> ", ...Array(50).fill("   ")];
+    store.api.mockResolvedValue({ screenText: lines.join("\n"), ...(styled ? { screenRuns: lines.map((t) => [{ t }]) } : {}) });
+    const { host, root } = await renderView();
+    try {
+      expect(host.querySelector("pre")?.textContent).toBe(lines[0]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps internal blank rows and a full output screen", async () => {
+    const screenText = ["first", "", ...Array.from({ length: 50 }, (_, i) => `output ${i}`), "PS>"].join("\n");
+    store.api.mockResolvedValue({ screenText });
+    const { host, root } = await renderView();
+    try {
+      expect(host.querySelector("pre")?.textContent).toBe(screenText);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("stops following while scrolled up and resumes at the bottom", async () => {
+    vi.useFakeTimers();
+    let screenText = "first output";
+    store.api.mockImplementation(async () => ({ screenText }));
+    const { host, root } = await renderView();
+    try {
+      const pre = host.querySelector("pre")!;
+      Object.defineProperty(pre, "scrollHeight", { configurable: true, value: 1000 });
+      Object.defineProperty(pre, "clientHeight", { configurable: true, value: 200 });
+      pre.scrollTop = 300;
+      await act(async () => pre.dispatchEvent(new Event("scroll", { bubbles: true })));
+      screenText = "more output";
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(pre.scrollTop).toBe(300);
+      pre.scrollTop = 800;
+      await act(async () => pre.dispatchEvent(new Event("scroll", { bubbles: true })));
+      screenText = "latest output";
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(pre.scrollTop).toBe(1000);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("renders recent text then the live screen with the cwd", async () => {
     store.api.mockResolvedValue({ screenText: "$ ls", recentText: "done", cwd: "C:\work", exited: false });
     const { host, root } = await renderView();

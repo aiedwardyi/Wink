@@ -5,6 +5,7 @@ export interface LiveTurn {
   depth: number;
   rootId: string | null;
   nowWatch: unknown[];
+  docFix?: string;
 }
 
 type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -187,6 +187,49 @@ describe("streaming tail", () => {
       }
       await act(async () => root.render(createElement(ChatMarkdown, { text: reply, streaming: false })));
       expect(host.querySelector(".chat-md strong")?.textContent).toBe("check the config");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
+describe("ChatMarkdown first paragraph", () => {
+  it("shows only what the finished paragraph shows, one character at a time", async () => {
+    localStorage.setItem("omb-reply-style", "paragraphs");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const reply = "See [the docs](https://example.com/a_b) and ![cat](cat.png) for ~~old~~ _new_ steps, use `my_var` or **bold** <b>tag</b> now.";
+    const rendered = async (text: string, streaming: boolean) => {
+      await act(async () => root.render(createElement(ChatMarkdown, { text, streaming, whole: 0 })));
+      return host.querySelector(".chat-md")?.textContent ?? "";
+    };
+    try {
+      const final = await rendered(reply, false);
+      for (let at = 1; at <= reply.length; at++) {
+        const partial = await rendered(reply.slice(0, at), true);
+        expect.soft(final.startsWith(partial), `${JSON.stringify(reply.slice(0, at))} -> ${JSON.stringify(partial)}`).toBe(true);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      localStorage.setItem("omb-reply-style", "live");
+    }
+  });
+});
+
+describe("ChatMarkdown stray user tags", () => {
+  it("renders a stored row with raw tags clean and keeps code literal", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { streaming: true, text: "<user1>Got it</user1> use `<user2>`\n\n```\n<user3>x</user3>\n```" })));
+      const text = host.querySelector(".chat-md")?.textContent ?? "";
+      expect(text).toContain("Got it use <user2>");
+      expect(text).toContain("<user3>x</user3>");
+      expect(text).not.toContain("<user1>");
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -709,6 +752,149 @@ describe("relative file links", () => {
     }
   });
 
+  describe("phone video full screen", () => {
+    let host: HTMLDivElement;
+    let root: Root;
+    let shown: Element | null;
+    let layers: WindowEventMap["orbit:back-layer"][];
+    const record = (event: WindowEventMap["orbit:back-layer"]) => layers.push(event);
+    const setFullscreen = (element: Element | null) => {
+      shown = element;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+
+    async function mount(touch = true, supported = true) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
+      vi.stubGlobal("matchMedia", (query: string) => ({ matches: touch && query === "(pointer: coarse)", addEventListener() {}, removeEventListener() {} }));
+      Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: supported });
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => shown });
+      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+        configurable: true,
+        value: supported ? vi.fn(async function (this: Element) { setFullscreen(this); }) : undefined,
+      });
+      document.exitFullscreen = vi.fn(async () => setFullscreen(null));
+      await act(async () => root.render(createElement(ChatMarkdown, { text: "[clip.mp4](C:/clips/clip.mp4)", threadId: "t1" })));
+      await act(async () => {
+        await vi.waitFor(() => {
+          expect(host.querySelector("video")).not.toBeNull();
+        });
+      });
+    }
+    const button = () => host.querySelector<HTMLButtonElement>("[data-phone-video-fullscreen]");
+
+    beforeEach(() => {
+      shown = null;
+      layers = [];
+      window.addEventListener("orbit:back-layer", record);
+      host = document.body.appendChild(document.createElement("div"));
+      root = createRoot(host);
+    });
+
+    afterEach(async () => {
+      await act(async () => root.unmount());
+      host.remove();
+      window.removeEventListener("orbit:back-layer", record);
+      Reflect.deleteProperty(document, "fullscreenEnabled");
+      Reflect.deleteProperty(document, "fullscreenElement");
+      Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
+      Reflect.deleteProperty(document, "exitFullscreen");
+      vi.unstubAllGlobals();
+      applyLocale("en");
+    });
+
+    it("puts the wrapper holding the same video into full screen and turns the browser button off", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      const play = vi.spyOn(video, "play");
+      const pause = vi.spyOn(video, "pause");
+      expect(video.getAttribute("controlslist")).toBe("nofullscreen");
+      await act(async () => button()!.click());
+      expect(shown).toBe(video.parentElement);
+      expect(shown).not.toBe(video);
+      expect(host.querySelector("video")).toBe(video);
+      expect(button()!.getAttribute("aria-label")).toBe("Exit full screen");
+      expect(play).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+      expect(video.className).toContain("object-contain");
+    });
+
+    it("exits with the same button and keeps the video element", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      await act(async () => button()!.click());
+      await act(async () => button()!.click());
+      expect(document.exitFullscreen).toHaveBeenCalledTimes(1);
+      expect(shown).toBeNull();
+      expect(host.querySelector("video")).toBe(video);
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+    });
+
+    it("focuses the video on entry so the browser shows its controls", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      video.setAttribute("tabindex", "0");
+      expect(document.activeElement).not.toBe(video);
+      await act(async () => button()!.click());
+      expect(document.activeElement).toBe(video);
+    });
+
+    it("lets phone Back leave full screen first", async () => {
+      await mount();
+      expect(layers).toHaveLength(0);
+      await act(async () => button()!.click());
+      const layer = layers.at(-1)!;
+      expect(layer.detail.close).toBeTypeOf("function");
+      await act(async () => layer.detail.close!());
+      expect(shown).toBeNull();
+      expect(layers.at(-1)!.detail.close).toBeUndefined();
+    });
+
+    it("drops the Back layer when the browser leaves full screen itself", async () => {
+      await mount();
+      await act(async () => button()!.click());
+      await act(async () => setFullscreen(null));
+      expect(layers.at(-1)!.detail.close).toBeUndefined();
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+    });
+
+    it("ignores another element's full screen", async () => {
+      await mount();
+      await act(async () => setFullscreen(document.body));
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+      expect(layers).toHaveLength(0);
+    });
+
+    it("names the button in Korean with a real icon", async () => {
+      applyLocale("ko");
+      await mount();
+      expect(button()!.getAttribute("aria-label")).toBe("전체 화면");
+      expect(button()!.title).toBe("전체 화면");
+      expect(button()!.querySelector("svg")).not.toBeNull();
+      expect(button()!.textContent).toBe("");
+      await act(async () => button()!.click());
+      expect(button()!.getAttribute("aria-label")).toBe("전체 화면 종료");
+    });
+
+    it("sizes the touch target and keeps it off the seek bar", async () => {
+      await mount();
+      const classes = button()!.className;
+      expect(classes).toContain("h-11");
+      expect(classes).toContain("w-11");
+      expect(classes).toContain("bottom-14");
+    });
+
+    it.each([
+      ["a mouse pointer", true, false],
+      ["no element full screen", false, true],
+    ] as const)("renders the plain video with %s", async (_, supported, touch) => {
+      await mount(touch, supported);
+      expect(button()).toBeNull();
+      const video = host.querySelector("video")!;
+      expect(video.hasAttribute("controlslist")).toBe(false);
+      expect(video.parentElement!.tagName).not.toBe("SPAN");
+    });
+  });
+
   it.each(["zip", "md", "txt", "docx", "html", "htm"])("opens a linked %s from an authenticated browser without the desktop bridge", async (ext) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
     const host = document.createElement("div");
@@ -753,7 +939,7 @@ describe("relative file links", () => {
     }
   });
 
-  it.each([["folder", 404, false], ["empty.zip", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
+  it.each([["unlisted-folder", 404, false], ["empty.zip", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status, headers: { "content-range": "bytes */0" } })));
     const host = document.createElement("div");
     const root = createRoot(host);
@@ -768,6 +954,159 @@ describe("relative file links", () => {
       await act(async () => root.unmount());
       vi.unstubAllGlobals();
     }
+  });
+
+  describe("a folder link", () => {
+    const folder = "C:/Users/홍길동/Desktop/showcase-1111";
+    const files = [
+      { name: "2026-11-11 쇼케이스 최종 발표 자료 (수정본).html", path: `${folder}/2026-11-11 쇼케이스 최종 발표 자료 (수정본).html`, size: 48_213 },
+      { name: "hero-shot.png", path: `${folder}/hero-shot.png`, size: 1_532_001 },
+      { name: "notes.txt", path: `${folder}/notes.txt`, size: 812 },
+    ];
+    const mount = async (locale: "en" | "ko" = "en", listed = files, link = folder, more = 7) => {
+      applyLocale(locale);
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
+        ? new Response(JSON.stringify({ files: listed, more }), { headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify({ error: "not found" }), { status: 404 })));
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${link})`, threadId: "t1" })));
+      await act(async () => host.querySelector("button")!.click());
+      return { host, root };
+    };
+    const src = (path: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`;
+    afterEach(() => {
+      document.body.replaceChildren();
+      applyLocale("en");
+      Reflect.deleteProperty(window, "ogb");
+      vi.unstubAllGlobals();
+    });
+
+    it("a remote folder link lists its files", async () => {
+      const { root } = await mount();
+      try {
+        expect(fetch).toHaveBeenCalledWith(`/api/threads/t1/linked-folder?path=${encodeURIComponent(folder)}`);
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        expect(sheet.querySelector("h2")!.textContent).toBe("showcase-1111");
+        expect([...sheet.querySelectorAll("[data-folder-file]")].map((row) => row.textContent)).toEqual([
+          `${files[0]!.name}47.1 KB`, `${files[2]!.name}812 B`,
+        ]);
+        expect(sheet.textContent).toContain("7 more files");
+        const [page, notes] = [...sheet.querySelectorAll<HTMLElement>("[data-folder-file]")];
+        expect([page!.getAttribute("href"), page!.getAttribute("target")]).toEqual([src(files[0]!.path), "_blank"]);
+        expect([notes!.getAttribute("href"), notes!.hasAttribute("download")]).toEqual([src(files[2]!.path), true]);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("images show as a grid", async () => {
+      const photos = ["IMG_20261111_093012.jpg", "DSC04417.png", "sunset-over-han-river.webp"].map((name) => ({ name, path: `${folder}/${name}`, size: 2_000_000 }));
+      const { root } = await mount("en", [files[0]!, photos[0]!, files[2]!, photos[1]!, photos[2]!]);
+      try {
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        const grid = sheet.querySelector("[data-folder-grid]")!;
+        expect(grid.compareDocumentPosition(sheet.querySelector("[data-folder-file]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        const tiles = [...grid.querySelectorAll("button")];
+        expect(tiles.map((tile) => [tile.title, tile.querySelector("img")?.getAttribute("src"), tile.querySelector("img")?.getAttribute("loading")]))
+          .toEqual(photos.map((photo) => [photo.name, src(photo.path), "lazy"]));
+        expect(tiles[0]!.textContent).toBe("");
+        expect(tiles[0]!.getAttribute("aria-label")).toBe(`Open Image ${photos[0]!.name}`);
+        expect(sheet.querySelectorAll("[data-folder-file]")).toHaveLength(2);
+        await act(async () => tiles[1]!.click());
+        expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toBe(src(photos[1]!.path));
+      } finally {
+        await act(async () => root.unmount());
+      }
+      const plain = await mount("en", [files[0]!, files[2]!]);
+      try {
+        expect(document.querySelector("[data-folder-grid]")).toBeNull();
+      } finally {
+        await act(async () => plain.root.unmount());
+      }
+    });
+
+    it.each([["en", "Download notes.txt"], ["ko", "notes.txt 다운로드"]] as const)("file rows have a download button in %s", async (locale, label) => {
+      const { root } = await mount(locale);
+      try {
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        const saves = [...sheet.querySelectorAll<HTMLAnchorElement>("a[data-folder-download]")];
+        expect(saves.map((save) => [save.getAttribute("href"), save.getAttribute("download")])).toEqual([files[0]!, files[2]!].map((file) => [src(file.path), file.name]));
+        expect(saves[1]!.getAttribute("aria-label")).toBe(label);
+        expect(saves[1]!.querySelector("svg")).not.toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it.each([["en", "1 more file"], ["ko", "파일 1개가 더 있어요"]] as const)("says one more file in %s", async (locale, line) => {
+      const { root } = await mount(locale, files, folder, 1);
+      try {
+        expect(document.querySelector("[data-linked-folder] p")?.textContent).toBe(line);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("lists a folder once for a double tap", async () => {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/linked-folder?")
+        ? new Response(JSON.stringify({ files, more: 0 }))
+        : new Response(JSON.stringify({ error: "not found" }), { status: 404 })));
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      try {
+        await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${folder})`, threadId: "t1" })));
+        await act(async () => {
+          host.querySelector("button")!.click();
+          host.querySelector("button")!.click();
+        });
+        expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/linked-folder?"))).toHaveLength(1);
+        expect(document.querySelectorAll("[data-linked-folder]")).toHaveLength(1);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("a backslash folder link in angle brackets opens too", async () => {
+      const windows = String.raw`C:\Users\mredw\Desktop\Orbit-extras\showcase-1111`;
+      const { root } = await mount("en", files, `<${windows}>`);
+      try {
+        expect(fetch).toHaveBeenCalledWith(`/api/threads/t1/linked-folder?path=${encodeURIComponent(windows)}`);
+        expect(document.querySelector("[data-linked-folder] h2")?.textContent).toBe("showcase-1111");
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("names the sheet in Korean", async () => {
+      const { root } = await mount("ko");
+      try {
+        const sheet = document.querySelector('[role="dialog"][data-linked-folder]')!;
+        expect(sheet.textContent).toContain("파일 7개가 더 있어요");
+        expect(sheet.querySelector("button[aria-label]")!.getAttribute("aria-label")).toBe("폴더 닫기");
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
+
+    it("desktop folder link still opens explorer", async () => {
+      const openFile = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(window, "ogb", { configurable: true, value: { openFile } });
+      vi.stubGlobal("fetch", vi.fn());
+      const host = document.createElement("div");
+      const root = createRoot(host);
+      try {
+        await act(async () => root.render(createElement(ChatMarkdown, { text: `[showcase-1111](${folder})`, threadId: "t1" })));
+        await act(async () => host.querySelector("button")!.click());
+        expect(openFile).toHaveBeenCalledWith(folder, undefined);
+        expect(fetch).not.toHaveBeenCalled();
+        expect(document.querySelector("[data-linked-folder]")).toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+      }
+    });
   });
 
   it("keeps the file name beside Open on PC", async () => {
@@ -803,5 +1142,80 @@ describe("relative file links", () => {
       host.remove();
       vi.unstubAllGlobals();
     }
+  });
+
+  describe("a desktop link whose file is on another PC", () => {
+    const file = "C:/Users/홍길동/문서/주간 보고서.docx";
+    const missing = () => vi.fn().mockRejectedValue(new Error("That file no longer exists"));
+    const invalid = () => vi.fn().mockRejectedValue(new Error("That file path is invalid"));
+    const click = async (ogb: object | undefined, pc: { offline?: boolean; writer?: boolean; locale?: "en" | "ko"; pending?: boolean; link?: string } = {}) => {
+      applyLocale(pc.locale ?? "en");
+      if (ogb) Object.defineProperty(window, "ogb", { configurable: true, value: ogb });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        if (pc.pending) return new Promise<Response>(() => {});
+        if (String(input).includes("/api/devices")) {
+          return new Response(JSON.stringify({ devices: [{ deviceId: "home-pc", name: "Home", host: "home.example", current: false, offline: pc.offline === true }] }));
+        }
+        return new Response(JSON.stringify(pc.writer === false ? { error: "not found" } : { error: "not found", deviceId: "home-pc" }), { status: 404 });
+      }));
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      try {
+        await act(async () => root.render(createElement(ChatMarkdown, { text: `[주간 보고서.docx](${pc.link ?? "C:/Users/홍길동/문서/주간%20보고서.docx"})`, threadId: "t1" })));
+        await act(async () => host.querySelector("button")!.click());
+        return host.querySelector("button")!.nextElementSibling?.textContent;
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+        applyLocale("en");
+        Reflect.deleteProperty(window, "ogb");
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it("fetches it from the PC that wrote the link when that PC is on", async () => {
+      const openPeerFile = vi.fn().mockResolvedValue(undefined);
+      expect(await click({ openFile: missing(), openPeerFile }, { writer: false })).toBe("That file no longer exists");
+      expect(openPeerFile).not.toHaveBeenCalled();
+      expect(await click({ openFile: missing(), openPeerFile })).toBeUndefined();
+      expect(openPeerFile).toHaveBeenCalledWith("home.example", "t1", file);
+    });
+
+    it.each([["en", "This file is on Home."], ["ko", "이 파일은 Home에 있어요."]] as const)("says which PC has it in %s when that PC is off", async (locale, line) => {
+      const openPeerFile = vi.fn();
+      expect(await click({ openFile: missing(), openPeerFile }, { offline: true, locale })).toBe(line);
+      expect(openPeerFile).not.toHaveBeenCalled();
+    });
+
+    it("says which PC has it when the fetch fails or the desktop app is older", async () => {
+      expect(await click({ openFile: missing(), openPeerFile: vi.fn().mockRejectedValue(new Error("That file could not be opened")) })).toBe("This file is on Home.");
+      expect(await click({ openFile: missing() })).toBe("This file is on Home.");
+    });
+
+    it("keeps the reason that PC refused with", async () => {
+      const openPeerFile = vi.fn().mockRejectedValue(new Error("That file is outside the bot's folder"));
+      expect(await click({ openFile: missing(), openPeerFile })).toBe("That file is outside the bot's folder");
+    });
+
+    it("asks the PC that wrote a Windows path a Mac or Linux desktop calls invalid", async () => {
+      const openPeerFile = vi.fn().mockResolvedValue(undefined);
+      expect(await click({ openFile: invalid(), openPeerFile })).toBeUndefined();
+      expect(openPeerFile).toHaveBeenCalledWith("home.example", "t1", file);
+      expect(await click({ openFile: invalid(), openPeerFile: vi.fn() }, { offline: true })).toBe("This file is on Home.");
+    });
+
+    it("keeps a path invalid when no other PC wrote it or no PC may open it", async () => {
+      const openPeerFile = vi.fn();
+      expect(await click({ openFile: invalid(), openPeerFile }, { writer: false })).toBe("That file path is invalid");
+      for (const link of ["C:/Users/a/notes.txt:secret", "//nas/share/notes.txt", "/C:/Users/a/notes.txt:secret"]) {
+        expect(await click({ openFile: invalid(), openPeerFile }, { link }), link).toBe("That file path is invalid");
+      }
+      expect(openPeerFile).not.toHaveBeenCalled();
+    });
+
+    it.each([["en", "Checking this file..."], ["ko", "파일을 확인하는 중이에요..."]] as const)("answers a click in %s before the file check lands", async (locale, line) => {
+      expect(await click(undefined, { pending: true, locale })).toBe(line);
+    });
   });
 });

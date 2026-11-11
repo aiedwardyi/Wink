@@ -5,6 +5,8 @@ import type { ModelCatalog, ModelSelection, ProviderInstance, ProviderSnapshot }
 import type { ProviderRegistry } from "./harness/registry.ts";
 import type { BotRecord, Store } from "./store.ts";
 
+export const SIGNED_OUT = "This account is signed out. Sign in again, then send your message.";
+
 export class BotAccounts {
   private readonly accounts: AccountService;
   private readonly registry: ProviderRegistry;
@@ -26,6 +28,7 @@ export class BotAccounts {
     if (!accountId) {
       if (this.accounts.drains[selection.instanceId]) throw new AccountError("This account is draining. Use Set as Main on the Usage page");
       if (this.accounts.get(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page before starting this engine");
+      if (this.registry.accountBlocked(selection.instanceId)) throw new AccountError(SIGNED_OUT);
       return selection;
     }
     const instance = this.validate(accountId, selection);
@@ -90,9 +93,9 @@ export class BotAccounts {
   useForBots(id: string) {
     const account = this.accounts.list().find((row) => row.id === id);
     if (!account) throw new AccountError("Unknown account", 404);
-    if (!this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
+    if (!this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections", 409, "main-unavailable");
     for (const bot of this.store.bots) {
-      for (const selection of this.selections(bot)) if (selection.instanceId === account.of) this.validate(id, selection);
+      for (const selection of this.selections(bot)) if (selection.instanceId === account.of) this.validate(id, selection, bot);
     }
     return this.accounts.setDefault(account.of, id);
   }
@@ -145,14 +148,16 @@ export class BotAccounts {
     return !this.accounts.drains[id] && (!account || account.state === "ready") && this.registry.accountAvailable(id);
   }
 
-  private validate(id: string, selection: ModelSelection) {
+  private validate(id: string, selection: ModelSelection, bot?: BotRecord) {
     const instance = this.registry.get(id);
-    if (!instance || !this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
+    if (!instance || !this.available(id)) {
+      throw new AccountError(!this.accounts.drains[id] && this.registry.accountBlocked(id) ? SIGNED_OUT : "This account is unavailable or draining. Sign in again in Settings > Connections");
+    }
     if (selection.model !== instance.models.default && !instance.models.options.some((option) => option.id === selection.model)) {
-      throw new AccountError("This account does not offer the selected model; choose a model first", 400);
+      throw new AccountError("This account does not offer the selected model; choose a model first", 400, bot && "main-model", bot?.name);
     }
     if (selection.effort && !isEffortOffered(instance.driverKind, selection.model, selection.effort, instance.adapter.capabilities.effortLevels ?? [])) {
-      throw new AccountError("This account does not offer the selected effort; choose an effort first", 400);
+      throw new AccountError("This account does not offer the selected effort; choose an effort first", 400, bot && "main-effort", bot?.name);
     }
     return instance;
   }

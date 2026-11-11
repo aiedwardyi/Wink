@@ -394,6 +394,45 @@ test("downloaded release survives same-version checks until a newer release appe
   assert.equal(feed.downloads, 1);
 });
 
+test("Try again after a failed manual check returns to the downloaded release", async () => {
+  const { updater, coordinator, getState } = harness();
+  const feed = releaseFeed(updater, "1.0.94");
+  await coordinator.download();
+  const check = updater.checkForUpdates;
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  assert.equal(getState().status, "error");
+
+  updater.checkForUpdates = check;
+  await coordinator.check(true);
+  assert.equal(getState().status, "downloaded");
+  assert.equal(getState().version, "1.0.94");
+
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  updater.checkForUpdates = check;
+  feed.live = "1.0.95";
+  await coordinator.check(true);
+  assert.deepEqual(getState(), { status: "available", version: "1.0.95", message: undefined });
+});
+
+test("Try again does not bring back a withdrawn release", async () => {
+  const { updater, coordinator, getState } = harness();
+  const feed = versionedFeed(updater, "1.0.97", "1.0.98");
+  await coordinator.download();
+  feed.live = "1.0.97";
+  await coordinator.download();
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  updater.checkForUpdates = () => {
+    updater.emit("checking-for-update");
+    updater.emit("update-not-available");
+    return Promise.resolve({ isUpdateAvailable: false, updateInfo: { version: feed.live } });
+  };
+  await coordinator.check(true);
+  assert.equal(getState().status, "idle");
+});
+
 for (const failure of ["event", "rejection"]) {
   test(`downloaded release survives a background check ${failure}`, async () => {
     const { updater, coordinator, getState, states } = harness();
@@ -676,4 +715,62 @@ test("compares release versions numerically", () => {
   assert.equal(isNewerVersion("1.1.0", "1.1.0-beta.2"), true);
   assert.equal(isNewerVersion("1.1.0-beta.10", "1.1.0-beta.2"), true);
   assert.equal(isNewerVersion("1.0.98", null), true);
+});
+
+const MINUTE = 60_000;
+
+function timedHarness() {
+  const timers = [];
+  let now = 0;
+  const h = harness({
+    now: () => now,
+    schedule: (fn, ms) => timers.push({ fn, ms }),
+  });
+  return { ...h, timers, advance: (ms) => void (now += ms) };
+}
+
+test("background transient failure stays silent and retries after 1, 5, 15 minutes", async () => {
+  const { updater, coordinator, states, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error('504 "method: GET" Data: <html>'));
+
+  for (let i = 0; i < 4; i += 1) await coordinator.check();
+
+  assert.deepEqual(errorStates(states), []);
+  assert.deepEqual(timers.map((timer) => timer.ms), [1 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
+});
+
+test("a successful check resets the retry ladder", async () => {
+  const { updater, coordinator, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("read ECONNRESET"));
+  await coordinator.check();
+  updater.checkForUpdates = () => Promise.resolve({ isUpdateAvailable: false });
+  await coordinator.check();
+  updater.checkForUpdates = () => Promise.reject(new Error("read ECONNRESET"));
+  await coordinator.check();
+
+  assert.deepEqual(timers.map((timer) => timer.ms), [1 * MINUTE, 1 * MINUTE]);
+});
+
+test("background non-transient failure neither retries nor surfaces", async () => {
+  const { updater, coordinator, states, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("sha512 checksum mismatch"));
+
+  await coordinator.check();
+
+  assert.deepEqual(errorStates(states), []);
+  assert.deepEqual(timers, []);
+});
+
+test("a transient failure persisting 24 hours surfaces", async () => {
+  const { updater, coordinator, getState, advance } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("getaddrinfo ENOTFOUND github.com"));
+
+  await coordinator.check();
+  advance(23 * 60 * MINUTE);
+  await coordinator.check();
+  assert.equal(getState().status, "idle");
+
+  advance(60 * MINUTE);
+  await coordinator.check();
+  assert.equal(getState().status, "error");
 });

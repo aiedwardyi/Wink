@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
 
 import { leaveFor } from "@/lib/back-navigation";
+import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
@@ -25,7 +26,7 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
 
 const DEVICES_CHANGE = "orbit-devices-change";
 
-function useDevices(enabled: boolean, watching = false) {
+export function useDevices(enabled: boolean, watching = false) {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const live = useRef(true);
   const requested = useRef(0);
@@ -204,7 +205,7 @@ export function DeviceSwitcher({
                 </li>
               ),
             )}
-            <li className="mt-1 border-t border-hairline/40 pt-1">
+            {onThisPc() && <li className="mt-1 border-t border-hairline/40 pt-1">
               <button type="button" data-connect-device onClick={() => {
                 close();
                 dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
@@ -212,7 +213,7 @@ export function DeviceSwitcher({
                 <Plus size={16} className="shrink-0" />
                 <span>{t("settings.devices.connect")}</span>
               </button>
-            </li>
+            </li>}
           </ul>
     </>
   );

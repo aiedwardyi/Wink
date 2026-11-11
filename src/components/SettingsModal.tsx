@@ -24,6 +24,7 @@ import { TerminalAppearanceRow } from "./TerminalAppearanceRow";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { LanguagePicker } from "./LanguagePicker";
 import { useI18n } from "@/lib/i18n";
+import { isTransientUpdateError } from "../../shared/update-error.mjs";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
@@ -109,7 +110,9 @@ export function UpdatesRow() {
               : s?.status === "error"
                 ? isMissingUpdateConfig(s.message)
                   ? t("settings.updates.unavailable")
-                  : t("settings.updates.error", { message: s.message ?? t("settings.updates.unknownError") })
+                  : isTransientUpdateError(s.message)
+                    ? t("update.unreachable")
+                    : t("settings.updates.error")
                 : acknowledged
                   ? t("update.upToDate")
                   : t("settings.updates.latest");
@@ -404,6 +407,7 @@ export function SettingsModal({
   useEffect(() => { backRef.current = back; }, [back]);
   useBackLayer(!closing && phone && page, back);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const activityWaved = useRef(false);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
   const phoneAvailable = true;
@@ -604,11 +608,17 @@ export function SettingsModal({
           <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">
             {section === "account" && (
               <>
-                <Card title={t("settings.profile.title")}>
-                  <ProfileFields />
+                <Card>
+                  <div className="flex items-center gap-6">
+                    <div className="min-w-0 flex-1 md:min-w-[13rem] lg:min-w-[19rem]"><ProfileFields /></div>
+                    {!phone && (
+                      <div className="min-w-0 self-stretch border-l border-hairline/40 pl-6">
+                        <SyncPanel onAccountEmail={setAccountEmail} />
+                      </div>
+                    )}
+                  </div>
                 </Card>
-                {!phone && <SyncPanel onAccountEmail={setAccountEmail} />}
-                <ActivityCard />
+                <ActivityCard waved={activityWaved} />
               </>
             )}
 
@@ -653,12 +663,10 @@ export function SettingsModal({
             )}
 
             {section === "connections" && (
-              <Card band>
-                <div className="flex flex-col gap-4">
-                  <EnginesSettings />
-                  <SavedKeys />
-                </div>
-              </Card>
+              <div data-settings-connections="" className="flex flex-col gap-4">
+                <EnginesSettings />
+                <SavedKeys />
+              </div>
             )}
 
             {section === "themes" && (

@@ -1,3 +1,9 @@
+import { isTransientUpdateError } from "../shared/update-error.mjs";
+
+// Quiet retries after a transient background failure, then the normal schedule resumes.
+const RETRY_MS = [1, 5, 15].map((minutes) => minutes * 60_000);
+const SURFACE_AFTER_MS = 24 * 60 * 60_000;
+
 function versionParts(version) {
   const [core, pre = ""] = String(version ?? "").split(/-(.*)/s);
   return { core: core.split(".").map((part) => Number.parseInt(part, 10) || 0), pre };
@@ -17,7 +23,12 @@ export function isNewerVersion(candidate, current) {
   return a.pre.localeCompare(b.pre, undefined, { numeric: true }) > 0;
 }
 
-export function createUpdaterCoordinator(updater, setState, { quitForInstall, onFailure = () => {} } = {}) {
+export function createUpdaterCoordinator(updater, setState, {
+  quitForInstall,
+  onFailure = () => {},
+  schedule = (run, ms) => setTimeout(run, ms).unref?.(),
+  now = Date.now,
+} = {}) {
   let checkOperation = null;
   let downloadOperation = null;
   let installOperation = null;
@@ -25,10 +36,19 @@ export function createUpdaterCoordinator(updater, setState, { quitForInstall, on
   // The feed withdrew the staged build: it stays unusable until a new download lands.
   let withdrawn = false;
   let rechecks = 0;
+  let transientFailures = 0;
+  let failingSince = null;
   const routedErrors = new WeakSet();
 
   const routeError = (manual, error) => {
     if (manual) onFailure();
+    let surface = manual;
+    if (!manual && isTransientUpdateError(String(error?.message ?? error))) {
+      failingSince ??= now();
+      if (transientFailures < RETRY_MS.length) schedule(() => void check(), RETRY_MS[transientFailures]);
+      transientFailures += 1;
+      surface = now() - failingSince >= SURFACE_AFTER_MS;
+    }
     if (error instanceof Error) routedErrors.add(error);
     if (downloadOperation) downloadOperation.failed = true;
     if (checkOperation) checkOperation.failed = true;
@@ -37,7 +57,7 @@ export function createUpdaterCoordinator(updater, setState, { quitForInstall, on
       clearTimeout(installOperation.timer);
       installOperation = null;
     }
-    if (!manual) {
+    if (!surface) {
       setState(downloadedVersion ? { status: "downloaded", version: downloadedVersion } : { status: "idle" });
       return;
     }
@@ -104,6 +124,21 @@ export function createUpdaterCoordinator(updater, setState, { quitForInstall, on
     checkOperation = operation;
     try {
       operation.promise = Promise.resolve(updater.checkForUpdates())
+        .then((result) => {
+          if (!operation.failed) {
+            transientFailures = 0;
+            failingSince = null;
+          }
+          // checkOwnsState muted every event, so an earlier error card would never clear.
+          const latest = result?.isUpdateAvailable ? result.updateInfo?.version : undefined;
+          if (
+            operation.manual && !operation.failed && !operation.supersededByDownload
+            && !downloadOperation && !installOperation && downloadedVersion
+            && !(latest && isNewerVersion(latest, downloadedVersion))
+          ) {
+            setState({ status: "downloaded", version: downloadedVersion });
+          }
+        })
         .catch((error) => {
           if (!operation.supersededByDownload) handleRejectedOperation(operation.manual, error);
         })

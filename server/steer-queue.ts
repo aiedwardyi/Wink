@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
+import type { CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
@@ -16,6 +17,7 @@ import { syncHold } from "./sync-hold.ts";
 /** The slice of Store this module needs — narrow so tests can fake it. */
 export interface SteerStore {
   bot(id: string): BotRecord | null;
+  messagesFor(threadId: string): Message[];
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
   patchMessage(threadId: string, messageId: string, patch: Partial<Message>): Message | null;
 }
@@ -30,6 +32,7 @@ interface SteerItem {
   sendId?: string;
   after?: boolean;
   syncUntil?: number;
+  call?: CallTag;
 }
 
 interface RoomItem {
@@ -41,6 +44,7 @@ interface RoomItem {
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
+  askId?: string;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -77,6 +81,7 @@ const savedQueueSchema = z.array(z.object({
     sendId: z.string().optional(),
     after: z.boolean().optional(),
     syncUntil: z.number().finite().nonnegative().optional(),
+    call: z.object({ id: z.string(), voice: z.literal(true).optional(), order: z.literal(true).optional(), ask: z.literal(true).optional() }).optional(),
   })),
 }));
 
@@ -122,7 +127,7 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
     const messages = store.messagesFor(entry.threadId);
     const items = entry.items.filter((item) => !messages.some((message) =>
-      (item.sendId && message.sendId === item.sendId) || message.queueId === item.messageId));
+      (item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff")));
     if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items });
   }
   if (pending.length) saveQueuedSends();
@@ -188,6 +193,7 @@ export interface RoomDrain {
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
+  askId?: string;
 }
 
 export type DrainRun = (
@@ -218,7 +224,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag } = {},
 ): QueuedSteer {
   if (options.sendId && cancelledSendIds.has(options.sendId)) {
     return { id: options.sendId, skipped: true, cancelled: true };
@@ -236,6 +242,7 @@ export function queueSteeredMessage(
     sendId: options.sendId,
     after: options.after,
     syncUntil: options.syncUntil,
+    call: options.call,
   };
   queues.set(key, { ...entry, items: [...entry.items, item] });
   try {
@@ -250,7 +257,7 @@ export function queueSteeredMessage(
 
 /** Hold a room member's turn until the bot is idle. Same member + thread
  * coalesces to one participation so two room lines while busy cannot
- * double-fire after settle. */
+ * double-fire after settle. Team room asks never coalesce: each is its own turn. */
 export function queueRoomParticipation(
   botId: string,
   threadId: string,
@@ -261,10 +268,11 @@ export function queueRoomParticipation(
     cardContinuation?: string;
     onDispatchError?: (message: string) => void;
     instructionId?: string;
+    askId?: string;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = entry.items.find((item): item is RoomItem => item.kind === "room");
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId);
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
@@ -286,6 +294,7 @@ export function queueRoomParticipation(
     cardContinuation: options.cardContinuation,
     onDispatchError: options.onDispatchError,
     instructionId: options.instructionId,
+    ...(options.askId ? { askId: options.askId } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
   return { id };
@@ -342,15 +351,18 @@ export function drainSteeredMessages(
       }
       // queueId is the pending-chip identity from the 202; append still
       // assigns a fresh transcript id so replay/exclude keep using message.id.
+      // a queued quick handoff's ask row already shows this line
+      const ask = store.messagesFor(entry.threadId).find((message) => message.queueId === item.messageId && message.quick?.state === "handoff");
       let appended: Message;
       try {
-        appended = store.appendMessage(entry.threadId, {
+        appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined })) || store.appendMessage(entry.threadId, {
           role: "user",
           kind: "text",
           text: item.text,
           replyToId: item.replyToId,
           sendId: item.sendId,
           queueId: item.messageId,
+          call: item.call,
         });
       } catch (error) {
         queues.set(key, entry);
@@ -370,13 +382,15 @@ export function drainSteeredMessages(
     }
 
     saveQueuedSends();
-    const room = roomItems[0];
+    const [room, ...waiting] = roomItems;
     if (!room) continue;
+    if (waiting.length) queues.set(key, { botId: entry.botId, threadId: entry.threadId, items: waiting });
     const roomDrain: RoomDrain = { groupId: room.groupId, hop: room.hop };
     if (room.rootId) roomDrain.rootId = room.rootId;
     if (room.cardContinuation) roomDrain.cardContinuation = room.cardContinuation;
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
+    if (room.askId) roomDrain.askId = room.askId;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }
@@ -399,7 +413,7 @@ export function takeQueuedSteers(
   botId: string,
   threadId: string,
   since: number,
-): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string }> {
+): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag }> {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   if (!entry || entry.botId !== botId) return [];
@@ -411,23 +425,26 @@ export function takeQueuedSteers(
   else queues.delete(key);
   return steerItems
     .filter((item) => !item.after && !promoting.has(item.messageId) && !isSendCancelled(item.sendId))
-    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId }));
+    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId, call: item.call }));
 }
 
 /** Persist this thread's waiting sends as steered user lines and return
  * their prompts in send order, for the turn about to dispatch. */
 export function foldQueuedSends(
-  store: Pick<SteerStore, "appendMessage">,
+  store: Pick<SteerStore, "messagesFor" | "appendMessage" | "patchMessage">,
   botId: string,
   threadId: string,
   since: number,
+  rows?: Message[],
 ): string[] {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   const appended = new Set<string>();
   try {
     const prompts = takeQueuedSteers(botId, threadId, since).map((item) => {
-      store.appendMessage(threadId, {
+      // a queued quick handoff's ask row already shows this line
+      const ask = store.messagesFor(threadId).find((message) => message.queueId === item.id && message.quick?.state === "handoff");
+      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",
         text: item.text,
@@ -435,7 +452,9 @@ export function foldQueuedSends(
         sendId: item.sendId,
         queueId: item.id,
         steered: true,
+        call: item.call,
       });
+      rows?.push(row);
       appended.add(item.id);
       return item.prompt;
     });
@@ -592,6 +611,15 @@ export function cancelQueuedRoomParticipations(groupId: string, threadId: string
     else queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
   }
   return cancelled;
+}
+
+export function cancelQueuedAsk(askId: string): void {
+  for (const [key, entry] of queues) {
+    const items = entry.items.filter((item) => !(isRoomItem(item) && item.askId === askId));
+    if (items.length === entry.items.length) continue;
+    if (items.length) queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
+    else queues.delete(key);
+  }
 }
 
 /** Test helper: drop in-memory queues and cancel/running bookkeeping. */

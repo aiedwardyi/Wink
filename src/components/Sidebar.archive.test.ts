@@ -234,11 +234,12 @@ describe("New menu with the phone drawer", () => {
 
 describe("bot archive from its menu", () => {
   it("offers Archive in the menu and keeps restore behind the archived entry", () => {
-    expect(en["chrome.deleteBotBody"]).toBe("This permanently deletes {name} and its conversation. This cannot be undone.");
+    expect(en["chrome.deleteBotBody"]).toBe("This deletes {name}, all its chats, its memory and the files in its folder. This cannot be undone.");
     expect(en["chrome.deleteBotBodyAllPcs"]).toBe(
-      "This permanently deletes {name} and its conversation on all your PCs. This cannot be undone.",
+      "This deletes {name}, all its chats, its memory and the files in its folder on all your PCs. This cannot be undone.",
     );
-    expect(ko["chrome.deleteBotBodyAllPcs"]).toBe("{name} 및 대화를 모든 PC에서 완전히 삭제합니다. 되돌릴 수 없습니다.");
+    expect(ko["chrome.deleteBotBody"]).toBe("{name}의 모든 대화, 메모리, 폴더 안 파일까지 삭제합니다. 되돌릴 수 없습니다.");
+    expect(ko["chrome.deleteBotBodyAllPcs"]).toBe("{name}의 모든 대화, 메모리, 폴더 안 파일까지 모든 PC에서 삭제합니다. 되돌릴 수 없습니다.");
     expect(sidebar).toContain('t("chrome.archive")');
     expect(ko["chrome.archive"]).toBe("보관");
     expect(sidebar).toContain("archivedBots.length > 0");
@@ -353,7 +354,7 @@ describe("bot archive from its menu", () => {
         buttonByText("Delete", document.querySelector("[data-bot-menu]") ?? document).click();
       });
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("This permanently deletes Ada and its conversation. This cannot be undone.");
+        expect(document.body.textContent).toContain("This deletes Ada, all its chats, its memory and the files in its folder. This cannot be undone.");
       });
       expect(document.body.textContent).not.toContain("on all your PCs");
     } finally {
@@ -369,7 +370,7 @@ describe("bot archive from its menu", () => {
         buttonByText("삭제", document.querySelector("[data-bot-menu]") ?? document).click();
       });
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("Ada 및 대화를 모든 PC에서 완전히 삭제합니다.");
+        expect(document.body.textContent).toContain("Ada의 모든 대화, 메모리, 폴더 안 파일까지 모든 PC에서 삭제합니다.");
       });
     } finally {
       await act(async () => second.root.unmount());
@@ -389,7 +390,7 @@ describe("bot archive from its menu", () => {
       await act(async () => {
         buttonByText("Delete", document.querySelector("[data-bot-menu]") ?? document).click();
       });
-      expect(document.body.textContent).toContain("This permanently deletes Ada and its conversation. This cannot be undone.");
+      expect(document.body.textContent).toContain("This deletes Ada, all its chats, its memory and the files in its folder. This cannot be undone.");
       await act(async () => answer?.());
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("on all your PCs");

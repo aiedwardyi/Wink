@@ -34,6 +34,10 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(store).toMatch(/partByKey\.get\("instances"\)/);
   });
 
+  it("warms lazy screens in every window once the first chat is up", () => {
+    expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(state\.hydrated\) return warmViews\(\[SettingsPanel\.preload, SettingsModal\.preload\]\);\s*\}, \[state\.hydrated\]\);/);
+  });
+
   it("fetches app settings on desktop before boot API calls can hold every connection", () => {
     expect(app).toMatch(/useEffect\(\(\) => \{\s*if \(window\.ogb\) void import\("@\/components\/SettingsModal"\)\.catch\(\(\) => \{\}\);\s*\}, \[\]\);/);
   });
@@ -48,7 +52,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
   it("isolates lazy overlays so one chunk cannot unmount the others", () => {
     expect(app).toMatch(/<CommandPalette onOpenChange=\{setPaletteOpen\} \/>/);
     expect(app).not.toMatch(/paletteReady/);
-    expect(app).toMatch(/CreateBotSheet required=\{!noEngines && state\.bots\.length === 0\} closing=\{closing\} \/>[\s\S]*?<\/LazyView>/);
+    expect(app).toMatch(/CreateBotSheet required=\{createBotRequired\} closing=\{closing\} \/>[\s\S]*?<\/LazyView>/);
     expect(app.match(/<LazyView overlay>/g)?.length).toBeGreaterThanOrEqual(6);
   });
 });

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
@@ -24,6 +25,10 @@ import { ChatPlanMeters } from "./ChatPlanMeters";
 let host: HTMLDivElement;
 let root: Root;
 const q = (selector: string) => host.querySelector<HTMLElement>(selector);
+const foldAll = async () => {
+  await click("[data-fold-all]");
+  await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
+};
 const click = async (selector: string) => {
   expect(q(selector), selector).not.toBeNull();
   await act(async () => q(selector)!.click());
@@ -80,7 +85,7 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(rule(".usage-meter-summary .usage-figures")).toContain("gap: 6px");
   expect(rule(".usage-cells-mini")).toContain("--cells-w: 70px");
   expect(rule(".usage-cells-mini")).toContain("--cell-h: 4px");
-  expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
+  expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content var(--usage-bar-col, 70px) minmax(0, 1fr)");
   expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
   expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
   expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-sections')).toContain("row-gap: 30px");
@@ -112,13 +117,13 @@ it("measures phone rows before aligning and restores the expanded layout", async
   const size = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 302, 45));
   await mount();
   expect(q("[data-phone-columns]")).toBeNull();
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).not.toBeNull();
   for (const head of host.querySelectorAll<HTMLElement>(".usage-engine-head")) {
     expect(head.style.getPropertyValue("--usage-row-height")).toBe("45px");
     expect(head.style.transitionProperty).toBe("");
   }
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).toBeNull();
   size.mockRestore();
 });
@@ -146,7 +151,7 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   let width = 628;
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   await mount();
-  await click("[data-fold-all]");
+  await foldAll();
   const list = q("[data-desktop-columns]")!;
   expect(list).not.toBeNull();
   expect(list.style.getPropertyValue("--usage-summary-columns")).toBe("210px 190px");
@@ -154,7 +159,7 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   await mount();
   expect(q("[data-desktop-columns]")).toBeNull();
   width = 628;
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-desktop-columns]")).toBeNull();
   vi.restoreAllMocks();
 });
@@ -193,12 +198,37 @@ it("steps every collapsed bar down with its container width and leaves phones un
     expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(size);
     expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe(columns);
   }
-  vi.stubGlobal("innerWidth", 392);
-  await mount();
-  expect(q("[data-summary-size]")).toBeNull();
   expect(rule(".usage-sections .usage-cells-mini")).toContain("transition-property: none");
   expect(rule('.usage-sections[data-summary-size="large"] .usage-cells-mini')).toContain("--cells-w: 120px; --cell-h: 7px");
   expect(rule('.usage-sections[data-summary-size="medium"] .usage-cells-mini')).toContain("--cells-w: 95px; --cell-h: 5.5px");
+  vi.restoreAllMocks();
+});
+
+it("sizes phone folded bars like the limits card and steps down when the figures would squeeze", async () => {
+  vi.stubGlobal("innerWidth", 392);
+  h.board!.engines = [h.board!.engines[0]!];
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify({ claude: true }));
+  let overflows: string[] = [];
+  let wraps: string[] = [];
+  const size = (element: HTMLElement) => element.closest<HTMLElement>("[data-summary-size]")?.dataset.summarySize ?? "";
+  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) { return this.matches(".usage-figures") && overflows.includes(size(this)) ? 90 : 40; });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(60);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches(".usage-figures") && wraps.includes(size(this)) ? 46 : 20; });
+  for (const [overflow, wrap, expected] of [[[], [], "large"], [["large"], [], "medium"], [[], ["large"], "medium"], [[], ["large", "medium"], "small"], [["large", "medium"], ["small"], "small"]] as const) {
+    overflows = [...overflow];
+    wraps = [...wrap];
+    await mount();
+    expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(expected);
+    expect(q("[data-phone-columns]")).not.toBeNull();
+  }
+  expect(rule(".usage-sections[data-phone-columns]")).toContain("var(--usage-bar-col, 70px)");
+  expect(rule(".usage-sections[data-phone-columns] .usage-cells-mini")).toContain("--cells-w: var(--usage-bar-col, 70px); --cell-h: var(--usage-bar-h, 4px)");
+  expect(rule('.usage-sections[data-phone-columns][data-summary-size="large"]')).toContain("--usage-bar-col: 80px; --usage-bar-h: 7px");
+  expect(rule('.usage-sections[data-phone-columns][data-summary-size="medium"]')).toContain("--usage-bar-col: 75px; --usage-bar-h: 5.5px");
+  expect(css).toMatch(/@media \(width < 768px\) \{\s*\.usage-meter \{ --cells-w: 80px;/);
+  expect(rule(".usage-desk, [data-usage-quick]")).toContain("--cell-h: 7px");
+  await foldAll();
+  expect(q("[data-summary-size]")).toBeNull();
   vi.restoreAllMocks();
 });
 
@@ -284,7 +314,7 @@ it.each(["en", "ko"] as const)("puts Collapse all then the refresh icon at the r
   expect([...toolbar.children].map((el) => el.hasAttribute("data-fold-all") ? "fold" : el.hasAttribute("data-usage-refresh") ? "refresh" : "count")).toEqual(["count", "fold", "refresh"]);
   const refresh = q("[data-usage-refresh]")!;
   expect(refresh.getAttribute("aria-label")).toBe(locale === "en" ? "Refresh" : "새로고침");
-  expect(refresh.getAttribute("title")).toBe(refresh.getAttribute("aria-label"));
+  expect(refresh.getAttribute("title")).toBe(locale === "en" ? "Refresh (Alt R)" : "새로고침 (Alt R)");
   expect(refresh.querySelector("svg")).not.toBeNull();
   expect(refresh.textContent).toBe("");
   expect(refresh.getAttribute("aria-busy")).toBe("false");
@@ -293,6 +323,8 @@ it.each(["en", "ko"] as const)("puts Collapse all then the refresh icon at the r
   expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(true);
   await act(async () => finish({}));
   expect(refresh.getAttribute("aria-busy")).toBe("false");
+  expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(true);
+  await act(async () => { refresh.querySelector("svg")!.dispatchEvent(new Event("animationiteration", { bubbles: true })); });
   expect(refresh.querySelector("svg")!.classList.contains("motion-safe:animate-spin")).toBe(false);
 });
 

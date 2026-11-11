@@ -42,7 +42,8 @@ What to build or fix, and why. Two to five lines.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
 ## Already built
-- The built.md lines this touches and the live files to open first.
+- The built.md lines and status-board decisions this touches, and the live
+  files to open first.
 
 ## Files
 - The files it should start from.
@@ -84,7 +85,7 @@ Every step re-reads the worker's whole context, so long runs cost more.
   each pick with a one-sentence reason.
 - Default workers to high effort. Only when the user turns max mode on, use
   max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
-  audits only.
+  audits only, at xhigh.
 - Save Gemini 4 Argon for big jobs that gain from a second model family's view,
   like a whole-codebase audit or 3D and graphic design. Routine work goes to the
   other engines.
@@ -125,7 +126,7 @@ git -C "<repo>" worktree add "{{WORKTREE}}" -b <branch> <base>
 You own the worktrees, scratch folders, test data, servers and panes you create.
 Record paths in the card's progress file.
 
-- Scratch and test data go in one folder per card, `<system temp>\wink-<NICKNAME>`.
+- Scratch and test data go in one folder per card: use `$ORBIT_SCRATCH`.
   Never reuse another card's folder.
   Wink removes it when the pane closes; close with `keep` to hand it to the next card.
 - Keep evidence files the user still needs (sheet.png, findings) outside temp.

@@ -11,6 +11,7 @@ import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { STATIC_ANTIGRAVITY_MODELS } from "./antigravity.ts";
 import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
 import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
+import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
 const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────";
@@ -123,11 +124,12 @@ describe("terminal proxy", () => {
 
   it("lists every picker model of the four worker engines with its name and --model id", () => {
     const description = TOOLS[2].description;
-    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
+    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.filter((option) => !RETIRED_PICKER_MODEL_IDS.includes(option.id)).map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
     for (const [name, id] of [STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].flatMap(names)) {
       expect(description, id).toContain(`${name} = ${id}`);
     }
     expect(description).toContain("Astra = gpt-6-astra");
+    expect(description).not.toContain("Fable 5 = claude-fable-5");
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
@@ -365,6 +367,9 @@ describe("terminal proxy", () => {
     await callTool("terminal_close", fetchImpl, config, { sessionId: "p1" });
     expect(timeoutSpy.mock.calls.at(-1)?.[0]).toBe(10_000); // other routes are unaffected
 
+    await callTool("terminal_spawn", fetchImpl, config, { label: "worker" });
+    expect(timeoutSpy.mock.calls.at(-1)?.[0]).toBe(30_000); // spawn outlasts the host's ready wait
+
     timeoutSpy.mockRestore();
   });
 
@@ -391,6 +396,20 @@ describe("terminal proxy", () => {
     expect(url).toBe("http://127.0.0.1:1/v1/bots/bot-1/terminal/send");
     expect(JSON.parse(String(init?.body))).toEqual({ sessionId: "s1", generation: 2, text: "echo ok" });
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer grant");
+  });
+
+  it("returns the last 30 screen lines from terminal_send and the full snapshot from terminal_read", async () => {
+    const rows = Array.from({ length: 50 }, (_, index) => `row ${index + 1}`);
+    const snapshot = { sessionId: "s1", generation: 2, screenText: `${rows.join("\n")}\n\n\n`, recentText: "old scrollback", panes: [{ sessionId: "s1", generation: 2, label: "worker" }] };
+    const sent = (await send(scripted(snapshot), { text: "x", sessionId: "s1", generation: 2 })).content[0].text;
+    expect(sent).toContain("Terminal session: s1 (generation 2)\n");
+    expect(sent).toContain("State: running\n");
+    expect(sent.endsWith(`\n\nCurrent screen (last 30 lines):\n${rows.slice(-30).join("\n")}\n\nPanes:\n- worker: sessionId s1 (generation 2)`)).toBe(true);
+    const short = { ...snapshot, screenText: "PS> echo ok\n\n" };
+    expect((await send(scripted(short), { text: "x", sessionId: "s1", generation: 2 })).content[0].text).toContain("\n\nCurrent screen:\nPS> echo ok\n\nPanes:");
+    const read = (await callTool("terminal_read", scripted(snapshot), CONFIG)).content[0].text;
+    expect(read).toBe(terminalSnapshotText(snapshot));
+    expect(read).toContain(`Current screen:\n${snapshot.screenText}\n\nRecent scrollback:\nold scrollback`);
   });
 
   it("posts a resumed launch note for a submitted line, not a key or the main terminal", async () => {

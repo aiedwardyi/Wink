@@ -118,6 +118,37 @@ describe("relay client", () => {
     expect(fresh.c.snapshot().state).toBe("connected");
   });
 
+  it("sends active only after a ready that offered it", async () => {
+    r = await rig();
+    const relay = r.relay;
+    relay.on("event", () => bus.emit("event"));
+    const old = start();
+    await waitFor(() => old.c.snapshot().state === "connected");
+    old.c.sendActive();
+    old.c.stop();
+    await waitFor(() => relay.count("control:close") === 1);
+    expect(relay.count("active")).toBe(0);
+
+    relay.offerActive = true;
+    const fresh = start();
+    await waitFor(() => fresh.c.snapshot().state === "connected");
+    fresh.c.sendActive();
+    await waitFor(() => relay.count("active") === 1);
+    expect(fresh.c.snapshot().state).toBe("connected");
+  });
+
+  it("holds activity from before ready and sends it once the relay offers active", async () => {
+    r = await rig();
+    const relay = r.relay;
+    relay.on("event", () => bus.emit("event"));
+    relay.offerActive = true;
+    const { c } = start();
+    c.sendActive();
+    expect(c.snapshot().state).not.toBe("connected");
+    await waitFor(() => relay.count("active") === 1);
+    expect(c.snapshot().state).toBe("connected");
+  });
+
   it("advertises reporting only from an authenticated current session", async () => {
     r = await rig();
     r.relay.reportOwner = "a".repeat(64);

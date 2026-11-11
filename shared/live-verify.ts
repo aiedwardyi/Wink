@@ -1,5 +1,6 @@
-// Keep the build switch off until the eval passes.
-export const LIVE_VERIFY_V0: boolean = false;
+import type { VerifyDocData } from "./verify-doc.ts";
+
+export const LIVE_VERIFY_V0: boolean = true;
 
 export const VERIFY_TOOL = "verify_site";
 /** agents-proxy lists verify_site only when this env var is "1". */
@@ -42,6 +43,8 @@ export interface VerifyCounts {
   failed: number;
   blocked: number;
   notRun: number;
+  /** [done, planned] per checker and tile while a run goes; planned grows as each rule's list is known. */
+  by?: Partial<Record<VerifyChecker, Partial<Record<VerifyTile, [done: number, planned: number]>>>>;
 }
 
 export interface VerifyIssue {
@@ -101,6 +104,7 @@ export interface VerifyCardData {
   replay?: string[];
   /** problems an earlier run of this turn found that this run no longer finds */
   fixed?: number;
+  doc?: VerifyDocData;
 }
 
 export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "waiting", "preparing", "running"];
@@ -117,6 +121,9 @@ export const VERIFY_LIMITS = {
   issues: 40,
   resultTextChars: 1_200,
   entryChars: 1_024,
+  scanEntries: 2_000,
+  scanMs: 250,
+  autoFreeBytes: 2_656 * 1024 * 1024,
 } as const;
 
 export const VERIFY_ROUTES = {
@@ -166,7 +173,7 @@ export function verifyCardStale(card: VerifyCardData, now: number): boolean {
   if (!VERIFY_ACTIVE_STATUSES.includes(card.status)) return false;
   const held = card.status === "offered" && card.errorCode === "needs-approval";
   const offered = card.status === "offered";
-  const since = offered ? card.offeredAt : card.startedAt ?? card.offeredAt;
+  const since = offered ? card.offeredAt : card.doc?.beat ?? card.startedAt ?? card.offeredAt;
   const limit = held ? VERIFY_LIMITS.heldMs : offered ? VERIFY_LIMITS.askWaitMs : VERIFY_LIMITS.runMs + 10_000;
   return now - since >= limit;
 }

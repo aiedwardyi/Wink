@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { MODEL_INDEX_AS_OF, MODEL_INDEX_ENTRIES, MODEL_INDEX_SOURCES, type ModelIndexEntry } from "../../shared/model-index-data.ts";
+import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 import { PICKER_MODEL_IDS } from "./cross-model-picker";
 import {
   MODEL_INDEXES,
@@ -30,6 +31,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCORES = MODEL_INDEXES.filter((index) => index !== "cost");
+const CHARTED = [...PICKER_MODEL_IDS, ...RETIRED_PICKER_MODEL_IDS];
 
 function instance(driverKind: string, ids: string[]): InstanceInfo {
   return {
@@ -63,9 +65,9 @@ describe("model index data", () => {
   it("charts only models from the picker", () => {
     const retired = ["gpt-5.6-terra"];
     for (const entry of MODEL_INDEX_ENTRIES) {
-      expect([...PICKER_MODEL_IDS, ...retired], entry.model).toContain(entry.model);
+      expect([...CHARTED, ...retired], entry.model).toContain(entry.model);
     }
-    const outside = MODEL_INDEXES.flatMap((index) => indexView(index, []).points).filter((e) => !PICKER_MODEL_IDS.includes(e.model)).map((e) => e.model);
+    const outside = MODEL_INDEXES.flatMap((index) => indexView(index, []).points).filter((e) => !CHARTED.includes(e.model)).map((e) => e.model);
     expect([...new Set(outside)]).toEqual([]);
   });
 
@@ -78,7 +80,7 @@ describe("model index data", () => {
 
   it("prices every picker model its vendor still lists, once, per 1M tokens, blended 7:2:1", () => {
     const cost = indexView("cost", []).points;
-    expect(cost.map((e) => e.model).sort()).toEqual([...PICKER_MODEL_IDS].sort());
+    expect(cost.map((e) => e.model).sort()).toEqual([...CHARTED].sort());
     for (const e of cost) {
       expect(e.effort, e.model).toBe("all");
       expect(e.price, e.model).toBeDefined();
@@ -97,7 +99,7 @@ describe("model index data", () => {
   });
 
   it("charts FrontierCode on coding, Rams Index on design and CyberBench on security", () => {
-    const want = { coding: ["aa-frontiercode", "1.1", /FrontierCode 1\.1/], design: ["rams-index", "0.6.1", /Rams Index.*CC BY 4\.0/], security: ["vals-cyberbench", "1.1", /CyberBench 1\.1/] } as const;
+    const want = { coding: ["aa-frontiercode", "2.0", /FrontierCode 2.0/], design: ["rams-index", "0.6.1", /Rams Index.*CC BY 4\.0/], security: ["vals-cyberbench", "1.1", /CyberBench 1\.1/] } as const;
     for (const [index, [benchmark, version, label]] of Object.entries(want)) {
       const rows = MODEL_INDEX_ENTRIES.filter((e) => e.index === index);
       expect(rows.length, index).toBeGreaterThan(0);
@@ -175,9 +177,9 @@ describe("sourced data", () => {
     expect(MODEL_INDEX_AS_OF).toBe(new Date(newest).toISOString().slice(0, 10));
   });
 
-  it("charts Legal Research Bench for 14 picker models at each run's own cost", () => {
+  it("charts Legal Research Bench for 15 models at each run's own cost", () => {
     const legal = MODEL_INDEX_ENTRIES.filter((e) => e.index === "legal");
-    expect([...new Set(indexView("legal", []).points.map((e) => e.model))].sort()).toEqual(PICKER_MODEL_IDS.filter((id) => !id.endsWith("-contributor")).sort());
+    expect([...new Set(indexView("legal", []).points.map((e) => e.model))].sort()).toEqual(CHARTED.filter((id) => !id.endsWith("-contributor")).sort());
     for (const e of legal) {
       expect([e.benchmark, e.costBenchmark, e.costSource], e.model).toEqual(["vals-legal-research", "vals-legal-research", "https://www.vals.ai/benchmarks/legal_research"]);
       expect(e.cost, e.model).toBeGreaterThan(0);
@@ -195,7 +197,7 @@ describe("sourced data", () => {
   it("charts 12 Design models with published page costs and confidence intervals", () => {
     const { points, missing } = indexView("design", PICKER_MODEL_IDS.map((model) => ({ provider: "other", model, label: model })));
     expect(new Set(points.map((e) => e.model)).size).toBe(12);
-    expect(missing.map((e) => e.model).sort()).toEqual(["grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
+    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
     for (const e of points) {
       expect([e.benchmark, e.costBenchmark, e.effort]).toEqual(["rams-index", "rams-index", "default"]);
       expect(e.costSource).toBe("https://www.rams.ai/index/data/models-v0.6.1.json");
@@ -203,7 +205,7 @@ describe("sourced data", () => {
       expect(e.interval?.low).toBeLessThanOrEqual(e.score);
       expect(e.interval?.high).toBeGreaterThanOrEqual(e.score);
     }
-    expect(points.find((e) => e.model === "gpt-6.1-sol")).toMatchObject({ score: 92, cost: 0.15, interval: { low: 90.3, high: 93.8 } });
+    expect(points.find((e) => e.model === "gpt-6.1-sol")).toMatchObject({ score: 87.8, cost: 0.15, interval: { low: 84.6, high: 89.9 } });
   });
 
   it("retains the filled WebDev snapshot as inactive history", () => {
@@ -253,11 +255,11 @@ describe("sourced data", () => {
   it("charts Argon on the four AA indexes, Rams Index and the two Vals benchmarks", () => {
     const scored = MODEL_INDEX_ENTRIES.filter((e) => e.model === "gemini-4-argon" && e.index !== "cost");
     expect(scored.map((e) => [e.index, e.benchmark, e.effort, e.score, e.cost])).toEqual([
-      ["coding", "aa-frontiercode", "high", 43.4532, undefined],
-      ["general", "aa-gdpval", "high", 1623.99, 1.8192251097173668],
-      ["intelligence", "aa-intelligence-index", "high", 52.6, 1.990322379299008],
+      ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
+      ["general", "aa-gdpval", "high", 1630.66, 3.64],
+      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
-      ["design", "rams-index", "default", 22.9, 0.149],
+      ["design", "rams-index", "default", 20.7, 0.149],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],
       ["legal", "vals-legal-research", "all", 54.808, 6.44908],
     ]);

@@ -41,6 +41,8 @@ import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
+import { recordToolSchemas } from "../turn-timing.ts";
+import { createToolCatalog } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -58,10 +60,10 @@ const verifyCalls = new Map<unknown, AbortController>();
 
 const VERIFY_SITE_TOOL = {
   name: "verify_site",
-  description: "After changing files that render in a browser, call verify_site before saying done. Checks a static site in your working folder or workspace, hidden in a real browser on desktop and phone. Fix the reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
+  description: "After every change that renders in a browser, call verify_site before saying done, unless the user says not to. Checks static files in any folder or a local dev server, hidden in a real browser on desktop and phone. Fix reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
   inputSchema: {
     type: "object",
-    properties: { entry: { type: "string", description: "The site folder or .html file, absolute or relative to your working folder." } },
+    properties: { entry: { type: "string", description: "A loopback http:// URL, or a site folder/.html file anywhere on this PC (path or file://). Relative paths use your working folder." } },
     required: ["entry"],
     additionalProperties: false,
   },
@@ -504,8 +506,14 @@ const TOOLS = [
   {
     name: "list_routines",
     description:
-      "List routines owned by this bot, including their ids, schedules, status, and next run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+      "List routines owned by this bot, one row each: id, name, schedule, status, and next run. Pass routine_id for one routine's record, with up to 2,000 characters of its instructions and its latest run. The result includes the computer's authoritative current time and timezone; use those when interpreting relative dates. Only call this when the user asks about routines or wants to change one.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        routine_id: { type: "string", minLength: 1, description: "Return this routine's full record instead of the list." },
+      },
+    },
   },
   {
     name: "propose_routine",
@@ -555,6 +563,11 @@ const TOOLS = [
       },
       required: ["on"],
     },
+  },
+  {
+    name: "no_reply_needed",
+    description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
   },
 ];
 
@@ -617,6 +630,14 @@ async function api(path: string, init?: RequestInit): Promise<Json> {
 
 function jsonRecord(value: unknown): value is Json {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function routineRow(routine: Json): string {
+  const schedule = jsonRecord(routine.schedule) ? routine.schedule : {};
+  const when = schedule.type === "once"
+    ? `once ${String(schedule.at ?? "")}`
+    : `${String(schedule.type ?? "weekly")} ${String(schedule.time ?? "")} ${Array.isArray(schedule.weekdays) ? schedule.weekdays.join(",") : ""}`.trimEnd();
+  return `- ${String(routine.id)} | ${String(routine.name)} | ${when} | ${routine.enabled ? "enabled" : "paused"} | ${String(routine.nextRunAt ?? "none")}`;
 }
 
 function routineAction(value: unknown): RoutineAction | null {
@@ -940,14 +961,21 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === "list_routines") {
     const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID });
     const r = await api(`/api/internal/routines?${query.toString()}`);
-    const routines = Array.isArray(r.routines) ? r.routines : [];
+    const routines: unknown[] = Array.isArray(r.routines) ? r.routines : [];
     const now = typeof r.now === "string" ? r.now : new Date().toISOString();
     const timeZone = typeof r.timeZone === "string" && r.timeZone ? r.timeZone : "local computer timezone";
     if (!routines.length) {
       return { text: `This bot has no routines. Current time: ${now}. Timezone: ${timeZone}.` };
     }
+    const clock = `current time: ${now}; timezone: ${timeZone}`;
+    if (typeof args.routine_id === "string") {
+      const routine = routines.find((row) => jsonRecord(row) && row.id === args.routine_id);
+      return routine
+        ? { text: `Routine ${args.routine_id} (${clock}):\n${JSON.stringify(routine, null, 2)}` }
+        : { text: `This bot has no routine ${args.routine_id}. Call list_routines without routine_id for the ids.`, isError: true };
+    }
     return {
-      text: `This bot's routines (current time: ${now}; timezone: ${timeZone}):\n${JSON.stringify(routines, null, 2)}`,
+      text: `This bot's routines (${clock}), as id | name | schedule | status | next run:\n${routines.filter(jsonRecord).map(routineRow).join("\n")}`,
     };
   }
   if (name === "propose_routine") {
@@ -1013,8 +1041,12 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         : "Agentic Mode is off. Running work is left alone.",
     };
   }
+  if (name === "no_reply_needed") return { text: "ok" };
   return { text: `Unknown tool: ${name}`, isError: true };
 }
+
+const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
+const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
 
 export async function handle(msg: Json) {
   const id = msg.id;
@@ -1038,18 +1070,33 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      ok(id, { tools: TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [] });
+      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
+      ok(id, { tools: catalog?.tools ?? eligibleTools });
       return;
     case "tools/call": {
-      const name = params.name as string;
+      if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);
+      let name = params.name as string;
+      let args = (params.arguments ?? {}) as Json;
+      const gateway = name === "call_wink_tool" && catalog;
+      if (name === "find_wink_tool" && catalog) {
+        const result = catalog.find(args);
+        return textResult(id, result.text, result.isError);
+      }
+      if (gateway) {
+        const call = catalog.resolve(args);
+        if ("error" in call) return textResult(id, call.error, true);
+        name = call.name;
+        args = call.arguments as Json;
+      }
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
       const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
       if (verify) verifyCalls.set(id, verify);
       const deadline = verify ? setTimeout(() => verify.abort("deadline"), VERIFY_LIMITS.toolMs) : undefined;
       try {
-        const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json, verify?.signal);
-        textResult(id, text, isError);
+        const { text, isError } = await callTool(name, args, verify?.signal);
+        if (gateway) ok(id, { content: [{ type: "text", text }], isError: isError ?? false, _meta: { winkTool: name } });
+        else textResult(id, text, isError);
       } catch (e) {
         // A cancelled request gets no response (MCP cancellation).
         if (verify?.signal.reason === "cancelled") return;

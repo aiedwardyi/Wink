@@ -2,17 +2,21 @@ import { mkdirSync, readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { closedAskNotes } from "./ask-user.ts";
 import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { _resetPending, drainDelegations, finishDelegatedTurn, queueDelegation, type DelegatedTurn } from "./delegations.ts";
 import * as mail from "./mail.ts";
+import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
+import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
+import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -85,15 +89,15 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: foldQueuedSends,
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
-      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined,
+      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000,
-      taskRecord: undefined, durableTaskRecordText: "", contextCompacted: false,
+      taskRecord: undefined, durableTaskRecordText: "",
       providerReload: { started: () => instance }, privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),

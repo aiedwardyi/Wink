@@ -150,9 +150,44 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: {} });
   });
 
+  it("attributes a helper batch once when its write waits for a busy turn", async () => {
+    const timing = process.env.ORBIT_TURN_TIMING;
+    const outputDir = process.env.OMB_DATA_DIR;
+    process.env.ORBIT_TURN_TIMING = "1";
+    process.env.OMB_DATA_DIR = dataDir;
+    try {
+      generate.mockImplementation(async (_prompt, _signal, onUsage) => {
+        onUsage?.({ input: 20, output: 2 }, "request-1");
+        busy.add("bot-t1");
+        return facts(["Prefers pnpm", "I prefer pnpm"]);
+      });
+      say("t1", "I prefer pnpm", { sendId: "source-send" });
+      await settle("t1", 3 * MINUTE);
+      busy.clear();
+      await settle("t1");
+      expect(generate).toHaveBeenCalledTimes(1);
+      const traces = readFileSync(join(dataDir, "turn-traces.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({ botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
+      expect(chips("t1")).toHaveLength(1);
+    } finally {
+      if (timing === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = timing;
+      if (outputDir === undefined) delete process.env.OMB_DATA_DIR;
+      else process.env.OMB_DATA_DIR = outputDir;
+    }
+  });
+
   it("runs right at the turn end after 8 new user messages", async () => {
     for (let i = 0; i < 8; i += 1) say("t1", `line ${i}`);
     await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes at once before the engine compacts", async () => {
+    say("t1", "i'm 38");
+    pass.onSettled("bot-t1", "t1", true);
+    await pass.idle();
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
@@ -778,6 +813,14 @@ describe("note generator", () => {
     expect(noteGenerator([instance("codex")])).toBeNull();
     expect(noteGenerator([])).toBeNull();
   });
+
+  it("passes an optional usage observer without changing the helper call", async () => {
+    const claude = instance("claudeAgent");
+    const signal = new AbortController().signal;
+    const onUsage = vi.fn();
+    await noteGenerator([claude])!("prompt", signal, onUsage);
+    expect(claude.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true, onUsage });
+  });
 });
 
 describe("memory pass wiring", () => {
@@ -787,7 +830,7 @@ describe("memory pass wiring", () => {
 
   it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
-    expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId\);/);
+    expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);/);
     expect(index).toContain("memoryPass.dispose();");
   });
 

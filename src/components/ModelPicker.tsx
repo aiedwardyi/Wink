@@ -6,8 +6,8 @@ import { filterCustomModels } from "@/lib/custom-models";
 import { chipEffortLabel, chipEffortShortLabel, chipPhoneName,displayedChipEffort, engineBadgeText, modelChipText, modelChipTitle, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
 import { movePicker, pickerColumn, pickerEfforts, pickerModels, pickerRows, selectPickerEffort, selectPickerModel, withPickerEffort } from "@/lib/cross-model-picker";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
-import { pickerPrice } from "@/lib/model-index";
-import { dialWheel } from "@/lib/model-dial";
+import { formatCost, pickerPrice } from "@/lib/model-index";
+import { dialRunCost, dialWheel } from "@/lib/model-dial";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { noReplySource, switchFromNoReply } from "@/lib/no-reply-switch";
@@ -19,7 +19,7 @@ import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
 import { loadModelPickerView, saveModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
-import { DEFAULT_SKIN, HUD_SKIN_IDS, useSkin } from "@/lib/skins";
+import { DEFAULT_SKIN, HUD_SKIN_IDS, LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
 import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import "./ModelPicker.css";
 
@@ -77,7 +77,7 @@ export function ModelPickerControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const focusComposerAfterCloseRef = useRef(false);
-  const openedWithShortcutRef = useRef(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const switchingRef = useRef(false);
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
@@ -123,19 +123,19 @@ export function ModelPickerControl({
   const custom = instance?.models.options.filter((option) => option.custom) ?? [];
   const filteredCustom = filterCustomModels(custom, query);
   const price = pickerPrice(draft.model);
+  const runCost = dialRunCost(draft.model, draft.effort);
 
-  const show = (viaShortcut = false, switching = false) => {
+  const show = (switching = false) => {
     setDraft(selection);
     setCustomOpen(false);
     setListView(loadModelPickerView() === "list");
     setQuery("");
     focusComposerAfterCloseRef.current = false;
-    openedWithShortcutRef.current = viaShortcut;
     switchingRef.current = switching;
     switchSourceRef.current = switching ? noReplySource(bot)?.id : undefined;
     setOpen(true);
   };
-  useImperativeHandle(switchControl, () => () => show(false, true));
+  useImperativeHandle(switchControl, () => () => show(true));
   const close = () => {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = 0;
@@ -153,12 +153,12 @@ export function ModelPickerControl({
   const finishSave = () => {
     close();
     if (focusComposerAfterCloseRef.current) {
-      focusComposerOnActivation({ activatedElement: triggerRef.current });
+      focusComposerOnActivation({ activatedElement: triggerRef.current, onDeclined: () => previousFocusRef.current?.focus() });
     }
   };
   const save = (candidate: ModelSelection = draft, fromKeyboard = false, closeDelay = 0) => {
     if (saveTimerRef.current || !canCommit(candidate)) return false;
-    focusComposerAfterCloseRef.current = fromKeyboard && (openedWithShortcutRef.current || switchingRef.current) && !contained;
+    focusComposerAfterCloseRef.current = !contained && (fromKeyboard || !switchingRef.current);
     if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
     else dispatch({ type: "setModel", botId: bot.id, selection: candidate });
     if (closeDelay) saveTimerRef.current = window.setTimeout(finishSave, closeDelay);
@@ -181,7 +181,7 @@ export function ModelPickerControl({
       if (!shortcutEnabled || (!open && document.querySelector('[data-model-picker-content], [aria-labelledby="team-library-title"]'))) return;
       event.preventDefault();
       if (open) close();
-      else show(true);
+      else show();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -191,6 +191,7 @@ export function ModelPickerControl({
     if (!open) return;
     void refreshInstances();
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
+    previousFocusRef.current = previous;
     dialogRef.current?.focus();
     return () => {
       if (!focusComposerAfterCloseRef.current) previous?.focus();
@@ -308,7 +309,7 @@ export function ModelPickerControl({
   );
 
   const dialog = (
-    <div className="model-cross-backdrop animate-fade-in" data-skin={HUD_SKIN_IDS.has(skin) ? DEFAULT_SKIN : undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
+    <div className="model-cross-backdrop animate-fade-in" data-skin={HUD_SKIN_IDS.has(skin) ? DEFAULT_SKIN : undefined} data-light={LIGHT_SKIN_IDS.has(skin) || undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
       if (event.target === event.currentTarget || (event.target instanceof Element && event.target.matches(".model-cross-plane, .model-cross-stage"))) close();
     }}>
       <div
@@ -451,6 +452,7 @@ export function ModelPickerControl({
             <span data-picker-current-model className="break-all text-ink">{t("model.automaticHelp", { name: draft.model || t("model.unresolved") })}</span>
             {effortIndex >= 0 && <span>{t("model.effort")}: {effortLabel(efforts[effortIndex]!.label)}</span>}
             {price && <span data-model-price className="shrink-0 whitespace-nowrap" title={t("model.priceUnits")}>{price} {t("model.pricePerMillion")}</span>}
+            {runCost != null && <span data-model-run-cost className="shrink-0 whitespace-nowrap">{formatCost(runCost)}{t("model.dial.perTask")}</span>}
             {!instance && <span>{t("model.offList")}</span>}
             {instance && <span className={cn("rounded-full px-2 py-0.5", blocked ? "bg-warning/10 text-warning" : "bg-success/10 text-success")}>
               {engineBadgeText(instance.snapshot, needsCli(instance) ? "not-installed" : needsSignIn(instance) ? "sign-in" : "ready", t)}

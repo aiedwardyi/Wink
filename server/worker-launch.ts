@@ -1,8 +1,10 @@
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { accountLaunch, canonicalAccountHome, type AccountContext } from "./account-policy.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
+import { CODEX_CREDIT_ENV, CODEX_CREDIT_NAME, isCodexCredit, withCodexCredit, type CodexCredit } from "./codex-credit.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { createSpawnUsage } from "./spawn-usage.ts";
 import type { WorkerTurnResolver } from "./worker-turn.ts";
@@ -117,17 +119,34 @@ function unroutedLaunch(text: string) {
   }
 }
 
-export function createWorkerLaunch(deps: {
+export function createWorkerLaunch(options: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
   mainAccount?(of: string): AccountContext | undefined | null;
   nameOf?(id: string, engine: string): string;
   accounts?(): readonly AccountContext[];
+  credit?(): CodexCredit | undefined;
 }) {
+  const deps = withCodexCredit(options);
+  const onCredit = (text: string) => {
+    const credit = deps.credit?.();
+    let named = false;
+    try {
+      const command = deps.credit && workerCommand(text);
+      const home = command && command.kind === "managed" && command.driver === "codex" ? command.home?.value : undefined;
+      named = home?.trim().normalize("NFC").toLowerCase() === CODEX_CREDIT_NAME.toLowerCase();
+      if (credit && home !== undefined && (named || canonicalAccountHome(home) === canonicalAccountHome(credit.account.home))) return true;
+    } catch {
+      return false;
+    }
+    if (named) throw new Error("OpenAI credit needs a saved OpenAI key. (OpenAI 크레딧을 쓰려면 저장된 OpenAI 키가 필요합니다.)");
+    return false;
+  };
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
-    if (!deps.enabled() && !input.resume) return null;
+    // Routing is on for the credit alone; every other launch gets the answer an unrouted host gets today.
+    if (!deps.enabled() && !input.resume && (input.mode === "send" || !onCredit(input.command))) return deps.credit && process.platform === "win32" && input.mode !== "send" ? unroutedLaunch(input.command) : null;
     const resume = input.resume;
     const command = resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
     if (command.kind !== "managed") return command;
@@ -182,7 +201,8 @@ export function createWorkerLaunch(deps: {
       return { kind: "unrouted" as const, account: { id: account.id, generation: account.generation }, executable: command.executable, args, workerSettings, session, line: usage.line };
     }
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
-    const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source, account.generation > 0);
+    const creditKey = isCodexCredit(account) ? deps.credit?.()?.key : undefined;
+    const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source, account.generation > 0, creditKey);
     if (command.driver === "claudeAgent" && account.generation === 0
       && !Object.entries(baseEnvironment).some(([key, value]) => key.toUpperCase() === "CLAUDE_CONFIG_DIR" && value)) {
       // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
@@ -205,9 +225,10 @@ export function createWorkerLaunch(deps: {
     if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation)
       || (selected && !candidates().some((row) => row.id === selected.id && row.generation === selected.generation && row.home === selected.home))
       || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
+    if (creditKey) mkdirSync(join(account.home, "state"), { recursive: true });
     if (managedEngine && account.generation > 0) shareUserSetup(command.driver, account, baseAccount(baseId, command.driver, baseEnvironment).home);
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
-      environment: policy.env, workerSettings, session,
+      environment: policy.env, workerSettings, session, ...(creditKey ? { clearEnv: [CODEX_CREDIT_ENV] } : {}),
       line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line ?? (selected ? `Worker account: ${captured.name}.` : undefined) };
   };
 }

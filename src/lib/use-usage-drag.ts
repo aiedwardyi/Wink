@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion } from "./phone-swipe";
-import { useTouchDrag } from "./use-touch-drag";
+import { roomBelow, useTouchDrag } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
 const CHANGE = "usage-order";
 type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
+const PRESSABLE = "[data-usage-reorder]";
+const SKIP = "[data-account-name-editor], input, a, code";
+const DRAGGING = "data-usage-dragging";
+const EDGE = 48;
+const STEP = 10;
+const SLOP = 4;
+
+export const reorderable = (label: string) => ({
+  "data-usage-reorder": "", role: "group", tabIndex: 0, "aria-label": label, "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown",
+});
 
 function load(): Orders {
   try {
@@ -17,18 +27,19 @@ function load(): Orders {
   } catch { return {}; }
 }
 
-export function readUsageOrder(base: string) {
-  return load()[base];
-}
-
 export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
   const rank = new Map(order.map((key, index) => [key, index]));
   return [...items].sort((a, b) => (rank.get(id(a)) ?? order.length) - (rank.get(id(b)) ?? order.length));
 }
 
 type Drag = {
-  node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number;
+  node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number; scrollTop: number; room: number;
 };
+
+function scrollParent(node: HTMLElement | null) {
+  for (let each = node; each; each = each.parentElement) if (/auto|scroll/.test(getComputedStyle(each).overflowY)) return each;
+  return null;
+}
 
 export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[]) {
   const [orders, setOrders] = useState(load);
@@ -51,6 +62,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     return [...scope.querySelectorAll<HTMLElement>(account ? ROW : SECTION)].filter((item) => !item.closest("[aria-hidden='true']"));
   };
   const clean = (drag: Drag) => {
+    document.documentElement.removeAttribute(DRAGGING);
     for (const node of drag.items) {
       node.style.removeProperty("translate");
       node.style.removeProperty("transition");
@@ -75,7 +87,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
   const focus = (drag: Drag) => {
     const selector = drag.node.matches(ROW) ? ROW : SECTION;
     const node = [...list.current?.querySelectorAll<HTMLElement>(selector) ?? []].find((each) => identify(each) === identify(drag.node));
-    node?.querySelector<HTMLElement>("[data-usage-grip]")?.focus({ preventScroll: true });
+    (node?.matches(PRESSABLE) ? node : node?.querySelector<HTMLElement>(PRESSABLE))?.focus({ preventScroll: true });
   };
   const lift = (pressed: HTMLElement) => {
     const node = pressed.closest<HTMLElement>(`${ROW}, ${SECTION}`);
@@ -83,14 +95,16 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const items = siblings(node);
     const from = items.indexOf(node);
     active.current = { node, items, rects: items.map((item) => item.getBoundingClientRect()), from, to: from,
-      key: node.matches(ROW) ? node.closest<HTMLElement>(SECTION)!.dataset.usageBase! : "engines", y: 0, dy: 0 };
+      key: node.matches(ROW) ? node.closest<HTMLElement>(SECTION)!.dataset.usageBase! : "engines", y: 0, dy: 0, scrollTop: scrollParent(list.current)?.scrollTop ?? 0, room: roomBelow(node, scrollParent(list.current)) };
     node.setAttribute("data-usage-lifted", "");
+    // the whole page: a lifted row ignores hits, so a long press would land on the text around it
+    document.documentElement.setAttribute(DRAGGING, "");
     return node;
   };
   const over = (_target: Element | null, y: number) => {
     const drag = active.current;
     if (!drag) return null;
-    drag.dy = y - drag.y;
+    drag.dy = y - drag.y + (scrollParent(list.current)?.scrollTop ?? 0) - drag.scrollTop;
     const own = drag.rects[drag.from]!;
     const center = own.top + own.height / 2 + drag.dy;
     let to = drag.from;
@@ -124,8 +138,8 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     if (reducedMotion() || !drag.node.animate) { finish(); return; }
     drag.node.style.removeProperty("translate");
     const animation = drag.node.animate([
-      { translate: `0 ${drag.dy}px`, scale: "1.03" },
-      { translate: `0 ${offset}px`, scale: "1" },
+      { translate: `0 ${Math.min(drag.room, drag.dy)}px`, scale: "1.03", boxShadow: getComputedStyle(drag.node).boxShadow, backgroundColor: getComputedStyle(drag.node).backgroundColor },
+      { translate: `0 ${offset}px`, scale: "1", boxShadow: "none", backgroundColor: "transparent" },
     ], { duration: 220, easing: "cubic-bezier(0.16,1,0.3,1)", fill: "forwards" });
     animation.finished.then(() => { finish(); animation.cancel(); }, () => { clean(drag); active.current = null; });
   };
@@ -133,7 +147,10 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     if (active.current) clean(active.current);
     active.current = null;
   };
-  const touchRef = useTouchDrag("[data-usage-grip]", `${SECTION}, ${ROW}`, {
+  const touchRef = useTouchDrag(PRESSABLE, `${SECTION}, ${ROW}`, {
+    skip: `button:not([data-edit-name], [data-engine-fold]), ${SKIP}`,
+    selectPressed: true,
+    scroller: () => scrollParent(list.current),
     lift: (pressed) => {
       const node = lift(pressed);
       if (node && active.current) active.current.y = touchY.current;
@@ -143,33 +160,73 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
   const touchY = useRef(0);
   const ref = useCallback((node: HTMLElement | null) => { list.current = node; touchRef(node); }, [touchRef]);
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
-    if (!(event.target instanceof Element) || !event.target.closest("[data-usage-grip]")) return;
     touchY.current = event.clientY;
-    if (event.pointerType === "touch" || event.button !== 0) return;
-    const node = lift(event.target.closest<HTMLElement>("[data-usage-grip]")!);
-    if (!node || !active.current) return;
-    event.preventDefault();
-    active.current.y = event.clientY;
-    const move = (next: globalThis.PointerEvent) => {
-      if (!active.current) return;
-      over(null, next.clientY);
-      node.style.translate = `0 ${next.clientY - active.current.y}px`;
+    if (event.pointerType === "touch" || event.button !== 0 || !(event.target instanceof Element) || active.current || event.target.closest(SKIP)) return;
+    const pressed = event.target.closest<HTMLElement>(PRESSABLE);
+    if (!pressed) return;
+    unbind.current();
+    const { clientX: startX, clientY: startY } = event;
+    let node: HTMLElement | null = null;
+    let pointerY = startY;
+    let frame = 0;
+    const place = () => {
+      if (!active.current || !node) return;
+      over(null, pointerY);
+      node.style.translate = `0 ${Math.min(active.current.room, active.current.dy)}px`;
     };
-    const end = () => { unbind.current(); drop(); };
-    const abort = () => { unbind.current(); cancel(); };
+    const edge = () => {
+      const box = scrollParent(list.current);
+      if (box && active.current) {
+        const rect = box.getBoundingClientRect();
+        const before = box.scrollTop;
+        box.scrollTop += pointerY < rect.top + EDGE ? -STEP : pointerY > rect.bottom - EDGE ? STEP : 0;
+        if (box.scrollTop !== before) place();
+      }
+      frame = requestAnimationFrame(edge);
+    };
+    const move = (next: globalThis.PointerEvent) => {
+      pointerY = next.clientY;
+      if (!node) {
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) < SLOP) return;
+        node = lift(pressed);
+        if (!node || !active.current) { unbind.current(); return; }
+        active.current.y = startY;
+        frame = requestAnimationFrame(edge);
+      }
+      place();
+    };
+    const end = () => {
+      unbind.current();
+      if (!node) return;
+      drop();
+      // the drop lands on the press's own button, whose click would still fire
+      const stop = (click: Event) => { click.stopPropagation(); click.preventDefault(); };
+      const release = () => document.removeEventListener("click", stop, true);
+      document.addEventListener("click", stop, { capture: true, once: true });
+      setTimeout(release);
+      unbind.current = release;
+    };
+    const abort = () => { unbind.current(); if (node) cancel(); };
+    const noSelect = (start: Event) => start.preventDefault();
+    // a double click keeps its word selection
+    const second = (down: MouseEvent) => { if (down.detail > 1) unbind.current(); };
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", end, { once: true });
     document.addEventListener("pointercancel", abort, { once: true });
+    document.addEventListener("selectstart", noSelect);
+    document.addEventListener("mousedown", second, { once: true });
     unbind.current = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", end);
       document.removeEventListener("pointercancel", abort);
+      document.removeEventListener("selectstart", noSelect);
+      document.removeEventListener("mousedown", second);
+      cancelAnimationFrame(frame);
     };
   };
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key) || !(event.target instanceof Element)) return;
-    const pressed = event.target.closest<HTMLElement>("[data-usage-grip]");
-    if (!pressed || !lift(pressed) || !active.current) return;
+    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key) || !(event.target instanceof HTMLElement) || !event.target.matches(PRESSABLE)) return;
+    if (!lift(event.target) || !active.current) return;
     event.preventDefault();
     event.stopPropagation();
     const drag = active.current;

@@ -1,7 +1,7 @@
 // Pure step logic for the New group wizard: engine suggestions, local bot
 // naming, and the create payloads. No React, no I/O — unit-tested below.
 import type { InstanceInfo } from "@/state/store";
-import { isRetiredEngineKind } from "../../shared/model-selection.ts";
+import { isRetiredEngineKind, RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 import { pickerInstances } from "./cross-model-picker";
 
 /** An engine row the host can actually run a turn on. */
@@ -35,7 +35,7 @@ export interface WizardModelOption {
 
 /** Model options offered for a wizard row; other engines are unchanged. */
 export function wizardModelOptions(instance: InstanceInfo): WizardModelOption[] {
-  const options = instance.models.options;
+  const options = instance.models.options.filter((option) => !RETIRED_PICKER_MODEL_IDS.includes(option.id));
   if (instance.driverKind !== "antigravityAgent") return options;
   const curated = options.filter((option) => ANTIGRAVITY_MODEL_PATTERN.test(option.id));
   return curated.length ? curated : options;

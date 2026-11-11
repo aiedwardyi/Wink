@@ -4,7 +4,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
@@ -16,7 +16,7 @@ import {
   type BrokeredCredentialId,
   type CustomKey,
 } from "../shared/credential-request.ts";
-import { writeFileAtomic } from "./atomic.ts";
+import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { hostMatchesRemote } from "./remote-access.ts";
@@ -76,6 +76,7 @@ const featureConfigSchema = z.object({
   /** Show each tool run in the transcript. Off unless explicitly enabled. */
   showToolCalls: z.boolean().optional(),
   toolDetailCapture: z.boolean().optional(),
+  liveVerifyAuto: z.boolean().optional(),
   detailedReplies: z.boolean().optional(),
   /** Background notes from chat into MEMORY.md. On unless switched off. */
   memoryNotes: z.boolean().optional(),
@@ -185,8 +186,8 @@ export interface AppConfig {
   /** Shared preserves the historical singleton. Per-bot gives every bot a
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
-  /** Product switches. Every flag defaults to off except memoryNotes. */
-  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  /** Product switches. Every flag defaults to off except memoryNotes and liveVerifyAuto. */
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
 }
@@ -301,6 +302,20 @@ export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit");
 export const DOWNLOADS_DIR = process.env.OMB_DOWNLOADS_DIR ?? join(homedir(), "Downloads");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
+
+export const BACKUP_MAX_BYTES = 2 * 1024 ** 3;
+const backupFileSchema = z.object({ dir: z.string().trim().min(1).optional(), maxBytes: z.number().int().positive().optional() });
+
+/** Backup place and cap, from a file of their own so sync and config patches never carry them. */
+export function backupSettings(dataDir = DATA_DIR): { dir: string; maxBytes: number } {
+  let saved: z.output<typeof backupFileSchema> = {};
+  try {
+    saved = backupFileSchema.parse(parseJson(readFileSync(join(dataDir, "backup.json"), "utf8")));
+  } catch {
+    /* no file: the defaults */
+  }
+  return { dir: resolve(saved.dir ?? join(homedir(), "Wink Backups")), maxBytes: saved.maxBytes ?? BACKUP_MAX_BYTES };
+}
 
 export function ensureDirs() {
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
@@ -464,11 +479,14 @@ export function applyCredentialAllowlist(
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");
   let disk: JsonObject = {};
+  let damaged = false;
   try {
     const parsed = jsonObjectSchema.safeParse(parseJson(readFileSync(p, "utf8")));
     if (parsed.success) disk = parsed.data;
-  } catch {
-    /* first write */
+    else damaged = true;
+  } catch (error) {
+    // a missing file is the first write
+    damaged = !(error instanceof Error && "code" in error && error.code === "ENOENT");
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
   for (const key of ["xai", "gemini", "openaiCompat", "composio", "box", "tts", "imageGen", "anthropic", "vertex", "profile", "rooms", "localVm", "features", "phoneRelay"] as const) {
@@ -492,6 +510,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk.instances = diskInstances;
   }
   mkdirSync(DATA_DIR, { recursive: true });
+  if (damaged) setAsideFile(p);
   writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
 }
 

@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
-import { writeFileAtomic } from "./atomic.ts";
+import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { BotHooks } from "./bot-hooks.ts";
+import { TrashList } from "./bot-trash.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
@@ -17,7 +18,7 @@ import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
-import { workspaceDir } from "./workspace.ts";
+import { removeWorkspace } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { applyPendingModel } from "./pending-model.ts";
@@ -37,6 +38,7 @@ import { lastUserInstruction, packetAfterInterruption } from "./task-recovery-fl
 import {
   botAvatarChoiceSchema,
   botAvatarProfile,
+  nextWinkAvatar,
   type BotAvatarChoice,
   type BotAvatarCrop,
 } from "../shared/bot-avatar.ts";
@@ -159,7 +161,7 @@ export interface Message {
     signIn?: boolean;
     accountId?: string;
     folder?: string;
-    usageLimit?: { resetsAt: number | null };
+    usageLimit?: { resetsAt: number | null; model?: boolean };
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
@@ -168,8 +170,11 @@ export interface Message {
    * model saw it mid-turn, so the transcript marks it — a reader should
    * know the reply above it may already account for this line */
   steered?: boolean;
+  /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
+  quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../shared/live-call.ts").CallTag;
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
@@ -191,6 +196,10 @@ export interface Message {
   /** group threads: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
   origin?: string;
+  /** Team room rows: who said it, and the room log entry it mirrors. */
+  author?: import("./rooms/db.ts").RoomAuthor;
+  roomEntryId?: string;
+  roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
   snagIds?: string[];
   reportIds?: string[];
@@ -259,6 +268,8 @@ export interface GroupRecord {
   /** true for auto-created bot⇄bot channels (ask_bot exchanges live here;
    * the user can open the channel and chip in) */
   dm?: boolean;
+  /** A team room this PC hosts; its people and log live in rooms.db. */
+  hosted?: { roomId: string };
   /** transient: the member currently running a turn (never persisted) */
   busyBotId?: string | null;
   /** the room's shared desk: where member turns run their shell tools,
@@ -474,7 +485,7 @@ export type StoreChange =
   | { type: "bots.order"; botIds: string[] }
   | { type: "groups.order"; groupIds: string[] }
   | { type: "group"; groupId: string }
-  | { type: "group.deleted"; groupId: string };
+  | { type: "group.deleted"; groupId: string; hosted?: true };
 
 /** What a task is called before its first message names it. */
 export const UNTITLED_TASK = "New task";
@@ -622,6 +633,7 @@ export interface InstalledPackageMetadata {
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
+const fileMissing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 // One file per resume cursor, so bots.json never carries a prompt copy.
 const SESSION_SYSTEM_DIR = join(DATA_DIR, "session-system");
@@ -722,27 +734,14 @@ interface ThreadState {
   activeLeafId: string | null;
 }
 
-const WINK_ICON_ORDER = ["icon-31", "icon-33", "icon-34", "icon-35", "icon-32"] as const satisfies readonly BotAvatarChoice[];
-
-/** Ties break in WINK_ICON_ORDER, so a fresh install starts on icon-31. */
-function leastUsedWinkIcon(bots: readonly { mascotStyle?: string | null }[]): (typeof WINK_ICON_ORDER)[number] {
-  const counts = new Map<string, number>(WINK_ICON_ORDER.map((id) => [id, 0]));
-  for (const bot of bots) {
-    const style = bot.mascotStyle;
-    if (style && counts.has(style)) counts.set(style, (counts.get(style) ?? 0) + 1);
-  }
-  let chosen: (typeof WINK_ICON_ORDER)[number] = WINK_ICON_ORDER[0];
-  for (const id of WINK_ICON_ORDER) {
-    if ((counts.get(id) ?? 0) < (counts.get(chosen) ?? 0)) chosen = id;
-  }
-  return chosen;
-}
-
 export class Store {
   bots: BotRecord[] = [];
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
+  readonly trash = new TrashList();
+  /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
+  private unloaded = new Set<string>();
   private threads = new Map<string, ThreadState>();
   private taskPackets = new Map<string, TaskResumePacket | null>();
   private defaultSelection: () => ModelSelection;
@@ -758,12 +757,14 @@ export class Store {
       this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
     } catch (error) {
       this.bots = [];
-      this.botsFile = error instanceof Error && "code" in error && error.code === "ENOENT" ? "missing" : "unreadable";
+      this.botsFile = fileMissing(error) ? "missing" : "unreadable";
+      if (this.botsFile === "unreadable") this.unloaded.add(BOTS_FILE);
     }
     try {
       this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
-    } catch {
+    } catch (error) {
       this.groups = [];
+      if (!fileMissing(error)) this.unloaded.add(GROUPS_FILE);
     }
     // busy never survives a restart - no turn does either.
     let botsMigrated = false;
@@ -935,8 +936,16 @@ export class Store {
     }
   }
 
-  private saveBots() {
-    writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2), { mode: 0o600 });
+  private saveList(file: string, json: string) {
+    if (this.unloaded.has(file)) {
+      setAsideFile(file);
+      this.unloaded.delete(file);
+    }
+    writeFileAtomic(file, json, { mode: 0o600 });
+  }
+
+  saveBots() {
+    this.saveList(BOTS_FILE, JSON.stringify(this.bots, null, 2));
     this.pruneSessionSystems();
   }
 
@@ -948,8 +957,10 @@ export class Store {
     } catch {
       return;
     }
+    // a trash list that did not load may still name sessions a restore needs
+    if (this.trash.unreadable) return;
     const live = new Set<string>();
-    for (const bot of this.bots) {
+    for (const bot of [...this.bots, ...this.trash.entries.map((entry) => entry.record)]) {
       for (const cursors of [bot.resumeCursors, ...(bot.tasks ?? []).map((task) => task.resumeCursors)]) {
         for (const [instanceId, cursor] of Object.entries(cursors ?? {})) live.add(sessionSystemFile(instanceId, cursor));
       }
@@ -964,7 +975,7 @@ export class Store {
   }
 
   private saveGroups() {
-    writeFileAtomic(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, ...g }) => g), null, 2), { mode: 0o600 });
+    this.saveList(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, ...g }) => g), null, 2));
   }
 
   setSyncWriter(writer: Store["syncWrite"]): void {
@@ -1018,7 +1029,7 @@ export class Store {
     }
   }
 
-  private emit(change: StoreChange) {
+  emit(change: StoreChange) {
     for (const listener of [...this.listeners]) {
       try {
         listener(change);
@@ -1048,6 +1059,7 @@ export class Store {
       defaultResponder?: GroupDefaultResponder;
       completed?: boolean;
     },
+    hosted?: GroupRecord["hosted"],
   ): GroupRecord {
     const threadId = newId();
     const createdAt = Date.now();
@@ -1065,6 +1077,7 @@ export class Store {
       dm: dm || undefined,
       busyBotId: null,
       section,
+      ...(hosted ? { hosted } : {}),
     };
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
@@ -1104,14 +1117,15 @@ export class Store {
     return group;
   }
 
-  /** A thread's durable record: DB rows plus any legacy JSON leftovers. */
-  private deleteThreadRecord(threadId: string) {
+  /** A thread's durable record: DB rows plus any legacy JSON leftovers. `tell` false writes no delete for other PCs. */
+  deleteThreadRecord(threadId: string, tell = true) {
     this.threads.delete(threadId);
     this.taskPackets.delete(threadId);
     try {
       deleteTaskResumePacket(threadId);
     } catch {}
-    this.persistThread(threadId, [{ kind: "delete", value: { deletedAt: Date.now() } }], () => mdb.deleteThread(threadId));
+    if (tell) this.persistThread(threadId, [{ kind: "delete", value: { deletedAt: Date.now() } }], () => mdb.deleteThread(threadId));
+    else mdb.deleteThread(threadId);
     for (const file of [messagesFile(threadId), `${messagesFile(threadId)}.imported`]) {
       try {
         unlinkSync(file);
@@ -1128,7 +1142,7 @@ export class Store {
     for (const threadId of new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)])) {
       this.deleteThreadRecord(threadId);
     }
-    this.emit({ type: "group.deleted", groupId: id });
+    this.emit({ type: "group.deleted", groupId: id, ...(group.hosted ? { hosted: true as const } : {}) });
     return true;
   }
 
@@ -1272,10 +1286,17 @@ export class Store {
       }
     }
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
+    const previousLeaf = t.activeLeafId;
     t.messages.push(full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
-    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    try {
+      this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    } catch (error) {
+      t.messages.pop();
+      t.activeLeafId = previousLeaf;
+      throw error;
+    }
     if (full.comm?.mailKey && full.comm.peer === "reply") this.indexMail(threadId, full);
     if (full.kind === "screen") {
       for (const pruned of this.pruneScreenFrames(t)) {
@@ -1449,12 +1470,12 @@ export class Store {
       description: profile.description ?? job ?? "",
       notifications: true,
       color: profile.color ?? "white",
-      mascotStyle: profile.mascotStyle ?? leastUsedWinkIcon(this.bots),
+      mascotStyle: profile.mascotStyle ?? nextWinkAvatar(this.bots),
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       resumeCursors: {},
-      createdAt: Date.now(),
+      createdAt: Math.max(Date.now(), ...this.bots.map((b) => (b.createdAt ?? 0) + 1)),
       ...(computer ? { computer } : {}),
     };
     if (profile.cwd) bot.cwd = profile.cwd;
@@ -1475,10 +1496,8 @@ export class Store {
     return bot;
   }
 
-  deleteBot(id: string): boolean {
-    const bot = this.bot(id);
-    if (!bot) return false;
-    this.bots = this.bots.filter((b) => b.id !== id);
+  /** Takes `id` out of every room it can leave. */
+  leaveRooms(id: string): void {
     for (const group of this.groups) {
       const patch: Partial<Pick<GroupRecord, "memberIds" | "busyBotId">> = {};
       if (group.busyBotId === id) patch.busyBotId = null;
@@ -1489,6 +1508,13 @@ export class Store {
       }
       if (Object.keys(patch).length) this.patchGroup(group.id, patch);
     }
+  }
+
+  deleteBot(id: string): boolean {
+    const bot = this.bot(id);
+    if (!bot) return false;
+    this.bots = this.bots.filter((b) => b.id !== id);
+    this.leaveRooms(id);
     // every task's transcript goes with the bot, not just the open one
     for (const threadId of new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)])) {
       this.deleteThreadRecord(threadId);
@@ -1496,7 +1522,7 @@ export class Store {
     // the bot's workspace (files + memory) goes with it — same rule as its
     // transcripts: deleting a bot deletes what it knew
     try {
-      rmSync(workspaceDir(id), { recursive: true, force: true });
+      removeWorkspace(id);
     } catch {}
     this.saveBots();
     this.emit({ type: "bot.deleted", botId: id });
@@ -1728,11 +1754,12 @@ export class Store {
   ) {
     const task = this.taskByThread(botId, threadId);
     const cursor = task?.resumeCursors[instanceId];
-    if (!task || cursor === undefined) return;
+    if (!task || cursor === undefined) return undefined;
     const same = task.nativePrompt?.cursor === cursor ? task.nativePrompt : undefined;
     const window = contextWindow && task.lastModel ? { model: task.lastModel, tokens: contextWindow } : task.nativePrompt?.window;
-    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, window };
+    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, growth: prompt.last - (same?.last ?? prompt.first), window };
     this.saveBots();
+    return task.nativePrompt;
   }
 
   /** Repoint saved bot selections and task continuity from a retired model id. */
@@ -1980,9 +2007,9 @@ export class Store {
 
   taskPacket(threadId: string): TaskResumePacket | null {
     if (!this.taskPackets.has(threadId)) {
-      const knownThread = Boolean(this.botByThread(threadId) || this.groupByThread(threadId));
-      const packet = knownThread ? readTaskResumePacket(threadId) : null;
-      this.taskPackets.set(threadId, packet);
+      // an unknown thread may be a trashed bot's, so its null is not cached past a restore
+      if (!this.botByThread(threadId) && !this.groupByThread(threadId)) return null;
+      this.taskPackets.set(threadId, readTaskResumePacket(threadId));
     }
     const packet = this.taskPackets.get(threadId);
     if (!packet) return null;

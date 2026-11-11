@@ -242,6 +242,19 @@ describe("engine default account routing", () => {
     expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
   });
 
+  it("tells the Usage page which bot and which setting blocked a Main switch", async () => {
+    const f = await fixture();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, model: "claudeAgent-retired" } });
+    expect(await f.useDefault(f.added[0].id)).toMatchObject({ status: 400, body: { code: "main-model", bot: "Routing fixture" } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("refused (main-model)"));
+    f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, model: "claudeAgent-1", effort: "max" } });
+    expect((await f.useDefault(f.added[0].id)).body).toMatchObject({ code: "main-effort", bot: "Routing fixture" });
+    await f.accounts.stop(f.added[1].id);
+    expect((await f.useDefault(f.added[1].id)).body.code).toBe("main-unavailable");
+    expect(f.accounts.defaultFor("claude")).toBeUndefined();
+  });
+
   it("validates HTTP model picks against the default catalog and keeps portable ids", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);
@@ -382,6 +395,45 @@ describe("account removal drain", () => {
     expect(f.resolve).toThrow("Sign in again in Settings > Connections");
     expect(() => f.controller.bots?.checkSelection({ instanceId: f.added[0].id, model: "claudeAgent-1" })).toThrow("Use Set as Main on the Usage page");
     expect((await f.request("POST", `/api/accounts/${f.added[0].id}/default`)).body.error).toContain("Sign in again in Settings > Connections");
+  });
+
+  it("stops new chats on a Main whose turn just signed out and keeps its sessions, generation and other accounts", async () => {
+    const f = await fixture();
+    const [main, other] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.store.setResumeCursor(f.bot.id, main.id, "cursor-1");
+    f.store.recordNativePrompt(f.bot.id, f.bot.threadId, main.id, { first: 10, last: 20 });
+    const commit = vi.spyOn(f.accounts as unknown as { commit(next: unknown): void }, "commit");
+    const invalidate = vi.spyOn(f.registry, "invalidateAccount");
+    const clear = vi.spyOn(f.store, "clearAccountSessions");
+    f.deps.changed.mockClear();
+    await f.controller.signedOut?.(main.id);
+    expect(f.resolve).toThrow("This account is signed out. Sign in again, then send your message.");
+    expect(f.accounts.get(main.id)).toMatchObject({ state: "stopped", generation: main.generation, identity: main.identity });
+    expect(f.accounts.defaultFor("claude")).toBe(main.id);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(f.deps.invalidateHolds).not.toHaveBeenCalled();
+    expect(f.deps.changed).toHaveBeenCalled();
+    expect(f.deps.changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
+    expect(f.bot.resumeCursors[main.id]).toBe("cursor-1");
+    expect(f.bot.tasks?.[0].resumeCursors[main.id]).toBe("cursor-1");
+    expect(f.bot.tasks?.[0].nativePrompt).toMatchObject({ cursor: "cursor-1", first: 10, last: 20 });
+    expect(new AccountService(f.root, () => f.bases).get(main.id)).toMatchObject({ state: "stopped", generation: main.generation });
+    expect(f.registry.accountAvailable(other.id)).toBe(true);
+    expect((await f.useDefault(other.id)).status).toBe(200);
+    expect(f.resolve().instanceId).toBe(other.id);
+  });
+
+  it("refuses a send to a signed-out base Main with the signed-out line", async () => {
+    const f = await fixture();
+    const commit = vi.spyOn(f.accounts as unknown as { commit(next: unknown): void }, "commit");
+    expect(f.resolve()).toBe(f.bot.modelSelection);
+    await f.controller.signedOut?.("claude");
+    expect(f.resolve).toThrow("This account is signed out. Sign in again, then send your message.");
+    expect(commit).not.toHaveBeenCalled();
+    expect(f.registry.accountAvailable(f.added[0].id)).toBe(true);
   });
 
   it("keeps last-account sign-out available without changing portable selections", async () => {

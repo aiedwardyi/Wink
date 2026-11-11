@@ -41,9 +41,11 @@ describe("shared motion tokens", () => {
     const motion = await import("./motion");
     const { PRESENCE_EXIT_MS } = await import("./use-presence");
     expect(`${motion.MOTION_FAST_MS}ms`).toBe(token("motion-fast"));
+    expect(`${motion.MOTION_MODERATE_MS}ms`).toBe(token("motion-moderate"));
     expect(`${motion.MOTION_LARGE_MS}ms`).toBe(token("motion-large"));
     expect(motion.EASE_STANDARD).toBe(token("ease-standard"));
     expect(motion.EASE_ENTRANCE).toBe(token("ease-entrance"));
+    expect(motion.EASE_SOFT).toBe(token("ease-soft"));
     expect(PRESENCE_EXIT_MS).toBe(motion.MOTION_FAST_MS);
   });
 
@@ -86,7 +88,7 @@ describe("collapse and expand", () => {
   });
 
   it.each([
-    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel", "MemoryGroups",
+    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel", "MemoryMap",
     "MemorySaveChip", "PhoneLinkSettings", "SettingsModal", "SettingsPanel", "SkinPicker", "WorkerRows",
   ])("folds %s's disclosure content instead of snapping it", (name) => {
     expect(read(`components/${name}.tsx`)).toMatch(/<Fold open=\{/);

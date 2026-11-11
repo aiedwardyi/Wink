@@ -1,11 +1,12 @@
 // Workspace + file memory contract: the workspace is created idempotently,
 // MEMORY.md loads under a hard budget, and an empty file gets only a starter
 // block in the first-turn prompt.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as atomic from "./atomic.ts";
+import { traceClaimedTurn } from "./turn-timing.ts";
 
 import {
   ensureWorkspace,
@@ -33,6 +34,25 @@ const BOT = "bot-workspace-test";
 describe("workspace", () => {
   beforeEach(() => {
     rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+  });
+
+  it("preserves memory prompt and durable bytes with tracing on and off", async () => {
+    ensureWorkspace(BOT);
+    const text = "# Memory\n- Keep the corrected task at stage 39.\n";
+    writeMemoryFile(BOT, text);
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const prompts: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        prompts.push(await traceClaimedTurn({ botId: BOT }, async () => memorySystemPrompt(BOT)));
+        expect(readFileSync(join(workspaceDir(BOT), "MEMORY.md"), "utf8")).toBe(text);
+      }
+      expect(prompts[1]).toBe(prompts[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
   });
 
   it("creates the workspace with a memory dir and no seed MEMORY.md, idempotently", () => {
@@ -121,6 +141,19 @@ describe("workspace", () => {
       truncated: false,
       revision: memoryRevision("# Memory\n- one fact\n"),
     });
+  });
+
+  it("writeMemoryFile replaces the file instead of truncating it in place", () => {
+    const dir = ensureWorkspace(BOT);
+    const file = join(dir, "MEMORY.md");
+    writeFileSync(file, "- old note\n");
+    linkSync(file, join(dir, "MEMORY.link"));
+
+    writeMemoryFile(BOT, "- new note\n");
+
+    expect(readFileSync(join(dir, "MEMORY.link"), "utf8")).toBe("- old note\n");
+    expect(readFileSync(file, "utf8")).toBe("- new note\n");
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   it("writeMemoryFile round-trips without needing the workspace to exist first", () => {
@@ -294,7 +327,7 @@ describe("workspace", () => {
     expect(memorySystemPrompt(BOT)).toContain("for anything longer. One rule per line, about 300 bytes at most. A side file is read only when a line here says when to read it. A newer correction replaces the old line; never keep two lines that disagree. When you learn");
   });
 
-  it("puts the file's real size above the notes from 80% of either budget", () => {
+  it("puts the file's rounded size above the notes from 80% of either budget", () => {
     const dir = ensureWorkspace(BOT);
     const nearBytes = `# Memory\n${"- long note ".repeat(1700)}`;
     const nearLines = Array.from({ length: 170 }, (_, i) => `- fact ${i}`).join("\n");
@@ -306,10 +339,43 @@ describe("workspace", () => {
     ] as const) {
       writeFileSync(join(dir, "MEMORY.md"), text);
       const prompt = memorySystemPrompt(BOT);
-      const size = `${Buffer.byteLength(text, "utf8")} bytes`;
+      const size = `about ${Math.ceil(Buffer.byteLength(text, "utf8") / 1_000) * 1_000} bytes`;
       expect(prompt, size).toContain(size);
       expect(prompt.indexOf(size)).toBeLessThan(prompt.indexOf("Your memory (MEMORY.md):"));
       expect(prompt.includes("its end was not loaded"), size).toBe(cut);
+    }
+  });
+
+  it("keeps the size notice the same across a small edit", () => {
+    const dir = ensureWorkspace(BOT);
+    const notes = `# Memory\n${"- long note ".repeat(1700)}`;
+    const notice = (text: string) => {
+      writeFileSync(join(dir, "MEMORY.md"), text);
+      const prompt = memorySystemPrompt(BOT);
+      return prompt.slice(prompt.indexOf("\n\n[MEMORY.md is"), prompt.indexOf("\n\nYour memory (MEMORY.md):"));
+    };
+    expect(notice(notes)).toContain("[MEMORY.md is about 21000 bytes in about 10 lines, near ");
+    expect(notice(`${notes}\n- one more fact`)).toBe(notice(notes));
+  });
+
+  it("starts the size notice at 80% of either budget and the cut notice past it", () => {
+    const dir = ensureWorkspace(BOT);
+    const bytes = (count: number) => "x".repeat(count);
+    const lines = (count: number) => Array.from({ length: count }, () => "- fact").join("\n");
+    for (const [text, notice] of [
+      [bytes(MEMORY_MAX_BYTES * 0.8 - 1), null],
+      [bytes(MEMORY_MAX_BYTES * 0.8), "[MEMORY.md is about 20000 bytes in about 10 lines, near "],
+      [bytes(MEMORY_MAX_BYTES), "[MEMORY.md is about 24000 bytes in about 10 lines, near "],
+      [bytes(MEMORY_MAX_BYTES + 1), "[MEMORY.md is about 25000 bytes in about 10 lines, over "],
+      [lines(MEMORY_MAX_LINES * 0.8 - 1), null],
+      [lines(MEMORY_MAX_LINES * 0.8), "[MEMORY.md is about 2000 bytes in about 160 lines, near "],
+      [lines(MEMORY_MAX_LINES), "[MEMORY.md is about 2000 bytes in about 200 lines, near "],
+      [lines(MEMORY_MAX_LINES + 1), "[MEMORY.md is about 2000 bytes in about 210 lines, over "],
+    ] as const) {
+      writeFileSync(join(dir, "MEMORY.md"), text);
+      const prompt = memorySystemPrompt(BOT);
+      if (notice) expect(prompt).toContain(notice);
+      else expect(prompt).not.toContain("[MEMORY.md is");
     }
   });
 

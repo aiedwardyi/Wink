@@ -1,3 +1,4 @@
+import { UserTagScanner, unwrapUserTags } from "../shared/user-tags.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
@@ -21,6 +22,7 @@ interface SplitTurn {
 
 const turns = new Map<string, SplitTurn>();
 const liveTurns = new Map<string, string | undefined>();
+const streams = new Map<string, { turnId?: string; scanner: UserTagScanner }>();
 let nextInput = 0;
 
 function splitText(text: string): { peer: string; users: Array<{ id: number; text: string }> } {
@@ -42,7 +44,7 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
   turn.inputs.set(id, input);
   turns.set(threadId, turn);
   return {
-    prompt: `${prompt}\n\nReply in <user${id}>one short line</user${id}>; keep the peer answer outside.`,
+    prompt: `${prompt}\n\nFor this reply only, answer in <user${id}>one short line</user${id}>; keep the peer answer outside. Never use that tag in later turns.`,
     accept: (message: Message) => { input.message = message; },
     cancel: () => {
       turn.inputs.delete(id);
@@ -53,11 +55,11 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
 
 export function foldPeerQueuedSends(store: Store, botId: string, threadId: string, since: number, steering: boolean): string[] {
   if (hasPeerWatch(threadId) && !steering) return [];
-  const prompts = foldQueuedSends(store, botId, threadId, since);
-  const messages = store.activePath(threadId).slice(-prompts.length);
+  const rows: Message[] = [];
+  const prompts = foldQueuedSends(store, botId, threadId, since, rows);
   return prompts.map((prompt, index) => {
     const input = beginPeerUserReply(botId, threadId, prompt);
-    if (input) input.accept(messages[index]!);
+    if (input) input.accept(rows[index]!);
     return input?.prompt ?? prompt;
   });
 }
@@ -65,6 +67,21 @@ export function foldPeerQueuedSends(store: Store, botId: string, threadId: strin
 function splitTurn(event: RuntimeEvent): SplitTurn | undefined {
   const turn = turns.get(event.threadId);
   return turn && !turn.ready && (!turn.turnId || !event.turnId || turn.turnId === event.turnId) ? turn : undefined;
+}
+
+export function stripStrayUserTags(event: RuntimeEvent): RuntimeEvent {
+  const held = streams.get(event.threadId);
+  const own = held && held.turnId === event.turnId;
+  if (event.type === "turn.started" || (own && event.type === "turn.completed")) streams.delete(event.threadId);
+  if (event.type === "item.completed" && event.itemType === "assistant_text") {
+    if (own) streams.delete(event.threadId);
+    return splitTurn(event) ? event : { ...event, text: unwrapUserTags(event.text) };
+  }
+  if (event.type !== "content.delta" || event.streamKind !== "assistant_text" || splitTurn(event)) return event;
+  const stream = own ? held! : { turnId: event.turnId, scanner: new UserTagScanner() };
+  streams.set(event.threadId, stream);
+  const next = stream.scanner.push(event.delta);
+  return { ...event, delta: next };
 }
 
 export function peerUserRuntime(event: RuntimeEvent): RuntimeEvent | null {
@@ -153,5 +170,6 @@ export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread" |
 export function _resetPeerUserReplies(): void {
   turns.clear();
   liveTurns.clear();
+  streams.clear();
   nextInput = 0;
 }

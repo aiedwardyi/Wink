@@ -25,17 +25,7 @@ export function AskUserRecord({
   if (!card) return null;
   const status = askUserStatus(transcript, message);
   const waiting = status.state === "waiting";
-  if (waiting && pinned) {
-    return (
-      <div
-        data-ask-user-record={status.state}
-        className="flex w-full max-w-[840px] min-w-0 items-center gap-1.5 rounded-2xl border border-accent/40 bg-card px-4 py-3 text-[13px] text-ink-secondary"
-      >
-        <CircleHelp size={14} className="shrink-0 text-accent" />
-        <span className="min-w-0 truncate">{askerName ? t("ask.waitingFor", { name: askerName }) : t("ask.waiting")}</span>
-      </div>
-    );
-  }
+  if (waiting && pinned) return null;
   return (
     <div
       data-ask-user-record={status.state}

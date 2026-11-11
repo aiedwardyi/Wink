@@ -5,9 +5,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import vm from "node:vm";
+
+import { contextMenuTemplate } from "./context-menu.mjs";
+import { saveImageCopy } from "./open-file.mjs";
 
 const require = createRequire(import.meta.url);
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 
 function openDeviceWindowSource(main) {
   const start = main.indexOf("function openDeviceWindow");
@@ -15,6 +19,77 @@ function openDeviceWindowSource(main) {
   assert.ok(start >= 0 && end > start, "openDeviceWindow slice bounds not found");
   return main.slice(start, end);
 }
+
+// Run the real device-window listener without opening a native window or menu.
+function remoteImageMenu({ canceled = false, status = 200 } = {}) {
+  const source = openDeviceWindowSource(readFileSync(new URL("./main.mjs", import.meta.url), "utf8"));
+  const listener = /win\.webContents\.on\("context-menu", ([\s\S]*?\n    \})\);/.exec(source)?.[1];
+  assert.ok(listener, "remote device windows must register a context-menu listener");
+  const copies = [], fetches = [], writes = [], errors = [], popups = [];
+  const bytes = Buffer.from("remote image bytes");
+  const devices = {
+    async fetch(url) {
+      assert.equal(this, devices, "fetch must use the remote cookie session");
+      fetches.push(url);
+      return new Response(bytes, { status });
+    },
+  };
+  const win = { webContents: { copyImageAt: (...point) => copies.push(point) } };
+  let items;
+  const callback = vm.runInNewContext(`(${listener})`, {
+    win, devices, contextMenuTemplate, nativeText: (key) => key,
+    clipboard: { writeText: () => {} },
+    Menu: { buildFromTemplate: (template) => { items = template; return { popup: (options) => popups.push(options) }; } },
+    app: { getPath: () => "downloads" },
+    dialog: { showSaveDialog: async () => ({ canceled, filePath: "saved.png" }), showErrorBox: (...args) => errors.push(args) },
+    saveImageCopy: (url, options) => saveImageCopy(url, { ...options, fsp: { writeFile: async (...args) => writes.push(args) } }),
+  });
+  return { callback, win, copies, fetches, writes, errors, popups, bytes, items: () => items };
+}
+
+const remoteImageParams = { mediaType: "image", srcURL: "https://home.tail1234.ts.net/api/attachments/shot.png", x: 32, y: 47, frame: {} };
+
+test("remote image menu copies the clicked chat or viewer image", () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, remoteImageParams);
+  assert.deepEqual(menu.items().map((item) => item.label), ["native.copyImage", "native.saveImage"]);
+  menu.items()[0].click();
+  assert.deepEqual(menu.copies, [[32, 47]]);
+  assert.equal(menu.popups[0].window, menu.win);
+  assert.equal(menu.popups[0].frame, remoteImageParams.frame);
+});
+
+test("remote image menu saves through its authenticated cookie session", async () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.fetches, [remoteImageParams.srcURL]);
+  assert.equal(menu.writes[0][0], "saved.png");
+  assert.deepEqual(Buffer.from(menu.writes[0][1]), menu.bytes);
+});
+
+test("remote image menu cancellation fetches and writes nothing", async () => {
+  const menu = remoteImageMenu({ canceled: true });
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.fetches, []);
+  assert.deepEqual(menu.writes, []);
+});
+
+test("remote image menu reports download failures without writing", async () => {
+  const menu = remoteImageMenu({ status: 401 });
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.writes, []);
+  assert.deepEqual(menu.errors, [["native.saveCopyFailed", "That image could not be downloaded (401)"]]);
+});
+
+test("remote image menu ignores non-image targets", () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, { mediaType: "none", selectionText: "remote text" });
+  assert.equal(menu.items(), undefined);
+  assert.deepEqual(menu.popups, []);
+});
 
 class FakeWindow extends EventEmitter {
   destroyed = false;
@@ -325,6 +400,86 @@ test("fails closed without this PC's tailnet", () => {
     assert.equal(deviceTailnet(local), "");
   }
   assert.throws(() => deviceWindowUrl("home.tail1234.ts.net", ""), /invalid/);
+});
+
+const LABEL = "abcdefghijklmnop";
+const RELAY_PC = `${LABEL}.wink.test`;
+
+// Runs main's real openDeviceWindow with no window, browser or tailscale call.
+function openDevice({ teamRelay = "wink.test", tailnet = "" } = {}) {
+  const source = openDeviceWindowSource(readFileSync(new URL("./main.mjs", import.meta.url), "utf8"));
+  const external = [], windows = [];
+  const open = vm.runInNewContext(`(async ${source})`, {
+    GOOGLE_CLIENT: teamRelay ? { id: "id", secret: "secret", teamRelay } : null,
+    shell: { openExternal: async (url) => void external.push(url) },
+    localTailnet: async () => tailnet,
+    relayDeviceUrl,
+    deviceWindowUrl,
+    openOrFocus: (_windows, key) => void windows.push(key),
+    deviceWindows: new Map(),
+    deviceLoads: new Map(),
+  });
+  return { open, external, windows };
+}
+
+async function assertRefused(hosts) {
+  for (const host of hosts) {
+    assert.equal(relayDeviceUrl(host, "wink.test"), "", JSON.stringify(host));
+    const device = openDevice();
+    assert.equal(await device.open(host, "Home"), false, JSON.stringify(host));
+    assert.deepEqual(device.external, []);
+  }
+}
+
+test("openDeviceWindow opens a team relay host in the default browser with no tailnet", async () => {
+  const device = openDevice();
+  assert.equal(await device.open(RELAY_PC, "Home"), true);
+  assert.deepEqual(device.external, [`https://${RELAY_PC}/`]);
+  assert.deepEqual(device.windows, []);
+});
+
+test("reads the team base from a baked base or relay origin", () => {
+  for (const baked of ["wink.test", "relay.wink.test", "https://relay.wink.test", "https://relay.wink.test/"]) {
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), `https://${RELAY_PC}/`, baked);
+  }
+  for (const baked of [undefined, "", "http://relay.wink.test", "relay.", "wink test", 42]) {
+    assert.equal(relayDeviceUrl(RELAY_PC, baked), "", String(baked));
+  }
+});
+
+test("refuses <label>.<other base>", async () => {
+  await assertRefused([`${LABEL}.other.test`, `${LABEL}.test`, `${LABEL}.evilwink.test`, `${LABEL}.relay.wink.test`]);
+});
+
+test("refuses a 15-char label", async () => {
+  await assertRefused([`${LABEL.slice(1)}.wink.test`, `${LABEL}a.wink.test`, `abcdefghijklmno1.wink.test`, `x.${RELAY_PC}`]);
+});
+
+test("refuses uppercase, port, path, userinfo and trailing-dot hosts", async () => {
+  await assertRefused([RELAY_PC.toUpperCase(), `${LABEL}.WINK.test`, `${RELAY_PC}:444`, `${RELAY_PC}/x`, `a@${RELAY_PC}`, `${RELAY_PC}.evil.com`, `${RELAY_PC}.`]);
+});
+
+test("refuses a lookalike base where a dot is any other character", async () => {
+  await assertRefused([`${LABEL}.winkxtest`, `${LABEL}.wink-test`, `${LABEL}xwink.test`]);
+});
+
+test("refuses a trailing newline or space", async () => {
+  await assertRefused([`${RELAY_PC}\n`, `${RELAY_PC} `, ` ${RELAY_PC}`, `${RELAY_PC}\t`, 42, null]);
+});
+
+test("a PC with an answering tailnet host still opens the Wink window", async () => {
+  const device = openDevice({ tailnet: "tail1234.ts.net" });
+  assert.equal(await device.open("home.tail1234.ts.net", "Home"), true);
+  assert.deepEqual(device.windows, ["https://home.tail1234.ts.net"]);
+  assert.deepEqual(device.external, []);
+});
+
+test("no baked team relay opens no relay PC", async () => {
+  for (const teamRelay of [null, ""]) {
+    const device = openDevice({ teamRelay });
+    assert.equal(await device.open(RELAY_PC, "Home"), false);
+    assert.deepEqual(device.external, []);
+  }
 });
 
 test("reads the tailnet from tailscale status", () => {

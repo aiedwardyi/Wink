@@ -8,6 +8,8 @@
 //                     mcp-elicitation | logged-in-stdout | logged-out | unauthorized
 //                     | bench-quiet (no tool items — latency floor)
 //                     | usage-calls (two model calls: `last` per call, `total` the thread)
+//                     | approval-pair (two approvals in one stdout chunk, then exits)
+//   FAKE_CODEX_ELICIT  "server/tool" the mcp-elicitation asks about (default agents/list_bots)
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //   FAKE_CODEX_USAGE  JSON array of tokenUsage payloads, one
 //                     thread/tokenUsage/updated per model call of the turn
@@ -16,6 +18,8 @@
 //   FAKE_CODEX_MESSAGES  JSON array of {text, phase?}: the turn's agentMessage
 //                     items, in place of the one default reply
 //   FAKE_CODEX_NO_INJECT  thread/inject_items fails, like a CLI without it
+//   FAKE_CODEX_CONFIG  JSON config that config/read answers
+//   thread/fork answers a new thread id and echoes `ephemeral`; the params land in the dump's calls
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { readFileSync, writeFileSync, writeSync } from "node:fs";
@@ -194,6 +198,12 @@ process.stdin.on("data", (chunk) => {
       case "thread/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
         break;
+      case "config/read":
+        out({ jsonrpc: "2.0", id: msg.id, result: { config: JSON.parse(process.env.FAKE_CODEX_CONFIG ?? "{}") } });
+        break;
+      case "thread/fork":
+        out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-fork-1", ephemeral: msg.params?.ephemeral === true }, model: "fake-codex-model" } });
+        break;
       case "thread/inject_items":
         out(process.env.FAKE_CODEX_NO_INJECT
           ? { jsonrpc: "2.0", id: msg.id, error: { code: Number(process.env.FAKE_CODEX_NO_INJECT) < 0 ? Number(process.env.FAKE_CODEX_NO_INJECT) : -32601, message: "injection failed" } }
@@ -245,6 +255,11 @@ process.stdin.on("data", (chunk) => {
               id: msg.id,
               error: { code: -32603, message: "provider returned 503: upstream capacity exceeded" },
             });
+            // a retired attempt keeps talking until its kill lands
+            if (process.env.FAKE_CODEX_LATE_COMPLETE) {
+              const late = setInterval(() => notify("turn/completed", { turn: { status: "completed" } }), 5);
+              setTimeout(() => clearInterval(late), 400);
+            }
             break;
           }
         }
@@ -266,18 +281,23 @@ process.stdin.on("data", (chunk) => {
           notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
         }
         if (mode === "mcp-elicitation") {
+          const [serverName, tool] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
           out({
             jsonrpc: "2.0",
             id: 101,
             method: "mcpServer/elicitation/request",
             params: {
-              serverName: "agents",
+              serverName,
               mode: "form",
               _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
-              message: 'Allow the agents MCP server to run tool "list_bots"?',
+              message: `Allow the ${serverName} MCP server to run tool "${tool}"?`,
               requestedSchema: { type: "object", properties: {} },
             },
           });
+        } else if (mode === "approval-pair") {
+          const ask = (id: number) => JSON.stringify({ jsonrpc: "2.0", id, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
+          writeSync(1, `${ask(100)}\n${ask(101)}\n`);
+          process.exit(0);
         } else if (mode === "approval" || mode === "windows-command") {
           const approvalCommand = mode === "windows-command" ? command : "rm -rf scratch";
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: approvalCommand } });

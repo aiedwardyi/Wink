@@ -263,7 +263,7 @@ describe("reaction plumbing", () => {
   });
 
   it("leaves reactions to the next turn on an engine that cannot report a steer consumed", () => {
-    expect(botChatSource).toContain("const prompt = consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName);");
+    expect(botChatSource).toContain("consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),");
     expect(botChatSource).toContain("const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];");
   });
 

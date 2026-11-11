@@ -3,6 +3,7 @@
 // separates a slow provider from a wedged one. Every phase below reads a
 // signal the client already receives.
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { isVoiceLine, type CallTag } from "../../shared/live-call";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
@@ -242,7 +243,8 @@ export function nextTurnSignals(signals: TurnSignals, threadId: string, event: T
  * settled assistant text does that. Leaving the reasoning buffer set past a
  * tool pins the label to "Thinking" for the whole post-tool model wait.
  */
-export function streamResetFor(message: { role?: string; kind?: string }): "stream" | "reasoning" | null {
+export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag }): "stream" | "reasoning" | null {
+  if (isVoiceLine(message)) return null;
   if (message.role === "bot" && message.kind === "text") return "stream";
   if (message.kind === "activity") return "reasoning";
   return null;
@@ -273,7 +275,70 @@ export function revealStream(text: string, ramps: readonly StreamRamp[], now: nu
   };
 }
 
-export function splitReplyBlocks(text: string, complete = false, whole = 0): string[] {
+/** Start of markup a half-typed paragraph has opened but not closed, or -1. */
+function openMarkup(text: string): number {
+  let tilde = -1;
+  const em: Record<string, number> = { _: -1, "*": -1 };
+  const earliest = (stop: number) => {
+    const open = [tilde, em._, em["*"], stop].filter((index) => index >= 0);
+    return open.length ? Math.min(...open) : -1;
+  };
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at];
+    if (c === "\\") at++;
+    else if (c === "`") {
+      let n = 1;
+      while (text[at + n] === "`") n++;
+      const close = text.indexOf("`".repeat(n), at + n);
+      if (close < 0) return earliest(-1);
+      at = close + n - 1;
+    } else if (c === "[") {
+      const from = text[at - 1] === "!" ? at - 1 : at;
+      const end = text.indexOf("]", at);
+      if (end < 0) return earliest(from);
+      if (text[end + 1] !== "(") {
+        if (end === text.length - 1) return earliest(from);
+        continue;
+      }
+      const target = /\((?:[^()]|\([^()]*\))*\)/y;
+      target.lastIndex = end + 1;
+      if (!target.test(text)) return earliest(from);
+      at = target.lastIndex - 1;
+    } else if (c === "<" && /[A-Za-z/!]/.test(text[at + 1] ?? "")) {
+      if (text.indexOf(">", at) < 0) return earliest(at);
+    } else if (c === "!" && at === text.length - 1) return earliest(at);
+    else if (c === "~" && (at === text.length - 1 || text[at + 1] === "~")) {
+      if (at === text.length - 1) return earliest(at);
+      tilde = tilde < 0 ? at : -1;
+      at++;
+    } else if (c === "_" || c === "*") {
+      let n = 1;
+      while (text[at + n] === c) n++;
+      if (c === "_" || n === 1) {
+        const prev = text[at - 1] ?? " ";
+        const next = text[at + n] ?? "";
+        if (em[c] >= 0 && next && !/\s/.test(prev) && !/[\p{L}\p{N}]/u.test(next)) em[c] = -1;
+        else if (em[c] < 0 && (!next || /[\p{L}\p{N}]/u.test(next)) && !/[\p{L}\p{N}]/u.test(prev)) em[c] = at;
+      }
+      at += n - 1;
+    }
+  }
+  return earliest(-1);
+}
+
+/** The first paragraph while it is still arriving: nothing that could still turn into another block or half-draw markup. */
+function openParagraph(block: string, settle: (text: string) => string): string[] {
+  const [head, next] = block.split("\n");
+  const table = head.includes("|") && (next === undefined || /^[\s|:-]*$/.test(next));
+  if (table && next !== undefined) return [];
+  const body = (table ? head.slice(0, head.indexOf("|")) : block).replace(/(^|\n)\s*\d{1,9}\s*$/, "");
+  if (/^[-*_=\s]*$/.test(body)) return [];
+  const cut = openMarkup(body);
+  const shown = settle(cut < 0 ? body : body.slice(0, cut)).trimEnd();
+  return shown ? [shown] : [];
+}
+
+export function splitReplyBlocks(text: string, complete = false, whole = 0, settle = (block: string) => block): string[] {
   if (/^ {0,3}\[[^\]\n]+\]:/m.test(text)) return complete || whole >= text.length ? [text] : [];
   const nodes = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
   return nodes.flatMap((node, i) => {
@@ -284,7 +349,11 @@ export function splitReplyBlocks(text: string, complete = false, whole = 0): str
     const closed = mark && new RegExp(`\\n {0,3}${mark[0]}{${mark.length},}[ \\t]*\\r?$`).test(block);
     const blank = !["list", "blockquote", "code", "html"].includes(node.type) && /^\r?\n[ \t]*\r?\n/.test(text.slice(end));
     if (complete || i < nodes.length - 1 || closed || blank) return [block.trimEnd()];
-    return whole > start ? [text.slice(start, whole).trimEnd()] : [];
+    if (whole > start) return [text.slice(start, whole).trimEnd()];
+    if (i) return [];
+    const setext = node.type === "heading" ? /\n {0,3}[-=]+[ \t]*$/.exec(block) : null;
+    if (setext) return openParagraph(block.slice(0, setext.index), settle);
+    return node.type === "paragraph" ? openParagraph(block, settle) : [];
   });
 }
 

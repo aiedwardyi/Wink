@@ -161,6 +161,34 @@ afterEach(() => {
 });
 
 describe("Google sync journeys", { timeout: 60_000 }, () => {
+  it("grows rate-limit waits across passes and resets after a clean pass", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    let limited = true;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return limited && url.pathname === `/drive/v3/files/${drive.root().id}`
+        ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      for (const wait of [1_000, 2_000, 4_000]) {
+        await settle(home);
+        expect(schedule.mock.calls.at(-1)?.[1]).toBe(wait);
+      }
+      limited = false;
+      await settle(home);
+      limited = true;
+      await settle(home);
+      expect(schedule.mock.calls.at(-1)?.[1]).toBe(1_000);
+    } finally {
+      requests.mockRestore();
+      schedule.mockRestore();
+    }
+  });
   it.each([{ ext: "notes", changes: { memoryNotes: false } }, { ext: "style", changes: { mascotStyle: "icon-36" } }])("counts a PC whose only published change is $ext", async ({ ext, changes }) => {
     const home = makePC("home", { bots: [bot("Counsel")] });
     await startOn(home);

@@ -4,6 +4,8 @@ import { usageIdentity } from "../../shared/usage-identity";
 import type { UsageBoard } from "@/lib/usage-board";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 
+const MANUAL_DRIVERS = ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"];
+
 export const AUTO_REFRESH_MS = 5 * 60_000;
 // A failed or empty attempt waits at least this long, or until the server's retryAt.
 const AUTO_RETRY_MS = 60_000;
@@ -53,6 +55,43 @@ export function joinRefresh(instanceId: string, start: () => Promise<any>): Prom
   pending.set(instanceId, call);
   announce();
   return call;
+}
+
+/** The Refresh button: forces every listed account (default all), ignoring reading age. */
+export async function refreshUsage(instances: InstanceInfo[], board: UsageBoard, dispatch: ReturnType<typeof useStore>["dispatch"],
+  only?: ReadonlySet<string>): Promise<{ failed: boolean; museAuthFailed: boolean }> {
+  let museAuthFailed = false;
+  const results = await Promise.allSettled(instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
+    && (!only || only.has(each.instanceId))
+    && MANUAL_DRIVERS.includes(each.driverKind)
+    && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
+    .map((each) => joinRefresh(each.instanceId, async () => {
+      let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+      if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
+        result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
+      }
+      if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+      if (each.driverKind === "museAgent" && result.status === "auth_error") museAuthFailed = true;
+      if (result.error) throw new Error("refresh");
+      return result;
+    })));
+  return { failed: results.some((each) => each.status === "rejected"), museAuthFailed };
+}
+
+/** Alt+R runs `refresh` while its view is mounted; null (busy or shut) ignores it. */
+export function useRefreshKey(refresh: (() => void) | null) {
+  const latest = useRef(refresh);
+  latest.current = refresh;
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+        || event.code !== "KeyR" || !latest.current) return;
+      event.preventDefault();
+      latest.current();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
 }
 
 export function staleAccounts(instances: InstanceInfo[], now = Date.now(), board?: UsageBoard): InstanceInfo[] {

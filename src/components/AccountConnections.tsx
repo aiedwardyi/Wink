@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
-import { api, type InstanceInfo } from "@/state/store";
+import { api, useStore, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
@@ -11,31 +11,47 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
 import { useEngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
-import { Tile } from "./UsageDesk";
-import { UsageGrip } from "./UsageAccounts";
+import { ACCOUNT_ROW, AccountGroup, Tile } from "./UsageDesk";
 
-const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
+const LINE = "flex min-h-7 items-center";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
 
 function signInPending(account: UsageAccount): boolean {
   return !accountReady(account) && (account.loginState === "pending" || (!account.loginState && account.accountState === "pending"));
 }
 
+/** With the engine mark it is the engine's header, its actions the one slot on the right; without, a line inside an account row. */
 export function ConnectionRow({ mark, label, actions, children }: { mark?: ReactNode; label: ReactNode; actions?: ReactNode; children?: ReactNode }) {
+  const head = Boolean(mark);
   return (
     <div className="min-w-0 break-keep text-[12px] text-ink-secondary">
-      <div className="flex items-start gap-2">
-        <span className={`${LINE} w-4 shrink-0`}>{mark}</span>
+      <div data-engine-head={head ? "" : undefined} className="flex items-start gap-2">
+        {head && <span className={`${LINE} w-4 shrink-0`}>{mark}</span>}
         <div className={`${LINE} min-w-0 flex-1 gap-2`}>{label}</div>
-        {actions && <div className={`${LINE} max-w-[65%] shrink-0 justify-end gap-2 whitespace-nowrap`}>{actions}</div>}
+        {actions && <div data-engine-slot={head ? "" : undefined} className={`${LINE} max-w-[65%] shrink-0 justify-end gap-2 whitespace-nowrap`}>{actions}</div>}
       </div>
-      {children && <div className="flex min-w-0 flex-col items-stretch gap-2 pb-2 pl-6 has-[>[hidden]]:pb-0">{children}</div>}
+      <Fold open={Boolean(children)} keep>
+        <div className={cn("flex min-w-0 flex-col items-stretch gap-2", head && "pb-2 pl-6 has-[>[hidden]]:pb-0")}>{children}</div>
+      </Fold>
+    </div>
+  );
+}
+
+/** Usage's account row head: the name line, the address under it, one control on the right. */
+export function AccountHead({ name, email, control }: { name: ReactNode; email?: ReactNode; control?: ReactNode }) {
+  return (
+    <div data-account-head="" className="usage-account-head">
+      <div className="usage-account-identity min-w-0">
+        <div className="flex min-w-0 items-center gap-2">{name}</div>
+        {email && <span data-account-email="" className="usage-email min-w-0 break-words">{email}</span>}
+      </div>
+      {control && <div className="usage-control flex h-[22px] items-center justify-end gap-2 whitespace-nowrap text-[12px] text-ink-secondary">{control}</div>}
     </div>
   );
 }
@@ -46,17 +62,15 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
   const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
   const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
-  const elsewhere = computerOnly && !loading && !connected;
   return (
     <div aria-live="polite">
       <ConnectionRow mark={mark}
         label={name ?? (!loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
-        actions={<>{loading || connected || computerOnly ? null : waiting ? <>
+        actions={<>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
         </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
-        {(elsewhere || name && status || steps) && <>
-          {elsewhere && <span>{t("engines.signInFromComputer")}</span>}
+        {(name && status || steps) && <>
           {name && status && <span>{status}</span>}
           {waiting && copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
           {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
@@ -73,7 +87,7 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
   );
 }
 
-function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, grip }: {
+function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, reorder }: {
   account: UsageAccount;
   label: string;
   named?: UsageBoardAccount;
@@ -82,13 +96,12 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   disabled: boolean;
   signOut: () => void;
   reload: () => Promise<void>;
-  grip: boolean;
+  reorder: boolean;
 }) {
   const { t } = useI18n();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const id = useId();
-  const [expanded, setExpanded] = useState(false);
   const [menu, setMenu] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState<(SavedAccountName & { revision: number }) | null>(null);
@@ -124,67 +137,64 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
-  const mark = <ProviderMark driverKind={account.driverKind} size={16} />;
   const tile = name && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
   const draining = account.drain && account.drain.phase !== "failed";
   const signInRow = !ready && !account.drain;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
-  // On a phone the address gets its own line under the tile, running under the more button, so a 30-character email shows whole.
-  // Connected rows only: the sign-in row keeps its menu on its name row, so an overlay there would cover Sign In.
-  const stacked = phone && name && !draining && !signInRow;
+  // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
+  const control = draining ? <span role="status">{t("accounts.removing")}</span> : signInRow ? phone && canName && more : phone ? more : controls;
   return (
-    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0">
-      {grip && <UsageGrip label={name?.name ?? account.displayName} />}
-      {signInRow ? <>
-        <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
-        {name && <ConnectionRow label={<>
-          {tile}
-          {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name.nickname} inline
-            onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-            : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
-              className="min-w-0 truncate text-left font-normal">{name.name}</button>}
-        </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
-          onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
-      </> : <ConnectionRow mark={mark}
-        label={<>
-          {!stacked && tile}
-          <div className={cn("flex min-w-0 flex-1 flex-col", stacked ? "pb-2" : "items-start py-1")}>
-            <div className={stacked ? "flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11" : "contents"}>
-              {stacked && tile}
-              {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
-                onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-                : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
-                  className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
-            </div>
-            <button type="button" data-connection-identity="" aria-label={name ? `${t("connections.identity")}: ${name.name}` : t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("min-w-0 max-w-full text-left text-[11px] text-ink-secondary", stacked && "-mt-1.5")}>
-              <span data-account-email="" className="block min-w-0 truncate">{label}</span>
-            </button>
-          </div>
-        </>}
-        actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls}>
-        <Fold open={expanded} id={`${id}-identity`}>
-          <div data-connection-identity-body="" className="py-1 text-[13px] text-ink">{name && <div className="truncate">{name.name}</div>}<div className="truncate">{label}</div></div>
-        </Fold>
-      </ConnectionRow>}
-      {stacked && <span className="absolute right-0 top-0 flex h-9 items-center [@media(pointer:coarse)]:h-11">{more}</span>}
+    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
+      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && label} name={<>
+        {tile}
+        {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+          onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+          : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
+            className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
+      </>} />}
       <Fold open={menu} id={`${id}-actions`}>
-        <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pb-2 pl-6"
+        <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
           {controls}
         </div>
       </Fold>
+      {signInRow && <SignInRow instance={account} onUpdated={() => void reload()} />}
     </div>
   );
 }
 
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
   const { t } = useI18n();
+  const { state } = useStore();
   const { board } = useUsageBoard();
+  const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
+  useEffect(() => {
+    if (!adding) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const result = await api(`/api/accounts/${encodeURIComponent(adding)}/sign-in`);
+        if (cancelled) return;
+        if (result.state === "duplicate") {
+          setExistingId(result.existingId);
+          setAdding(null);
+          void reload();
+          return;
+        }
+        if (["complete", "failed", "cancelled"].includes(result.state)) { setAdding(null); return; }
+      } catch { if (cancelled) return; }
+      timer = setTimeout(() => void poll(), 1000);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [adding, reload]);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
       && signInPending(account))) setError(null);
@@ -198,9 +208,11 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
     setBusy(true);
     setError(null);
+    setExistingId(null);
     try {
       if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
-      await api(path, { method: "POST", body: JSON.stringify(body) });
+      const result = await api(path, { method: "POST", body: JSON.stringify(body) });
+      if (path === "/api/accounts" && typeof result.id === "string") setAdding(result.id);
       await reload();
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -211,25 +223,38 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     finally { setBusy(false); }
   };
   const addable = accounts.length < 8 && accounts.some(accountReady);
-  const add = addable && !computerOnly && <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
-    className={STRONG_BUTTON}>{t("accounts.add")}</button>;
+  const existing = state.instances.find((account) => account.instanceId === existingId);
+  const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
+    ?? existing?.snapshot.account ?? existing?.displayName;
+  const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
+    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
+      className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
-    <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0 py-1.5">
+    <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
       <ConnectionRow mark={<ProviderMark driverKind={accounts[0]!.driverKind} size={16} />}
-        label={<span className="min-w-0 truncate text-[13px] text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined}>
-        {addable && computerOnly && <span>{t("engines.signInFromComputer")}</span>}
-      </ConnectionRow>
-      {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
-        const drain = account.drain;
-        const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
-        const hasDestination = accounts.some((other) => other !== account && accountReady(other));
-        return (
-          <ConnectionAccount key={account.instanceId} grip={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
-            named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
-            reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
-        );
-      })}
-      {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error.message}</div>}
+        label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
+      <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
+        {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
+          const drain = account.drain;
+          const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
+          const hasDestination = accounts.some((other) => other !== account && accountReady(other));
+          return (
+            <ConnectionAccount key={account.instanceId} reorder={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+              named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
+              reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
+          );
+        })}
+      </AccountGroup>
+      {existing && <div role="status" className="mt-2 text-[12px] text-ink-secondary">
+        <button type="button" data-existing-account="" className="max-w-full break-words text-left underline" onClick={(event) => {
+          const list = event.currentTarget.closest("[data-settings-connections]") ?? event.currentTarget.closest("[data-engine-row]")?.parentElement;
+          const row = [...list?.querySelectorAll<HTMLElement>("[data-connection-account]") ?? []]
+            .find((row) => row.dataset.connectionAccount === existingId);
+          row?.scrollIntoView?.({ block: "nearest" });
+          row?.focus();
+        }}>{t("accounts.alreadyAdded", { account: existingName ?? "" })}</button>
+      </div>}
+      {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error.message}</div>}
     </div>
   );
 }

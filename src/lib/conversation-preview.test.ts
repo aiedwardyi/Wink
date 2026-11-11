@@ -185,6 +185,12 @@ describe("sidebar preview hides tool names when Show tool calls is off", () => {
     expect(roomConversationPreview({ working: true, messages: [] })).toBe("A bot is working…");
   });
 
+  it("names the teammate on a team room row, and keeps You for the host", () => {
+    const line = (id: string, kind: "host" | "person", name: string): Message => ({ id, role: "user", kind: "text", text: `hi from ${name}`, at: 1, author: { kind, id, name }, roomEntryId: id });
+    expect(roomConversationPreview({ messages: [line("e1", "person", "Mina")] })).toBe("Mina: hi from Mina");
+    expect(roomConversationPreview({ messages: [line("e2", "host", "Edward")] })).toBe("You: hi from Edward");
+  });
+
   it("passes Show tool calls into Sidebar 1:1 and room preview chrome", () => {
     const sidebar = ["Sidebar.tsx", "SidebarConversations.tsx"]
       .map((file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components", file), "utf8"))

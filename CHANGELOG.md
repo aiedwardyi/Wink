@@ -2,6 +2,207 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.251] - 2026-11-11
+
+### Added
+- Voice calls in the desktop app: the phone button now shows in the chat header.
+
+### Changed
+- The memory file reads as plain text, with an Edit button at the top right.
+- The model picker uses a light look on light skins.
+- Quick answers now reply to greetings and quick pings while your bot is busy, and the waiting dots are gone.
+
+### Fixed
+- Voice calls work in another PC's window, and End works after a call fails.
+- "Live now" reads indigo on light skins.
+- The compact worker chip matches the size of its neighbors.
+- The folder field explains itself when there is no Browse button.
+- The whole "Show more" row is clickable.
+
+## [1.0.250] - 2026-11-11
+
+### Added
+- Devices: one "Connect from my devices" switch per PC, a QR code for your phone right on the page, and a green check on each PC you can reach.
+- Opening Wink in Chrome on a computer now gives you a real terminal: typing, arrow keys, copy and Korean all work.
+
+### Changed
+- Connections uses the same account cards as Usage.
+
+### Fixed
+- The Claude mascot's eyes and feet stay even at 125%, 150% and 175% screen scaling.
+
+## [1.0.249] - 2026-11-11
+
+### Added
+- Voice calls with your bot: tap the phone icon at the top right of a chat. The chat stays quiet during the call, and one call card with a summary and the transcript stays after.
+- Open Wink on your other PCs from Chrome with Google sign-in, no Tailscale needed.
+- Bot Details and Workers share one panel on the right, and the bot list folds while it's open.
+- The bot's avatar in the chat header says it opens Bot Details and memory.
+- Activity squares ripple when you tap them.
+
+### Changed
+- A shorter welcome line on first run: "Give a bot a job. Check in from anywhere."
+- New bots start with an empty name.
+- Softer hover on chat header icons, a violet Muscle Memory icon, a darker Live now and a smoother memory glow.
+
+### Fixed
+- Wink's background checks no longer flash a terminal window on Windows.
+- Bots with nothing to say stay quiet: no stray lines and no status flicker.
+- The What's New card stays put until you close it.
+- Dragging on the Usage page no longer grows the list, and the hand closes when you press.
+- Browser connections to another PC stay alive between requests, and browser setup is clearer.
+- The refresh icon finishes its turn before stopping.
+- Quick answers work again after an ask card you typed past.
+- A message blocked by a Grok hook names the hook.
+- Code that reads a secret is no longer masked as one.
+
+## [1.0.248] - 2026-11-10
+
+### Added
+- Wink keeps a daily backup of your chats, bots and memory in a Wink Backups folder.
+- Document checks in Live Verify replay with one cursor per checker, and short files play long enough to follow.
+- Alt+R refreshes usage again, in the usage popover and in Settings > Usage.
+
+### Changed
+- Live Verify checks only documents the reply or your message names, never a bot's own notes or memory.
+- The bot's Description box is now called Instructions.
+- After a skipped update, What's New shows the newest notes you haven't seen.
+- Bots resend less context on each message, which saves tokens.
+- Hitting one model's limit (like Fable) shows the limit card instead of an error.
+
+### Fixed
+- Quick answers send Korean requests and refusals to the bot, and a quick answer no longer lands after the bot's final reply.
+- Deleting a bot never empties a folder linked inside it, and a damaged bot list, settings or routines file is set aside instead of overwritten. The delete warning says what goes.
+- A link to a file on another PC opens from that PC, or says which PC has it.
+- A failed account switch or a stopped Grok reply now says why.
+
+## [1.0.247] - 2026-11-10
+
+### Added
+- Claude Fable 5.2 in the model pickers and the Model Index.
+
+### Changed
+- The model list shows the cost per task at the effort you pick.
+- Fable 5 is no longer offered for new bots; bots already on it keep working.
+
+## [1.0.246] - 2026-11-10
+
+### Added
+- A What's New card after an update, shown once.
+- Quick answers: ask a Claude bot a short question while it works and get an answer without stopping its task.
+- Live Verify checks documents bots write and fixes the problems it finds, with details a tap away.
+- Live Verify checks app pages a bot names.
+- Codex workers can run on a saved OpenAI API key.
+- A refresh button in the usage quick view, and whole rows drag to reorder usage accounts.
+
+### Changed
+- Settings > Team counts hours only while someone is actually using Wink, not while it sits open.
+- Bot names show above bot replies on wide-bubble themes, and your own messages no longer carry a "You" label.
+- Smoother Memory panels and a soft brain glow; smoother motion on the newest cards and panels.
+- New bots rotate through the Wink colors.
+- Phones are listed under This PC in Devices, and folded usage bars are bigger on phones.
+- The Model Index uses today's sources.
+- Update failures show a plain, quiet message.
+
+### Fixed
+- Cleanup no longer keeps a CPU core busy for long after workers finish.
+- A signed-out account is marked once and skipped for new work until you sign in again.
+- Long-Term Memory shows facts written as plain lines.
+- Phone text selection has drag handles and Copy, and the phone worker list scrolls again after reaching the top.
+- The model picker no longer shows dark side bands at some window widths.
+- Bots no longer point at a question card you closed by typing.
+- Replies synced from another PC show the bot's own avatar.
+- Codex bots in Ask mode no longer ask before Wink's own tools.
+- Stray tags no longer show in bot replies, and quiet background wakes no longer post empty replies.
+- Security and reliability fixes from release audits.
+
+## [1.0.245] - 2026-11-09
+
+### Added
+- Phone videos get a Wink full screen button.
+- Swipe between a bot's Settings and Memory, and edit Memory on your phone.
+- The model dial shows the run cost at each effort.
+
+### Changed
+- The first paragraph appears as it streams.
+- Long Claude chats compact at Claude's own limit.
+- Precision gets wide bubbles and the Wink font.
+- Usage folds are smoother, and drag handles are easier to grab, with long press on phones.
+- Live Verify replays are calmer and show one cursor per checker.
+- Activity squares settle with a soft glint.
+- The bar repeating a pinned question is gone.
+
+### Fixed
+- The phone usage card opens at full height.
+- A failed phone send survives a reload.
+- Live Verify runs once.
+- Connected account emails no longer open a copy on tap.
+- Closed workers release their memory.
+- Safer, lighter cleanup.
+- A save or spawn that fails no longer loses or repeats work.
+- Security hardening for paired phones.
+
+## [1.0.244] - 2026-11-08
+
+### Added
+- A memory map on each bot's Memory tab.
+- Drag to reorder group answers.
+
+### Changed
+- Profile and Sync share one photo band in Account.
+- Saved keys fold into one row.
+- The Activity card opens at once, shows each day on hover or tap, and counts Day Streak, Best Day and Total Replies from your first day.
+
+### Fixed
+- Phones no longer show Reconnecting on a normal resume.
+- Phone Settings pages stay painted while closing.
+- Each worker gets its own temp folder, and its leftovers stop when the pane closes.
+- The cleanup sweep no longer freezes the app.
+
+## [1.0.243] - 2026-11-08
+
+### Added
+- Live Verify checks sites built by bots and shows results with Rerun and Watch.
+- Inkwell, Graphite and Moss dark themes, with all existing themes kept.
+- Agentic Mode appears first in Bot Details.
+
+### Changed
+- Bots check past builds and decisions before planning.
+- The bot guide matches the app.
+
+### Fixed
+- Type immediately after picking a model.
+- Swipe right to close Bot Details on phones.
+- Copy and save images from another PC's chat.
+- Reaction chips stay clear of reply text.
+- Servo bot bubbles no longer show a side line.
+- Finished workers no longer show a false stalled notice.
+- Gemini and Grok usage records include cached input.
+- Muse refresh gets a fresh reading and says when to sign in again.
+- Sync picks up files it previously skipped.
+
+## [1.0.242] - 2026-11-08
+
+### Added
+- An activity grid per account in Usage.
+- Drag accounts to reorder them in Connections. Usage follows the same order.
+- Tap the usage bar to open the small limits card.
+- Ctrl+number switches bots, Alt+number opens that worker's terminal, and Ctrl+` opens Main.
+
+### Changed
+- Ctrl+plus/minus zooms in smaller steps.
+- The quick usage card follows your Usage order.
+
+### Fixed
+- Wink no longer lags at startup on PCs with many old worker folders.
+- A message you send while a bot is answering another bot gets its own reply.
+- Single-account Connections rows show the signed-in email.
+
+## [1.0.241] - 2026-11-07
+
+### Fixed
+- Startup lag on PCs with many old worker folders, first pass.
+
 ## [1.0.240] - 2026-11-07
 
 ### Added
@@ -696,6 +897,17 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.251]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.251
+[1.0.250]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.250
+[1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
+[1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
+[1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
+[1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
+[1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
+[1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
+[1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
+[1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
+[1.0.241]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.241
 [1.0.240]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.240
 [1.0.239]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.239
 [1.0.238]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.238

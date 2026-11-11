@@ -91,6 +91,7 @@ describe("foldContinuationStart", () => {
     const messages: Message[] = [];
     const store: SteerStore = {
       bot: (id) => (id === bot.id ? bot : null),
+      messagesFor: () => messages,
       appendMessage: (threadId, message) => {
         const full: Message = { id: `m${messages.length + 1}-${threadId}`, at: 0, ...message };
         messages.push(full);

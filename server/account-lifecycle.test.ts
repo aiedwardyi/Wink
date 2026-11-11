@@ -88,6 +88,98 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
 }
 
 describe("account lifecycle", () => {
+  it.each(["identity", "email", "stored identity"])("rejects a new account with an existing %s", async (match) => {
+    const f = await fixture();
+    const existing = await f.add();
+    f.statuses.set(existing.id, { state: "available", authenticated: true, accountIdentity: existing.identity, account: "same@example.test" });
+    if (match === "stored identity") vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockRejectedValue(new Error("probe unavailable"));
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true,
+      accountIdentity: match === "email" ? "another-identity" : existing.identity, account: " SAME@EXAMPLE.TEST " });
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.accounts.get(existing.id)).toEqual(existing);
+    expect(f.start.mock.calls.some(([, , args]) => args.includes("logout"))).toBe(false);
+  });
+
+  it("rejects a new account matching the base login", async () => {
+    const f = await fixture();
+    f.statuses.set("claude", { state: "available", authenticated: true, account: "base@example.test" });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "base-identity", account: "base@example.test" });
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot).toHaveLength(0);
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: "claude" });
+  });
+
+  it("rechecks account changes without blocking them on duplicate probes", async () => {
+    const f = await fixture();
+    const existing = await f.add();
+    const stale: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: existing.identity, account: "old@example.test" };
+    let entered!: () => void;
+    const started = new Promise<void>((done) => { entered = done; });
+    let releaseProbe!: () => void;
+    const probe = new Promise<ProviderSnapshot>((done) => { releaseProbe = () => done(stale); });
+    vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockImplementationOnce(() => { entered(); return probe; });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "incoming", account: "same@example.test" });
+    release();
+    await started;
+    const changed: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: "changed", account: "same@example.test" };
+    f.statuses.set(existing.id, changed);
+    let observed = false;
+    const observation = f.controller.observe(existing.id, changed).then(() => { observed = true; });
+    try { await vi.waitFor(() => expect(observed).toBe(true), { timeout: 1000 }); }
+    finally {
+      releaseProbe();
+      await observation;
+      await f.controller.settled(added.id);
+    }
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
+  });
+
+  it("preserves existing duplicates through sign-in recovery", async () => {
+    const f = await fixture();
+    const first = await f.add();
+    const second = await f.add();
+    const snapshot: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: first.identity, account: "same@example.test" };
+    f.statuses.set(first.id, snapshot);
+    f.statuses.set(second.id, snapshot);
+    await f.controller.signIn(second.id);
+    await f.controller.settled(second.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([first.id, second.id]);
+    expect(f.accounts.get(second.id)?.identity).toBe(first.identity);
+    expect(f.registry.accountBlocked(second.id)).toBe(false);
+  });
+
+  it("allows the same email on different engines and waits for the add decision", async () => {
+    const f = await fixture();
+    const existing = await f.add();
+    const snapshot: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: existing.identity, account: "same@example.test" };
+    f.statuses.set(existing.id, snapshot);
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("codex");
+    f.statuses.set(added.id, snapshot);
+    expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body.state).toBe("pending");
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id, added.id]);
+    expect(f.accounts.get(added.id)?.state).toBe("ready");
+    f.state(undefined);
+    expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body.state).toBe("complete");
+  });
+
   it("handles failed base sign-in snapshots", async () => {
     const f = await fixture();
     f.registry.blockAccount("claude", true);
@@ -137,6 +229,136 @@ describe("account lifecycle", () => {
     vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new Error("Another sign-in is running"));
     await expect(f.controller.signIn("claude")).rejects.toThrow("Another sign-in");
     expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
+  it("starts sign-in on a signed-out account while its stopped worker panes are still open", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    const panesBusy = vi.fn(async () => false);
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = panesBusy;
+    await f.controller.signedOut?.(account.id);
+    await f.controller.signedOut?.("claude");
+    f.start.mockClear();
+    await expect(f.controller.signIn(account.id)).resolves.toBeDefined();
+    await f.controller.settled(account.id);
+    await expect(f.controller.signIn("claude")).resolves.toBeDefined();
+    expect(f.start.mock.calls.map(([id]) => id)).toEqual([account.id, "claude"]);
+    expect(panesBusy).toHaveBeenCalledWith(account.id, true);
+    expect(panesBusy).toHaveBeenCalledWith("claude", true);
+    f.references.add(account.id);
+    await f.controller.signedOut?.(account.id);
+    await expect(f.controller.signIn(account.id)).rejects.toThrow(/active work/);
+  });
+
+  it("still refuses sign-in on a ready account with live panes and gives the account-busy code", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => true;
+    f.start.mockClear();
+    for (const id of [account.id, "claude"]) {
+      await expect(f.controller.signIn(id)).rejects.toMatchObject({ message: "Finish this account's active work before signing in", code: "account-busy" });
+      expect(await request(f, "POST", `/api/accounts/${id}/sign-in`)).toMatchObject({ status: 409, body: { error: "Finish this account's active work before signing in", code: "account-busy" } });
+    }
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    await expect(runtime!.accountPanesBusy(null, account.id)).rejects.toMatchObject({ code: "host-unknown" });
+    const { LoginBusyError } = await import("./engine-login.ts");
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => false;
+    vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
+    expect(await request(f, "POST", `/api/accounts/${account.id}/sign-in`)).toMatchObject({ status: 409, body: { code: "login-busy" } });
+    const refused = await request(f, "POST", "/api/accounts", { of: "nope" });
+    expect(refused).toMatchObject({ status: 400, body: { error: expect.any(String) } });
+    expect(refused.body.code).toBeUndefined();
+  });
+
+  it("leaves the sign-out mark alone during a sign-in or for a stopped account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    f.state("pending");
+    await f.controller.signedOut?.(account.id);
+    await f.controller.signedOut?.("claude");
+    expect(f.registry.accountBlocked(account.id)).toBe(false);
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+    f.state("complete");
+    await f.accounts.stop(account.id);
+    f.changed.mockClear();
+    await f.controller.signedOut?.(account.id);
+    expect(f.registry.accountBlocked(account.id)).toBe(false);
+    expect(f.changed).not.toHaveBeenCalled();
+    await f.controller.signedOut?.("claude");
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+    expect(f.changed).toHaveBeenCalledExactlyOnceWith();
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("marks a base account only once until sign-in clears it", async () => {
+    const f = await fixture();
+    await f.controller.signedOut("claude");
+    await f.controller.signedOut("claude");
+    expect(f.changed).toHaveBeenCalledTimes(1);
+    expect(f.registry.accountAvailable("claude")).toBe(false);
+    await f.controller.signIn("claude");
+    await f.controller.settled("claude");
+    expect(f.registry.accountAvailable("claude")).toBe(true);
+  });
+
+  it("persists the sign-in recovery row before marking and catches a rejected mark", async () => {
+    const ts = await import("typescript");
+    const { runtimeErrorTool } = await import("./chat-error.ts");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const branch = source.split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0];
+    const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error": ${branch} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const order: string[] = [];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const signedOut = vi.fn(async () => { order.push("mark"); throw new Error("fixture"); });
+    const event = { type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true, providerInstanceId: "account" };
+    const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "runtimeErrorTool", "accounts", "accountRuntime", "INCOMPLETE_LOG_MESSAGE", javascript);
+    let row: { tool: ReturnType<typeof runtimeErrorTool> } | undefined;
+    run(event, { start() {} }, { messagesFor: () => [] }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture");
+    await Promise.resolve();
+    expect(order).toEqual(["row", "mark"]);
+    expect(row?.tool).toMatchObject({ signIn: true, accountId: "account" });
+    expect(error).toHaveBeenCalledExactlyOnceWith("Signed-out account could not be saved");
+  });
+
+  it("does not stop an account when sign-in starts ahead of the queued mark", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const signingIn = f.controller.signIn(account.id);
+    const marked = f.controller.signedOut(account.id);
+    await signingIn;
+    await marked;
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    release();
+    await f.controller.settled(account.id);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+  });
+
+  it.each(["base", "added"])("guards a signed-out %s account against active and unknown worker runs", async (kind) => {
+    const f = await fixture(vi.fn());
+    const account = await f.add();
+    const id = kind === "base" ? "claude" : account.id;
+    const fetch = vi.mocked(globalThis.fetch);
+    await f.controller.signedOut(id);
+    const start = vi.spyOn(f.registry, "startSignIn");
+    for (const state of ["busy", "starting", "unknown"] as const) {
+      fetch.mockImplementation(async (url) => String(url).includes("account-runs")
+        ? state === "unknown" ? Response.json({}, { status: 404 }) : Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state }] })
+        : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
+      await expect(f.controller.signIn(id)).rejects.toMatchObject({ code: state === "unknown" ? "host-unknown" : "account-busy" });
+      expect(start).not.toHaveBeenCalled();
+      expect(f.registry.accountBlocked(id)).toBe(true);
+    }
+    fetch.mockImplementation(async (url) => String(url).includes("account-runs")
+      ? Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state: "idle" }] })
+      : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
+    await expect(f.controller.signIn(id)).resolves.toBeDefined();
+    await f.controller.settled(id);
+    expect(f.registry.accountAvailable(id)).toBe(true);
   });
 
   it("omits stale live account rows during reload without spinning", async () => {

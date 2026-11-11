@@ -2,10 +2,11 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
-import { ErrorRow } from "./ChatView";
+import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
   useStore,
@@ -56,6 +57,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
+import { GroupMemberRoster } from "./GroupMemberRoster";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -180,7 +182,7 @@ export function RoomToolChip({
   }
   const comm = message.comm;
   if (comm) {
-    const peer = state.bots.find((bot) => bot.id === comm.withBotId);
+    const peer = commPeer(state.bots, comm);
     const chip = (
       <div className="flex justify-start">
         <button
@@ -348,7 +350,7 @@ export const Transcript = memo(function Transcript({
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const findCurrent = useFindCurrentId();
-  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && isShownMessage(entry))?.id;
+  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
     target && messageId === target.messageId
@@ -369,7 +371,7 @@ export const Transcript = memo(function Transcript({
   const dockTargetId = dock
     ? items.reduce<string | null>(
         (target, item, i) =>
-          rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" ? item.message.id : target,
+          rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" && !isVoiceLine(item.message) ? item.message.id : target,
         null,
       )
     : null;
@@ -469,7 +471,7 @@ export const Transcript = memo(function Transcript({
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
           m.kind === "note" && m.verify ? (
-            <VerifyCard card={m.verify} threadId={group.threadId} />
+            <VerifyCard card={m.verify} threadId={group.threadId} messageId={m.id} />
           ) : m.kind === "secret" && m.secret && m.from?.botId ? (
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (
@@ -479,7 +481,7 @@ export const Transcript = memo(function Transcript({
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
             </div>
           ) : isAskUserCard(m) ? (
-            <div className="flex justify-start">
+            <div className="flex justify-start empty:hidden">
               <AskUserRecord
                 message={m}
                 transcript={transcript}
@@ -1297,7 +1299,7 @@ export function GroupView({ group }: { group: Group }) {
   for (let i = windowedMessages.length - 1; liveTail && !tail && i >= 0; i--) {
     if (messageVisible(windowedMessages[i], showToolCalls, showActivities)) tail = windowedMessages[i];
   }
-  const tailSlot = tail?.role === "bot" && tail.kind === "text" ? replySlot(group.threadId, tail, shown) : null;
+  const tailSlot = tail?.role === "bot" && tail.kind === "text" && !isVoiceLine(tail) ? replySlot(group.threadId, tail, shown) : null;
   const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
@@ -1556,19 +1558,27 @@ export function GroupView({ group }: { group: Group }) {
           ) : (
             // The roster lives where you already look to see who is in the
             // room; a dashed + says the row is editable without shouting.
-            <button
-              ref={membersTriggerRef}
-              type="button"
-              onClick={() => setMembersOpen(true)}
-              title={t("room.manageMembers")}
-              aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60 max-md:gap-0 max-md:-space-x-1.5"
+            <GroupMemberRoster
+              group={group}
+              members={members}
+              mauses={memberMauses}
+              onOpen={(pressed) => {
+                if (pressed) membersTriggerRef.current = pressed;
+                setMembersOpen(true);
+              }}
             >
-              {memberMauses}
-              <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
-                <Plus size={11} />
-              </span>
-            </button>
+              <button
+                ref={membersTriggerRef}
+                type="button"
+                title={t("room.manageMembers")}
+                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
+                className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
+              >
+                <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
+                  <Plus size={11} />
+                </span>
+              </button>
+            </GroupMemberRoster>
           )}
         </div>
       </div>

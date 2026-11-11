@@ -52,8 +52,8 @@ function turnScope(accountNotices: ReturnType<typeof createAccountNotices>, disp
   return {
     accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, threadId: "t1", threadSyncV2: null,
     paneNotes: ["Pane note: ATLAS-1 finished."], paneNoteIds: [], paneTokens: 0, modelContextWindow: 200_000, newestPaneNoteId: "n1",
-    mailForTurn: () => [], routineCards: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
-    routineCardsSinceLastUserTurn: () => [], recycleDeferred: false, seed: {}, systemSeed: null,
+    mailForTurn: () => [], routineCards: [], recallNotes: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
+    routineCardsSinceLastUserTurn: () => [], quickAnswers: [], callLines: [], closedAsk: [], quickAnswersSinceLastUserTurn: () => [], replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,
     markMailRead: vi.fn(), markPaneMailRead: vi.fn(),
   };
 }
@@ -81,8 +81,8 @@ it("delivers a pending note on a room-member turn", async () => {
   const scope = {
     accountNotices: notices, bot: { id: "atlas", autoApprove: false, leanStartup: false }, threadId: "room-1", hop: 0, text: "Room message", roomSystem: "", cwd: undefined, integrations: {},
     roomMail: [], selection: { instanceId: "claude" }, isCancelled: () => false, epoch: 1, currentTurnEpoch: () => epoch,
-    turnRegistry: { prepare: vi.fn() }, workerTurns: { capture: vi.fn() }, pendingInterruptThreads: { started: vi.fn() },
-    rootForStart, rootId: null,
+    turnRegistry: { prepare: vi.fn() }, verifyDoc: { fixTurn: () => undefined }, workerTurns: { capture: vi.fn() }, pendingInterruptThreads: { started: vi.fn() },
+    rootForStart, rootId: null, authority: undefined,
     providerReload: { started: () => ({ adapter: { sendTurn: async (input: { text: string }) => { sent.push(input.text); return { turnId: "room-turn" }; } } }) },
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),

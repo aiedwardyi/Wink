@@ -7,7 +7,7 @@ import type { Store } from "./store.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import type { createUsageRefresh } from "./usage-refresh.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
-import { livePanesForAccount } from "./worker-panes.ts";
+import { livePanesForAccount, liveWorkerRuns } from "./worker-panes.ts";
 
 export function createAccountRuntime(deps: {
   accounts: AccountService; registry: ProviderRegistry; providers: ProviderReload; store: Store;
@@ -28,7 +28,7 @@ export function createAccountRuntime(deps: {
     changed: deps.changed,
     onMainChanged: deps.onMainChanged,
     configBusy: deps.configBusy,
-    panesBusy: (id) => accountPanesBusy(deps.terminal(), id),
+    panesBusy: (id, activeOnly) => accountPanesBusy(deps.terminal(), id, activeOnly),
     referenced: async (id, activeOnly) => {
       if (!activeOnly && deps.accounts.defaultFor(deps.accounts.get(id)?.of ?? id) === id) return true;
       if ([...starting].some((hold) => hold.id === id && hold.generation === (deps.accounts.get(id)?.generation ?? 0))) return true;
@@ -64,8 +64,13 @@ export function createAccountRuntime(deps: {
   });
 }
 
-export async function accountPanesBusy(terminal: TerminalBridgeAccess | null, id: string): Promise<boolean> {
+export async function accountPanesBusy(terminal: TerminalBridgeAccess | null, id: string, activeOnly = false): Promise<boolean> {
   const panes = await livePanesForAccount(terminal, id);
   if (panes.unknown) throw new AccountError("Terminal host is unreachable or account pane state is unknown; try signing out again when the host is available", 409, "host-unknown");
+  if (activeOnly && panes.count > 0) {
+    const workers = await liveWorkerRuns(terminal);
+    if (!workers.known) throw new AccountError("Terminal host is unreachable or account pane state is unknown; try signing out again when the host is available", 409, "host-unknown");
+    return workers.runs.some((run) => run.accountId === id && (run.state === "busy" || run.state === "starting"));
+  }
   return panes.count > 0;
 }

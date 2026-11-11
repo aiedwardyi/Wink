@@ -1,0 +1,27 @@
+.whats-new-dock { display: flex; justify-content: flex-start; }
+.whats-new { --whats-new-line: color-mix(in oklab, var(--color-hairline) 55%, transparent); width: 100%; max-width: 560px; border: 1px solid var(--whats-new-line); border-radius: 8px; padding: 14px 16px 12px; background: var(--color-panel); color: var(--color-ink); font-size: 13px; line-height: 1.45; word-break: keep-all; overflow-wrap: anywhere; animation: var(--animate-pop-in); }
+.whats-new[data-closing] { animation: whats-new-out var(--motion-fast) var(--ease-exit) forwards; }
+@keyframes whats-new-out {
+  to { transform: scale(0.96) translateY(6px); opacity: 0; }
+}
+.whats-new-head { display: flex; align-items: center; gap: 8px; }
+.whats-new-head h2 { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; }
+.whats-new-x { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 26px; height: 26px; margin: -4px -6px -4px 0; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; }
+.whats-new-x:hover { background: var(--color-control); color: var(--color-ink); }
+/* subgrid: a title that wraps in one tile keeps both tiles' rows level */
+.whats-new-tiles { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; margin-top: 12px; }
+.whats-new-tile { display: grid; grid-row: span 4; grid-template-rows: subgrid; min-width: 0; }
+.whats-new-frame { aspect-ratio: 16 / 10; overflow: hidden; border: 1px solid var(--whats-new-line); border-radius: 6px; background: var(--color-inset); }
+.whats-new-frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.whats-new-tile-title { margin-top: 8px; font-weight: 500; }
+.whats-new-line { margin-top: 2px; color: var(--color-ink-secondary); font-size: 12.5px; animation: var(--animate-fade-in); }
+.whats-new-show { justify-self: start; align-self: start; margin: 6px 0 0 -6px; padding: 2px 6px; border-radius: 5px; color: var(--color-accent); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.whats-new-show:hover { background: color-mix(in oklab, var(--color-accent) 10%, transparent); }
+.whats-new-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--whats-new-line); }
+.whats-new-foot a { min-width: 0; color: var(--color-ink-secondary); font-size: 12.5px; cursor: pointer; }
+.whats-new-foot a:hover { color: var(--color-ink); text-decoration: underline; }
+.whats-new-done { flex-shrink: 0; padding: 5px 14px; border-radius: 6px; background: var(--color-accent); color: var(--color-accent-ink); font-size: 13px; font-weight: 500; cursor: pointer; }
+@media (max-width: 767px) {
+  .whats-new { padding: 12px 12px 10px; }
+  .whats-new-tiles { column-gap: 10px; }
+}

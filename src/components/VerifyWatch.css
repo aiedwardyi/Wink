@@ -1,11 +1,21 @@
 .verify-watch-dock { container: verify-watch / inline-size; }
-.verify-watch { flex-shrink: 0; width: clamp(380px, 44cqi, 560px); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); }
+.verify-watch { --dock: clamp(380px, min(44cqi, 100cqi - 960px), 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
 @container verify-watch (max-width: 659px) {
-  .verify-watch { position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; width: min(380px, calc(100cqi - 56px)); box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
+  .verify-watch { --dock: min(380px, calc(100cqi - 56px)); position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
+}
+/* A closing docked panel gives its column back on the first frame, like the other side panels, and slides out over the chat. */
+@container verify-watch (min-width: 660px) {
+  .verify-watch[data-closing] { margin-left: calc(-1 * var(--dock)); transition: none; }
+}
+/* Maximized, the panel grows leftward over the chat without taking its column, so the chat never reflows. */
+.verify-watch:has(> .verify-watch-frame[data-maximized]) { z-index: 15; width: 100cqi; margin-left: calc(var(--dock) - 100cqi); border-left-width: 0; transition-property: width, margin-left, border-left-width; }
+@container verify-watch (max-width: 659px) {
+  .verify-watch:has(> .verify-watch-frame[data-maximized]) { width: 100%; margin-left: 0; }
 }
 
-.verify-watch-frame { flex: 1; min-width: 0; min-height: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--color-hairline); border-radius: 10px; overflow: hidden; background: var(--color-panel); color: var(--color-ink); font-size: 12px; }
-.verify-watch-frame[data-inline] { margin: 8px 0 0; }
+.verify-watch-frame { flex: 1; min-width: 0; min-height: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--color-hairline); border-radius: 10px; overflow: hidden; background: var(--color-panel); color: var(--color-ink); font-size: 12px; transition: min-height var(--motion-large) var(--ease-standard); }
+.verify-watch-frame[data-maximized] { min-height: calc(100% - 24px); }
+.verify-watch-frame[data-inline] { margin: 8px 0 0; max-height: none; }
 .verify-watch-bar { display: flex; flex-shrink: 0; align-items: center; gap: 10px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-raised); }
 .verify-watch-dots { display: flex; gap: 6px; }
 .verify-watch-dots i { width: 10px; height: 10px; border-radius: 50%; background: #f05d5d; }
@@ -18,12 +28,19 @@
 .verify-watch-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; flex-shrink: 0; }
 .verify-watch-icon:hover { background: var(--color-inset); color: var(--color-ink); }
 .verify-watch-icon:disabled { opacity: .45; cursor: default; }
+.verify-watch-again { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; align-self: center; gap: 6px; min-height: 32px; margin: 0 12px 12px; padding: 6px 12px; border: 1px solid var(--color-hairline); border-radius: 6px; background: var(--color-raised); cursor: pointer; }
+.verify-watch-again:hover { background: var(--color-inset); }
 .verify-watch-address { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--color-hairline); }
 .verify-watch-url { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 999px; background: var(--color-inset); color: var(--color-ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .verify-watch-error { padding: 6px 12px; color: var(--color-ink-secondary); }
 .verify-watch-stage { position: relative; flex: 0 1 auto; min-height: 160px; display: flex; align-items: center; justify-content: center; background: #0a0d14; overflow: hidden; transition: none; }
+.verify-watch-stage[data-pending] { visibility: hidden; }
 .verify-watch-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .verify-watch-frame[data-inline] .verify-watch-stage { flex: none; max-height: min(56vh, 460px); }
+/* The stage canvas's cursor as an element, for a watch whose stage is text. */
+.verify-watch-cursor { position: absolute; top: 0; left: 0; will-change: transform; }
+.verify-watch-cursor svg { display: block; overflow: visible; fill: var(--role); stroke: #f8fafc; stroke-width: 1.2; }
+.verify-watch-cursor span { position: absolute; top: 0; left: 0; height: 14px; padding: 0 4px; background: var(--role); color: #0a0d14; font: 10px/14px "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; }
 .verify-watch-pill, .verify-watch-banner, .verify-watch-caption { position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 6px 14px; border: 1px solid rgb(255 255 255 / .1); border-radius: 999px; background: rgb(10 13 20 / .94); color: #e2e8f0; font: 12px/1.4 "Cascadia Mono", ui-monospace, monospace; white-space: nowrap; box-shadow: 0 8px 28px rgb(0 0 0 / .45); }
 .verify-watch-pill { bottom: 12px; translate: 0 0; transition: bottom var(--motion-large) var(--ease-standard), translate var(--motion-large) var(--ease-standard); }
 .verify-watch-pill[data-top] { bottom: calc(100% - 12px); translate: 0 100%; }
@@ -56,4 +73,5 @@
   .verify-watch-tabs button { height: 44px; }
   .verify-watch-address { padding: 0 8px 0 0; }
   .verify-watch-icon { width: 44px; height: 44px; }
+  .verify-watch-again { min-height: 44px; }
 }
