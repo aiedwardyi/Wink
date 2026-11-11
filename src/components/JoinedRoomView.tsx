@@ -1,0 +1,80 @@
+// A room joined on someone else's Wink. Only its lines and files reach this screen.
+import { useMemo, useState } from "react";
+import { LogOut } from "lucide-react";
+
+import { request } from "@/lib/api-request";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { cn } from "@/lib/cn";
+import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
+import { useI18n } from "@/lib/i18n";
+import { useJoinedRoom } from "@/lib/joined-rooms";
+import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { joinedLines, joinedPhase, joinedRoomBase } from "@/lib/team-rooms";
+import { Presence } from "@/lib/use-presence";
+
+import { ConfirmDialog } from "./ConfirmDialog";
+import { TeamRoomComposer, TeamRoomStatus } from "./TeamRoomComposer";
+import { TeamRoomTranscript } from "./TeamRoomRow";
+
+export function JoinedRoomView({ roomId }: { roomId: string }) {
+  const { t } = useI18n();
+  const sidebarOnRight = useSidebarSide() === "right";
+  const room = useJoinedRoom(roomId);
+  const [leaving, setLeaving] = useState(false);
+  const entries = room?.entries;
+  const lines = useMemo(() => joinedLines(entries ?? []), [entries]);
+  const base = joinedRoomBase(roomId);
+  const name = room?.state?.roomName ?? "";
+  const phase = room ? joinedPhase(room) : room === null ? null : "connecting";
+  const status =
+    phase === null ? t("teamRoom.gone")
+    : phase === "connecting" ? t("teamRoom.connecting")
+    : phase === "offline" ? t("teamRoom.offline", { host: room?.state?.host ?? "" })
+    : phase === "removed" ? t("teamRoom.removed")
+    : phase === "left" ? t("teamRoom.left")
+    : null;
+  const me = room?.me.id;
+  const joined = phase === "connecting" || phase === "live" || phase === "offline";
+  return (
+    <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
+        <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{name}</span>
+        {room && joined && (
+          <button
+            type="button"
+            onClick={() => setLeaving(true)}
+            aria-label={t("teamRoom.leave")}
+            title={t("teamRoom.leave")}
+            className="flex shrink-0 items-center rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <LogOut size={18} />
+          </button>
+        )}
+      </div>
+      <TeamRoomTranscript
+        lines={lines}
+        mine={(line) => line.author.kind === "person" && line.author.id === me}
+        base={base}
+        label={t("chat.roomAria", { name })}
+      />
+      <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
+        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} /> : <TeamRoomStatus text={status} />}
+      </div>
+      <Presence open={leaving}>
+        {(closing) => (
+          <ConfirmDialog
+            closing={closing}
+            title={t("teamRoom.leaveTitle", { name })}
+            body={t("teamRoom.leaveBody")}
+            confirmLabel={t("teamRoom.leave")}
+            onCancel={() => setLeaving(false)}
+            onConfirm={() => {
+              setLeaving(false);
+              void request(`${base}/leave`, { method: "POST" }).catch(() => {});
+            }}
+          />
+        )}
+      </Presence>
+    </main>
+  );
+}

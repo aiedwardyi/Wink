@@ -1,0 +1,464 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { useStore } from "@/state/store";
+import type { Group, Message } from "@/state/store-types";
+
+const store = vi.hoisted(() => ({ dispatch: null as ReturnType<typeof useStore>["dispatch"] | null, selectedId: "" }));
+vi.mock("@/state/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/state/store")>();
+  return { ...actual, useStore: () => {
+    const value = actual.useStore();
+    store.dispatch = value.dispatch;
+    store.selectedId = value.state.selectedId;
+    return value;
+  } };
+});
+
+import App from "./App";
+
+const CODE = `wkr1:edward-pc.tail1234.ts.net:inv_mina.wki_${"A".repeat(43)}`;
+
+class FakeEventSource {
+  static all: FakeEventSource[] = [];
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
+  close = vi.fn();
+  constructor(readonly url: string) {
+    FakeEventSource.all.push(this);
+  }
+}
+
+type Call = { path: string; method: string; body: unknown };
+type Answer = Response | Promise<Response> | undefined;
+
+const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const nova = { id: "nova", threadId: "nova-thread", name: "Nova", modelSelection: { instanceId: "claude", model: "default" }, messages: [] };
+
+const line = (id: string, author: { kind: "host" | "person"; id: string; name: string }, text: string, roomFiles: Message["roomFiles"] = []): Message =>
+  ({ id, role: "user", kind: "text", text, at: Date.UTC(2026, 10, 11, 9, 0), author, roomEntryId: `e-${id}`, roomFiles });
+
+const teamRoom = (people: Array<{ id: string; name: string }> = [], messages: Message[] = []) =>
+  ({ id: "g1", threadId: "g1-thread", name: "Design team", memberIds: [], bulletin: "", messages, hosted: { roomId: "r1" }, room: { name: "Design team", people } }) as unknown as Group;
+
+const joinedView = (status: "joined" | "removed" | "left", link: "connecting" | "live" | "offline" | null) => ({
+  roomId: "r9",
+  status,
+  link,
+  me: { id: "p-mina", name: "Mina" },
+  state: { roomName: "Design team", host: "Edward", people: [{ id: "p-mina", name: "Mina" }] },
+});
+
+const joinedEntries = [
+  { seq: 1, id: "j1", at: Date.UTC(2026, 10, 11, 9, 0), author: { kind: "host", id: "host", name: "Edward" }, text: "Welcome", files: [{ id: "F".repeat(24), name: "map.png", type: "image/png", bytes: 2048, sha256: "a" }] },
+  { seq: 2, id: "j2", at: Date.UTC(2026, 10, 11, 9, 1), author: { kind: "person", id: "p-mina", name: "Mina" }, text: "Thanks", files: [{ id: "G".repeat(24), name: "notes.pdf", type: "application/pdf", bytes: 4096, sha256: "b" }] },
+];
+
+let root: Root | null = null;
+let host: HTMLDivElement | null = null;
+let calls: Call[] = [];
+
+async function boot({ teamRooms, groups = [], route = () => undefined, locale = "en" }: {
+  teamRooms: boolean;
+  groups?: Group[];
+  route?: (call: Call, init?: RequestInit) => Answer;
+  locale?: "en" | "ko";
+}) {
+  localStorage.setItem("omb-onboarding-done", "true");
+  localStorage.setItem("omb-locale", locale);
+  calls = [];
+  FakeEventSource.all = [];
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("fetch", vi.fn((path: string, init?: RequestInit) => {
+    const call = { path, method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : init?.body };
+    calls.push(call);
+    return route(call, init) ?? new Promise<Response>(() => {});
+  }));
+  host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(createElement(App)));
+  await act(async () => {
+    store.dispatch!({ type: "instances", instances: [{
+      instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
+      snapshot: { state: "available" }, models: { default: "default", options: [] },
+    }] } as never);
+    store.dispatch!({ type: "connected", value: true });
+    store.dispatch!({ type: "configStatus", config: { features: { teamRooms } } as never });
+    store.dispatch!({ type: "hydrate", bots: [nova], groups, botsUnreadable: false, computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } } as never);
+  });
+}
+
+const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
+const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((each) => each.getAttribute("aria-label") === label || each.textContent?.trim() === label);
+async function click(target: Element | null | undefined) {
+  expect(target, "control on screen").toBeTruthy();
+  await act(async () => { (target as HTMLElement).click(); });
+}
+
+async function type(target: HTMLInputElement | HTMLTextAreaElement | null, value: string) {
+  expect(target, "field on screen").toBeTruthy();
+  await act(async () => {
+    if (!target) return;
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(target), "value")!.set!.call(target, value);
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function paste(target: HTMLInputElement | null, text: string) {
+  expect(target, "field on screen").toBeTruthy();
+  await act(async () => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { files: [], getData: () => text } });
+    target!.dispatchEvent(event);
+  });
+}
+
+async function enter(target: Element | null) {
+  expect(target, "field on screen").toBeTruthy();
+  await act(async () => {
+    target!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
+  });
+}
+
+async function openPlus() {
+  await click(button("New or share") ?? button("새로 만들기 또는 공유"));
+}
+
+const joinedSource = () => FakeEventSource.all.find((source) => source.url.includes("screens=off"));
+
+async function joinedFrame(roomId: string) {
+  await act(async () => joinedSource()!.onmessage?.({ data: JSON.stringify({ kind: "joined", hosted: true, roomId }), lastEventId: `${Date.now()}` }));
+}
+
+const asked = (method: string, path: string) => calls.filter((call) => call.method === method && call.path === path);
+
+afterEach(async () => {
+  vi.useRealTimers();
+  if (root) await act(async () => root!.unmount());
+  host?.remove();
+  root = null;
+  host = null;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+  store.dispatch = null;
+});
+
+describe("Team rooms with the flag off", () => {
+  it("adds nothing and keeps a hosted people-only room on the ordinary group screen", async () => {
+    await boot({ teamRooms: false, groups: [teamRoom([{ id: "p1", name: "Mina" }], [line("m1", { kind: "person", id: "p1", name: "Mina" }, "hi")])] });
+    await openPlus();
+    expect(button("New group")).toBeTruthy();
+    expect(button("New team room")).toBeUndefined();
+    expect(button("Join team room")).toBeUndefined();
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    expect($("[data-room-transcript]")).not.toBeNull();
+    expect($("[data-team-room]")).toBeNull();
+    expect($("[data-joined-room-row]")).toBeNull();
+    expect(calls.some((call) => call.path.startsWith("/api/joined/") || call.path.startsWith("/api/rooms/"))).toBe(false);
+  });
+});
+
+describe("Team rooms for the host", () => {
+  it("creates a zero-bot room from a name alone and opens it", async () => {
+    const created = teamRoom();
+    await boot({ teamRooms: true, route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
+    await openPlus();
+    await click(button("New team room"));
+    const name = $<HTMLInputElement>('input[aria-label="Room name"]')!;
+    expect(document.querySelectorAll('[role="dialog"] input')).toHaveLength(1);
+    await type(name, "Design team");
+    await click(button("Create"));
+    expect(asked("POST", "/api/groups").map((call) => call.body)).toEqual([{ name: "Design team", hosted: true, peopleOnly: true, memberIds: [] }]);
+    await vi.waitFor(() => expect($('[data-team-room="host"]')).not.toBeNull());
+    expect(store.selectedId).toBe("g1");
+    expect($("main")!.textContent).toContain("Design team");
+  });
+
+  it("shows no bot, level, work, approval or hold controls in the room", async () => {
+    await boot({ teamRooms: true, groups: [teamRoom()] });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    expect($('[data-team-room="host"]')).not.toBeNull();
+    const main = $('[data-team-room="host"]')!;
+    expect(main.querySelector("[data-orbit-composer]")).toBeNull();
+    expect(main.querySelector("[data-room-transcript]")).toBeNull();
+    const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
+    expect(labels).toEqual(["People", "Attach a file"]);
+    expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
+  });
+
+  it("invites a person with one code to copy, lists them once they join, and removes them", async () => {
+    let people: Array<{ id: string; name: string }> = [];
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await boot({
+      teamRooms: true,
+      groups: [teamRoom()],
+      route: (call) => {
+        if (call.path === "/api/rooms/r1/invites") return reply({ invite: { id: "inv_mina", name: "Mina" }, code: CODE });
+        if (call.path === "/api/bots?messages=0") return reply({ bots: [], groups: [{ ...teamRoom(people) }] });
+        if (call.method === "DELETE" && call.path === "/api/rooms/r1/people/p1") {
+          people = [];
+          return reply({ ok: true });
+        }
+        return undefined;
+      },
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("People"));
+    expect($('[role="dialog"]')!.textContent).toContain("No one yet.");
+    await type($<HTMLInputElement>('input[aria-label="Name"]')!, "Mina");
+    await click(button("Invite"));
+    expect(asked("POST", "/api/rooms/r1/invites").map((call) => call.body)).toEqual([{ name: "Mina" }]);
+    await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
+    expect(document.querySelectorAll("[data-team-room-code]")).toHaveLength(1);
+    await click(button("Copy the code for Mina"));
+    expect(writeText).toHaveBeenCalledWith(CODE);
+    expect($("[data-team-room-code]")!.textContent).toContain("Copied");
+
+    people = [{ id: "p1", name: "Mina" }];
+    await act(async () => vi.advanceTimersByTime(3_000));
+    await vi.waitFor(() => expect(button("Remove Mina")).toBeTruthy());
+    expect($("[data-team-room-code]")).toBeNull();
+    await click(button("Remove Mina"));
+    expect(asked("DELETE", "/api/rooms/r1/people/p1")).toHaveLength(1);
+    expect(button("Remove Mina")).toBeUndefined();
+  });
+
+  it("keeps a person listed when Remove fails", async () => {
+    await boot({
+      teamRooms: true,
+      groups: [teamRoom([{ id: "p1", name: "Mina" }])],
+      route: (call) => (call.method === "DELETE" ? reply({ error: "room store is busy" }, 500) : undefined),
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("People"));
+    await click(button("Remove Mina"));
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Wink couldn't finish that. Try again."));
+    expect(button("Remove Mina")).toBeTruthy();
+  });
+
+  it("says why an invite failed in one line", async () => {
+    await boot({
+      teamRooms: true,
+      groups: [teamRoom()],
+      route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ error: "phone access is off" }, 409) : undefined),
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("People"));
+    await type($<HTMLInputElement>('input[aria-label="Name"]')!, "Mina");
+    await click(button("Invite"));
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Turn on Phone Access in Settings first."));
+    expect($("[data-team-room-code]")).toBeNull();
+  });
+
+  it("renders text, pictures and files through the shared row and sends both kinds", async () => {
+    const files = [
+      { id: "P".repeat(24), name: "board.png", type: "image/png", bytes: 2048, sha256: "a" },
+      { id: "D".repeat(24), name: "plan.pdf", type: "application/pdf", bytes: 4096, sha256: "b" },
+    ];
+    await boot({
+      teamRooms: true,
+      groups: [teamRoom([{ id: "p1", name: "Mina" }], [
+        line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning"),
+        line("m2", { kind: "person", id: "p1", name: "Mina" }, "Here it is", files),
+      ])],
+      route: (call) => {
+        if (call.path.startsWith("/api/rooms/r1/files?")) return reply({ file: { id: "U".repeat(24) } });
+        if (call.path === "/api/rooms/r1/send") return reply({ ok: true });
+        return undefined;
+      },
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const rows = document.querySelectorAll("[data-team-room-line]");
+    expect([...rows].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["mine", "theirs"]);
+    expect($('[data-team-room="host"]')!.textContent).toContain("Mina");
+    expect($<HTMLImageElement>('[data-team-room-line="theirs"] img')!.getAttribute("src")).toBe(`/api/rooms/r1/files/${"P".repeat(24)}/preview`);
+    const download = $<HTMLAnchorElement>('[data-team-room-line="theirs"] a[download]')!;
+    expect(download.getAttribute("href")).toBe(`/api/rooms/r1/files/${"D".repeat(24)}`);
+    expect(download.getAttribute("download")).toBe("plan.pdf");
+    expect(download.textContent).toContain("plan.pdf");
+    expect(download.textContent).toContain("4.0 KB");
+
+    const box = $<HTMLTextAreaElement>('[data-team-room="host"] textarea')!;
+    await type(box, "hello");
+    await enter(box);
+    await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(1));
+    expect(asked("POST", "/api/rooms/r1/send")[0]!.body).toMatchObject({ text: "hello" });
+
+    const picker = $<HTMLInputElement>('[data-team-room="host"] input[type="file"]')!;
+    const picture = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+    await act(async () => {
+      Object.defineProperty(picker, "files", { value: [picture], configurable: true });
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click(button("Send"));
+    await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(2));
+    expect(calls.find((call) => call.path.startsWith("/api/rooms/r1/files?"))!.path).toContain("name=shot.png");
+    expect(asked("POST", "/api/rooms/r1/send")[1]!.body).toMatchObject({ text: "", fileIds: ["U".repeat(24)] });
+  });
+
+  it("keeps the newest line in view when a picture loads after it", async () => {
+    const observers: Array<{ callback: () => void; targets: Element[] }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(public callback: () => void) { observers.push(this); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    await boot({ teamRooms: true, groups: [teamRoom([], [line("m1", { kind: "host", id: "host", name: "Edward" }, "Morning")])] });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const scroller = $('[data-team-room-transcript]')!;
+    const pins = observers.filter((observer) => observer.targets.includes(scroller));
+    expect(pins).not.toHaveLength(0);
+    Object.defineProperty(scroller, "scrollHeight", { value: 900, configurable: true });
+    await act(async () => pins.forEach((observer) => observer.callback()));
+    expect(scroller.scrollTop).toBe(900);
+  });
+});
+
+describe("Team rooms for a teammate", () => {
+  it("joins the moment a valid code is pasted, with no Enter and no button", async () => {
+    let answer!: (response: Response) => void;
+    await boot({
+      teamRooms: true,
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
+        if (call.path === "/api/joined/join") return new Promise<Response>((resolve) => { answer = resolve; });
+        if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...joinedView("joined", "live"), entries: joinedEntries } });
+        return undefined;
+      },
+    });
+    await openPlus();
+    await click(button("Join team room"));
+    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    expect(document.querySelectorAll('[role="dialog"] button')).toHaveLength(0);
+    await paste(box, `  ${CODE}\n`);
+    expect(asked("POST", "/api/joined/join").map((call) => call.body)).toEqual([{ code: CODE }]);
+    expect($('[role="dialog"]')!.textContent).toContain("Joining...");
+    await act(async () => answer(reply({ room: joinedView("joined", "connecting") })));
+    await vi.waitFor(() => expect($('[data-team-room="joined"]')).not.toBeNull());
+    expect(store.selectedId).toBe("joined:r9");
+    expect($('[role="dialog"]')).toBeNull();
+    await vi.waitFor(() => expect($('[data-team-room="joined"]')!.getAttribute("data-team-room-phase")).toBe("live"));
+    expect($("[data-joined-room-row]")!.textContent).toContain("Design team");
+  });
+
+  it("shows one short line for a bad code and joins nothing", async () => {
+    await boot({
+      teamRooms: true,
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
+        if (call.path === "/api/joined/join") return reply({ error: "wrong-secret" }, 401);
+        return undefined;
+      },
+    });
+    await openPlus();
+    await click(button("Join team room"));
+    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    await paste(box, "hello there");
+    expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("That code doesn't work.");
+    expect(asked("POST", "/api/joined/join")).toHaveLength(0);
+    await paste(box, CODE);
+    await vi.waitFor(() => expect(asked("POST", "/api/joined/join")).toHaveLength(1));
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("That code doesn't work."));
+    expect(store.selectedId).not.toBe("joined:r9");
+  });
+
+  it("walks connecting, live, offline, removed and left, sending only while live", async () => {
+    let view = joinedView("joined", "connecting");
+    await boot({
+      teamRooms: true,
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [view] });
+        if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...view, entries: joinedEntries } });
+        if (call.path === "/api/joined/rooms/r9/send") return reply({ ok: true });
+        if (call.path === "/api/joined/rooms/r9/leave") {
+          view = joinedView("left", null);
+          return reply({ ok: true });
+        }
+        return undefined;
+      },
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
+    const main = () => $('[data-team-room="joined"]')!;
+    const phase = () => $('[data-team-room="joined"]')?.getAttribute("data-team-room-phase");
+    const status = () => main().querySelector('[role="status"]')?.textContent;
+    await vi.waitFor(() => expect(phase()).toBe("connecting"));
+    expect(status()).toBe("Connecting...");
+    expect(main().querySelector("textarea")).toBeNull();
+
+    view = joinedView("joined", "live");
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect(phase()).toBe("live"));
+    expect(status()).toBeUndefined();
+    const box = main().querySelector("textarea")!;
+    await type(box, "on my way");
+    await enter(box);
+    await vi.waitFor(() => expect(asked("POST", "/api/joined/rooms/r9/send")).toHaveLength(1));
+    expect([...main().querySelectorAll("[data-team-room-line]")].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["theirs", "mine"]);
+    expect(main().querySelector("img")!.getAttribute("src")).toBe(`/api/joined/rooms/r9/files/${"F".repeat(24)}/preview`);
+    expect(main().querySelector("a[download]")!.getAttribute("href")).toBe(`/api/joined/rooms/r9/files/${"G".repeat(24)}`);
+
+    view = joinedView("joined", "offline");
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect(phase()).toBe("offline"));
+    expect(status()).toBe("Unavailable. Edward is offline.");
+    expect(main().querySelector("textarea")).toBeNull();
+
+    view = joinedView("removed", null);
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect(phase()).toBe("removed"));
+    expect(status()).toBe("You were removed from this room.");
+    expect(button("Leave")).toBeUndefined();
+
+    view = joinedView("joined", "live");
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect(phase()).toBe("live"));
+    await click(button("Leave"));
+    expect($('[role="dialog"]')!.textContent).toContain("Leave Design team?");
+    await click([...document.querySelectorAll('[role="dialog"] button')].find((each) => each.textContent === "Leave"));
+    expect(asked("POST", "/api/joined/rooms/r9/leave")).toHaveLength(1);
+    await joinedFrame("r9");
+    await vi.waitFor(() => expect(phase()).toBe("left"));
+    expect(status()).toBe("You left this room.");
+    expect(asked("POST", "/api/joined/rooms/r9/send")).toHaveLength(1);
+  });
+
+  it("never offers bot features or owner screens in a joined room", async () => {
+    await boot({
+      teamRooms: true,
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [joinedView("joined", "live")] });
+        if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...joinedView("joined", "live"), entries: joinedEntries } });
+        return undefined;
+      },
+    });
+    await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
+    await vi.waitFor(() => expect($('[data-team-room="joined"]')?.getAttribute("data-team-room-phase")).toBe("live"));
+    const main = $('[data-team-room="joined"]')!;
+    expect(main.querySelector("[data-orbit-composer]")).toBeNull();
+    const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
+    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["Leave", "Attach a file"]);
+    expect(main.textContent).not.toMatch(/Nova|People|Settings|Manage members|Find in conversation|approve|model/i);
+    expect(calls.some((call) => call.path.startsWith("/api/rooms/"))).toBe(false);
+    await act(async () => store.dispatch!({ type: "hydrate", bots: [nova], groups: [], botsUnreadable: false, computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } } as never));
+    expect(store.selectedId).toBe("joined:r9");
+  });
+
+  it("speaks Korean", async () => {
+    await boot({ teamRooms: true, locale: "ko", route: (call) => (call.path === "/api/joined/rooms" ? reply({ rooms: [] }) : undefined) });
+    await openPlus();
+    expect(button("새 팀 채팅방")).toBeTruthy();
+    await click(button("팀 채팅방 참여"));
+    const box = $<HTMLInputElement>('input[aria-label="코드를 붙여 넣으세요"]')!;
+    await paste(box, "아무거나");
+    expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("사용할 수 없는 코드예요.");
+  });
+});

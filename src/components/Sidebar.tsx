@@ -55,6 +55,8 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
+import { JoinedRoomList } from "./JoinedRoomList";
+import { TeamRoomDialogs, TeamRoomMenuItems } from "./TeamRoomMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   displaySidebarWidth,
@@ -1643,6 +1645,7 @@ export function Sidebar({
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
                   </button>
+                  <TeamRoomMenuItems onPick={() => setPlusOpen(false)} />
                   {showNewMenuExport() && <button
                     onClick={() => {
                       setPlusOpen(false);
@@ -1787,6 +1790,7 @@ export function Sidebar({
               </div>
             );
           })}
+          <JoinedRoomList density={density} />
           <SearchResults query={query} onLanded={() => setQuery("")} />
           <span className="sr-only" aria-live="polite">{reorderAnnouncement}</span>
         </div>
@@ -1894,6 +1898,7 @@ export function Sidebar({
       {wizardPresence.value && (
         <GroupWizard closing={wizardPresence.closing} onClose={() => setWizard(false)} />
       )}
+      <TeamRoomDialogs />
       <Presence open={archivedBotsOpen}>
         {(closing) => (
           <ArchivedBotsPanel

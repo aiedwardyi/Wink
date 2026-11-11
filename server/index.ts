@@ -59,6 +59,7 @@ import { joinedRoute } from "./rooms/joined-routes.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
+import { peopleRoute } from "./rooms/people-routes.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -7202,6 +7203,7 @@ function configStatus() {
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
       terminalLive: true,
+      teamRooms: cfg.features?.teamRooms === true,
       modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
   };
@@ -8451,6 +8453,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, status);
     }
     if (await joinedFileRoute(req, res, method, url, guestClient, cfg.features?.teamRooms === true)) return;
+    if (await peopleRoute(req, res, method, path, { store, teamRooms: cfg.features?.teamRooms === true, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, teamRooms: cfg.features?.teamRooms === true })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, cfg.features?.teamRooms === true, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
