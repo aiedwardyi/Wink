@@ -44,6 +44,8 @@ const CLAUDE_BOT = [
 
 // anti-slop/no-shape-in-symbol-names flags the JSX attribute name, so spread it.
 const CRISP = { "shapeRendering": "crispEdges" } as const;
+// Fill via color, so a parent's `* { fill: currentColor }` lands on the same value; transparent wherever --claude-eye is unset.
+const EYE = { fill: "currentColor", color: "var(--claude-eye, transparent)" };
 
 /** viewBox giving each bot column the same whole number of device px, centered on whole device px. */
 export function claudeViewBox(size: number, ratio: number): [number, number, number, number] {
@@ -68,6 +70,8 @@ export function ClaudeMark({ size = 16, className }: IconProps) {
       {CLAUDE_BOT.map(([x, row, w]) => (
         <rect key={`${x},${row}`} x={x} y={row * 2} width={w} height={2} />
       ))}
+      <rect {...EYE} x={5} y={2} width={1} height={2} />
+      <rect {...EYE} x={13} y={2} width={1} height={2} />
     </svg>
   );
 }

@@ -71,6 +71,15 @@ describe("ClaudeMark", () => {
     ]);
   });
 
+  it("fills the eye gaps only where --claude-eye is set", () => {
+    const markup = renderToStaticMarkup(createElement(ClaudeMark, { size: 16 }));
+    const eyes = [...markup.matchAll(/<rect fill="currentColor" color="var\(--claude-eye, transparent\)" x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/g)];
+    expect(eyes.map((m) => m.slice(1).map(Number))).toEqual([
+      [5, 2, 1, 2],
+      [13, 2, 1, 2],
+    ]);
+  });
+
   const viewBox = (size: number) =>
     renderToStaticMarkup(createElement(ClaudeMark, { size })).match(/viewBox="(\S+) (\S+) (\S+) (\S+)"/)!.slice(1).map(Number);
 

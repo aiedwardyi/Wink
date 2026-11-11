@@ -18,7 +18,7 @@
 }
 .model-cross-backdrop:has(.model-dial) { background: #050608; backdrop-filter: none; }
 .model-dial :where(button) { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
-.model-dial button:focus-visible { outline: 2px solid #f3f4fa; outline-offset: 3px; }
+.model-dial button:focus-visible { outline: 2px solid var(--dial-focus, #f3f4fa); outline-offset: 3px; }
 
 .dial-stage {
   --t: 140ms;
@@ -58,6 +58,7 @@
     radial-gradient(1600px 1000px at 50% 40%, #07080b, #030405);
 }
 .dial-scene-lab {
+  display: var(--dial-lab, block);
   opacity: 0;
   transition: opacity var(--t) linear;
   background:
@@ -107,7 +108,7 @@
   place-items: center;
   transform: rotate(calc(var(--face, 0deg) - var(--lab) * var(--lab-step) * 1deg + var(--a))) translateX(174px) rotate(calc(var(--lab) * var(--lab-step) * 1deg - var(--a) - var(--face, 0deg)));
 }
-.dial-seg .dial-mark { grid-area: 1 / 1; width: 18px; height: 18px; color: #7d808b; transition: opacity var(--t) linear; }
+.dial-seg .dial-mark { grid-area: 1 / 1; width: 18px; height: 18px; color: var(--dial-mark, #7d808b); transition: opacity var(--t) linear; }
 .dial-seg .dial-mark.lit { opacity: 0; color: var(--c); filter: drop-shadow(0 0 calc(6px * var(--glow)) color-mix(in srgb, var(--c) 80%, transparent)); }
 .dial-seg[data-on] .dial-mark { opacity: 0; }
 .dial-seg[data-on] .dial-mark.lit { opacity: 1; }
@@ -145,7 +146,7 @@
   box-shadow: inset 0 1px 0 #ffffff1f, inset 0 0 0 1px #ffffff0d, 0 16px 34px #000c;
 }
 /* Each lab's logo rides the lab ring, so a lab flip swings the outgoing logo out and the next one in. */
-.dial-logo { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transform: rotate(calc((var(--lab) - var(--j)) * var(--lab-step) * -1deg)) scale(.8); transition: opacity var(--t) linear, transform var(--t) var(--flip); }
+.dial-logo { --claude-eye: var(--dial-eye); position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transform: rotate(calc((var(--lab) - var(--j)) * var(--lab-step) * -1deg)) scale(.8); transition: opacity var(--t) linear, transform var(--t) var(--flip); }
 .dial-logo[data-on] { opacity: 1; transform: rotate(calc((var(--lab) - var(--j)) * var(--lab-step) * -1deg)); }
 .dial-logo .dial-mark { width: 72px; height: 72px; color: var(--c); filter: drop-shadow(0 0 calc(16px * var(--glow)) color-mix(in srgb, var(--c) 70%, transparent)); }
 .dial-tile[data-q="0"] [data-on] .dial-mark { animation: dial-squash-a var(--t) ease-out; }
@@ -169,10 +170,10 @@
   align-items: center;
   gap: 14px;
   padding: 0 14px 0 18px;
-  border: 1px solid #2a2d37;
+  border: 1px solid var(--dial-card-edge, #2a2d37);
   border-radius: 14px;
-  background: linear-gradient(145deg, #181920, #0a0c10);
-  box-shadow: inset 0 1px 0 #ffffff0d, 0 10px 24px #0007;
+  background: var(--dial-card-bg, linear-gradient(145deg, #181920, #0a0c10));
+  box-shadow: var(--dial-card-shadow, inset 0 1px 0 #ffffff0d, 0 10px 24px #0007);
   text-align: left;
   pointer-events: auto;
   transform-origin: 0 50%;
@@ -181,12 +182,12 @@
   transition: transform var(--t) var(--click) var(--lag), opacity var(--t) linear var(--lag);
 }
 .dial-plane[data-open] .dial-card { --push: calc(clamp(0, var(--k), 1) * 5deg); }
-.dial-card .dial-mark { flex: none; width: 18px; height: 18px; color: #8a8d97; }
+.dial-card .dial-mark { flex: none; width: 18px; height: 18px; color: var(--dial-mark, #8a8d97); }
 .dial-card-text { display: flex; flex: 1; flex-direction: column; gap: 5px; min-width: 0; }
-.dial-card-name { overflow: hidden; color: #c9ccd3; font-size: 19px; font-weight: 600; line-height: 1.1; letter-spacing: -.01em; white-space: nowrap; }
-.dial-card-name em { margin-left: 8px; padding: 1px 6px; border: 1px solid #ffffff1c; border-radius: 5px; color: var(--ink-2); font: 500 max(10px, var(--cf))/1.4 var(--mono); font-style: normal; letter-spacing: .06em; vertical-align: 3px; }
+.dial-card-name { overflow: hidden; color: var(--dial-card-name, #c9ccd3); font-size: 19px; font-weight: 600; line-height: 1.1; letter-spacing: -.01em; white-space: nowrap; }
+.dial-card-name em { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--dial-em-edge, #ffffff1c); border-radius: 5px; color: var(--ink-2); font: 500 max(10px, var(--cf))/1.4 var(--mono); font-style: normal; letter-spacing: .06em; vertical-align: 3px; }
 .dial-card-line { overflow: hidden; color: var(--ink-3); font: 400 max(11px, var(--cf))/1.2 var(--mono); white-space: nowrap; text-overflow: ellipsis; }
-.dial-card-badge { display: flex; flex: none; min-width: 44px; justify-content: center; padding: 4px 7px; border: 1px solid #ffffff17; border-radius: 7px; color: var(--ink-3); font: 600 max(11px, var(--cf))/1.2 var(--mono); letter-spacing: .04em; }
+.dial-card-badge { display: flex; flex: none; min-width: 44px; justify-content: center; padding: 4px 7px; border: 1px solid var(--dial-badge-edge, #ffffff17); border-radius: 7px; color: var(--ink-3); font: 600 max(11px, var(--cf))/1.2 var(--mono); letter-spacing: .04em; }
 .dial-card[aria-pressed="true"] .dial-mark { color: var(--accent); }
 .dial-card[aria-pressed="true"] .dial-card-name { color: var(--ink); }
 .dial-card[aria-pressed="true"] .dial-card-line { color: var(--ink-2); }
@@ -242,7 +243,7 @@
 
 .dial-rail { position: absolute; left: calc(var(--cx) + var(--R) + var(--cw) + 24px); top: calc(var(--cy) - 80px); display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid #ffffff12; border-radius: 16px; background: #0b0d11d9; box-shadow: 0 12px 30px #0009; }
 .dial-rail button { display: grid; width: 44px; height: 48px; place-items: center; border-radius: 11px; color: var(--ink-2); }
-.dial-rail button:hover { background: #ffffff0b; color: var(--ink); }
+.dial-rail button:hover { background: var(--dial-rail-hover, #ffffff0b); color: var(--ink); }
 .dial-rail button[data-pick] { color: var(--accent); }
 .dial-typeahead { position: absolute; left: min(var(--cx) + var(--R) + var(--cw) - 28px, var(--pw) - var(--m) - 220px); top: calc(var(--cy) + 104px); width: 220px; color: var(--accent-ink); font: 500 max(12px, var(--floor))/1.5 var(--mono); opacity: 0; transition: opacity 200ms linear; }
 .dial-typeahead[data-on] { opacity: 1; transition: none; }
@@ -256,7 +257,7 @@
 .dial-stage :is([data-pick], [data-dial-pick]) { position: relative; transition: transform 90ms var(--spring), filter 90ms linear; }
 .dial-stage :is([data-pick], [data-dial-pick]):enabled:active { transform: scale(.94); filter: brightness(.9); }
 .dial-stage :is([data-pick], [data-dial-pick])::after { content: ""; position: absolute; inset: -1px; border: 1px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; }
-.dial-stage kbd { display: inline-grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border: 1px solid #ffffff1f; border-radius: 5px; background: #ffffff08; color: var(--ink-2); font: 500 max(10.5px, var(--floor)) var(--mono); }
+.dial-stage kbd { display: inline-grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border: 1px solid var(--dial-kbd-edge, #ffffff1f); border-radius: 5px; background: var(--dial-kbd-bg, #ffffff08); color: var(--ink-2); font: 500 max(10.5px, var(--floor)) var(--mono); }
 .dial-stat { display: flex; align-items: center; gap: 16px; }
 .dial-stat-text { display: flex; flex-direction: column; gap: 6px; }
 .dial-label { color: var(--ink-2); font: 500 max(10.5px, var(--floor))/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
@@ -348,4 +349,40 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
 @media (prefers-reduced-motion: reduce) {
   .dial-stage *, .dial-stage *::before, .dial-stage *::after { transition: none !important; animation: none !important; }
   .dial-stage :is([data-pick], [data-dial-pick]):enabled:active { transform: none; }
+}
+
+/* Light skins: a pearl dial on the picker's tint. Repeated parts read these vars, so light adds no rules per tick or card. */
+@scope (.model-cross-backdrop[data-light]) {
+  :scope {
+    --dial-line: var(--color-ink);
+    --dial-seg-a: #ffffff;
+    --dial-seg-b: #eef0fc;
+    --dial-lab: none;
+    --dial-mark: var(--color-ink-secondary);
+    --dial-eye: var(--color-ink);
+    --dial-focus: var(--color-ink);
+    --dial-card-edge: color-mix(in srgb, var(--color-hairline) 70%, transparent);
+    --dial-card-bg: var(--color-card);
+    --dial-card-shadow: 0 10px 24px color-mix(in srgb, var(--color-ink) 8%, transparent);
+    --dial-card-name: var(--color-ink);
+    --dial-em-edge: color-mix(in srgb, var(--color-ink) 12%, transparent);
+    --dial-badge-edge: color-mix(in srgb, var(--color-ink) 10%, transparent);
+    --dial-rail-hover: color-mix(in srgb, var(--color-ink) 5%, transparent);
+    --dial-kbd-edge: color-mix(in srgb, var(--color-ink) 14%, transparent);
+    --dial-kbd-bg: color-mix(in srgb, var(--color-ink) 3%, transparent);
+  }
+  :scope:has(.model-dial) { background: var(--color-app); }
+  .model-dial { --ink: var(--color-ink); --ink-2: color-mix(in srgb, var(--color-ink) 40%, var(--color-ink-secondary)); --ink-3: var(--color-ink-secondary); --ink-4: var(--color-ink-secondary); background: var(--color-app); }
+  .dial-stage { --glow: .35; --accent-ink: oklch(from var(--accent) min(l, .45) c h); }
+  .dial-scene { opacity: 1; }
+  .dial-scene-base { background: radial-gradient(closest-side at var(--cx) var(--cy), var(--picker-tint)); }
+  .dial-socket { background: radial-gradient(circle, #ffffff 60%, #eef0fc); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 6%, transparent), inset 0 10px 30px color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .dial-tile { background: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%); box-shadow: inset 0 1px 0 #ffffff, inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 6%, transparent), 0 0 22px rgb(129 140 248 / .18), 0 0 60px rgb(221 214 254 / .5), 0 16px 34px color-mix(in srgb, var(--color-ink) 12%, transparent); }
+  .dial-bar { border-color: color-mix(in srgb, var(--color-hairline) 70%, transparent); background: var(--color-card); box-shadow: 0 10px 24px color-mix(in srgb, var(--color-ink) 10%, transparent); }
+  .dial-rail { border-color: color-mix(in srgb, var(--color-hairline) 70%, transparent); background: rgb(255 255 255 / .85); box-shadow: 0 12px 30px color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .dial-cta { background: color-mix(in srgb, var(--accent) 9%, var(--color-card)); }
+  .dial-ring .track { border-color: color-mix(in srgb, var(--color-ink) 7%, transparent); }
+  .dial-footer { border-top-color: color-mix(in srgb, var(--color-ink) 8%, transparent); }
+  .model-cross-header .model-dial-view { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
+  .model-cross-header .model-dial-view:hover { color: var(--color-ink); }
 }

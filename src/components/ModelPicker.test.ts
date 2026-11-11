@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
+import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot, InstanceInfo } from "@/state/store";
 
 const { mockInstances } = vi.hoisted(() => {
@@ -668,6 +669,19 @@ describe("ModelPicker centre guides", () => {
     const options = readFileSync(join(here, "ModelPicker.css"), "utf8").match(/\.model-cross-options \{([^}]*)\}/)?.[1] ?? "";
     for (const token of ["ink", "ink-secondary", "control", "inset", "hairline", "accent", "accent-ink", "success", "warning"]) {
       expect(options).toMatch(new RegExp(`--color-${token}:`));
+    }
+  });
+});
+
+describe("ModelPicker light skins", () => {
+  it.each(SKINS.map((skin) => skin.id))("gives the %s skin the light picker only if it is light", (skin) => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null) });
+    try {
+      const backdrop = markup(bot.modelSelection, true).match(/<div [^>]*class="model-cross-backdrop[^>]*>/)?.[0] ?? "";
+      expect(backdrop).not.toBe("");
+      expect(backdrop.includes(' data-light="true"')).toBe(LIGHT_SKIN_IDS.has(skin));
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });
