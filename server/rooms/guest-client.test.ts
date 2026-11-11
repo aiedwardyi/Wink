@@ -468,6 +468,17 @@ describe("room alerts on a teammate", () => {
     await sleep(300);
     expect(alert.mock.calls).toEqual([ping("second")]);
   });
+
+  it("pings a reconnect replay once with its latest line, then live lines again", async () => {
+    const replay = Array.from({ length: 60 }, (_, index): [number, string] => [0, entry(index + 1, edward, `line ${index + 1}`)]);
+    route = stream([...replay, [300, entry(61, edward, "live")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 100 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 61);
+    await sleep(250);
+    expect(alert.mock.calls).toEqual([ping("line 60"), ping("live")]);
+  });
 });
 
 describe("upload deadline", () => {

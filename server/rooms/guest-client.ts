@@ -154,6 +154,7 @@ export class GuestClient {
   private readonly syncs = new Map<string, Sync>();
   private readonly sending = new Map<string, Promise<unknown>>();
   private readonly pending = new Map<string, number>();
+  private readonly alerts = new Map<string, RoomAlert>();
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
   private readonly changing = new Set<string>();
@@ -455,7 +456,7 @@ export class GuestClient {
     if (!room || (entry.author.kind === "person" && entry.author.id === room.me.id)) return;
     const chat = `joined:${roomId}`;
     const line = { chat, threadId: chat, room: room.state?.roomName ?? "", name: entry.author.name, text: roomLineText(entry.text, entry.files) };
-    alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs);
+    alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs, this.alerts);
   }
 
   private changed(roomId: string): void {

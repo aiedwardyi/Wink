@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksForChange, claimOf } from "./guard";
+import { asksAboutDone, asksForChange, asksToRepeat, claimOf } from "./guard";
 
 export const MIC_BLOCKED = "Microphone blocked";
 export const MIC_MISSING = "Microphone missing";
@@ -502,9 +502,9 @@ export class LiveCall {
   /** A promise of work with nothing behind it gets one nudge per request, then a line saying it was not sent. */
   private guard(said: string) {
     if (this.guarded || !said) return;
-    const claim = claimOf(said);
-    if (!claim) return;
     const req = this.req;
+    const claim = claimOf(said, asksAboutDone(req.text));
+    if (!claim) return;
     if (claim.claim === "failed") {
       req.failed = true;
       return;
@@ -545,7 +545,7 @@ export class LiveCall {
     const req = this.req = request(text);
     // The first line after the card was read out is its answer, so it goes to the bot as one.
     const card = this.card;
-    if (!this.pending && card?.armed) {
+    if (!this.pending && card?.armed && !asksToRepeat(text)) {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
@@ -737,9 +737,9 @@ export class LiveCall {
     this.release();
   }
 
-  // Text sent while the voice talks, thinks or listens cuts it off, so every [Wink] line waits here for quiet.
+  // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
-    if (!this.connected || this.turnHadAudio || this.deps.audio.playing || this.generating || spokenText(this.heardBuf)) return;
+    if (!this.connected || this.playing || this.turnHadAudio || this.deps.audio.playing || this.generating || spokenText(this.heardBuf)) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();

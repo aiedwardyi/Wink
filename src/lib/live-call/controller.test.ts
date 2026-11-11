@@ -251,6 +251,7 @@ describe("LiveCall", () => {
     await flush();
     call.observe({ busy: false, messages: [orderRow("o1", "Do A."), botRow("a", "A done."), userRow("u", "What time is it?"), botRow("t", "Noon."), orderRow("o2", "Do B."), botRow("b", "B done.")] });
     await flush();
+    engine().events.turnDone();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: B done.", "[Wink] Nova replied: A done."]);
     expect(engine().contexts).toHaveLength(1);
     expect(engine().contexts[0]).toContain("Nova: Noon.");
@@ -307,6 +308,7 @@ describe("LiveCall", () => {
     rows.push(orderRow("o3", "Do C."), botRow("c", "C done."));
     call.observe({ busy: false, messages: rows });
     await flush();
+    engine().events.turnDone();
     expect(call.state().status).toBe("listening");
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A and B done.", "[Wink] Nova replied: C done."]);
   });
@@ -323,6 +325,7 @@ describe("LiveCall", () => {
     rows.push(botRow("a2", "A verified."));
     call.observe({ busy: false, messages: rows });
     await flush();
+    engine().events.turnDone();
     expect(call.state().status).toBe("working");
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A done.", "[Wink] Nova replied: A verified."]);
     rows.push(orderRow("o2", "Do B."), botRow("b", "B done."));
@@ -798,6 +801,29 @@ describe("VOICE-SEND: promise guard", () => {
     expect(nudges(engine())).toHaveLength(flagged ? 1 : 0);
   });
 
+  it.each([
+    ["What did you get done today?", "I fixed the login bug and sent the report.", false],
+    ["Did you check the build?", "I checked it this morning. It was green.", false],
+    ["오늘 뭐 했어?", "로그인 버그 고치고 보고서 보냈어요.", false],
+    ["What did you get done today?", "I fixed the login bug. I'll check the tests now.", true],
+  ])("a recap of done work is not a promise: %s / %s -> nudge %s", async (asked, said, flagged) => {
+    const { engine } = await started();
+    turn(engine(), asked, said);
+    expect(nudges(engine())).toHaveLength(flagged ? 1 : 0);
+  });
+
+  it("a recap after the nudges run out leaves no Not sent row", async () => {
+    const { call, engine, posts } = await started();
+    for (const ask of ["Check A?", "Check B?", "Check C?"]) {
+      turn(engine(), ask, "I'll check that.");
+      turn(engine(), "", "Okay.");
+    }
+    turn(engine(), "What did you get done today?", "I fixed the login bug and sent the report.");
+    call.end();
+    await flush();
+    expect(linesOf(posts).filter((line) => line.startsWith("Not sent"))).toEqual([]);
+  });
+
   it("honest failure is terminal for its request, a new request is guarded again", async () => {
     const { engine } = await started();
     turn(engine(), "Can you check the build?", "I'll check that.");
@@ -906,6 +932,48 @@ describe("VOICE-SEND: cards", () => {
     engine().events.answering();
     await flush();
     expect(messagesOf(posts)).toHaveLength(2);
+  });
+
+  it("a reply landing while the card notice is in flight waits its turn, and the card still takes the answer", async () => {
+    const { call, engine, posts } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy the site." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o1", "Deploy the site."), botRow("r1", "Which one?"), cardRow("q1")] });
+    await flush();
+    expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer.");
+    engine().events.turnDone();
+    expect(engine().texts.at(-1)).toBe("[Wink] Nova replied: Which one?");
+    engine().events.turnDone();
+    engine().events.heard("Production.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Deploy the site.", "Production."]);
+  });
+
+  it("two replies in a row are spoken one after the other", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Check the build." } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Check the tests." } }]);
+    await call.answer(true);
+    call.observe({ busy: false, messages: [orderRow("o1", "Check the build."), botRow("r1", "Red."), orderRow("o2", "Check the tests."), botRow("r2", "Green.")] });
+    await flush();
+    const replies = () => engine().texts.filter((t) => t.includes("replied"));
+    expect(replies()).toEqual(["[Wink] Nova replied: Red."]);
+    engine().events.turnDone();
+    expect(replies()).toEqual(["[Wink] Nova replied: Red.", "[Wink] Nova replied: Green."]);
+  });
+
+  it.each(["Sorry, what's the question?", "What did Nova ask?", "Could you say the question again?", "질문이 뭐였지?"])("asking for the question again keeps the card waiting for the answer: %s", async (again) => {
+    const { call, engine, posts } = await started();
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    engine().events.turnDone();
+    turn(engine(), again, "Nova asks: restart at 8:15 PM? Yes or no.");
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(linesOf(posts)).toContain(again);
   });
 
   it("drops a waiting card notice once the card is answered by typing", async () => {
