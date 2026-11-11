@@ -119,6 +119,35 @@ describe("account lifecycle", () => {
     expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: "claude" });
   });
 
+  it("rechecks account changes without blocking them on duplicate probes", async () => {
+    const f = await fixture();
+    const existing = await f.add();
+    const stale: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: existing.identity, account: "old@example.test" };
+    let entered!: () => void;
+    const started = new Promise<void>((done) => { entered = done; });
+    let releaseProbe!: () => void;
+    const probe = new Promise<ProviderSnapshot>((done) => { releaseProbe = () => done(stale); });
+    vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockImplementationOnce(() => { entered(); return probe; });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "incoming", account: "same@example.test" });
+    release();
+    await started;
+    const changed: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: "changed", account: "same@example.test" };
+    f.statuses.set(existing.id, changed);
+    let observed = false;
+    const observation = f.controller.observe(existing.id, changed).then(() => { observed = true; });
+    try { await vi.waitFor(() => expect(observed).toBe(true), { timeout: 1000 }); }
+    finally {
+      releaseProbe();
+      await observation;
+      await f.controller.settled(added.id);
+    }
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
+  });
+
   it("preserves existing duplicates through sign-in recovery", async () => {
     const f = await fixture();
     const first = await f.add();

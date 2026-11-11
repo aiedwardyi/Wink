@@ -342,34 +342,41 @@ export class AccountLifecycle {
       this.jobs.delete(account.id);
       throw error;
     }
-    const finished = this.registry.logins.wait(account.id).then(() => this.exclusive(async () => {
-      if (this.jobs.get(account.id) !== token || !this.accounts.get(account.id)) return;
-      const state = this.registry.logins.state(account.id);
-      const error = this.registry.logins.capture(account.id).error;
-      const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
-      this.jobs.delete(account.id);
-      if (this.accounts.drains[account.id]) {
-        await this.accounts.stop(account.id);
-        this.registry.blockAccount(account.id, true);
-        return;
-      }
-      if (state === "complete" && snapshot?.authenticated === true && snapshot.accountIdentity) {
-        const existingId = account.state === "pending" && await this.duplicate(account, snapshot);
-        if (existingId) {
-          this.results.set(account.id, { state: "duplicate", existingId });
-          if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
-          await this.discard(account.id);
+    const finished = this.registry.logins.wait(account.id).then(async () => {
+      const queued = this.queue;
+      await queued;
+      const probes = account.state === "pending" && this.registry.logins.state(account.id) === "complete"
+        ? await this.duplicateProbes(account) : undefined;
+      const snapshots = this.queue === queued ? probes : undefined;
+      return this.exclusive(async () => {
+        if (this.jobs.get(account.id) !== token || !this.accounts.get(account.id)) return;
+        const state = this.registry.logins.state(account.id);
+        const error = this.registry.logins.capture(account.id).error;
+        const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
+        this.jobs.delete(account.id);
+        if (this.accounts.drains[account.id]) {
+          await this.accounts.stop(account.id);
+          this.registry.blockAccount(account.id, true);
           return;
         }
-        await this.accept(this.accounts.get(account.id)!, snapshot, true);
-        this.registry.logins.acknowledge(account.id, true);
-      } else {
-        this.results.set(account.id, { state: state === "cancelled" ? "cancelled" : "failed", ...(error ? { error } : {}) });
-        if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
-        if (account.state === "pending") await this.discard(account.id);
-        else await this.accept(this.accounts.get(account.id)!, snapshot ?? { state: "unavailable" });
-      }
-    }, false)).catch(() => this.exclusive(async () => {
+        if (state === "complete" && snapshot?.authenticated === true && snapshot.accountIdentity) {
+          const existingId = account.state === "pending" && await this.duplicate(account, snapshot, snapshots);
+          if (existingId) {
+            this.results.set(account.id, { state: "duplicate", existingId });
+            if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
+            await this.discard(account.id);
+            return;
+          }
+          await this.accept(this.accounts.get(account.id)!, snapshot, true);
+          this.registry.logins.acknowledge(account.id, true);
+        } else {
+          this.results.set(account.id, { state: state === "cancelled" ? "cancelled" : "failed", ...(error ? { error } : {}) });
+          if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
+          if (account.state === "pending") await this.discard(account.id);
+          else await this.accept(this.accounts.get(account.id)!, snapshot ?? { state: "unavailable" });
+        }
+      }, false);
+    }).catch(() => this.exclusive(async () => {
       this.jobs.delete(account.id);
       const current = this.accounts.get(account.id);
       try {
@@ -381,13 +388,26 @@ export class AccountLifecycle {
     return capture;
   }
 
-  private async duplicate(account: AccountRecord, snapshot: ProviderSnapshot) {
+  private duplicateCandidates(account: AccountRecord) {
     const driver = this.registry.get(account.id)?.driverKind;
+    return this.accounts.list().filter((row) => row.id !== account.id && row.driverKind === driver
+      && row.state === "ready" && !this.accounts.drains[row.id]);
+  }
+
+  private async duplicateProbes(account: AccountRecord) {
+    return new Map(await Promise.all(this.duplicateCandidates(account).map(async (row) => [
+      row.id, await this.registry.get(row.id)?.snapshot({ refresh: true }).catch(() => undefined),
+    ] as const)));
+  }
+
+  private async duplicate(account: AccountRecord, snapshot: ProviderSnapshot, snapshots?: Map<string, ProviderSnapshot | undefined>) {
+    const rows = this.duplicateCandidates(account);
+    const saved = rows.find((row) => snapshot.accountIdentity && this.accounts.get(row.id)?.identity === snapshot.accountIdentity);
+    if (saved) return saved.id;
+    const probes = snapshots ?? await this.duplicateProbes(account);
     const email = snapshot.account?.trim().toLowerCase();
-    for (const row of this.accounts.list()) {
-      if (row.id === account.id || row.driverKind !== driver || row.state !== "ready" || this.accounts.drains[row.id]) continue;
-      if (snapshot.accountIdentity && this.accounts.get(row.id)?.identity === snapshot.accountIdentity) return row.id;
-      const other = await this.registry.get(row.id)?.snapshot({ refresh: true }).catch(() => undefined);
+    for (const row of rows) {
+      const other = probes.get(row.id);
       if (other?.authenticated !== true) continue;
       const identity = other.accountIdentity ?? this.accounts.get(row.id)?.identity;
       if ((snapshot.accountIdentity && identity === snapshot.accountIdentity) || (email && other.account?.trim().toLowerCase() === email)) return row.id;
