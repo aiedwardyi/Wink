@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -36,6 +36,8 @@ interface Phone {
 }
 
 const STATUS_POLL_MS = 3_000;
+// The sign-in page lists only PCs on its own relay base.
+const FRONT_DOOR = "wink.edwardyi.dev";
 
 const PROBLEM = {
   superseded: "settings.phoneAccess.problem.superseded",
@@ -59,8 +61,8 @@ const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-co
 const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent";
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
-/** This PC's relay switch, its phone QR and the devices signed in to it. `refresh` reloads that list. */
-export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: typeof api; refresh?: number }) {
+/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. */
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(null);
   const [refused, setRefused] = useState(false);
@@ -105,6 +107,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
   }, [request, loadGoogle]);
 
   const enabled = status?.enabled === true;
+  useEffect(() => onEnabled?.(enabled), [enabled, onEnabled]);
   useEffect(() => {
     if (!enabled) return;
     const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
@@ -182,10 +185,12 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
     void save(true);
   };
   const link = status?.host ? `https://${status.host}/` : null;
+  const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
+  const shown = door ? FRONT_DOOR : status?.host?.replace(/^(.{4}).{12}\./, "$1….");
   const copy = async () => {
     if (!link) return;
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(door ? `https://${FRONT_DOOR}/` : link);
       setCopied(true);
       window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1200);
@@ -292,25 +297,30 @@ export function PhoneAccessSettings({ request = api, refresh = 0 }: { request?: 
           {error && !asking ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
         </>}
       >
-        <DeviceRow name={t("settings.devices.reach")} sub={sub} control={control} ready={connected ? t("settings.devices.connected") : undefined} />
+        <DeviceRow name={t("settings.devices.reach")} sub={sub} control={control} />
         {enabled && link ? (
           <div data-account-row="" className="min-w-0 border-hairline/70 [&+&]:border-t">
             <div className="flex items-start gap-4">
-              <div data-relay-qr data-url={link} className="shrink-0 rounded-lg bg-white p-2" aria-label={t("settings.devices.openOnPhone")}>
+              <div data-relay-qr data-url={link} className="shrink-0 rounded-lg bg-white p-2 max-[379px]:[&>svg]:size-[88px]" aria-label={t("settings.devices.openAnywhere")}>
                 <QRCodeSVG value={link} size={104} level="M" bgColor="#ffffff" fgColor="#111111" />
               </div>
-              <div className="min-w-0">
-                <div className="text-[13px] font-medium leading-[18px] text-ink">{t("settings.devices.openOnPhone")}</div>
-                <div className="break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openOnPhoneHelp")}</div>
-                <button type="button" onClick={() => void copy()} className={cn(ROW_BUTTON, "mt-2.5 gap-1.5")}>
-                  {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-                  {copied ? t("settings.phoneLink.copied") : t("settings.phoneLink.copy")}
-                </button>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium leading-[18px] text-ink">{t("settings.devices.openAnywhere")}</div>
+                <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                  <span data-relay-link="" className="min-w-0 truncate text-[13px] text-ink">{shown}</span>
+                  <button type="button" onClick={() => void copy()} className={cn(ROW_BUTTON, "gap-1.5")}>
+                    {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+                    {copied ? t("settings.phoneLink.copied") : t("settings.phoneLink.copy")}
+                  </button>
+                </div>
+                <div className="mt-1.5 break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openAnywhereHelp")}</div>
               </div>
             </div>
           </div>
         ) : null}
       </DevicesSection>
+
+      {pcs}
 
       {enabled ? (
         <DevicesSection title={t("settings.devices.signedInHere")} data-signed-in="">

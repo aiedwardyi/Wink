@@ -128,6 +128,16 @@ describe("DeviceSwitcher", () => {
     await act(async () => root.unmount());
   });
 
+  it("connect a device hidden off this PC", async () => {
+    setPhone(true);
+    vi.stubGlobal("location", { hostname: "abcdefghijklmnop.wink.test" });
+    const { host, root } = await renderView([device("home", { current: true }), device("work")], vi.fn(), DeviceSwitcher, true);
+    await act(async () => click(host.querySelector("button")!));
+    expect(document.querySelector("[data-device-id]")).not.toBeNull();
+    expect(document.querySelector("[data-connect-device]")).toBeNull();
+    await act(async () => root.unmount());
+  });
+
   it("opens Devices when the native PC opener has no local Tailscale", async () => {
     const open = setDesktop();
     open.mockResolvedValue(false);
