@@ -45,13 +45,21 @@ function app(deps: Record<string, unknown>) {
   const texts = statements.map((s) => s.getText(index));
   const start = texts.findIndex((s) => s.startsWith("const relay ="));
   const end = texts.findIndex((s) => s.startsWith("const startupWait ="));
-  const wanted = texts.filter((s) => [
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  // Selected routes must stay top-level in the request handler.
+  const wanted = [
     'if (path.startsWith("/api/") &&', 'if (await phoneAccess.handle(', 'if (method === "GET" && path === "/api/bots")',
     'if (await joinedFileRoute(', 'if (await peopleRoute(', 'if (await hostFileRoute(', 'const joinedReply =', 'if (joinedReply)',
-  ].some((prefix) => s.startsWith(prefix)));
+  ].map((prefix) => {
+    const matches = texts.filter((text) => text.startsWith(prefix));
+    expect(matches, prefix).toHaveLength(1);
+    return matches[0];
+  });
   const messages = texts.findIndex((s) => s === 'm = path.match(/^\\/api\\/threads\\/([\\w-]+)\\/messages$/);');
   expect(messages).toBeGreaterThan(0);
   const create = texts.find((s) => s.startsWith('if (method === "POST" && path === "/api/groups")'))!;
+  expect(create).toBeDefined();
   const code = `async function serve(req, res) { let m; ${[...texts.slice(start, end), ...wanted, create, ...texts.slice(messages, messages + 2)].join("\n")} res.writeHead(404).end(); }`;
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
   return new Function(...Object.keys(deps), `${js}\nreturn serve;`)(...Object.values(deps)) as (req: IncomingMessage, res: ServerResponse) => Promise<void>;

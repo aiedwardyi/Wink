@@ -61,8 +61,8 @@ describe("team rooms on the phone", () => {
   it("includes hosted and joined frames live and in replay, while keeping screen filtering", () => {
     const wants = load("wants", {});
     const replayBuffer: Array<{ kind: string; frame: string }> = [];
-    const phone = { res: { write: vi.fn() }, screens: true, phone: true };
-    const desktop = { res: { write: vi.fn() }, screens: true, phone: false };
+    const phone = { res: { write: vi.fn() }, screens: true };
+    const desktop = { res: { write: vi.fn() }, screens: true };
     const write = load("writeBroadcastFrame", {
       lastSeq: 0, STREAM_ID: "s", REPLAY_MAX: 500, replayBuffer, sseClients: new Set([phone, desktop]), wants,
       maskRuntimePayload: (p: unknown) => p, redactSecrets: (p: unknown) => p, store,
