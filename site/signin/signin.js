@@ -105,6 +105,25 @@
     location.assign(`https://${label}.${config.base}/pair${suffix}`);
   }
 
+  function reachable(label) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      const finish = (online) => {
+        clearTimeout(timeout);
+        // Clearing src can fire onerror; detach handlers first.
+        image.onload = null;
+        image.onerror = null;
+        image.src = "";
+        resolve(online);
+      };
+      const timeout = setTimeout(() => finish(false), 2000);
+      image.onload = () => finish(true);
+      image.onerror = () => finish(false);
+      image.referrerPolicy = "no-referrer";
+      image.src = `https://${label}.${config.base}/app-icon.svg?probe=${Date.now()}`;
+    });
+  }
+
   function showList(pcs) {
     say("Choose a PC.");
     const list = $("list");
@@ -120,9 +139,13 @@
     }
   }
 
-  function choose(pcs) {
+  function choose(pcs, pick = false) {
     if (pcs.length === 0) {
       say(EMPTY);
+      return;
+    }
+    if (pick) {
+      showList(pcs);
       return;
     }
     if (pcs.length === 1) {
@@ -177,9 +200,10 @@
         slot.replaceChildren();
         gis.renderButton(slot, {
           type: "standard",
-          theme: "filled_black",
+          theme: matchMedia("(prefers-color-scheme: dark)").matches ? "filled_black" : "outline",
           size: "large",
           text: "signin_with",
+          shape: "rectangular",
           width: 300,
         });
       };
@@ -211,14 +235,20 @@
     });
   }
 
-  async function coldStart() {
+  async function coldStart(pick) {
+    const last = remembered();
+    const saved = LABEL_RE.test(last);
+    if (!pick && saved && await reachable(last)) {
+      go(last, "?g=1");
+      return;
+    }
     const token = await requestToken(randomNonce(), false);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
-    choose(listed);
+    choose(listed, pick || saved);
   }
 
   async function returnLeg(pc, m) {
@@ -272,7 +302,7 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
-      void coldStart().catch(() => say(GOOGLE_DOWN, "error"));
+      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
     if (pc === null || m === null || !LABEL_RE.test(pc) || !M_RE.test(m)) {
