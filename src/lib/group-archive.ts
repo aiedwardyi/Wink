@@ -10,6 +10,7 @@ export interface GroupArchive {
 }
 
 let archive: GroupArchive | null = null;
+let ticket = 0;
 const watchers = new Set<() => void>();
 
 function set(next: GroupArchive | null) {
@@ -23,13 +24,20 @@ const watch = (watcher: () => void) => {
   return () => void watchers.delete(watcher);
 };
 
+/** Taken before asking for a task; a newer ask, select or close makes its answer stale. */
+export const groupTaskTicket = () => ++ticket;
+
 /** A task the server opened: a shared group's goes here, any other group switches to it. */
-export function showGroupTask(view: Group, dispatch: (action: Action) => void): void {
-  if (view.hosted) set({ groupId: view.id, threadId: view.threadId, messages: view.messages ?? [] });
-  else dispatch({ type: "groupPatched", group: view });
+export function showGroupTask(view: Group, dispatch: (action: Action) => void, asked: number): void {
+  if (view.hosted) {
+    if (asked === ticket) set({ groupId: view.id, threadId: view.threadId, messages: view.messages ?? [] });
+  } else dispatch({ type: "groupPatched", group: view });
 }
 
-export const closeGroupArchive = () => set(null);
+export function closeGroupArchive() {
+  ticket++;
+  set(null);
+}
 
 export function useGroupArchive(groupId: string): GroupArchive | null {
   const open = useSyncExternalStore(watch, () => archive);

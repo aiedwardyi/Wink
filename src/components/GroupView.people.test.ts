@@ -43,11 +43,11 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function show(messages: Message[], joins?: RoomJoin[]) {
+async function show(messages: Message[], joins?: RoomJoin[], readOnly = false, onMessageMenu: () => void = () => undefined) {
   const host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   await act(async () => root!.render(createElement(I18nProvider, null, createElement(Transcript, {
-    group, members: [], messages, transcript: messages, streamingMessage: null, dock: null, onReply: () => undefined, onMessageMenu: () => undefined, workers: [], joins,
+    group, members: [], messages, transcript: messages, streamingMessage: null, dock: null, onReply: () => undefined, onMessageMenu, workers: [], joins, readOnly,
   }))));
   return host;
 }
@@ -104,7 +104,19 @@ describe("header roster", () => {
 
 describe("an older task of a shared group", () => {
   it("swaps the composer for the read-only bar and drops join lines", () => {
-    expect(groupView).toContain("{archive ? <GroupArchiveBar /> : <>");
+    expect(groupView).toMatch(/\{archive \? \(\s*<GroupArchiveBar \/>\s*\) : \(/);
     expect(groupView).toContain("joins={archive ? undefined : roomJoins(group)}");
+    expect(groupView).toContain("readOnly={Boolean(archive)}");
+  });
+
+  it("offers no reply, reaction, pin or menu on its lines", async () => {
+    const menu = vi.fn();
+    const reacted = { ...theirs, reactions: [{ emoji: "👍", by: "user" }] };
+    const host = await show([mine, reacted], undefined, true, menu);
+    expect(host.querySelector("[data-message-hover-actions]")).toBeNull();
+    for (const row of host.querySelectorAll("[data-orbit-message]")) row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    expect(menu).not.toHaveBeenCalled();
+    const chip = host.querySelector("[data-mid=\"u2\"] [data-orbit-message-body] button");
+    expect(chip?.closest(".pointer-events-none")).not.toBeNull();
   });
 });

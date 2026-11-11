@@ -288,4 +288,14 @@ describe("ManageMembersPanel people", () => {
     expect(calls).toEqual([]);
     expect(people().querySelector("[data-group-invite]")).not.toBeNull();
   });
+
+  it("shows the code once a missing room comes back while open", async () => {
+    await open({ ...group, hosted: { roomId: "r1" }, room: { missing: true } }, "en", () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
+    const { ManageMembersPanel } = await import("./ManageMembersPanel");
+    const { I18nProvider } = await import("@/lib/i18n");
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ManageMembersPanel, { group: shared([]), onClose: () => undefined, triggerRef: { current: null } }))));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(calls).toEqual([{ method: "POST", path: "/api/groups/group-1/share" }]);
+    expect(people().querySelector("[data-team-room-code]")!.textContent).toContain(CODE);
+  });
 });

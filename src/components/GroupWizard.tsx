@@ -97,9 +97,10 @@ export function GroupWizard({
     }
   };
 
+  const saving = rows.some((row) => row.saving);
   const createGroup = () => {
     const memberIds = [...picked];
-    if (creating) return;
+    if (creating || saving) return;
     setCreating(true);
     setCreateError(null);
     const title = name.trim() || t("groupWizard.namePrefill");
@@ -190,7 +191,7 @@ export function GroupWizard({
           </button>
           <button
             onClick={createGroup}
-            disabled={creating}
+            disabled={creating || saving}
             className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
           >
             {t("groupWizard.create")}

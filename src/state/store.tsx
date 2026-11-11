@@ -35,7 +35,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
-import { closeGroupArchive, showGroupTask } from "@/lib/group-archive";
+import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
@@ -1882,11 +1882,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "notificationSwitchPending":
           pendingNotificationSwitch.current = action.target;
           break;
-        case "switchGroupTask":
+        case "switchGroupTask": {
+          const asked = groupTaskTicket();
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
-            .then((r: any) => r?.group && showGroupTask(r.group, dispatch))
+            .then((r: any) => r?.group && showGroupTask(r.group, dispatch, asked))
             .catch(showError);
           break;
+        }
         case "interruptGroup":
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;

@@ -37,7 +37,7 @@ export function GroupPeople({ group }: { group: Group }) {
     return () => {
       alive.current = false;
     };
-  }, [group.id]);
+  }, [group.id, shared]);
 
   const remove = async (personId: string) => {
     if (!group.hosted) return;
@@ -46,6 +46,7 @@ export function GroupPeople({ group }: { group: Group }) {
     } catch {
       return setProblem("errors.request");
     }
+    if (!alive.current) return;
     // Remove retires the old code.
     setCode(null);
     void invite();

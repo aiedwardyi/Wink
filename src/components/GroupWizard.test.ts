@@ -368,6 +368,33 @@ describe("GroupWizard members", () => {
     }
   });
 
+  it("holds Create while a new bot is still saving", async () => {
+    let finish: (value: { bot: { id: string; name: string } }) => void = () => undefined;
+    apiImpl = () => new Promise((resolve) => (finish = resolve));
+    const { host, root } = await renderWizard();
+    try {
+      await toMembers(host);
+      await act(async () => button(host, "+ New bot").click());
+      const [name] = nameInputs(host);
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "review my code");
+        name!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, "Add bot").click());
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
+      await act(async () => button(host, "Create").click());
+      expect(dispatched.some((action) => action.type === "createGroup" || action.type === "groupPatched")).toBe(false);
+      await act(async () => finish({ bot: { id: "nb1", name: "review my code" } }));
+      await flush();
+      await act(async () => button(host, "Create").click());
+      expect(findCreate()).toMatchObject({ memberIds: ["nb1"] });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
   it.each([
     ["en", "Create", "Name your group"],
     ["ko", "만들기", "그룹 이름 정하기"],

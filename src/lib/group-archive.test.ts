@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Group, Message } from "@/state/store-types";
 
-import { closeGroupArchive, showGroupTask, useGroupArchive, type GroupArchive } from "./group-archive";
+import { closeGroupArchive, groupTaskTicket, showGroupTask, useGroupArchive, type GroupArchive } from "./group-archive";
 
 const older: Message[] = [{ id: "m1", role: "user", kind: "text", at: 1, text: "Last week's plan" }];
 const view = (hosted: boolean) => ({ id: "g1", threadId: "older", messages: older, ...(hosted ? { hosted: { roomId: "r1" } } : {}) }) as unknown as Group;
@@ -23,7 +23,7 @@ describe("an older task of a shared group", () => {
     }
     const root = createRoot(document.createElement("div"));
     await act(async () => root.render(createElement(Probe)));
-    await act(async () => showGroupTask(view(true), dispatch));
+    await act(async () => showGroupTask(view(true), dispatch, groupTaskTicket()));
     expect(dispatch).not.toHaveBeenCalled();
     expect(seen).toEqual({ g1: { groupId: "g1", threadId: "older", messages: older }, g2: null });
     await act(async () => closeGroupArchive());
@@ -34,8 +34,31 @@ describe("an older task of a shared group", () => {
 
   it("switches a group that isn't shared, as before", () => {
     const dispatch = vi.fn();
-    showGroupTask(view(false), dispatch);
+    showGroupTask(view(false), dispatch, groupTaskTicket());
     expect(dispatch).toHaveBeenCalledWith({ type: "groupPatched", group: view(false) });
+  });
+
+
+  it("drops an answer that a newer ask or a select overtook", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let seen: GroupArchive | null = null;
+    function Probe() {
+      seen = useGroupArchive("g1");
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Probe)));
+    const first = groupTaskTicket();
+    const second = groupTaskTicket();
+    await act(async () => showGroupTask({ ...view(true), threadId: "newer" }, vi.fn(), second));
+    await act(async () => showGroupTask(view(true), vi.fn(), first));
+    expect(seen).toMatchObject({ threadId: "newer" });
+    const asked = groupTaskTicket();
+    await act(async () => closeGroupArchive());
+    await act(async () => showGroupTask(view(true), vi.fn(), asked));
+    expect(seen).toBeNull();
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
   });
 });
 
@@ -45,7 +68,7 @@ describe("the older task bar", () => {
     const { applyLocale, I18nProvider } = await import("./i18n");
     const { GroupArchiveBar } = await import("@/components/GroupArchiveBar");
     localStorage.setItem("omb-locale", locale);
-    showGroupTask(view(true), vi.fn());
+    showGroupTask(view(true), vi.fn(), groupTaskTicket());
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     let open: GroupArchive | null = null;

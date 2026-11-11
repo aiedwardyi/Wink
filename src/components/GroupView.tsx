@@ -321,6 +321,7 @@ export const Transcript = memo(function Transcript({
   onMessageMenu,
   workers,
   joins = NO_JOINS,
+  readOnly = false,
 }: {
   group: Group;
   members: Bot[];
@@ -334,6 +335,8 @@ export const Transcript = memo(function Transcript({
   onMessageMenu: (menu: MessageMenuRequest) => void;
   workers: ShownRun[];
   joins?: RoomJoin[];
+  /** An older task: shown, never changed. */
+  readOnly?: boolean;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -367,7 +370,7 @@ export const Transcript = memo(function Transcript({
   const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
-    target && messageId === target.messageId
+    target && !readOnly && messageId === target.messageId
       ? (callbacks?: { onError?: () => void }) => {
           const onError = callbacks?.onError;
           dispatch({
@@ -450,7 +453,7 @@ export const Transcript = memo(function Transcript({
         const docked = dock && dock.slot === slot && m.id === dockTargetId ? dock : null;
         const attachedImages = user && m.text ? splitAttachedImages(m.text) : null;
         const menuTarget =
-          m.kind === "text" && m.text && !m.placeholder
+          m.kind === "text" && m.text && !m.placeholder && !readOnly
             ? {
               threadId: group.threadId,
               message: m,
@@ -571,7 +574,7 @@ export const Transcript = memo(function Transcript({
                 data-strip={m.reactions?.length ? "" : undefined}
                 className={cn("relative w-fit max-w-[min(42rem,78%)]", Boolean(m.reactions?.length) && "pb-3.5")}
               >
-                {mine && (
+                {mine && !readOnly && (
                   <div
                     data-message-hover-actions
                     className="pointer-events-none absolute top-1/2 right-full z-20 mr-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
@@ -613,7 +616,7 @@ export const Transcript = memo(function Transcript({
                   ) : null}
                 </div>
                 )}
-                {!mine && !streaming && !docked?.live && (
+                {!mine && !streaming && !docked?.live && !readOnly && (
                   <div
                     data-message-hover-actions
                     className="pointer-events-none absolute top-1/2 left-full z-20 ml-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
@@ -636,7 +639,7 @@ export const Transcript = memo(function Transcript({
                   message={m}
                   members={members}
                   corner={mine ? "left" : "right"}
-                  className="bottom-3.5"
+                  className={cn("bottom-3.5", readOnly && "pointer-events-none")}
                 />
               </div>
               {optionChoices && (
@@ -644,7 +647,7 @@ export const Transcript = memo(function Transcript({
                   options={optionChoices.options}
                   question={optionChoices.question}
                   answeredText={answeredChoice}
-                  disabled={!answeredChoice && Boolean(group.busyBotId)}
+                  disabled={readOnly || (!answeredChoice && Boolean(group.busyBotId))}
                   onPick={(option) => dispatch({ type: "sendGroup", groupId: group.id, text: option })}
                 />
               )}
@@ -1819,6 +1822,7 @@ export function GroupView({ group: live }: { group: Group }) {
             onMessageMenu={setMenu}
             workers={rowWorkers}
             joins={archive ? undefined : roomJoins(group)}
+            readOnly={Boolean(archive)}
           />
           {jump.forwardFailed && (
             <div className="flex justify-center">
@@ -1870,29 +1874,33 @@ export function GroupView({ group: live }: { group: Group }) {
       )}
 
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
-      {archive ? <GroupArchiveBar /> : <>
-      {recoveryPacket && recoveryBot && (
-        <TaskRecoveryCard
-          key={`${recoveryBot.id}:${group.threadId}`}
-          bot={recoveryBot}
-          packet={recoveryPacket}
-          turns={recoveryPacket?.turnsAtWrite ?? 0}
-          busy={roomRecoveryBusy(group, recoveryBot.busy)}
-        />
+      {archive ? (
+        <GroupArchiveBar />
+      ) : (
+        <>
+          {recoveryPacket && recoveryBot && (
+            <TaskRecoveryCard
+              key={`${recoveryBot.id}:${group.threadId}`}
+              bot={recoveryBot}
+              packet={recoveryPacket}
+              turns={recoveryPacket?.turnsAtWrite ?? 0}
+              busy={roomRecoveryBusy(group, recoveryBot.busy)}
+            />
+          )}
+          <Composer
+            key={group.threadId}
+            group={group}
+            members={members}
+            composerRef={composerInputRef}
+            onSend={jumpToLatest}
+            locked={setupPending}
+            replyTo={replyTo}
+            onClearReply={clearReply}
+            onConsumeReply={consumeReply}
+            onRestoreReply={restoreReply}
+          />
+        </>
       )}
-      <Composer
-        key={group.threadId}
-        group={group}
-        members={members}
-        composerRef={composerInputRef}
-        onSend={jumpToLatest}
-        locked={setupPending}
-        replyTo={replyTo}
-        onClearReply={clearReply}
-        onConsumeReply={consumeReply}
-        onRestoreReply={restoreReply}
-      />
-      </>}
       </div>
       </div>
     </main>
