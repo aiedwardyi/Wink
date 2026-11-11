@@ -54,6 +54,48 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("keeps each Connections email bound to its account id when Main and order change", async () => {
+  await render(5);
+  const labels = ["hitecledtx", "getwinkdev", "aiedwardyi", "mredwardyi", "rocknblock.official"];
+  state.instances = state.instances.map((account, index) => ({ ...account,
+    snapshot: { ...account.snapshot, account: `${labels[index]}@example.test` },
+    pickerSnapshot: { state: "available" as const, authenticated: true, account: "mredwardyi@example.test" },
+    accountMain: index === 3,
+  })).reverse();
+  await update();
+  for (const account of state.instances) {
+    const row = host.querySelector(`[data-connection-account="${account.instanceId}"]`);
+    expect(row?.querySelector("[data-account-email]")?.textContent).toBe(account.snapshot.account);
+  }
+});
+
+it.each(["en", "ko"] as const)("points a duplicate add to its existing row in %s", async (locale) => {
+  persistPreference(locale);
+  await render(2);
+  request.mockImplementation(async (path: string) => path === "/api/accounts" ? { id: "duplicate" }
+    : path === "/api/accounts/duplicate/sign-in" ? { state: "duplicate", existingId: "account-1" } : {});
+  await act(async () => buttons(locale === "en" ? "Add Account" : "계정 추가")[0]!.click());
+  expect(host.querySelector('[role="status"]')?.textContent).toContain(locale === "en" ? "Already added" : "이미 추가된 계정");
+  const link = host.querySelector<HTMLButtonElement>("[data-existing-account]");
+  expect(link).not.toBeNull();
+  await act(async () => link!.click());
+  expect(document.activeElement?.getAttribute("data-connection-account")).toBe("account-1");
+  expect(host.querySelectorAll("[data-connection-account]")).toHaveLength(2);
+});
+
+it("points a duplicate add to another profile of the same engine", async () => {
+  await render(2);
+  state.instances = [...state.instances, { ...engine("work"), accountOf: "work", accountMain: true }];
+  await update();
+  request.mockImplementation(async (path: string) => path === "/api/accounts" ? { id: "duplicate" }
+    : path === "/api/accounts/duplicate/sign-in" ? { state: "duplicate", existingId: "work" } : {});
+  await act(async () => buttons("Add Account")[0]!.click());
+  const link = host.querySelector<HTMLButtonElement>("[data-existing-account]");
+  expect(link?.textContent).toContain("work@example.com");
+  await act(async () => link!.click());
+  expect(document.activeElement?.getAttribute("data-connection-account")).toBe("work");
+});
+
 it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", async (locale) => {
   persistPreference(locale);
   await render(3);
