@@ -171,7 +171,7 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["People", "Attach a file"]);
+    expect(labels).toEqual(["Room photo", "People", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
   });
 
@@ -283,7 +283,7 @@ describe("Team rooms for the host", () => {
     await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(1));
     expect(asked("POST", "/api/rooms/r1/send")[0]!.body).toMatchObject({ text: "hello" });
 
-    const picker = $<HTMLInputElement>('[data-team-room="host"] input[type="file"]')!;
+    const picker = $<HTMLInputElement>('[data-team-room="host"] input[type="file"]:not([data-room-picture-input])')!;
     const picture = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [picture], configurable: true });
