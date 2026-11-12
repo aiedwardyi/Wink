@@ -1902,7 +1902,7 @@ function publicGroupState(group: GroupRecord) {
     ...groupClears(group),
     working: groupIsWorking(group),
     taskState: store.taskPacket(group.threadId) ?? undefined,
-    ...(group.hosted ? { room: hostedRoomView(group.hosted) } : {}),
+    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };

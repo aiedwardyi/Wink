@@ -17,6 +17,7 @@ import {
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
   roomMessage,
+  roomNoticeText,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -73,6 +74,13 @@ describe("team room shape", () => {
       { seq: 3, id: "e3", at: 3, author: { kind: "person", id: "p", name: "Mina" }, text: "thanks" },
     ], [{ id: "b1", name: "Wink", color: "blue" }]);
     expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
+  });
+
+  it("shows the host's full pinned line when the room has it, else the pin's preview", () => {
+    const notice = { entryId: "e1", by: "host", at: 1, text: "preview…" };
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [], noticeText: "the whole line" } }))).toBe("the whole line");
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [] } }))).toBe("preview…");
+    expect(roomNoticeText(group({ notice, room: { missing: true } }))).toBe("preview…");
   });
 
   it("selects a joined room by an id no bot or group can have", () => {

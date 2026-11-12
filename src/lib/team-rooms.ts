@@ -30,6 +30,8 @@ export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boole
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
 
 export const roomRemoved = (group: Group) => (group.room && "people" in group.room ? group.room.removed ?? [] : []);
+/** The pin's preview stops at the cap; the host's room carries the whole line when it is longer. */
+export const roomNoticeText = (group: Group) => (group.room && "people" in group.room ? group.room.noticeText : undefined) ?? group.notice?.text;
 
 const NO_JOINS: RoomJoin[] = [];
 
