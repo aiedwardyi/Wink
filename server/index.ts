@@ -136,7 +136,7 @@ import { summaryInstance } from "./summary-instance.ts";
 import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { watchAskHold } from "./ask-hold.ts";
-import { closedAskNotes, memberClosedAskNotes } from "./ask-user.ts";
+import { closedAskNotes, memberClosedAskNotes, watchSkippedQuestions } from "./ask-user.ts";
 import {
   createPingLimiter,
   pingForMailbox,
@@ -4206,6 +4206,11 @@ bus.subscribe((event: RuntimeEvent) => {
 
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
+watchSkippedQuestions(store, (threadId, change) => {
+  const current = taskPacketForWrite(threadId);
+  const asks = current && change(current.asks);
+  if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
+});
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main

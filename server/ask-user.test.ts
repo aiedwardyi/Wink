@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
-import type { MausColor, Message } from "./store.ts";
+import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, skippedQuestion, watchSkippedQuestions, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
+import type { MausColor, Message, StoreChange } from "./store.ts";
+import type { TaskAsk } from "./task-asks.ts";
 
 type Bot = { id: string; name: string; color: MausColor };
 
@@ -168,5 +169,106 @@ describe("closed ask_user card note", () => {
     expect(memberClosedAskNotes([card, said("u1", "hm")], "bot-b")).toEqual([]);
     expect(memberClosedAskNotes([card, said("u1", "hm"), { id: "r1", at: 3, role: "bot", kind: "text", text: "ok", from: ada }], "bot-a")).toEqual([]);
     expect(memberClosedAskNotes([card], "bot-a")).toEqual([]);
+  });
+});
+
+describe("skipped ask_user questions", () => {
+  function watched(initial: TaskAsk[] = []) {
+    const listeners: Array<(change: StoreChange) => void> = [];
+    const path: Message[] = [];
+    const lists = new Map<string, TaskAsk[]>([["t1", initial]]);
+    const store = {
+      importingSync: false,
+      onChange: (listener: (change: StoreChange) => void) => (listeners.push(listener), () => {}),
+      activePath: () => [...path],
+    };
+    watchSkippedQuestions(store, (threadId, change) => {
+      const asks = change(lists.get(threadId));
+      if (asks) lists.set(threadId, asks);
+    }, () => 50);
+    const append = (message: Message, imported?: true) => {
+      path.push(message);
+      for (const listener of listeners) listener({ type: "message", threadId: "t1", message, ...(imported ? { imported } : {}) });
+    };
+    const patch = (message: Message) => {
+      path.splice(path.findIndex((entry) => entry.id === message.id), 1, message);
+      for (const listener of listeners) listener({ type: "message.patch", threadId: "t1", message });
+    };
+    return { store, append, patch, asks: () => lists.get("t1") };
+  }
+  const filed = (id: string, ask: string, at = 50): TaskAsk => ({ id, ask, status: "open", kind: "question", choices: "Yes / No", at, changedAt: at });
+
+  it("files a card a newer card replaced", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    expect(h.asks()).toEqual([]);
+    h.append(askCard("c2", "Which branch?", { at: 3 }));
+    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+  });
+
+  it("files a card the person typed past without picking a choice", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    h.append(said("u1", "what's for lunch?"));
+    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+  });
+
+  it("never files an answered, tapped or dismissed card", () => {
+    for (const card of [{ answered: "Yes" }, { dismissed: true }]) {
+      const h = watched();
+      h.append(askCard("c1", "Ship it?", {}, card));
+      h.append(said("u1", "hm"));
+      h.append(askCard("c2", "Next?"));
+      expect(h.asks()).toEqual([]);
+    }
+    const tapped = watched();
+    tapped.append(askCard("c1", "Ship it?"));
+    tapped.append(said("u1", "Yes"));
+    tapped.append(askCard("c2", "Next?"));
+    expect(tapped.asks()).toEqual([]);
+  });
+
+  it("takes back a card whose typed answer landed just after its message", () => {
+    const h = watched();
+    const card = askCard("c1", "Ship it?");
+    h.append(card);
+    h.append(said("u1", "after lunch"));
+    expect(h.asks()).toHaveLength(1);
+    h.patch({ ...card, card: { ...card.card!, answered: "after lunch" } });
+    expect(h.asks()).toEqual([]);
+  });
+
+  it("closes an older filed question once a re-asked card is answered", () => {
+    const h = watched([filed("A1", "Ship it?", 0)]);
+    const card = askCard("c1", "Ship it?", { at: 10 });
+    h.append(card);
+    h.patch({ ...card, card: { ...card.card!, answered: "Yes" } });
+    expect(h.asks()).toEqual([{ ...filed("A1", "Ship it?", 0), status: "done", changedAt: 50 }]);
+  });
+
+  it("files a question once while it stays open", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    h.append(askCard("c2", "ship  it?"));
+    h.append(askCard("c3", "Which branch?"));
+    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+  });
+
+  it("ignores synced history and messages that close nothing", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it?"));
+    h.append(said("u1", "hm"), true);
+    h.append({ id: "n1", at: 3, role: "user", kind: "text", text: "pane note", from: { botId: "b", name: "B", color: "teal" } });
+    h.append({ id: "r1", at: 4, role: "bot", kind: "text", text: "working" });
+    expect(h.asks()).toEqual([]);
+    h.store.importingSync = true;
+    h.append(said("u2", "hm"));
+    expect(h.asks()).toEqual([]);
+  });
+
+  it("reads the transcript before the message, not with it", () => {
+    expect(skippedQuestion([askCard("c1", "Ship it?")], askCard("c2", "Next?"))?.id).toBe("c1");
+    expect(skippedQuestion([], askCard("c2", "Next?"))).toBeNull();
+    expect(skippedQuestion([askCard("c1", "Ship it?"), said("u0", "hm")], said("u1", "hm"))).toBeNull();
   });
 });
