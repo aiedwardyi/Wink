@@ -518,6 +518,7 @@ export const Transcript = memo(function Transcript({
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
                 pinned={pinnedQuestion(group.messages)?.id === m.id}
+                onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
           ) : m.kind === "compaction" ? (

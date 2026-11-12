@@ -550,6 +550,13 @@ describe("Gate 0", () => {
     });
   });
 
+  it("passes past a live card with choices, but not a tap on one of them", () => {
+    const choices = closed({ staysOpen: true, options: ["Ship today", "Hold for QA"] });
+    expect(routesQuick({ ...base, messages: [choices] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [closed({ staysOpen: true, options: [QUESTION, "Hold for QA"] })] })).toBe(false);
+    expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
+  });
+
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {
     expect(routesQuick({ ...base, instance: { driverKind, fork: () => null, generateText: async () => "" } as never })).toBe(false);
   });

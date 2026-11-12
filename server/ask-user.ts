@@ -2,14 +2,14 @@
 // pauses the bot. It lands as a bot options card marked `askUser` (so the
 // client can tell it from the first-run quiz, which has no requestId either)
 // and buzzes the same "has a question" alert as a provider's own ask. The
-// answer is simply the user's next message, so nothing here waits and the
-// bot's activity is never set to waiting-on-you.
+// answer arrives as a user message, so nothing here waits and the bot's
+// activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { scanQuestion } from "../shared/open-question.ts";
+import { askStates, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
-import { addQuestionAsk, answerQuestionAsk, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, isOpenAsk, type TaskAsk } from "./task-asks.ts";
 
 export const ASK_USER_TITLE = "Your bot has a question";
 export const ASK_USER_QUESTION_MAX = 2_000;
@@ -78,7 +78,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",
-    card: { title: ASK_USER_TITLE, subtitle: question, options: askUserChoices(request.choices), askUser: true },
+    card: { title: ASK_USER_TITLE, subtitle: question, options: askUserChoices(request.choices), askUser: true, staysOpen: true },
   };
   // rooms attribute the question to the member who asked, like show_image
   if (owner.group) message.from = { botId: from.id, name: from.name, color: from.color };
@@ -97,7 +97,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
-/** The bot's note when the person's message closed its open ask_user card unanswered. No `closerId`: a steer not yet in `messages`. */
+/** The bot's note when the person's message closed its older ask_user card unanswered. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
   const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
   if (end < 0 || (closerId !== undefined && !sentByPerson(messages[end]!))) return [];
@@ -108,7 +108,7 @@ export function closedAskNotes(messages: readonly Message[], text: string, close
     const card = message.card!;
     // a tapped choice can arrive before its answered patch
     if (card.answered || card.dismissed || card.options.includes(text.trim())) return [];
-    if (botId && message.from?.botId !== botId) return [];
+    if ((botId && message.from?.botId !== botId) || card.staysOpen) return [];
     return [`[Your question card ("${replyExcerpt(card.subtitle, CLOSED_QUESTION_CHARS)}") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]`];
   }
   return [];
@@ -124,12 +124,12 @@ export function memberClosedAskNotes(messages: readonly Message[], botId: string
   return [];
 }
 
-/** The open ask_user card `next` closes unanswered: only a newer card replaces it, since anything the person says to it may be the answer. */
+/** The newest waiting ask_user card when the bot asks `next`. */
 export function skippedQuestion(before: readonly Message[], next: Message): Message | null {
   return isAskUserCard(next) ? scanQuestion(before) : null;
 }
 
-/** Files every question card that closes unanswered on its thread's asks list. `update` saves what `change` returns; null saves nothing. */
+/** Files a question card a newer one followed unanswered on its thread's asks list, and closes it once answered. `update` saves what `change` returns; null saves nothing. */
 export function watchSkippedQuestions(
   store: Pick<Store, "onChange" | "activePath" | "importingSync">,
   update: (threadId: string, change: (asks: TaskAsk[] | undefined) => TaskAsk[] | null) => void,
@@ -141,6 +141,16 @@ export function watchSkippedQuestions(
       const path = store.activePath(change.threadId);
       const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
       if (card) update(change.threadId, (asks) => addQuestionAsk(asks, card.subtitle, card.options, now()));
+    } else if (change.type === "message" && !change.imported && sentByPerson(change.message)) {
+      // a typed answer leaves no patch; only a thread with a filed question pays for the walk
+      update(change.threadId, (asks) => {
+        if (!asks?.some((ask) => ask.kind === "question" && isOpenAsk(ask))) return null;
+        const path = store.activePath(change.threadId);
+        for (const [card, state] of askStates(path.at(-1)?.id === change.message.id ? path : [...path, change.message])) {
+          if (state.state === "answered" && state.by?.id === change.message.id) return answerQuestionAsk(asks, card.card!.subtitle, card.at, now());
+        }
+        return null;
+      });
     } else if (change.type === "message.patch" && isAskUserCard(change.message) && change.message.card!.answered) {
       // a card-typed answer can land just after its message filed the card as skipped
       const { card, at } = change.message;

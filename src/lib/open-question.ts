@@ -1,9 +1,9 @@
-// A bot's ask_user question stays open until the person replies in that chat
-// (typing anything, or tapping a choice) or dismisses it. Nothing extra is
-// stored: the state is derived from the transcript, so the sidebar glow, the
-// pin over the composer and the inline record can never disagree.
+// A bot's ask_user question stays open until the person answers it (a tapped
+// choice, or typing to a pinned question without choices) or dismisses it.
+// Nothing extra is stored: the state is derived from the transcript, so the
+// sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { answersQuestion, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion } from "../../shared/open-question";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion, type AskState } from "../../shared/open-question";
 
 export { isAskUserCard, isSentByPerson };
 
@@ -50,28 +50,16 @@ export function chatNeedsYou(messages: readonly Message[]): boolean {
   return Boolean(state.question) || state.request;
 }
 
-export type AskUserStatus =
-  | { state: "waiting" }
-  | { state: "answered"; reply: string }
-  | { state: "dismissed" }
-  | { state: "superseded" };
+export type AskUserStatus = Exclude<AskState, { state: "answered" }> | { state: "answered"; reply: string };
 
-function firstLine(text: string): string {
-  return text.trim().split(/\r?\n/, 1)[0] ?? "";
-}
+const statuses = new WeakMap<readonly Message[], Map<string, AskState>>();
 
 /** How a marked card reads in the transcript. */
 export function askUserStatus(messages: readonly Message[], message: Message): AskUserStatus {
-  const card = message.card;
-  if (card?.answered) return { state: "answered", reply: firstLine(card.answered) };
-  if (card?.dismissed) return { state: "dismissed" };
-  const index = messages.findIndex((entry) => entry.id === message.id);
-  for (let i = index < 0 ? messages.length : index + 1; i < messages.length; i++) {
-    const later = messages[i];
-    if (answersQuestion(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
-    if (isAskUserCard(later)) return { state: "superseded" };
-  }
-  return { state: "waiting" };
+  let states = statuses.get(messages);
+  if (!states) statuses.set(messages, (states = new Map([...askStates(messages)].map(([card, state]) => [card.id, state]))));
+  const status = states.get(message.id) ?? askStates([message]).get(message)!;
+  return status.state === "answered" ? { state: "answered", reply: status.reply } : status;
 }
 
 /** For the control hiding the rows (drawer button, collapsed sidebar or

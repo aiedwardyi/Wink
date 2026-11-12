@@ -14,7 +14,7 @@ export const taskAskSchema = z.object({
   ask: z.string().min(1).max(ASK_LIMITS.ask),
   status: z.enum(ASK_STATUSES),
   ref: z.string().min(1).max(ASK_LIMITS.ref).optional(),
-  /** the bot's own ask_user card that closed unanswered; Wink adds these, not the bot */
+  /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
   kind: z.literal("question").optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
   at: z.number().int().nonnegative(),
@@ -87,7 +87,7 @@ const clip = (text: string, max: number) => {
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 };
 
-/** Files a question card that closed unanswered as an open question; null when an open ask has its words or none can close to make room. */
+/** Files a question card left unanswered as an open question; null when an open ask has its words or none can close to make room. */
 export function addQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, choices: readonly string[], now: number): TaskAsk[] | null {
   const ask = clip(question, ASK_LIMITS.ask);
   const asks = (existing ?? []).map((item) => ({ ...item }));
@@ -129,7 +129,7 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, all
   const shown = all ? ordered : ordered.slice(0, BRIEF_ASKS);
   const them = stale.length === 1 ? "it" : "them";
   const flagged = stale.length ? `, ${stale.length} stale: no change in 6+ hours, so raise ${them} with the user now, then update ${them}` : "";
-  const questions = shown.some(isQuestion) ? " A question is your own card the user skipped: re-ask open ones 1-3 at a time at a natural pause, and close moot or answered ones." : "";
+  const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
   return [
     `[Wink asks list - ${open.length} open${flagged}.${all ? " Build any summary or status from this list." : ""}${questions}]`,
     ...shown.map((ask) => `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${isStale(ask, now) ? " stale" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`),

@@ -14,7 +14,7 @@ interface Row {
   role: string;
   kind: string;
   text?: string;
-  from?: unknown;
+  from?: { botId?: string };
   author?: { kind: string };
   call?: { id: string; voice?: true; order?: true; ask?: true };
   card?: { title?: string; subtitle?: string; options?: string[]; tool?: string; askUser?: true; requestId?: string; answered?: string; dismissed?: boolean };

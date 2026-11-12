@@ -771,7 +771,15 @@ const MessagesList = memo(function MessagesList({
               }
               if (m.card && isAskUserCard(m)) {
                 const pinned = pinnedQuestion(bot.messages, visibleMessages(bot))?.id === m.id;
-                return <AskUserRecord message={m} transcript={transcript} askerName={bot.name} pinned={pinned} />;
+                return (
+                  <AskUserRecord
+                    message={m}
+                    transcript={transcript}
+                    askerName={bot.name}
+                    pinned={pinned}
+                    onPick={(answer) => dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer })}
+                  />
+                );
               }
               if (shouldHideOnboardingCard(m, transcript)) return null;
               return <OptionCard botId={bot.id} message={m} />;

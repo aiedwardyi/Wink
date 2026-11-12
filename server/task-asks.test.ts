@@ -129,7 +129,7 @@ describe("task asks", () => {
 
   describe("skipped questions", () => {
     const question = (id: number, overrides: Partial<TaskAsk> = {}) => ask(id, { ask: `question ${id}?`, kind: "question", choices: "Yes / No", ...overrides });
-    const GUIDE = " A question is your own card the user skipped: re-ask open ones 1-3 at a time at a natural pause, and close moot or answered ones.";
+    const GUIDE = " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones.";
 
     it("files a skipped card as an open question with its choices, clipped to the ask limits", () => {
       expect(addQuestionAsk([ask(1)], "  Ship   it now?  ", ["Ship", "Wait"], NOW)).toEqual([

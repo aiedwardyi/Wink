@@ -1,7 +1,7 @@
 // A bot's open ask_user question, pinned above the composer in the
 // PendingApproval style. Unlike an approval it never takes the composer
-// over: the bot keeps working, and typing a reply answers it just as well as
-// tapping a choice. The question is never truncated (it scrolls instead).
+// over: the bot keeps working, and typing a reply answers it only when it has
+// no choices. The question is never truncated (it scrolls instead).
 import { memo } from "react";
 import { X } from "lucide-react";
 import type { Message } from "@/state/store";
@@ -49,21 +49,26 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
         >
           {card.subtitle}
         </div>
-        {card.options.length > 0 && (
-          <div data-term-choices className="mt-2.5 flex flex-wrap gap-2">
-            {card.options.map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                onClick={() => onPick(choice)}
-                className="max-w-full break-words rounded-full border border-ink-secondary bg-control px-3.5 py-1.5 text-left text-[13px] text-ink transition-colors hover:bg-raised-hover pointer-coarse:min-h-11"
-              >
-                {choice}
-              </button>
-            ))}
-          </div>
-        )}
+        <AskChoices options={card.options} onPick={onPick} />
       </div>
     </div>
   );
 });
+
+export function AskChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
+  if (!options.length) return null;
+  return (
+    <div data-term-choices className="mt-2.5 flex flex-wrap gap-2">
+      {options.map((choice) => (
+        <button
+          key={choice}
+          type="button"
+          onClick={() => onPick(choice)}
+          className="max-w-full break-words rounded-full border border-ink-secondary bg-control px-3.5 py-1.5 text-left text-[13px] text-ink transition-colors hover:bg-raised-hover pointer-coarse:min-h-11"
+        >
+          {choice}
+        </button>
+      ))}
+    </div>
+  );
+}

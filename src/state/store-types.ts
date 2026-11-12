@@ -22,6 +22,8 @@ export interface OptionCardData {
   requestId?: string;
   /** A bot's non-blocking ask_user question; see lib/open-question. */
   askUser?: true;
+  /** an ask_user card that waits until answered; older ones closed when typed past */
+  staysOpen?: true;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
   /** why auto mode stopped to ask anyway */
