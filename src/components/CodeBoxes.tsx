@@ -40,10 +40,10 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
     want.current = null;
   });
 
-  const put = (from: number, chars: string) => {
-    const next = (value.slice(0, from) + chars).slice(0, SHORT_CODE_LENGTH);
+  const put = (from: number, chars: string, keep = false) => {
+    const next = (value.slice(0, from) + chars + (keep ? value.slice(from + chars.length) : "")).slice(0, SHORT_CODE_LENGTH);
     onChange(next);
-    focus(next.length);
+    focus(from + chars.length);
     if (next.length === SHORT_CODE_LENGTH) onDone(next);
   };
 
@@ -68,7 +68,7 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
           }}
           onChange={(e) => {
             const chars = shortCodeChars(e.target.value.replace(value[i] ?? "", ""));
-            if (chars) put(Math.min(i, value.length), chars);
+            if (chars) put(Math.min(i, value.length), chars, chars.length === 1);
             else onChange(value);
           }}
           onPaste={(e) => {
