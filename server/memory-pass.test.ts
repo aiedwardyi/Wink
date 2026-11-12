@@ -665,6 +665,19 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
+  it("takes context from the bot's reply over a later options card, and from the card when no reply names the options", async () => {
+    const card = (subtitle: string, options: string[]) => ({ title: "Your bot has a question", subtitle, options, askUser: true as const });
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "1. Always dark 2. Follow the app theme 3. Always light." });
+    store.appendMessage("t1", { role: "bot", kind: "options", card: card("Pick 1, 2 or 3.", []) });
+    say("t1", "the second one");
+    await settle("t1", 3 * MINUTE);
+    expect(generate.mock.calls[0]![0]).toContain("<context>1. Always dark 2. Follow the app theme 3. Always light.</context>\nthe second one");
+    store.appendMessage("t1", { role: "bot", kind: "options", card: card("Which look?", ["Dark", "Light"]) });
+    say("t1", "light");
+    await settle("t1", 3 * MINUTE);
+    expect(generate.mock.calls[1]![0]).toContain("<context>Which look? Dark Light</context>\nlight");
+  });
+
   it("gives no context to a long user line", async () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Dark or light?" });
     say("t1", `dark please, ${"and some more words ".repeat(12)}`);
@@ -864,6 +877,9 @@ describe("memory pass filters", () => {
       ]);
       expect(acceptFacts([decision("Deploys skip review", "the first one")], lines, "")).toEqual([]);
       expect(acceptFacts([decision("Picker follows the theme", "the first one")], [{ text: "the first one" }], "")).toEqual([]);
+      const named = [{ text: "Colors: 1. Forest green 2. Ocean blue and sand" }, { text: "colors 2", context: "Which one?" }];
+      expect(acceptFacts([decision("Site colors are ocean blue and sand", "colors 2")], named, "")).toEqual([{ line: "Site colors are ocean blue and sand", kind: "decision" }]);
+      expect(acceptFacts([decision("Site colors are ocean blue and sand", "colors 2")], [{ text: "pick one", context: "1. Ocean blue and sand" }, { text: "colors 2" }], "")).toEqual([]);
     });
 
     it("takes URLs, paths and commands only from the user's own line", () => {

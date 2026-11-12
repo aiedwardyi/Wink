@@ -130,18 +130,21 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
   for (let i = messages.length - 1, seen = 0; i >= 0 && seen < wanted.size; i -= 1) {
     if (!wanted.has(messages[i]!.id)) continue;
     seen += 1;
+    let card: string | undefined;
+    let reply: string | undefined;
     for (let j = i - 1; j >= Math.max(0, i - CONTEXT_SCAN); j -= 1) {
       const message = messages[j]!;
       if (sentByPerson(message)) break;
       if (message.role !== "bot" || message.comm) continue;
-      const text = message.kind === "text" ? message.text
-        : message.kind === "options" && message.card?.askUser && !message.card.requestId ? `${message.card.subtitle}\n${message.card.options.join("\n")}`
-        : undefined;
-      if (!text?.trim()) continue;
-      const context = replyContext(text);
-      if (context) found.set(messages[i]!.id, context);
-      break;
+      if (message.kind === "text" && message.text?.trim()) {
+        reply = message.text;
+        break;
+      }
+      // a card often just says "pick 1-3", so it stands in only when no reply names the options
+      if (!card && message.kind === "options" && message.card?.askUser && !message.card.requestId) card = `${message.card.subtitle}\n${message.card.options.join("\n")}`;
     }
+    const context = replyContext(reply ?? card ?? "");
+    if (context) found.set(messages[i]!.id, context);
   }
   return found;
 }
@@ -156,7 +159,7 @@ export function notePrompt(notes: string, lines: UserLine[]): string {
     "- Skip one-off requests, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
     "- CONTEXT is the end of the bot's message just before a user line. Use it only to see what a short answer like \"the second one\" or \"yes\" picked. The pick must still be in the user's own line; quote that line.",
-    `- kind: "decision" or "fact". A decision names the thing and the pick, ${DECISION_MAX} characters max, for example "Picker look follows the theme". At most ${DECISIONS_PER_PASS} decisions.`,
+    `- kind: "decision" or "fact". A decision names one thing and its pick, ${DECISION_MAX} characters max, for example "Picker look follows the theme". At most ${DECISIONS_PER_PASS} decisions, one per thing.`,
     "- Never record passwords, PINs, codes, keys, tokens, account numbers or one-time codes.",
     "- fact: one short plain line about the user, for example \"38 years old\" or \"Can't read Korean\".",
     `- quote: the user's exact words that state the fact, copied verbatim, ${QUOTE_MAX} characters max.`,
@@ -254,7 +257,8 @@ function grounded(line: string, said: string, sources: UserLine[]): boolean {
   const own = sources.filter(({ text }) => squash(text).includes(squash(said)));
   const typed = squash(sources.map(({ text }) => text).join("\n"));
   if (LITERALS.some((pattern) => (line.match(pattern) ?? []).some((literal) => !typed.includes(squash(literal))))) return false;
-  const known = own.flatMap(({ text, context }) => contentWords(`${text}\n${context ?? ""}`));
+  // the user may name the options in one line and pick in the next; bot text grounds only the line it precedes
+  const known = contentWords([...sources.map(({ text }) => text), ...own.map(({ context }) => context ?? "")].join("\n"));
   const needed = contentWords(line);
   const hits = needed.filter((word) => known.some((source) => sameStem(word, source))).length;
   return hits > 0 && hits * 2 >= needed.length;
