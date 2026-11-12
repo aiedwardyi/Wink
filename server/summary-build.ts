@@ -211,7 +211,8 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
   const park = (job: BuildJob) => {
     job.parked = true;
     queue.push(job);
-    if (!deps.busy(job.botId, job.threadId)) rest(job);
+    // busy is bot-wide and only this chat's own turn settles it, so a parked build keeps looking
+    rest(job);
   };
 
   const prepare = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController): Promise<Ready | null> => {

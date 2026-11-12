@@ -775,6 +775,22 @@ describe("summary build after settle", () => {
     expect(calls[0]!.prompt).not.toContain("short");
   });
 
+  it("builds once a turn that never settles this chat lets go of the bot", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    build.onSettled("bot", "t");
+    await tick();
+
+    state.busy = true;
+    await quiet();
+    expect(calls).toHaveLength(0);
+    state.busy = false;
+    await quiet();
+    expect(calls).toHaveLength(1);
+  });
+
   it("makes no call for a native build that waited while the send summarized for itself", async () => {
     const { calls, generateText } = deferred();
     const { threads, appended, state, build } = setup(generateText);
