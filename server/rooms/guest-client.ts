@@ -9,12 +9,13 @@ import { z } from "zod";
 
 import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
-import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES } from "./files.ts";
+import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES, ROOM_FILE_TYPES } from "./files.ts";
 import {
   addJoinedEntries,
   endJoined,
   joinedCode,
   joinedCursor,
+  joinedDeletedCount,
   joinedEntries,
   joinedEntry,
   joinedFile,
@@ -30,6 +31,7 @@ import {
   resetJoined,
   removeJoined,
   saveJoined,
+  setJoinedDeletedCount,
   setJoinedReactions,
   setJoinedState,
   setJoinedSentName,
@@ -65,7 +67,7 @@ const personSchema = z.object({ id, name });
 const fileSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
   name: z.string().max(200),
-  type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+  type: z.enum(ROOM_FILE_TYPES),
   bytes: z.number().int().positive().max(DOCUMENT_MAX_BYTES),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   deleted: z.boolean().optional(),
@@ -97,7 +99,7 @@ const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
   z.object({ kind: z.literal("state"), state: stateSchema }),
   z.object({ kind: z.literal("reactions"), reset: z.boolean().optional(), lines: z.array(z.object({ id, marks: marksSchema })).max(10_000) }),
-  z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000) }),
+  z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000), count: z.number().int().nonnegative().optional() }),
   z.object({ kind: z.literal("reset") }),
   z.object({ kind: z.literal("ended") }),
 ]);
@@ -240,10 +242,6 @@ export class GuestClient {
     const readSeq = Math.min(seq, joinedCursor(roomId));
     if (readSeq > 0 && readJoined(roomId, readSeq)) this.changed(roomId);
     return { ok: true, value: this.view(room) };
-  }
-
-  name(): string {
-    return this.deps.joiner().name;
   }
 
   /** The whole join: the pasted code in, a synced room out. */
@@ -610,7 +608,7 @@ export class GuestClient {
       hostname: creds.relayHost,
       servername: creds.relayHost,
       port: https.port ?? 443,
-      path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots`,
+      path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
       headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1" },
       ca: https.ca,
       lookup: https.lookup,
@@ -683,6 +681,7 @@ export class GuestClient {
     } else if (parsed.kind === "deleted") {
       await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
+      if (parsed.count !== undefined) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

@@ -103,6 +103,16 @@ describe("6-box code input", () => {
     expect(onDone).toHaveBeenCalledWith("GHJKLM");
   });
 
+  it("fixes one wrong letter mid-code without wiping the boxes after it", async () => {
+    const { boxes, onDone } = await mount();
+    await paste(boxes[0]!, "ABXDEF");
+    onDone.mockClear();
+    await type(boxes[2]!, "C");
+    expect(value(boxes)).toBe("ABCDEF");
+    expect(document.activeElement).toBe(boxes[3]);
+    expect(onDone).toHaveBeenCalledWith("ABCDEF");
+  });
+
   it("reads Korean keyboard letters as the keys they sit on", async () => {
     const { boxes, onDone } = await mount();
     for (const [i, ch] of [..."ㅁㅠㅊ2ㄸ"].entries()) await type(boxes[i]!, ch);

@@ -71,6 +71,11 @@ describe("people in a shared group's chat", () => {
     expect(row.querySelector('a[download="plan.pdf"]')?.getAttribute("href")).toBe("/api/rooms/r1/files/f2");
   });
 
+  it("names a teammate on a reaction, not as a bot", async () => {
+    const host = await show([{ ...mine, reactions: [{ emoji: "👍", by: "person:p1" }] }, theirs]);
+    expect(host.querySelector('[data-mid="u1"] [data-message-reactions] button')?.getAttribute("title")).toBe("Seo-yeon Park");
+  });
+
   it("puts each first join where it happened, in the divider style", async () => {
     const host = await show([mine, theirs], [{ personId: "p1", name: "Seo-yeon Park", at: day + 30_000 }, { personId: "p2", name: "Mina", at: day + 120_000 }]);
     const lines = [...host.querySelectorAll<HTMLElement>("[data-room-join]")];

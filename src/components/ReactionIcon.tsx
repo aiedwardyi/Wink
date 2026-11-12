@@ -12,8 +12,7 @@ const SLUG: Record<string, string> = {
   "👌": "ok-hand",
   "❓": "red-question-mark",
   "😂": "face-with-tears-of-joy",
-  // the open-mouth face is ringed eyes that read as the laughing one at 17px
-  "😮": "hushed-face",
+  "😮": "face-with-open-mouth",
   "👀": "eyes",
   "🤝": "handshake",
   "💀": "skull",
@@ -22,7 +21,7 @@ const SLUG: Record<string, string> = {
 
 const markup = (emoji: string) => SVG[`../assets/reactions/${SLUG[emoji.replace(/️/g, "")]}.svg`];
 
-/** Mono icon in the text color for a reaction emoji; older marks with no icon keep the glyph. */
+/** Color icon for a reaction emoji; older marks with no icon keep the glyph. */
 export function ReactionIcon({ emoji, size, className }: { emoji: string; size: number; className?: string }) {
   const svg = markup(emoji);
   if (!svg) return <span data-emoji={emoji} className={className}>{emoji}</span>;
@@ -30,7 +29,7 @@ export function ReactionIcon({ emoji, size, className }: { emoji: string; size: 
     <span
       data-emoji={emoji}
       aria-hidden
-      className={cn("inline-block shrink-0 text-ink [&>svg]:size-full", className)}
+      className={cn("inline-block shrink-0 [&>svg]:size-full", className)}
       style={{ width: size, height: size }}
       dangerouslySetInnerHTML={{ __html: svg }}
     />

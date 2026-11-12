@@ -2096,3 +2096,17 @@ test("a fresh reflog keeps an otherwise idle worktree", async (t) => {
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
   assert.deepEqual(f.warnings, []);
 });
+
+test("a fresh ignored file deep inside keeps an otherwise idle worktree", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const deep = path.join(target, "node_modules", "run", "out", "result.bin");
+  fs.mkdirSync(path.dirname(deep), { recursive: true });
+  fs.writeFileSync(deep, "running");
+  await eligible(f);
+  const future = new Date(Date.now() + 4 * DAY_MS);
+  fs.utimesSync(deep, future, future);
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(deep, "utf8"), "running");
+  assert.deepEqual(f.warnings, []);
+});

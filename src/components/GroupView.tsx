@@ -64,7 +64,7 @@ import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { hostRoomBase, roomJoins } from "@/lib/team-rooms";
+import { hostRoomBase, reactionNames, roomJoins, roomPeople } from "@/lib/team-rooms";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -348,6 +348,12 @@ export const Transcript = memo(function Transcript({
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
+  const people = useMemo(() => {
+    if (!group.hosted) return undefined;
+    const names = reactionNames(roomPeople(group));
+    for (const m of transcript) if (m.author?.kind === "person") names.set(`person:${m.author.id}`, m.author.name);
+    return names;
+  }, [group, transcript]);
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
@@ -643,6 +649,7 @@ export const Transcript = memo(function Transcript({
                   threadId={group.threadId}
                   message={m}
                   members={members}
+                  names={people}
                   corner={mine ? "left" : "right"}
                   className={cn("bottom-3.5", readOnly && "pointer-events-none")}
                 />

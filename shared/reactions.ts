@@ -19,6 +19,7 @@ export interface ReactionMessage {
   role: string;
   kind?: string;
   from?: { botId: string; name: string };
+  author?: { kind: string; id: string; name: string };
   reactions?: ReactionMark[];
 }
 
@@ -69,6 +70,7 @@ export function reactorName(
   if (messages) {
     for (const message of messages) {
       if (message.from?.botId === by) return message.from.name;
+      if (message.author?.kind === "person" && `person:${message.author.id}` === by) return message.author.name;
     }
   }
   return "Bot";

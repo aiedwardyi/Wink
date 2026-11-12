@@ -9,7 +9,7 @@ import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Message, Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
-import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
+import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
   broadcastDoorReactions,
@@ -249,7 +249,7 @@ async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: stri
   if (typeof entryId !== "string") return send(res, 400, { error: "bad request" });
   const entry = /^[\w-]{1,64}$/.test(entryId) ? roomEntry(roomId, entryId) : null;
   if (!entry) return send(res, 404, { error: "no such message in this room" });
-  const notice = { entryId, by, at: Date.now(), text: entry.text };
+  const notice = { entryId, by, at: Date.now(), text: noticeText(entry.text) };
   door!.deps.store.patchGroup(call.group.id, { notice });
   send(res, 200, { notice });
 }
@@ -363,8 +363,9 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   for (const frame of reactionFrames(group)) writeFrame(open, frame);
   // A teammate who was away missed the reset a delete sends.
-  const deleted = deletedRoomFiles(roomId);
-  if (deleted.length) writeFrame(open, { kind: "deleted", ids: deleted });
+  const seen = url.searchParams.get("deleted") ?? "";
+  const deleted = deletedRoomFiles(roomId, /^\d{1,15}$/.test(seen) ? Number(seen) : 0);
+  if (deleted.ids.length) writeFrame(open, { kind: "deleted", ...deleted });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
     writeFrame(open, { kind: "reset" });

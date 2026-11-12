@@ -106,6 +106,10 @@ function open(): DatabaseSync {
       room_id TEXT PRIMARY KEY,
       name TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS deleted_counts (
+      room_id TEXT PRIMARY KEY,
+      count INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS entries_id ON entries(room_id, json_extract(body, '$.id'));
     CREATE TABLE IF NOT EXISTS translations (
       room_id TEXT NOT NULL,
@@ -182,6 +186,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM entries WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
     database.prepare(`
@@ -208,6 +213,15 @@ export function joinedSentName(roomId: string): string | null {
 
 export function setJoinedSentName(roomId: string, name: string): void {
   db().prepare("INSERT OR REPLACE INTO sent_names (room_id, name) VALUES (?, ?)").run(roomId, name);
+}
+
+/** How many of the host's file deletions this PC has applied, so a reconnect asks only for newer ones. */
+export function joinedDeletedCount(roomId: string): number {
+  return (db().prepare("SELECT count FROM deleted_counts WHERE room_id = ?").get(roomId) as { count: number } | undefined)?.count ?? 0;
+}
+
+export function setJoinedDeletedCount(roomId: string, count: number): void {
+  db().prepare("INSERT OR REPLACE INTO deleted_counts (room_id, count) VALUES (?, ?)").run(roomId, count);
 }
 
 /** Only the guest client reads this. */
@@ -371,6 +385,7 @@ export function removeJoined(roomId: string): boolean {
       database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
     }
     return removed;

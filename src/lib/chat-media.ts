@@ -20,15 +20,19 @@ export function linkedFileSrc(threadId: string, filePath: string): string {
   return `/api/threads/${encodeURIComponent(threadId)}/linked-file?path=${encodeURIComponent(filePath)}`;
 }
 
-const LINK = /\]\(\s*(?:<([^>\n]+)>|([^\s)]+))/g;
+const LINK = /\]\(\s*(?:<([^>\n]+)>|([^\s)]+)(?=\s*[)"']))/g;
+const CODE = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
 
 /** Absolute local file links a bot reply hands over, in order. */
 export function localLinks(text: string): string[] {
   const paths: string[] = [];
-  for (const match of text.matchAll(LINK)) {
+  for (const match of text.replace(CODE, "").matchAll(LINK)) {
     let path = match[1] ?? match[2]!;
     if (/^file:\/\//i.test(path)) {
       try { path = decodeURIComponent(new URL(path).pathname).replace(/^\/([a-zA-Z]:)/, "$1"); } catch { continue; }
+    } else {
+      path = path.replace(/[#?].*$/, "");
+      try { path = decodeURIComponent(path); } catch { /* keep the raw target */ }
     }
     if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) paths.push(path);
   }

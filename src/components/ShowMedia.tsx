@@ -58,7 +58,7 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
   );
 });
 
-function MediaMonthRows({ month, layout, from, to, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; onOpen: (file: MediaFile) => void }) {
+const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; onOpen: (file: MediaFile) => void }) {
   const { columns, cell } = layout;
   const pitch = cell + GAP;
   const rows = Math.ceil(month.images.length / columns);
@@ -76,7 +76,7 @@ function MediaMonthRows({ month, layout, from, to, onOpen }: { month: GridMonth;
       {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} />)}
     </section>
   );
-}
+});
 
 function MediaCell({ file, top, left, size, onOpen }: { file: MediaFile; top: number; left: number; size: number; onOpen: (file: MediaFile) => void }) {
   const { t } = useI18n();

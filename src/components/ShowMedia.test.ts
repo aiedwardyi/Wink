@@ -82,14 +82,15 @@ afterEach(() => {
   forgetMedia();
   delete window.ogb;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   for (const [name, descriptor] of sizes) Object.defineProperty(HTMLElement.prototype, name, descriptor);
 });
 
-function Pane({ source }: { source: MediaSource }) {
+function Pane({ source, closing }: { source: MediaSource; closing?: boolean }) {
   const item = useShowItem();
   const media = useMediaThread() === source.threadId;
   shown = item;
-  return item || media ? createElement(ShowPane, { item: item ?? undefined, media, source, hidden: false }) : null;
+  return item || media ? createElement(ShowPane, { item: item ?? undefined, media, source, hidden: false, closing }) : null;
 }
 
 // as the app holds it: the last open pane stays mounted, marked closing, for its exit
@@ -169,6 +170,21 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
   expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
+});
+
+it("keeps the grid as it is while a reply streams, and adds a file the moment it lands", async () => {
+  await act(async () => showMedia("t1"));
+  await render(chat);
+  await settle();
+  const img = host.querySelector("[data-media-grid] img");
+  const renders = vi.mocked(useThumb).mock.calls.length;
+  const plain: Message = { id: "b2", role: "bot", kind: "text", at: 3, text: "thinking" };
+  await render({ ...chat, messages: [upload, reply, plain] });
+  await render({ ...chat, messages: [upload, reply, { ...plain, text: "thinking more" }] });
+  expect(vi.mocked(useThumb).mock.calls.length).toBe(renders);
+  expect(host.querySelector("[data-media-grid] img")).toBe(img);
+  await render({ ...chat, messages: [upload, reply, { ...plain, text: "done: [new.png](C:\\w\\new.png)" }] });
+  expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toContain("new.png");
 });
 
 it("lists a room's files from the room, and shows its PDFs", async () => {
@@ -294,4 +310,24 @@ it("lists a room again only when a new message brings files", async () => {
   await render({ threadId: "r-thread", roomId: "r1", messages: [text, sent] });
   await settle();
   expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+});
+
+it("closes at its open width, with the same thumbs and no new fetch", async () => {
+  const { showMedia } = await import("@/lib/show-pane");
+  const source: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => showMedia("r-thread"));
+  await render(source);
+  await settle();
+  const thumb = host.querySelector("[data-media-grid] img");
+  const width = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ width: 633 } as DOMRect);
+  await act(async () => root.render(createElement(Pane, { source, closing: true })));
+  width.mockReturnValue({ width: 515 } as DOMRect);
+  await act(async () => root.render(createElement(Pane, { source, closing: true })));
+  await settle();
+  width.mockRestore();
+  expect(host.querySelector("aside")!.style.getPropertyValue("--dock")).toBe("633px");
+  expect(host.querySelector("[data-media-grid] img")).toBe(thumb);
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(1);
+  await render(source);
+  expect(host.querySelector("aside")!.style.getPropertyValue("--dock")).toBe("");
 });
