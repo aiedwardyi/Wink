@@ -2,6 +2,36 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.257] - 2026-11-13
+
+### Added
+- Teammates bring their own bots into a team room, and only a bot's owner can ask it; hosts can add bots to a people-only room.
+- Room details opens from the room name or picture, with People, Bots and Room settings in one place.
+- A live call follows you across chats, rooms and settings, with a call widget in the sidebar and above the chat box; pick the call voice and language in Settings.
+- Media is a month timeline with Photos and Files; save a file or show it in its folder, and hosts delete room files there.
+- Rooms take video and audio files, and teammates still on 1.0.256 stay in the room when one is posted.
+- The checker gets its own Check tab in the right pane, and the Show pane can save a copy of a bot file.
+- Anonymous usage stats; one "Crash reports and stats" switch in Settings turns both off.
+
+### Changed
+- Reactions use Noto color emoji icons.
+- The call voice talks warmer and quicker, leads with the answer, and offers work instead of promising it.
+- Muse turns end sooner and use fewer tokens.
+- Sign-in shows PCs as pills with the last-used one marked; desktop browsers switch PC from the sidebar's top icon.
+- The Live memory card's Asks is now To Do with a Show all row; bot questions you skip are filed on the asks list.
+- Chat pictures are capped at 512 x 384 and keep their size, so the chat doesn't jump.
+- Turns no longer wait on the task record save or a native engine's summary build.
+
+### Fixed
+- Voice calls: every spoken order is sent or the call says it wasn't, a yes to the voice's own offer confirms, and the confirm card names the bot.
+- Calls pick back up after the phone app returns from the background, or show Tap to resume.
+- Bot question cards stay live until answered or dismissed, and bots no longer answer twice in one turn.
+- Rooms: long catch-ups no longer cut off, teammates scroll past 200 lines, Leave works when the host is gone, lines show links, and hosts can let a removed teammate back in.
+- Bot PDFs open in Show in the installed app, Korean text included.
+- Chat keeps its place as new messages land, the show pane closes without reloading Media, and a double tap on Send no longer stops the turn.
+- On phones, taps no longer leave a hover highlight and the Memory glow no longer shows a black box.
+- Room code boxes: fixing one keeps the rest, Backspace clears one, and they don't text-select.
+
 ## [1.0.256] - 2026-11-12
 
 ### Added
