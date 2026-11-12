@@ -261,7 +261,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     followPendingSyncImports: noop, store, syncMemory: noop,
   };
   new Function(...Object.keys(deps), fold)(...Object.values(deps));
-  const deleteBotFully = load("deleteBotFully", {
+  const deleteDeps = {
     botAccounts: { instance: () => undefined },
     registry: { get: () => undefined }, store: { ...store, deleteBot: noop },
     stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
@@ -269,7 +269,8 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
     perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
     EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), removeRotatingLog: noop,
-  });
+  };
+  const deleteBotFully = load("deleteBotFully", { ...deleteDeps, stopBotWork: load("stopBotWork", deleteDeps) });
   const original = options.preparing ? startTurn(bot.id, "original") : Promise.resolve();
   const groupStopDeps = {
     store, taskResumes,

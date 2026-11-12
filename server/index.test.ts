@@ -443,6 +443,32 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("moves a deleted bot to Recently deleted, restores it whole and empties it for good", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const rows = storedMessageCount(bot.threadId);
+    const listed = async () => (await api("GET", "/api/bot-trash")).body.bots.filter((entry: { id: string }) => entry.id === bot.id);
+    const live = async () => (await api("GET", "/api/bots")).body.bots.some((entry: { id: string }) => entry.id === bot.id);
+
+    expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+    expect(await live()).toBe(false);
+    expect(await listed()).toEqual([expect.objectContaining({ id: bot.id, name: bot.name, daysLeft: 30 })]);
+    expect(storedMessageCount(bot.threadId)).toBe(rows);
+
+    const restored = await api("POST", `/api/bot-trash/${bot.id}/restore`);
+    expect(restored.status).toBe(200);
+    expect(restored.body.bot).toMatchObject({ id: bot.id, name: bot.name, threadId: bot.threadId });
+    expect(await live()).toBe(true);
+    expect(await listed()).toEqual([]);
+    expect(storedMessageCount(bot.threadId)).toBe(rows);
+
+    await api("DELETE", `/api/bots/${bot.id}`);
+    expect((await api("POST", "/api/bot-trash/empty")).body.emptied).toBeGreaterThanOrEqual(1);
+    expect(await listed()).toEqual([]);
+    expect(await live()).toBe(false);
+    expect(storedMessageCount(bot.threadId)).toBe(0);
+    expect((await api("POST", `/api/bot-trash/${bot.id}/restore`)).status).toBe(409);
+  });
+
   it("deduplicates repeated room members while preserving their first-seen order", async () => {
     const [first, second] = await Promise.all([api("POST", "/api/bots"), api("POST", "/api/bots")]).then(
       (created) => created.map((response) => response.body.bot),

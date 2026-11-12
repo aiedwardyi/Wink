@@ -3,6 +3,7 @@
 import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
+import type { RoomNotice } from "../store.ts";
 import type { RoomAuthor, RoomEntry, RoomFile } from "./db.ts";
 
 /** The relay cuts a socket idle for 10 minutes. */
@@ -24,6 +25,7 @@ export interface DoorEntry {
 export interface DoorState {
   version: number;
   picture?: string;
+  notice?: RoomNotice;
   roomName: string;
   instructions: string;
   host: string;
@@ -33,9 +35,17 @@ export interface DoorState {
   myAsks: never[];
 }
 
+/** `by` is "host", "person:<id>" or "bot:<id>". */
+export interface LineReactions {
+  id: string;
+  marks: Array<{ emoji: string; by: string }>;
+}
+
+/** Older guests drop an unknown kind, so this never breaks their stream. A `reset` frame starts a full set. */
 export type DoorFrame =
   | { kind: "entry"; entry: DoorEntry }
   | { kind: "state"; state: DoorState }
+  | { kind: "reactions"; reset?: true; lines: LineReactions[] }
   | { kind: "deleted"; ids: string[] }
   | { kind: "reset" }
   | { kind: "ended" };
@@ -138,6 +148,10 @@ export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {
   if (!streams.size) return;
   const frame: DoorFrame = { kind: "entry", entry: doorEntry(entry) };
   for (const stream of roomStreams(roomId)) deliver(stream, frame);
+}
+
+export function broadcastDoorReactions(roomId: string, lines: LineReactions[]): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "reactions", lines });
 }
 
 export function sendDoorState(roomId: string, stateFor: (personId: string) => DoorState | null): void {

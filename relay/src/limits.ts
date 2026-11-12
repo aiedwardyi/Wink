@@ -44,6 +44,10 @@ export interface RelayLimits {
   drainGraceMs: number;
   /** Stuck-worker reports kept per PC label per UTC day. */
   snagsPerLabelPerDay: number;
+  /** GET /v1/room-codes/<code>, per source IP and relay-wide. */
+  roomCodeLookupsPerIpPerMin: number;
+  roomCodeLookupsPerIpPerHour: number;
+  roomCodeLookupsPerHour: number;
 }
 
 export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
@@ -72,6 +76,9 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   maxBodyBytes: 4_096,
   drainGraceMs: 10_000,
   snagsPerLabelPerDay: 20,
+  roomCodeLookupsPerIpPerMin: 10,
+  roomCodeLookupsPerIpPerHour: 30,
+  roomCodeLookupsPerHour: 1_000,
 });
 
 interface Bucket {

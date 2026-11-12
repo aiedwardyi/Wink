@@ -646,3 +646,35 @@ describe("bot lines", () => {
     expect(c.room("r1")!.state!.bots).toEqual([]);
   });
 });
+
+describe("reactions", () => {
+  it("keeps the emoji row off for an older host that sends no reactions frame", async () => {
+    route = quietDoor;
+    const c = guest();
+    await c.join(CODE);
+    await until(() => c.room("r1")?.link === "live");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(c.room("r1")?.canReact).toBe(false);
+  });
+
+  it("turns it on with the host's first reactions frame and routes a toggle to the door", async () => {
+    route = (req, res, body) => {
+      if (req.url?.includes("/stream")) {
+        quietDoor(req, res);
+        res.write(`data: ${JSON.stringify({ kind: "reactions", reset: true, lines: [{ id: "e1", marks: [{ emoji: "👍", by: "host" }] }] })}\n\n`);
+        return;
+      }
+      if (req.url === "/room/v1/rooms/r1/react") return reply(res, 200, { marks: [{ emoji: "👍", by: "host" }, ...(JSON.parse(body).emoji === "😂" ? [{ emoji: "😂", by: "person:p1" }] : [])] });
+      quietDoor(req, res);
+    };
+    const c = guest();
+    await c.join(CODE);
+    addJoinedEntries("r1", [{ seq: 1, id: "e1", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "hi" }], 1);
+    await until(() => c.room("r1")?.canReact === true);
+    expect(c.room("r1")?.entries[0]?.reactions).toEqual([{ emoji: "👍", by: "host" }]);
+    const res = await joinedRoute("POST", "/api/joined/rooms/r1/entries/e1/reactions", c, async () => ({ emoji: "😂" }));
+    expect(res?.status).toBe(200);
+    expect(JSON.parse(seen.find((row) => row.url === "/room/v1/rooms/r1/react")!.body)).toEqual({ entryId: "e1", emoji: "😂" });
+    expect(c.room("r1")?.entries[0]?.reactions).toHaveLength(2);
+  });
+});

@@ -4,7 +4,7 @@ import { createReplay } from "../../server/verify-replay.ts";
 import { readReplay } from "./verify-replay";
 import type { VerifyIssue } from "../../shared/live-verify";
 import type { VerifyReplayChunk } from "./verify-replay";
-import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, tagSpot } from "./verify-watch-show";
+import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, glideEase, tagSpot } from "./verify-watch-show";
 
 const head: VerifyReplayChunk = { kind: "head", head: { v: 1, runId: "r", site: "luna/index.html", page: "index.html", startedAt: 0, tiles: { desktop: [1280, 720], phone: [392, 800] } } };
 const frame = (ms: number, tile: "desktop" | "phone" = "desktop"): VerifyReplayChunk => ({ kind: "frame", tile, ms, jpeg: new Uint8Array([ms & 255]) });
@@ -100,12 +100,12 @@ it("has no beat: live marks land at once with no grid", () => {
 it("glides to the checker's own next thing, stays continuous at 16 ms frames and leaves the outlines on their beat", () => {
   const show = replay(result(0, 0, 0), result(1200, 1000, 500), end(1300));
   let last = position(show);
-  toClock(show, 180);
+  toClock(show, 100);
   expect(position(show)).toEqual(last);
-  while (show.clock < 900) {
-    show.advance(Math.min(16, 900 - show.clock));
+  while (show.clock < 380) {
+    show.advance(Math.min(16, 380 - show.clock));
     const p = position(show);
-    expect(Math.hypot(p.x - last.x, p.y - last.y)).toBeLessThan(60);
+    expect(Math.hypot(p.x - last.x, p.y - last.y)).toBeLessThan(Math.hypot(1000, 500) / 4);
     expect(p.x).toBeGreaterThanOrEqual(last.x);
     expect(p.y).toBeGreaterThanOrEqual(last.y);
     last = p;
@@ -118,10 +118,10 @@ it("glides to the checker's own next thing, stays continuous at 16 ms frames and
 
 it("jumps only on arrival with reduced motion, keeping check timing unchanged", () => {
   const show = replay(result(0, 0, 0), result(1200, 1000, 0), end(1300));
-  toClock(show, 800);
+  toClock(show, 300);
   expect(position(show).x).toBeGreaterThan(900);
   expect(position(show, true)).toEqual({ x: 12, y: 10 });
-  toClock(show, 900);
+  toClock(show, 380);
   expect(position(show, true)).toEqual({ x: 1012, y: 10 });
   expect(show.checks).toBe(1);
   toClock(show, SHOW_MIN_MS / 2);
@@ -130,7 +130,7 @@ it("jumps only on arrival with reduced motion, keeping check timing unchanged", 
 
 it("redraws on the frame a cursor arrives so a reduced-motion jump shows on time", () => {
   const show = replay(result(0, 0, 0), result(1200, 1000, 0), end(1300));
-  toClock(show, 899);
+  toClock(show, 379);
   expect(show.advance(2)).toBe(true);
   expect(position(show, true)).toEqual({ x: 1012, y: 10 });
   expect(show.advance(2)).toBe(false);
@@ -138,11 +138,11 @@ it("redraws on the frame a cursor arrives so a reduced-motion jump shows on time
 
 it("aims only at things in the view it plays at", () => {
   const show = replay(frame(0), result(0, 0, 0), mark(1100, "scroll", { tile: "desktop", y: 500 }), frame(1110), result(1200, 600, 700, { scrollY: 500 }), end(1300));
-  toClock(show, 1080);
-  expect(position(show)).toEqual({ x: 18, y: 10 });
+  toClock(show, 1240);
+  expect(position(show)).toEqual({ x: 12, y: 10 });
   toClock(show, SHOW_MIN_MS / 2);
   expect(show.scroll.desktop).toBe(500);
-  toClock(show, 1800);
+  toClock(show, 1520);
   expect(position(show)).toEqual({ x: 612, y: 210 });
 });
 
@@ -159,7 +159,7 @@ it("derives the same positions from the clock with 8 ms and 16 ms frames", () =>
 
 it("redraws during a glide before a thing changes the UI", () => {
   const show = replay(result(0, 0, 0), result(2000, 1000, 0), end(2100));
-  toClock(show, 1200);
+  toClock(show, 1300);
   const { version, ui } = show;
   expect(show.advance(16)).toBe(true);
   expect(show.version).toBeGreaterThan(version);
@@ -289,7 +289,7 @@ it("glides a late live target within 250 ms and keeps reduced motion instant", (
   expect(position(show)).toEqual(before);
   show.advance(16);
   expect(position(show).x).toBeGreaterThan(before.x);
-  expect(position(show).x).toBeLessThan(before.x + 30);
+  expect(position(show).x).toBeLessThan(before.x + 1000 / 4);
   expect(position(show, true)).toEqual({ x: 1012, y: 510 });
   toClock(show, at + 250);
   expect(position(show)).toEqual({ x: 1012, y: 510 });
@@ -485,10 +485,20 @@ it("staggers arrivals so the cursors never move in lockstep", () => {
   const seen = arrivals(replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90)));
   const dues = seen.map(a => a.due);
   expect(new Set(dues).size).toBe(dues.length);
-  expect(Math.min(...dues.slice(1).map((due, i) => due - dues[i]!))).toBeGreaterThanOrEqual(150);
+  expect(Math.min(...dues.slice(1).map((due, i) => due - dues[i]!))).toBeGreaterThanOrEqual(60);
 });
 
-it("never teleports a cursor and keeps them apart when they land", () => {
+it("glides each cursor quickly, fast first and soft at the end", () => {
+  const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90)), glides = new Set<number>();
+  while (show.phase === "play") {
+    for (const c of swarm(show)) if (c.at > 1_000) glides.add(c.duration);
+    show.advance(16);
+  }
+  expect([...glides]).toEqual([280]);
+  expect(glideEase(1 / 3)).toBeGreaterThan(0.75);
+});
+
+it("never teleports a cursor: a glide spans several frames, and they land apart", () => {
   const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90));
   const last = new Map<string, { x: number; y: number }>();
   while (show.phase === "play") {
@@ -497,7 +507,7 @@ it("never teleports a cursor and keeps them apart when they land", () => {
     const now = swarm(show).map(c => ({ c, p: show.cursorAt(c) }));
     for (const { c, p } of now) {
       const was = last.get(who(c));
-      if (was) expect(Math.hypot(p.x - was.x, p.y - was.y)).toBeLessThan(60);
+      if (was) expect(Math.hypot(p.x - was.x, p.y - was.y)).toBeLessThanOrEqual(Math.hypot(c.to.x - c.from.x, c.to.y - c.from.y) / 4 + 1);
       last.set(who(c), p);
       if (show.clock >= c.at + c.duration) for (const other of now) if (other.c !== c && show.clock >= other.c.at + other.c.duration) expect(Math.hypot(other.p.x - p.x, other.p.y - p.y)).toBeGreaterThan(40);
     }

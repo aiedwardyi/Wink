@@ -11,6 +11,7 @@ import type { WorkerTurnResolver } from "./worker-turn.ts";
 import { applyCredentialAllowlist } from "./config.ts";
 import { workerSession } from "./worker-session.ts";
 import { baseAccount, resumeArgs, type WorkerResume } from "./worker-resume.ts";
+import { requireCodexPromoAccount } from "../electron/codex-promo.mjs";
 
 const ENGINES = new Map([
   ["claude", { driver: "claudeAgent", base: "claude", name: "Claude" }],
@@ -144,6 +145,12 @@ export function createWorkerLaunch(options: {
     return false;
   };
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
+    let requested: ReturnType<typeof workerCommand> | undefined;
+    try { requested = workerCommand(input.command, input.mode === "send"); } catch {}
+    if (!deps.enabled() && !input.resume && requested?.kind === "managed" && requested.driver === "codex") {
+      const home = requested.home?.value ?? baseAccount("codex", "codex", input.environment).home;
+      requireCodexPromoAccount(home);
+    }
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
     // Routing is on for the credit alone; every other launch gets the answer an unrouted host gets today.
     if (!deps.enabled() && !input.resume && (input.mode === "send" || !onCredit(input.command))) return deps.credit && process.platform === "win32" && input.mode !== "send" ? unroutedLaunch(input.command) : null;
@@ -179,6 +186,7 @@ export function createWorkerLaunch(options: {
     const mainDown = main === null || (main !== undefined && !deps.available(main.id, main.generation));
     const account = selected ?? (sameEngine && turn.account ? turn.account : main && !mainDown ? main : baseAccount(baseId, command.driver, baseEnvironment));
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
+    if (command.driver === "codex") requireCodexPromoAccount(account.home, account.generation);
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
     let workerSettings = false;
@@ -221,6 +229,7 @@ export function createWorkerLaunch(options: {
     const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
+    if (command.driver === "codex") requireCodexPromoAccount(account.home, account.generation);
     const nowMain = sameEngine || selected ? undefined : deps.mainAccount?.(baseId);
     if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation)
       || (selected && !candidates().some((row) => row.id === selected.id && row.generation === selected.generation && row.home === selected.home))
