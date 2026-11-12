@@ -5021,6 +5021,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     });
     opts?.onDispatchError?.(detail);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
   let latestCompactionId = prepared.compactionId ?? null;
@@ -5036,6 +5037,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       opts?.onDispatchError?.(detail);
       logSummaryWait();
+      store.settleTaskPacket(threadId);
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
     if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
@@ -5241,11 +5243,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (currentTurnEpoch(bot.id) !== epoch) {
     memoryLookup.release(bot.id, threadId);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage);
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
     memoryLookup.release(bot.id, threadId);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { cancelled: true });
   }
   store.setActivity(bot.id, "working", threadId);
@@ -5256,6 +5260,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.setActivity(bot.id, "idle");
     clearSendRunning(bot.id);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage);
   }
   // a pane note, delegation, routine, or peer ask starting this turn is not
@@ -5289,6 +5294,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
+      store.settleTaskPacket(threadId);
       settleTrace?.();
       return;
     }
