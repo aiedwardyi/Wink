@@ -240,6 +240,8 @@ export interface TaskResumePacket {
   flushReason: "turn-end" | "progress" | "approval" | "stop" | "engine-switch" | "crash" | "pre-compaction" | "shutdown";
   lastEventId?: string;
   turnsAtWrite: number;
+  /** the bot's ask list; read through botAsks, which skips malformed items */
+  asks?: unknown[];
 }
 
 export interface TaskUsage {

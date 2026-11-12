@@ -7,6 +7,7 @@ import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, MemoryFileLines, NotedLines, type MemoryTopic } from "./MemoryGroups";
 import { paintsGlow, smoothGlow } from "./MemoryMapGlow";
 import { AURA, fadePanel, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { MemoryAsks } from "./MemoryAsks";
 import { TopicRows } from "./MemoryTopics";
 import { Fold } from "./Fold";
 import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
@@ -378,6 +379,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                   </div>
                 ) : <div className="mm-empty">{t("bot.memoryWorkingIdle")}</div>}
               </div>
+              <MemoryAsks bot={bot} />
               <div className="mm-learned">
                 <div className="mm-sec-head"><Sparkle size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryLearned")}</span><span className="mm-sec-hint">{t("bot.memoryLearnedHint")}</span></div>
                 {failed ? null : map.learned.length
