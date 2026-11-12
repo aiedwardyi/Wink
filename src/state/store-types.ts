@@ -148,7 +148,7 @@ export type GroupDefaultResponder =
 export interface Group {
   picture?: string | null;
   /** A team room's pinned line; `by` is "host" or "person:<id>". */
-  notice?: { entryId: string; by: string; at: number } | null;
+  notice?: { entryId: string; by: string; at: number; text?: string } | null;
   id: string;
   threadId: string;
   name: string;

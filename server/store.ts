@@ -255,6 +255,8 @@ export interface RoomNotice {
   entryId: string;
   by: string;
   at: number;
+  /** The line's text, for viewers whose loaded lines no longer reach it. */
+  text?: string;
 }
 
 export interface GroupRecord {

@@ -337,7 +337,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         if (!existing.hosted) return json(res, 400, { error: "not a team room" });
         const entry = typeof body.notice === "string" && /^[\w-]{1,64}$/.test(body.notice) ? roomEntry(existing.hosted.roomId, body.notice) : null;
         if (body.notice !== null && !entry) return json(res, 400, { error: "notice must be a room line id" });
-        patch.notice = entry ? { entryId: entry.id, by: "host", at: Date.now() } : undefined;
+        patch.notice = entry ? { entryId: entry.id, by: "host", at: Date.now(), text: entry.text } : undefined;
       }
       // one pinned message per room; null/"" clears. The id is not
       // validated against the transcript here - a pin whose message was

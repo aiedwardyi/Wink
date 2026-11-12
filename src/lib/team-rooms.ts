@@ -51,7 +51,7 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; notice?: { entryId: string; by: string; at: number } } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; notice?: { entryId: string; by: string; at: number; text?: string } } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
   /** False for an older host: no emoji row and no notice pin. */

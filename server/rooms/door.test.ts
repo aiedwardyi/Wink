@@ -1222,7 +1222,7 @@ describe("notice", () => {
     try {
       expect(await pin(group, mina.key, first.id)).toMatchObject({ status: 200, body: { notice: { entryId: first.id, by: `person:${mina.personId}` } } });
       await stream.until((frames) => noticeOf(frames)?.entryId === first.id);
-      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: daniel.key })).body.state.notice).toMatchObject({ entryId: first.id, by: `person:${mina.personId}`, at: expect.any(Number) });
+      expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: daniel.key })).body.state.notice).toMatchObject({ entryId: first.id, by: `person:${mina.personId}`, at: expect.any(Number), text: first.text });
       expect((await pin(group, daniel.key, second.id)).status).toBe(200);
       expect(store.groups.find((candidate) => candidate.id === group.id)?.notice).toMatchObject({ entryId: second.id, by: `person:${daniel.personId}` });
       expect((await pin(group, mina.key, null)).status).toBe(403);

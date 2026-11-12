@@ -603,6 +603,7 @@ describe("reactions and the notice on a teammate", () => {
     expect(await c.notice(roomId, welcome.id)).toMatchObject({ ok: true });
     await until(() => c.room(roomId)?.state?.notice?.entryId === welcome.id);
     expect(c.room(roomId)?.noticeEntry?.text).toBe("welcome");
+    expect(c.room(roomId)?.state?.notice?.text).toBe("welcome");
     expect(store.groups.find((candidate) => candidate.id === group.id)?.notice?.by).toBe(`person:${c.room(roomId)!.me.id}`);
     expect(await c.notice(roomId, null)).toMatchObject({ ok: true });
     await until(() => !c.room(roomId)?.state?.notice);

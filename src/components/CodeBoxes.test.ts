@@ -102,4 +102,19 @@ describe("6-box code input", () => {
     for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);
     expect(onDone).toHaveBeenCalledWith("GHJKLM");
   });
+
+  it("reads Korean keyboard letters as the keys they sit on", async () => {
+    const { boxes, onDone } = await mount();
+    for (const [i, ch] of [..."ㅁㅠㅊ2ㄸ"].entries()) await type(boxes[i]!, ch);
+    expect(value(boxes)).toBe("ABC2E");
+    await type(boxes[5]!, "ㄹ");
+    expect(onDone).toHaveBeenCalledWith("ABC2EF");
+  });
+
+  it("splits a composed Hangul syllable into its keys", async () => {
+    const { boxes } = await mount();
+    await type(boxes[0]!, "닭");
+    expect(value(boxes)).toBe("EKFR");
+    expect(document.activeElement).toBe(boxes[4]);
+  });
 });

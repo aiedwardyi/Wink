@@ -36,7 +36,7 @@ export interface JoinedFile {
 export interface JoinedState {
   version: number;
   picture?: string;
-  notice?: { entryId: string; by: string; at: number };
+  notice?: { entryId: string; by: string; at: number; text?: string };
   roomName: string;
   instructions: string;
   host: string;

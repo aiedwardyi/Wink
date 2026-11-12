@@ -68,7 +68,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply}
         reactionNames={names}
         onReact={(message, emoji) => dispatch({ type: "toggleReaction", threadId: group.threadId, messageId: message.id, emoji, message })}
-        notice={{ entryId: noticeEntry, canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
+        notice={{ entryId: noticeEntry, text: group.notice?.text, canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} replyTo={replyTo} onClearReply={clearReply} />}

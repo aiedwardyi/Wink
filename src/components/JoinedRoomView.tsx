@@ -102,7 +102,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         onReact={room?.canReact ? (message, emoji) => void reactInJoinedRoom(roomId, message.roomEntryId ?? message.id, emoji).catch(() => {}) : undefined}
         notice={{
           entryId: notice?.entryId,
-          text: room?.noticeEntry?.text,
+          text: room?.noticeEntry?.text ?? notice?.text,
           canUnpin: notice?.by === `person:${meId}`,
           set: room?.canReact ? (entryId) => void setJoinedNotice(roomId, entryId).catch(() => {}) : undefined,
         }}
