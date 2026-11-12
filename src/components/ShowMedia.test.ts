@@ -230,7 +230,9 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await settle();
   expect(calls).toContain("/api/rooms/r1/files");
   expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(3)}/preview`);
+  expect(host.querySelector("[data-media-grid] button")?.getAttribute("data-media-key")).toBe(id(3));
   const sheet = [...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "sheet.xlsx")!;
+  expect(sheet.getAttribute("data-media-key")).toBe(id(1));
   expect(sheet.getAttribute("href")).toBe(`/api/rooms/r1/files/${id(1)}`);
   expect(sheet.hasAttribute("download")).toBe(true);
   await click([...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "plan.pdf")!);

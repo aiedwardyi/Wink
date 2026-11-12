@@ -83,7 +83,7 @@ function MediaCell({ file, top, left, size, onOpen }: { file: MediaFile; top: nu
   const thumb = useThumb(file.src!);
   const [loaded, setLoaded] = useState(false);
   return (
-    <button type="button" title={file.name} aria-label={t("viewer.open", { name: file.name })} onClick={() => onOpen(file)} style={{ top, left, width: size, height: size }}
+    <button type="button" data-media-key={file.key} title={file.name} aria-label={t("viewer.open", { name: file.name })} onClick={() => onOpen(file)} style={{ top, left, width: size, height: size }}
       className="absolute overflow-hidden rounded-lg bg-raised focus-visible:outline-2 focus-visible:outline-accent">
       {thumb && <img src={thumb} alt="" decoding="async" data-loaded={loaded || undefined} onLoad={() => setLoaded(true)} className="size-full object-cover" />}
     </button>
@@ -160,8 +160,8 @@ function MediaRow({ file, top }: { file: MediaFile; top: number }) {
   const show = file.show;
   const openFile = file.path ? window.ogb?.openFile : undefined;
   const style = { top };
-  if (show) return <button type="button" data-media-file title={file.name} onClick={() => showItem(show)} style={style} className={ROW}>{body}</button>;
-  if (openFile) return <button type="button" data-media-file title={file.path} onClick={() => void openFile(file.path!).catch(() => {})} style={style} className={ROW}>{body}</button>;
-  if (file.src) return <a href={file.src} download={file.name} data-media-file title={file.name} style={style} className={ROW}>{body}</a>;
-  return <div data-media-file title={file.name} style={style} className={ROW}>{body}</div>;
+  if (show) return <button type="button" data-media-file data-media-key={file.key} title={file.name} onClick={() => showItem(show)} style={style} className={ROW}>{body}</button>;
+  if (openFile) return <button type="button" data-media-file data-media-key={file.key} title={file.path} onClick={() => void openFile(file.path!).catch(() => {})} style={style} className={ROW}>{body}</button>;
+  if (file.src) return <a href={file.src} download={file.name} data-media-file data-media-key={file.key} title={file.name} style={style} className={ROW}>{body}</a>;
+  return <div data-media-file data-media-key={file.key} title={file.name} style={style} className={ROW}>{body}</div>;
 }
