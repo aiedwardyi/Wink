@@ -93,7 +93,9 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("say it in 1-3 sentences.");
     expect(brief).not.toContain("details in chat");
-    expect(brief).toContain("Never point the person to the chat or tell them to check it for details, in any language.");
+    expect(brief).toContain("never point the person to the chat or tell them to check it for details, in any language.");
+    expect(brief).toContain("No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat");
+    expect(brief).toContain("Busy in STATUS never stops new work: offer it and call propose_work, it queues.");
   });
 
   it("brief greets in the app language", async () => {
@@ -140,6 +142,32 @@ describe("call token", () => {
     expect(brief(0)).toContain("ask again in Korean");
     expect(brief(1)).toContain("Speak English");
     expect(brief(0)).not.toContain("the user's language");
+  });
+
+  it("brief answers English or Korean in kind, any other language in the app language", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("When they speak English or Korean, answer in that language");
+    expect(brief).toContain("Any other language, Japanese too, gets English, never a third language.");
+    expect(brief).not.toContain("Switch only when the person clearly asks");
+  });
+
+  it("brief never names the app Orbit", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-extras\notes" }, { seedMessages: false });
+    h.store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "is OpenMaus or MausBot in the Orbit build?" });
+    await h.post("token", {}, bot.id);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("your project teacher for Wink");
+    expect(brief).not.toMatch(/Orbit|OpenMaus|MausBot/i);
+  });
+
+  it("a bot named Orbit keeps its name", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Orbit" }, { seedMessages: false });
+    await h.post("token", {}, bot.id);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("You are Orbit.");
   });
 
   it("409s without a key and puts one Gemini key card in the chat", async () => {

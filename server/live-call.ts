@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, type CallLine, type CallTag } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_GENERATION, LIVE_URL, LIVE_VAD, type CallLine, type CallTag } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -33,7 +33,9 @@ const SUMMARY_URL = `https://generativelanguage.googleapis.com/v1beta/models/${S
 const SUMMARY_MAX_CHARS = 280;
 const TRANSCRIPT_MAX_CHARS = 12_000;
 const CALL_LINES_TOKENS = 2_000;
-const CALL_LINES_HEAD = "[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
+// Old product names the voice would read aloud from notes, chat or a description.
+const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/gi;
+const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
 
 type LiveCallDeps = {
   cfg: AppConfig;
@@ -93,6 +95,11 @@ export function capNotes(text: string, max = NOTES_MAX_BYTES): string {
   return lastBreak > 0 ? cut.slice(0, lastBreak) : cut;
 }
 
+/** The app is Wink aloud; a bot named after an old name keeps it. */
+export function plainNames(text: string, botName: string): string {
+  return text.replace(OLD_NAMES, (name) => name.toLowerCase() === botName.trim().toLowerCase() ? name : "Wink");
+}
+
 /** Newest transcript lines within the token budget, oldest first. */
 export function chatTail(lines: Array<{ role: string; text: string }>, userName: string, budget = CHAT_TAIL_TOKENS): string {
   const kept: string[] = [];
@@ -112,16 +119,16 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
-  return [
+  return plainNames([
     `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
-    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will check, look into or add something unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
+    "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will check, look into or add something unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
     "FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines. Anything else: call ask.",
-    `STYLE: 1-2 short sentences. Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}. No code, paths or links aloud. Never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
+    `STYLE: 1-2 short sentences. Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}. No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
     `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id))}\nLocal time ${new Date(now).toString()}.`,
-  ].join("\n\n");
+  ].join("\n\n"), bot.name);
 }
 
 /** Two short sentences from the person's side, or undefined when Google gives nothing usable. */
@@ -173,7 +180,7 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
 export function liveSetup(brief: string, locale = "en") {
   return {
     model: `models/${LIVE_MODEL}`,
-    generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } } },
+    generationConfig: LIVE_GENERATION,
     systemInstruction: { parts: [{ text: brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
     inputAudioTranscription: { languageCodes: [locale === "ko" ? "ko" : "en"] },
