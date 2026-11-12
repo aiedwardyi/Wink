@@ -9,6 +9,7 @@ import { useStoreDispatch, type Bot, type Message } from "@/state/store";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { ReactionIcon } from "./ReactionIcon";
 
 /** The standoff between the bar and the picker. */
 const PICKER_GAP = 6;
@@ -200,7 +201,7 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
                       pressed && "bg-accent/15 ring-1 ring-accent/40",
                     )}
                   >
-                    {emoji}
+                    <ReactionIcon emoji={emoji} size={15} />
                   </button>
                 );
               })}
@@ -256,7 +257,7 @@ export function ReactionChips({
               : "border-hairline/40 bg-panel hover:bg-control",
           )}
         >
-          <span>{emoji}</span>
+          <ReactionIcon emoji={emoji} size={17} />
           {bys.length > 1 && <span className="text-[11px] text-ink-secondary">{bys.length}</span>}
         </button>
       ))}

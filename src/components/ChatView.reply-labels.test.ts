@@ -445,7 +445,7 @@ describe("ChatView target-side peer chips", () => {
   it("renders stored bot reactions on a peer message", async () => {
     const { host } = await mount(bot([received, { ...inbound, reactions: [{ emoji: "👍", by: "helper" }] }]));
     const reaction = host.querySelector('[data-mid="inbound"] [data-message-reactions] button');
-    expect(reaction?.textContent).toBe("👍");
+    expect(reaction?.querySelector("[data-emoji]")?.getAttribute("data-emoji")).toBe("👍");
     expect(reaction?.getAttribute("title")).toBe("Helper");
   });
 
