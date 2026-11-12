@@ -89,6 +89,7 @@ import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
+import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
@@ -1079,7 +1080,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   if (rehydrated) setSeenSnapshot(state.snapshots);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
-  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+  const earlier = useMemo(() => createEarlierWindow(shown, {
     terminal, workers: rowWorkers, renders: (message) => messageVisible(message, { showToolCalls, showActivities, transcript: shown }),
   }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
@@ -1091,7 +1092,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlier.start(prepended, scrollRef.current) : undefined));
     } else if (prepended < 0) {
       const { id, index } = windowAnchor.current;
       const at = id ? shown.findIndex((message) => message.id === id) : -1;
@@ -1408,7 +1409,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       return;
     }
     preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
-    const start = earlierStart(startIndex, scrollRef.current);
+    const start = earlier.start(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1432,7 +1433,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const [showEarlier, cancelEarlier] = useEarlierPage({
     key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : bot.hasMore),
     scrollRef, previousScrollTop, expand: expandEarlier,
+    settle: () => {
+      const end = earlier.end(startIndex, scrollRef.current);
+      if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
+    },
   });
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1764,7 +1770,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           aria-label={t("chat.conversationAria", { name: bot.name })}
         >
           {(hiddenCount > 0 || (jump.messages ? jump.hasMore : bot.hasMore)) && (
-            <div className="flex justify-center pt-2">
+            <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"

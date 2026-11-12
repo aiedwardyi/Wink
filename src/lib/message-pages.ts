@@ -7,33 +7,54 @@ import { TRANSCRIPT_WINDOW_SIZE, advanceWindow, shouldAdvanceWindow } from "./tr
 import { groupActivityRuns } from "./activity-runs";
 import { workerAnchors, type WorkerRun } from "./worker-runs";
 
+// rows a window reading back keeps mounted; the rest below unmount until the reader scrolls down
+const EARLIER_CAP = TRANSCRIPT_WINDOW_SIZE * 2;
+// rows one earlier load mounts at least, so long bubbles still bring a real page
+const EARLIER_ROWS = 40;
+
 export function createEarlierWindow(messages: Message[], {
   terminal, renders, workers,
 }: { terminal: boolean; renders: (message: Message) => boolean; workers: readonly { run: WorkerRun }[] }) {
-  let rows: { first: number; last: number }[] | undefined;
-  return (before: number, viewport: HTMLElement | null): number => {
-    if (!rows) {
-      const anchors = workerAnchors(workers, messages);
-      const visible = (message: Message) => anchors.has(message.id)
-        ? Boolean(anchors.get(message.id))
-        : message.kind !== "launch" && renders(message);
-      const indices = new Map(messages.map((message, index) => [message.id, index]));
-      rows = groupActivityRuns(messages, terminal, visible).flatMap((item) => {
-        const first = item.kind === "message" ? item.message : item.messages[0];
-        const last = item.kind === "message" ? first : item.messages.at(-1)!;
-        return visible(first) ? [{ first: indices.get(first.id)!, last: indices.get(last.id)! }] : [];
-      });
-    }
+  let built: { first: number; last: number }[] | undefined;
+  const rows = () => {
+    if (built) return built;
+    const anchors = workerAnchors(workers, messages);
+    const visible = (message: Message) => anchors.has(message.id)
+      ? Boolean(anchors.get(message.id))
+      : message.kind !== "launch" && renders(message);
+    const indices = new Map(messages.map((message, index) => [message.id, index]));
+    return built = groupActivityRuns(messages, terminal, visible).flatMap((item) => {
+      const first = item.kind === "message" ? item.message : item.messages[0];
+      const last = item.kind === "message" ? first : item.messages.at(-1)!;
+      return visible(first) ? [{ first: indices.get(first.id)!, last: indices.get(last.id)! }] : [];
+    });
+  };
+  const start = (before: number, viewport: HTMLElement | null): number => {
     let size = TRANSCRIPT_WINDOW_SIZE;
     if (viewport && viewport.clientHeight > 0) {
       const mounted = [...viewport.querySelectorAll("[data-mid], [data-run]")].filter((row) =>
         !row.parentElement?.closest("[data-mid], [data-run]") && row.lastElementChild && row.lastElementChild.getBoundingClientRect().height > 0);
-      if (mounted.length) size = Math.max(1, Math.ceil(2 * viewport.clientHeight * mounted.length / viewport.scrollHeight));
+      if (mounted.length) size = Math.max(EARLIER_ROWS, Math.ceil(2 * viewport.clientHeight * mounted.length / viewport.scrollHeight));
     }
     let counted = 0;
-    for (let i = rows.length - 1; i >= 0; i--) if (rows[i].last < before && ++counted >= size) return rows[i].first;
+    const all = rows();
+    for (let i = all.length - 1; i >= 0; i--) if (all[i].last < before && ++counted >= size) return all[i].first;
     return 0;
   };
+  /** Where a window reading back from `from` stops mounting, or null while it holds no more than the cap. */
+  const end = (from: number, viewport: HTMLElement | null): number | null => {
+    const all = rows();
+    const at = all.findIndex((row) => row.first >= from);
+    const cut = at < 0 ? undefined : all[at + EARLIER_CAP];
+    if (!cut) return null;
+    // never unmount a row the reader is about to scroll onto
+    const id = messages[cut.first]?.id;
+    const row = viewport && [...viewport.querySelectorAll("[data-mid], [data-run]")].find((el) => el.getAttribute("data-mid") === id || el.getAttribute("data-run")?.endsWith(`:${id}`));
+    const box = row?.lastElementChild?.getBoundingClientRect();
+    if (viewport && box && box.height > 0 && box.top < viewport.getBoundingClientRect().bottom + viewport.clientHeight) return null;
+    return cut.first;
+  };
+  return { start, end };
 }
 
 export async function fetchOlderPage(threadId: string, before: string, pages = 1): Promise<{ messages: Message[]; hasMore: boolean }> {
@@ -306,7 +327,7 @@ export function useForwardWindow<W extends { key: string; start: number; end: nu
 }
 
 export function useEarlierPage({
-  key, shown, startIndex, hasMore, scrollRef, previousScrollTop, expand,
+  key, shown, startIndex, hasMore, scrollRef, previousScrollTop, expand, settle,
 }: {
   key: string;
   shown: Message[];
@@ -315,10 +336,12 @@ export function useEarlierPage({
   scrollRef: React.RefObject<HTMLElement | null>;
   previousScrollTop: React.RefObject<number>;
   expand: (onFail: () => void, beforeCommit: () => boolean, pages: number) => void;
+  /** After the last batch of a load lands and the reader's place is restored. */
+  settle: () => void;
 }) {
   const pending = useRef<{ key: string; landed: boolean; height: number; screen: number; added: number; anchor: TranscriptAnchor | null; top: number } | null>(null);
-  const latest = useRef(expand);
-  useLayoutEffect(() => { latest.current = expand; });
+  const latest = useRef({ expand, settle });
+  useLayoutEffect(() => { latest.current = { expand, settle }; });
   const fail = () => { if (pending.current?.key === key) pending.current = null; };
   const measure = () => {
     const page = pending.current;
@@ -344,9 +367,9 @@ export function useEarlierPage({
     if (page.anchor && !anchored) restoreTranscriptScroll(el, { scrollHeight: page.height, scrollTop: page.top });
     previousScrollTop.current = el.scrollTop;
     page.added += anchored ? el.scrollTop - page.top : el.scrollHeight - page.height;
-    if (!hasMore || page.added >= page.screen) { fail(); return; }
+    if (!hasMore || page.added >= page.screen) { fail(); latest.current.settle(); return; }
     // Stored pages can fold to nothing; keep going until a screen actually lands.
-    latest.current(fail, measure, 5);
+    latest.current.expand(fail, measure, 5);
   }, [key, shown, startIndex, hasMore, scrollRef, previousScrollTop]);
   const show = () => {
     if (pending.current?.key === key) return;
