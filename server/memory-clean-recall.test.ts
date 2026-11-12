@@ -1,0 +1,333 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { cleanFiles } from "./memory-clean-engine.ts";
+import type { Change, ChangeList, CleanFile, TextCall } from "./memory-clean-types.ts";
+import { pointerLine, protectedLines, validateChangeList } from "./memory-clean-validate.ts";
+import { sleepReply } from "./testing/sleep-verdicts.ts";
+
+const load = () => import("./memory-clean-recall.ts");
+const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
+const keys = Array.from({ length: 18 }, (_, i) => i < 16 ? `value ${i}` : null);
+const questions = (key = keys) => key.map((answer, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer }));
+const pairs = (prompt: string) => JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)) as unknown[];
+
+function calls(lists: Partial<Record<CleanFile, Change[]>>, answers: unknown[] = keys, key = keys) {
+  const propose = vi.fn<TextCall>(async (prompt) => {
+    const staged = sleepReply(prompt);
+    if (staged !== null) return staged;
+    if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(questions(key));
+    if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(pairs(prompt).map(() => true));
+    const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
+    return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
+  });
+  const recall = vi.fn<TextCall>(async (prompt) => sleepReply(prompt) ?? JSON.stringify([...answers]));
+  const prompts = (tag: string) => [...propose.mock.calls, ...recall.mock.calls].map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));
+  return { propose, recall, prompts };
+}
+
+const scoped = [
+  "# Projects", "- alpha 2026-01-02", "", "- beta done", "- gamma one", "- gamma two", "- delta", "- filler a", "- filler b",
+  "## Later", "- Never touch epsilon", "- zeta", "- beta done", "- eta", "", "- theta old", "- Always iota", "- kappa", "- theta new",
+  "- Never lambda", "- Never mu", "- Never nu", "- Never xi",
+].join("\n");
+const scopedList: ChangeList = { version: 1, file: "MEMORY.md", changes: [
+  { op: "merge", ids: [5, 6], text: "- gamma one two", reason: "Same subject" }, retire(4), { op: "replace", id: 16, newer: 19, reason: "Current" },
+] };
+
+describe("recall scope", () => {
+  it("keeps changed, newer, exact twin, neighbors, heading and four protected lines, never blanks", async () => {
+    const { recallScope } = await load();
+    const ids = recallScope(scoped, scopedList, new Set());
+    expect(ids).toEqual([1, 2, 4, 5, 6, 7, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21]);
+    const guarded = protectedLines(scoped, new Set());
+    expect(ids.filter((id) => guarded.has(id))).toEqual([11, 17, 20, 21]);
+  });
+
+  it("marks skipped runs and shows the scope after the change", async () => {
+    const { afterExcerpt, excerpt, recallScope } = await load();
+    const ids = recallScope(scoped, scopedList, new Set());
+    expect(excerpt(scoped, ids)).toBe([
+      "# Projects", "- alpha 2026-01-02", "- beta done", "- gamma one", "- gamma two", "- delta", "…", "## Later", "- Never touch epsilon", "- zeta",
+      "- beta done", "- eta", "- theta old", "- Always iota", "- kappa", "- theta new", "- Never lambda", "- Never mu", "…",
+    ].join("\n"));
+    const result = validateChangeList({ file: "MEMORY.md", text: scoped, list: scopedList, typed: new Set() });
+    if (!result.ok) throw new Error("Fixture failed");
+    expect(afterExcerpt(scoped, ids, result.entries)).toBe([
+      "# Projects", "- alpha 2026-01-02", "- gamma one two", "- delta", "…", "## Later", "- Never touch epsilon", "- zeta",
+      "- beta done", "- eta", "- Always iota", "- kappa", "- theta new", "- Never lambda", "- Never mu", "…",
+    ].join("\n"));
+  });
+
+  it("keeps a side-file pair's recall prompts inside the scope and out of history", async () => {
+    const { recallScope } = await load();
+    const memory = ["# Memory", ...Array.from({ length: 120 }, (_, i) => `- ${(i + 2) % 30 ? "" : "Never "}m${String(i + 2).padStart(4, "0")} ${"memo ".repeat(5)}`)].join("\n") + "\n";
+    const side = ["# Queue", ...Array.from({ length: 400 }, (_, i) => `- ${(i + 2) % 50 ? "" : "Never "}q${String(i + 2).padStart(4, "0")} ${"done ".repeat(39)}`)].join("\n") + "\n";
+    expect(Buffer.byteLength(memory)).toBeLessThan(16000);
+    expect(Buffer.byteLength(side)).toBeGreaterThan(48000);
+    const lists = { "MEMORY.md": [{ op: "merge", ids: [2, 3], text: "- m0002 m0003 memo", reason: "Same subject" }], "memory/queued.md": [retire(2), retire(3), retire(4)] } satisfies Partial<Record<CleanFile, Change[]>>;
+    const engine = calls(lists);
+    const history = `HISTORY-MARKER ${"h".repeat(200_000)}`;
+    expect(await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history, typed: new Set(), ...engine })).toMatchObject({ ok: true });
+    const outside = ([["MEMORY.md", memory], ["memory/queued.md", side]] as const).flatMap(([file, text]) => {
+      const ids = new Set(recallScope(text, { version: 1, file, changes: lists[file] }, new Set()));
+      return text.split("\n").filter((line, i) => line.trim() && !ids.has(i + 1));
+    });
+    for (const prompt of [...engine.prompts("questions"), ...engine.prompts("answers")]) {
+      expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(20_000);
+      expect(outside.filter((line) => prompt.includes(line))).toEqual([]);
+    }
+    expect(engine.prompts("answers")[0]).not.toContain("HISTORY-MARKER");
+    expect(engine.prompts("answers")[0]).toContain("- m0002 m0003 memo");
+  });
+});
+
+describe("recall grading", () => {
+  const input = (engine: ReturnType<typeof calls>) => ({ memory: "- kept\n- old done\n", history: null, typed: new Set<string>(), ...engine });
+
+  it("grades exact and null pairs in code", async () => {
+    const { gradeByCode } = await load();
+    expect(gradeByCode(null, null)).toBe(true);
+    expect(gradeByCode(null, "x")).toBe(false);
+    expect(gradeByCode("x", null)).toBe(false);
+    expect(gradeByCode('`Path` "C:\\repo" [main].', "path  c:\\repo main")).toBe(true);
+    expect(gradeByCode("Eddie", "Eddie Yi")).toBeUndefined();
+  });
+
+  it("drops words the question already names from the key", async () => {
+    const { gradeByCode } = await load();
+    const question = "Which version is Tern on?";
+    expect(gradeByCode("Tern 2.3", "2.3", question)).toBe(true);
+    expect(gradeByCode("Tern 2.3", "2.4", question)).not.toBe(true);
+    expect(gradeByCode("Tern 2.3", "Tern", question)).not.toBe(true);
+    expect(gradeByCode(null, "2.3", question)).toBe(false);
+    expect(gradeByCode("Tern, version", "", question)).not.toBe(true);
+    expect(gradeByCode("Tern, version", "on", question)).not.toBe(true);
+    expect(gradeByCode("delete only what I made, by exact path", "only what I made, by exact path", "After a verified task, what may be deleted?")).toBe(true);
+    expect(gradeByCode("deleted the cache", "the cache", "What gets deleting?")).not.toBe(true);
+  });
+
+  it("passes a key whose extra words are only \"it\" and an inflected question word, grill-c light n3", async () => {
+    const { gradeByCode } = await load();
+    const question = "When does the Wink bot queue requests?";
+    expect(gradeByCode("it queues when busy", "when busy", question)).toBe(true);
+    expect(gradeByCode("it queues when busy", "busy", question)).toBe(true);
+    expect(gradeByCode("it queues when busy", "when idle", question)).not.toBe(true);
+    expect(gradeByCode("it queues when busy", null, question)).toBe(false);
+  });
+
+  it("passes a bare no to a key that only adds a negation, grill-d heavy n2", async () => {
+    const { gradeByCode } = await load();
+    const question = "Should Lordrenen be cc'd on payroll invoices?";
+    expect(gradeByCode("Never cc Lordrenen", "No", question)).toBe(true);
+    expect(gradeByCode("Never cc Lordrenen", "Yes", question)).toBe(false);
+    expect(gradeByCode("Never cc Lordrenen", "No", "Should Lordrenen never be cc'd on payroll invoices?")).not.toBe(true);
+    expect(gradeByCode("Never cc Velzanen", "No", question)).not.toBe(true);
+  });
+
+  it("passes the asked part of a key that also says how often, grill-d light n3", async () => {
+    const { gradeByCode } = await load();
+    const question = "Where do findings go under the no-repeats rule?";
+    expect(gradeByCode("once, in the final reply", "in the final reply", question)).toBe(true);
+    expect(gradeByCode("once, in the final reply", "in the first reply", question)).not.toBe(true);
+    expect(gradeByCode("once, in the final reply", "once", question)).not.toBe(true);
+    expect(gradeByCode("once, in the final reply", "in the final reply", "How often do findings go in the final reply?")).not.toBe(true);
+    expect(gradeByCode("Opus 5.5", "Opus", "Which model runs QA?")).not.toBe(true);
+  });
+
+  it("passes an answer equal to the core of a key wider than its question, grill-e", async () => {
+    const { gradeByCode } = await load();
+    const cap = "How many short lines does the TLDR rule cap at?";
+    expect(gradeByCode("1-3", "3", cap)).toBe(true);
+    expect(gradeByCode("1-3", "3 short lines", cap)).toBe(true);
+    expect(gradeByCode("1-3", "1", cap)).not.toBe(true);
+    expect(gradeByCode("1-3", "4", cap)).not.toBe(true);
+    expect(gradeByCode("1-3", "1", "What is the minimum number of short lines in a TLDR?")).toBe(true);
+    expect(gradeByCode("1-3", "3", "How many short lines does a TLDR have?")).not.toBe(true);
+    const bot = "Which bot does Eddie report Wink app harness friction to?";
+    expect(gradeByCode("Wink bot", "Wink", bot)).toBe(true);
+    expect(gradeByCode("Wink bot", "Kite", bot)).not.toBe(true);
+    expect(gradeByCode("Wink bot", null, bot, ["- Wink app harness friction goes to the Wink bot"])).toBe(false);
+    expect(gradeByCode("Tern, version", "Tern", "Which version is Tern on?")).not.toBe(true);
+    expect(gradeByCode("Edward Yi", "Edward", "What English name is on record for him?")).not.toBe(true);
+    expect(gradeByCode("November 16", "November", "What is the user's birthday?")).not.toBe(true);
+  });
+
+  it("asks for keys that answer exactly what their question asks", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] });
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("questions")[0]).toContain("the shortest span that answers exactly what its question asks");
+  });
+
+  it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
+    const { gradeByCode } = await load();
+    const source = [
+      "- Feature flags live in flags.yaml at the repo root; flip them by PR only (09-24).",
+      "- 2026-09-14: Kite beta moved to the Tuesday train (owner Mina).",
+      "- Tern 2.3 shipped to 40 users on 2026-10-02.",
+      "- Release notes go to `docs/release.md`, never the wiki.",
+    ];
+    for (const [question, key, answer] of [
+      ["Where do feature flags live?", "flags.yaml", "flags.yaml at the repo root"],
+      ["Which train did the Kite beta move to?", "Tuesday train", "2026-09-14: Kite beta moved to the Tuesday train"],
+      ["How many users got Tern 2.3?", "40", "Tern 2.3 shipped to 40 users"],
+      ["Where do release notes go?", "docs/release.md", "`docs/release.md`, never the wiki"],
+    ] as const) expect(gradeByCode(key, answer, question, source)).toBe(true);
+    expect(gradeByCode("3", "Tern 13 shipped", "", ["- Tern 13 shipped"])).toBeUndefined();
+    expect(gradeByCode("flags.yaml", "flags.yaml in the repo root", "", source)).toBeUndefined();
+    expect(gradeByCode("2.3", "Tern 40 shipped to 2.3 users", "", source)).toBeUndefined();
+  });
+
+  it("passes a null answer only when its key sits in a line the answerer had and in no merged line", async () => {
+    const { gradeByCode } = await load();
+    const lines = ["- q138 ticket 5138 closed day 138"];
+    expect(gradeByCode("5138", null, 'What comes after "q138 ticket"?', lines)).toBe(true);
+    expect(gradeByCode("5138", null, "", lines, ["- Kite 5138 build"])).toBe(false);
+    expect(gradeByCode("513", null, "", lines)).toBe(false);
+    expect(gradeByCode("ticket", null, "Which ticket?", lines)).toBe(false);
+  });
+
+  it("grades a key quoted from its line in code and sends only the rest to the grade call", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["Tern 2.3 shipped to 40 users", "it is value 1", ...keys.slice(2)], ["40", ...keys.slice(1)]);
+    expect(await cleanFiles({ ...input(engine), memory: "- kept\n- old done\n- Tern 2.3 shipped to 40 users on 2026-10-02\n" })).toMatchObject({ ok: true });
+    expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 1?", expected: "value 1", actual: "it is value 1" }]]);
+  });
+
+  it("passes a key that repeats the question without a grade call", async () => {
+    const key = ["Fact 0: 2.3", ...keys.slice(1)];
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["2.3", ...keys.slice(1)], key);
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("grade")).toEqual([]);
+  });
+
+  it("passes 18 exact answers without a grade call", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] });
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true, recall: { passed: 18 } });
+    expect(engine.prompts("grade")).toEqual([]);
+    expect(engine.prompts("answers")[0]).toContain("each just the asked value as written, with no extra detail");
+  });
+
+  it("sends only an undecided paraphrase to the grade call", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["it is value 0", ...keys.slice(1)]);
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 0?", expected: "value 0", actual: "it is value 0" }]]);
+  });
+
+  it("sends the key's source line with an undecided pair and asks for no pronoun keys, grill-c light n1", async () => {
+    const line = "- Quorum (heyquorum.com; his gf is the main user): never slower, and never take her time for tests.";
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["his gf", ...keys.slice(1)], ["her time", ...keys.slice(1)]);
+    expect(await cleanFiles({ ...input(engine), memory: `- kept\n- old done\n${line}\n` })).toMatchObject({ ok: true });
+    expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 0?", expected: "her time", actual: "his gf", line }]]);
+    expect(engine.prompts("questions")[0]).toContain("never by a pronoun");
+  });
+
+  it("treats a null file on a plain question as no file, grill-d heavy n1", async () => {
+    const run = async (file: unknown) => {
+      const engine = calls({ "MEMORY.md": [retire(2)] });
+      engine.propose.mockImplementation(async (prompt) => sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]")
+        ? JSON.stringify(questions().map((q) => ({ ...q, file }))) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] })));
+      return cleanFiles(input(engine));
+    };
+    expect(await run(null)).toMatchObject({ ok: true, recall: { passed: 18 } });
+    expect(await run(5)).toMatchObject({ ok: false, stage: "recall", detail: "ZodError" });
+  });
+
+  it("fails a null answer to a keyed question without a grade call", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] }, [null, ...keys.slice(1)]);
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: false, stage: "recall" });
+    expect(engine.prompts("grade")).toEqual([]);
+  });
+
+  it("joins an array answer", async () => {
+    const key = ["A, B", ...keys.slice(1)];
+    const engine = calls({ "MEMORY.md": [retire(2)] }, [["A", "B"], ...keys.slice(1)], key);
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("grade")).toEqual([]);
+  });
+
+  it("bounds work from a 300 KB side snapshot without truncating the file", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(3)] });
+    const side = { file: "memory/queued.md" as const, text: `- kept\n- old done\n${"- task line\n".repeat(25_000)}` };
+    const result = await cleanFiles({ ...input(engine), side });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok && result.side?.text).toBe(side.text.replace("- task line\n", ""));
+    expect(engine.prompts("propose").every((prompt) => Buffer.byteLength(prompt) < 10_000)).toBe(true);
+  });
+
+  it("fails a filed fact the answerer cannot find from MEMORY.md alone", async () => {
+    // the floor files the larger fillers, so the model's file op on 1 to 3 rides on top
+    const trips = [...Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`), ...Array.from({ length: 3 }, (_, i) => `- filler ${i} ${"z".repeat(280)}`)].join("\n") + "\n";
+    const filed = [{ op: "file", ids: [1, 2, 3], topic: "trips", pointer: "- memory/trips.md: trip stops 0, 1 and 2", reason: "Detail" }] as unknown as Change[];
+    const asked = questions().map((q, i) => i === 0 ? { ...q, file: "memory/trips.md", answer: "memory/trips.md" } : q);
+    const run = async (first: string | null) => {
+      const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1, 11), "memory/notes-2026-11.md", ...keys.slice(12)]);
+      engine.propose.mockImplementation(async (prompt) => sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(asked)
+        : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify(pairs(prompt).map(() => true)) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: filed })));
+      return { result: await cleanFiles({ memory: trips, history: null, typed: new Set(), now: Date.UTC(2026, 10, 4), propose: engine.propose, recall: engine.recall }), engine };
+    };
+    const missed = await run("harbor 0");
+    expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
+    const [asking] = missed.engine.prompts("questions");
+    expect(asking).toContain('"filedTo":"memory/trips.md"');
+    expect(asking).not.toContain("- memory/trips.md: trip\n");
+    expect(asking).toContain("Derive routing questions only from the original entity and relation");
+    const [answers] = missed.engine.prompts("answers");
+    expect(answers).toContain("- memory/trips.md: trip\n");
+    expect(answers).toContain("trip 1 stop at harbor 1");
+    expect(missed.engine.prompts("grade")).toHaveLength(0);
+    const found = await run("memory/trips.md");
+    expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }, { file: "memory/notes-2026-11.md" }] });
+  });
+});
+
+describe("pair.mjs sabotaged merge", () => {
+  const memory = ["# Memory", ...Array.from({ length: 119 }, (_, i) => i + 2).map((id) => id === 109 ? "- Kite beta 2.3 shipped 2026-03-14 reaching 40 users"
+    : id === 110 ? "- Kite crash build 7 hit 9 devices across 3 regions" : [100, 105, 115, 118].includes(id) ? `- Never touch m${id} key ${7000 + id}` : `- m${id} memo`)].join("\n") + "\n";
+  const side = ["# Queue", ...Array.from({ length: 149 }, (_, i) => i + 2).map((id) => [24, 67, 138].includes(id) ? `- q${id} ticket ${5000 + id} closed day ${id}` : `- q${id} open`)].join("\n") + "\n";
+  const honest = "- Kite beta 2.3 shipped 2026-03-14 reaching 40 users Kite crash build 7 hit 9 devices across 3 regions";
+  const sabotaged = "- Kite beta 7 shipped 2026-03-14 reaching 40 users Kite crash build 2.3 hit 9 devices across 3 regions";
+  const cues: Array<[string, string | null]> = [
+    ["beta", "2.3"], ["shipped", "2026-03-14"], ["reaching", "40"], ["build", "7"], ["hit", "9"], ["across", "3"],
+    ["q24 ticket", "5024"], ["q67 ticket", "5067"], ["q138 ticket", "5138"], ["5024 closed day", "24"], ["5067 closed day", "67"], ["5138 closed day", "138"],
+    ["m100 key", "7100"], ["m105 key", "7105"], ["m115 key", "7115"], ["m118 key", "7118"], ["zeta", null], ["omega", null],
+  ];
+  const asked = cues.map(([cue, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `What comes after "${cue}"?`, answer }));
+
+  async function run(text: string) {
+    const lists: Partial<Record<CleanFile, Change[]>> = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text, reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] };
+    const propose = vi.fn<TextCall>(async (prompt) => {
+      const staged = sleepReply(prompt);
+      if (staged !== null) return staged;
+      if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(asked);
+      if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify((pairs(prompt) as Array<{ expected: string; actual: string }>).map((pair) => pair.actual === pair.expected));
+      const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
+      return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
+    });
+    const recall = vi.fn<TextCall>(async (prompt) => {
+      const staged = sleepReply(prompt);
+      if (staged !== null) return staged;
+      const files = prompt.slice(prompt.indexOf("\n\n", prompt.indexOf("Questions: "))).split("\n\nChecks: ")[0]!;
+      return JSON.stringify([...cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null)]);
+    });
+    const result = await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history: null, typed: new Set(), propose, recall });
+    const sent = (tag: string) => propose.mock.calls.map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));
+    return { result, questions: sent("questions")[0], graded: sent("grade").flatMap(pairs).map((pair) => (pair as { question: string }).question) };
+  }
+
+  it("lands the honest merge when the answerer misses facts it had, and fails the sabotaged one on both swapped numbers", async () => {
+    const good = await run(honest);
+    expect(good.result).toMatchObject({ ok: true, recall: { passed: 18 } });
+    expect(good.questions).toContain('"op":"merge"');
+    expect(good.questions).toContain("Give every distinct number in merge lines its own changed question first.");
+    const bad = await run(sabotaged);
+    expect(bad.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
+    expect(bad.graded).toEqual(['What comes after "beta"?', 'What comes after "build"?']);
+  });
+});
+
+describe("bare pointers", () => {
+  it("protects a bare side-file name but not MEMORY.md", () => {
+    const result = validateChangeList({ file: "MEMORY.md", text: "## memory/\n- queued.md: open tasks\n- kept", list: { version: 1, file: "MEMORY.md", changes: [retire(2)] }, typed: new Set() });
+    expect(result).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "protected" })]) });
+    expect(pointerLine("- MEMORY.md holds the facts")).toBe(false);
+  });
+});

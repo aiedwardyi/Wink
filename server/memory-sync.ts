@@ -39,6 +39,7 @@ const snapshotSchema = z.object({
   device: z.string().regex(DEVICE),
   // when the user last messaged this bot on that PC
   talkedAt: time,
+  typed: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(2000).optional().catch(undefined),
   files: z.record(
     z.string().refine(isSyncedFile),
     z.object({ vv: versionsSchema, at: time, text: z.string().nullable(), by: rankSchema.optional() }),
@@ -271,8 +272,9 @@ function covered(main: string, copy: string): boolean {
 }
 
 // a set-aside copy its file already holds has nothing left to merge
-function dropMergedCopies(workspace: string, files: Iterable<string>): string[] {
+function dropMergedCopies(workspace: string, files: Iterable<string>, mergeParked?: MemorySyncOptions["mergeParked"]) {
   const dropped: string[] = [];
+  const merged = new Map<string, string>();
   for (const file of files) {
     const stem = PARKED_FILE.exec(file)?.[1];
     const parked = stem ? readText(join(workspace, file), file) : null;
@@ -281,14 +283,25 @@ function dropMergedCopies(workspace: string, files: Iterable<string>): string[] 
     const main = readText(join(workspace, source), source);
     if (!main) continue;
     const body = parked.startsWith(PARKED_NOTE) ? parked.slice(parked.indexOf("\n") + 1) : parked;
-    if (!covered(main, body)) continue;
+    // a stale memory copy waits for the bot: lines a later night archived would come back
+    const text = /^memory\/memory-history/.test(source) ? mergeParked?.({ file: source, kept: main, parked: body, history: readRaw(join(workspace, "memory/memory-history.md")) }) : null;
+    if (text != null) {
+      writeText(join(workspace, source), text);
+      merged.set(source, text);
+    } else if (!covered(main, body)) continue;
     rmSync(join(workspace, file), { force: true });
     dropped.push(file);
   }
-  return dropped;
+  return { dropped, merged };
 }
 
-export type MemorySyncOptions = { now?: number; legacy?: LegacyMemoryLedger; host?: string };
+export type MemorySyncOptions = {
+  now?: number;
+  legacy?: LegacyMemoryLedger;
+  host?: string;
+  typed?: readonly string[];
+  mergeParked?: (input: { file: string; kept: string; parked: string; history: string | null }) => string | null;
+};
 
 /** Syncs one bot's memory through one snapshot per PC: a copy is replaced only by one that includes it, and a tie sets the losing copy aside. */
 export function syncBotMemory(
@@ -296,7 +309,7 @@ export function syncBotMemory(
   botSyncId: string,
   workspace: string,
   ledger: MemorySyncLedger,
-  { now = Date.now(), legacy, host = machine() }: MemorySyncOptions = {},
+  { now = Date.now(), legacy, host = machine(), typed, mergeParked }: MemorySyncOptions = {},
 ): Record<string, MemorySyncResult> {
   memorySyncDir(folder, botSyncId);
   const me = deviceId(ledger, host);
@@ -385,7 +398,19 @@ export function syncBotMemory(
       // changed on two PCs at once, or the same versions with different text from a copied ledger
       const keep = wins({ ...(state.by ?? mine), at: state.at }, { ...(by ?? mine), at: entry.at });
       const vv = joined(state.vv, entry.vv);
-      const lost = keep ? entry.text : text;
+      const lost: string | null = keep ? entry.text : text;
+      const kept: string | null = keep ? text : entry.text;
+      const merged: string | null | undefined = kept !== null && lost !== null
+        ? mergeParked?.({ file, kept, parked: lost, history: readRaw(join(workspace, "memory/memory-history.md")) })
+        : null;
+      if (merged != null) {
+        writeText(path, merged);
+        text = merged;
+        state = bot.files[file] = { vv: { ...vv, [me]: tick(ledger) }, hash: hash(merged), at: now };
+        result = "pushed";
+        console.warn(`memory sync: ${botSyncId}/${file} changed on two PCs; merged the copies`);
+        continue;
+      }
       const lostAt = keep ? entry.at : state.at;
       const parked = lost === null ? null : park(workspace, file, lost, lostAt);
       // both PCs park the same copy under the same versions, so either bot deleting it deletes it everywhere
@@ -406,7 +431,14 @@ export function syncBotMemory(
     results[file] = result;
     texts.set(file, text);
   }
-  for (const file of dropMergedCopies(workspace, texts.keys())) {
+  const copies = dropMergedCopies(workspace, texts.keys(), mergeParked);
+  for (const [file, text] of copies.merged) {
+    const state = bot.files[file];
+    bot.files[file] = { vv: { ...state?.vv, [me]: tick(ledger) }, hash: hash(text), at: now };
+    texts.set(file, text);
+    results[file] = "pushed";
+  }
+  for (const file of copies.dropped) {
     const state = bot.files[file];
     texts.set(file, null);
     if (state?.hash) bot.files[file] = { vv: { ...state.vv, [me]: tick(ledger) }, hash: null, at: now };
@@ -419,7 +451,7 @@ export function syncBotMemory(
     const entry = text === undefined ? own?.files[file] : { vv: state.vv, at: state.at, text, by: state.by };
     if (entry) published[file] = entry;
   }
-  const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published })}\n`;
+  const body = `${JSON.stringify({ format: FORMAT, version: 1, device: me, talkedAt, files: published, ...(typed?.length ? { typed } : {}) })}\n`;
   const path = join(dir, `${me}.json`);
   // a replayed, half-written or placeholder copy of this PC's snapshot is rewritten, not trusted
   if (readRaw(path) !== body) {

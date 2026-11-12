@@ -157,6 +157,8 @@ export interface Message {
     verb?: string;
     ok?: boolean;
     spoken?: string;
+    lines?: string[];
+    tidy?: { runId: string; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
@@ -401,6 +403,7 @@ export function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: 
       // Scrub them too — the bus no longer pre-redacts titles, and hydrate
       // / voice read this field from disk, not from the live SSE frame.
       ...(typeof out.tool.spoken === "string" ? { spoken: redactSecretsInText(out.tool.spoken) } : {}),
+      ...(out.tool.lines ? { lines: out.tool.lines.map(redactSecretsInText) } : {}),
       ...(typeof out.tool.summary === "string" ? { summary: redactSecretsInText(out.tool.summary) } : {}),
     };
   }

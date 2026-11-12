@@ -69,6 +69,11 @@ describe("Codex summaries", () => {
                 return;
               }
               send({ method: "item/completed", params: { item: { type: "agentMessage", id: "summary", text: SUMMARY, phase: "final_answer" } } });
+              if (mode === "usage") {
+                for (const total of [{ inputTokens: 17_000, cachedInputTokens: 9_216, outputTokens: 500 }, { inputTokens: 17_879, cachedInputTokens: 9_216, outputTokens: 1_029, reasoningOutputTokens: 317 }]) {
+                  send({ method: "thread/tokenUsage/updated", params: { tokenUsage: { total } } });
+                }
+              }
               send({ method: "turn/completed", params: { turn: { status: "completed" } } });
             }
           });
@@ -96,6 +101,19 @@ describe("Codex summaries", () => {
     mode = "recorded";
     await expect(instance.generateText!(recorded.stamp.prompt)).resolves.toBe("SUMMARY\nKeep the pending research open until the memory budgets are verified.");
     expect(children.at(-1)!.exitCode).toBe(0);
+  });
+
+  it("reports cumulative text usage without adding cache reads or reasoning twice", async () => {
+    mode = "usage";
+    const onUsage = vi.fn();
+    await expect(instance.generateText!("cleanup", { onUsage })).resolves.toBe(SUMMARY);
+    expect(onUsage).toHaveBeenLastCalledWith({ input: 17_879, output: 1_029 });
+  });
+
+  it("leaves absent text usage unreported", async () => {
+    const onUsage = vi.fn();
+    await expect(instance.generateText!("cleanup", { onUsage })).resolves.toBe(SUMMARY);
+    expect(onUsage).not.toHaveBeenCalled();
   });
 
   it("R9 builds a summary for a Codex selection after settle", async () => {

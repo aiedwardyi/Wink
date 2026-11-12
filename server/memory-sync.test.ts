@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { markTalked, memorySyncDir, syncBotMemory, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
@@ -73,6 +74,183 @@ function seed(text: string, ...all: PC[]) {
 }
 
 describe("memory sync", () => {
+  it("keeps the snapshot bytes unchanged without new options", () => {
+    const [a] = pcs(1);
+    a.ledger.device = "0123456789ab";
+    a.ledger.host = a.host;
+    edit(a, "notes\n", "MEMORY.md", 10_000);
+    sync(a);
+    const expected = '{"format":"orbit.memory-sync","version":1,"device":"0123456789ab","talkedAt":0,"files":{"MEMORY.md":{"vv":{"0123456789ab":1},"at":10000,"text":"notes\\n"}}}\n';
+    expect(capture(a)).toBe(expected);
+    syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, typed: [] });
+    expect(capture(a)).toBe(expected);
+  });
+
+  it("publishes only this PC's typed hashes and omits an empty or absent list", () => {
+    const [a, b] = pcs();
+    edit(a, "notes\n");
+    const typed = ["0123456789abcdef"];
+    syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, typed });
+    expect(JSON.parse(capture(a)).typed).toEqual(typed);
+    receive(a, b);
+    syncBotMemory(b.folder, "bot-1", b.workspace, b.ledger, { host: b.host, typed: ["fedcba9876543210"] });
+    expect(JSON.parse(capture(b)).typed).toEqual(["fedcba9876543210"]);
+    expect(read(b)).toBe("notes\n");
+    sync(b);
+    expect(JSON.parse(capture(b))).not.toHaveProperty("typed");
+    syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, typed: [] });
+    expect(JSON.parse(capture(a))).not.toHaveProperty("typed");
+  });
+
+  it("parses old and new snapshots and drops only typed for an old schema", () => {
+    const source = readFileSync(new URL("./memory-sync.ts", import.meta.url), "utf8");
+    const schemaSource = source.slice(source.indexOf("const versionsSchema"), source.indexOf("type Snapshot"))
+      .replace(/^type \w+ = .*;\r?$/gm, "");
+    const schema = new Function("z", "DEVICE", "FORMAT", "isSyncedFile", `${schemaSource}; return snapshotSchema;`)(
+      z, /^[0-9a-f]{12}$/, "orbit.memory-sync", (file: string) => file === "MEMORY.md",
+    ) as z.ZodObject;
+    const old = {
+      format: "orbit.memory-sync", version: 1, device: "0123456789ab", talkedAt: 0,
+      files: { "MEMORY.md": { vv: { "0123456789ab": 1 }, at: 0, text: "notes\n" } },
+    };
+    const current = { ...old, typed: ["0123456789abcdef"] };
+    expect(schema.parse(old)).toEqual(old);
+    expect(schema.parse(current)).toEqual(current);
+    expect(schema.omit({ typed: true }).parse(current)).toEqual(old);
+    for (const typed of [["bad"], ["ABCDEF0123456789"], [42], "0123456789abcdef", Array(2001).fill("0123456789abcdef")]) {
+      const parsed = schema.parse({ ...old, typed });
+      expect(parsed.typed).toBeUndefined();
+      expect(parsed.files).toEqual(old.files);
+    }
+  });
+
+  it("keeps another PC's user-owned line hashes through a sync round", () => {
+    const [a, b] = pcs();
+    const typedA = ["0123456789abcdef"];
+    const typedB = ["fedcba9876543210"];
+    const snapshots = (pc: PC) => readdirSync(memorySyncDir(pc.folder, "bot-1")).map((name) => JSON.parse(readFileSync(join(memorySyncDir(pc.folder, "bot-1"), name), "utf8")));
+    edit(a, "- typed on A\n");
+    syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, typed: typedA });
+    receive(a, b);
+    syncBotMemory(b.folder, "bot-1", b.workspace, b.ledger, { host: b.host, typed: typedB });
+    receive(b, a);
+    syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, typed: typedA });
+    receive(a, b);
+    for (const pc of [a, b]) expect(snapshots(pc).map((snapshot) => snapshot.typed).sort()).toEqual([typedA, typedB]);
+    expect(read(b)).toBe("- typed on A\n");
+  });
+
+  it("pulls snapshots with malformed typed lists without republishing them", () => {
+    const [a, b] = pcs();
+    edit(a, "notes\n");
+    sync(a);
+    receive(a, b, JSON.stringify({ ...JSON.parse(capture(a)), typed: ["bad"] }));
+    sync(b);
+    expect(read(b)).toBe("notes\n");
+    expect(JSON.parse(capture(b))).not.toHaveProperty("typed");
+  });
+
+  it.each([true, false])("publishes a conflict merge as a fresh local edit (keep local %s)", (keepLocal) => {
+    const [a, b] = pcs();
+    seed("base\n", a, b);
+    edit(a, "cleaned\n");
+    edit(a, "archive\n", "memory/memory-history.md");
+    markTalked(a.ledger, "bot-1", keepLocal ? 9000 : 1000);
+    sync(a);
+    edit(b, "retired\nnew\n");
+    markTalked(b.ledger, "bot-1", keepLocal ? 1000 : 9000);
+    sync(b);
+    const before = a.ledger.clock!;
+    const remote = JSON.parse(capture(b)).files["MEMORY.md"];
+    receive(b, a);
+    const mergeParked = vi.fn(() => "cleaned\nnew\n");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      syncBotMemory(a.folder, "bot-1", a.workspace, a.ledger, { host: a.host, now: 10_000, mergeParked });
+      expect(mergeParked).toHaveBeenCalledWith({
+        file: "MEMORY.md", kept: keepLocal ? "cleaned\n" : "retired\nnew\n",
+        parked: keepLocal ? "retired\nnew\n" : "cleaned\n", history: "archive\n",
+      });
+      expect(read(a)).toBe("cleaned\nnew\n");
+      expect(parked(a)).toEqual([]);
+      const entry = JSON.parse(capture(a)).files["MEMORY.md"];
+      expect(entry.text).toBe(read(a));
+      expect(entry.vv[a.ledger.device!]).toBeGreaterThan(before);
+      expect(entry.vv[b.ledger.device!]).toBe(remote.vv[b.ledger.device!]);
+      expect(entry.at).toBe(10_000);
+      expect(entry.by).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("merged"));
+      expect(warn.mock.calls.flat().join(" ")).not.toContain("set the other aside");
+    } finally {
+      warn.mockRestore();
+    }
+    receive(a, b);
+    sync(b);
+    expect(read(b)).toBe(read(a));
+    expect(parked(b)).toEqual([]);
+  });
+
+  it("leaves an already parked copy for the bot", () => {
+    const [a, b] = pcs();
+    seed("base\n", a, b);
+    edit(a, "retired\nnew\n");
+    sync(a);
+    edit(b, "cleaned\n");
+    markTalked(b.ledger, "bot-1", 9000);
+    sync(b);
+    receive(a, b);
+    sync(b);
+    expect(parked(b)).toEqual(["retired\nnew\n"]);
+    edit(b, "archive\n", "memory/memory-history.md");
+    const mergeParked = vi.fn(() => "cleaned\nnew\n");
+    syncBotMemory(b.folder, "bot-1", b.workspace, b.ledger, { host: b.host, now: 10_000, mergeParked });
+    expect(mergeParked).not.toHaveBeenCalled();
+    expect(read(b)).toBe("cleaned\n");
+    expect(parked(b)).toEqual(["retired\nnew\n"]);
+  });
+
+  it("keeps today's parking when the helper returns null, with missing history", () => {
+    const [a, b] = pcs();
+    seed("base\n", a, b);
+    edit(a, "from a\n");
+    sync(a);
+    edit(b, "from b\n");
+    markTalked(b.ledger, "bot-1", 9000);
+    sync(b);
+    receive(a, b);
+    const mergeParked = vi.fn(() => null);
+    expect(syncBotMemory(b.folder, "bot-1", b.workspace, b.ledger, { host: b.host, mergeParked })["MEMORY.md"]).toBe("conflict");
+    expect(mergeParked).toHaveBeenCalledWith({ file: "MEMORY.md", kept: "from b\n", parked: "from a\n", history: null });
+    expect(read(b)).toBe("from b\n");
+    expect(parked(b)).toEqual(["from a\n"]);
+  });
+
+  it("converges after both PCs merge the same conflict before exchanging snapshots", () => {
+    const [a, b] = pcs();
+    seed("base\n", a, b);
+    edit(a, "cleaned\n");
+    markTalked(a.ledger, "bot-1", 9000);
+    sync(a);
+    edit(b, "retired\nnew\n");
+    sync(b);
+    receive(a, b);
+    receive(b, a);
+    const mergeParked = vi.fn(() => "cleaned\nnew\n");
+    for (const pc of [a, b]) syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { host: pc.host, mergeParked });
+    expect(mergeParked).toHaveBeenCalledTimes(2);
+    for (let round = 0; round < 2; round++) {
+      receive(a, b);
+      receive(b, a);
+      for (const pc of [a, b]) syncBotMemory(pc.folder, "bot-1", pc.workspace, pc.ledger, { host: pc.host, mergeParked });
+    }
+    for (const pc of [a, b]) {
+      expect(read(pc)).toBe("cleaned\nnew\n");
+      expect(parked(pc)).toEqual([]);
+    }
+    expect(JSON.parse(capture(a)).files["MEMORY.md"].vv).toEqual(JSON.parse(capture(b)).files["MEMORY.md"].vv);
+    expect(mergeParked).toHaveBeenCalledTimes(2);
+  });
+
   it("reads split roots and keeps the local snapshot in its existing folder", () => {
     const [a, b] = pcs();
     edit(a, "from a");

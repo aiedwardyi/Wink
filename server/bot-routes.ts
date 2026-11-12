@@ -43,6 +43,7 @@ type BotRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
+  recordTypedLines?: (botId: string, before: string, after: string) => void;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -493,9 +494,15 @@ export function createBotRoutes(deps: BotRouteDeps) {
           error: `memory is capped at ${MEMORY_FILE_MAX_BYTES / 1024}KB - move longer notes into memory/<topic>.md files`,
         });
       }
+      const before = readMemoryFile(m[1]).text;
       const saved = saveMemoryFile(m[1], parsed.data.text, parsed.data.baseRevision);
       if (saved.conflict) return json(res, 409, { error: "conflict", text: saved.text, revision: saved.revision });
       memoryHealthCheck.refresh(m[1]);
+      try {
+        deps.recordTypedLines?.(m[1], before, parsed.data.text);
+      } catch (error) {
+        console.warn("memory editor: could not record typed lines", error);
+      }
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },

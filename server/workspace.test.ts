@@ -3,7 +3,9 @@
 // block in the first-turn prompt.
 import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import * as atomic from "./atomic.ts";
 import { traceClaimedTurn } from "./turn-timing.ts";
 
 import {
@@ -193,6 +195,18 @@ describe("workspace", () => {
     expect(saveMemoryFile(BOT, "- first\n", memoryRevision("")).conflict).toBe(false);
   });
 
+  it("atomically saves exact bytes through the same revision fence", () => {
+    writeMemoryFile(BOT, "- before\r\n");
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+    const revision = readMemoryFile(BOT).revision;
+    expect(saveMemoryFile(BOT, "- after\r\n", revision, true).conflict).toBe(false);
+    expect(readFileSync(join(workspaceDir(BOT), "MEMORY.md"), "utf8")).toBe("- after\r\n");
+    expect(saveMemoryFile(BOT, "- stale\n", revision, true).conflict).toBe(true);
+    expect(readMemoryFile(BOT).text).toBe("- after\r\n");
+    expect(write).toHaveBeenCalledExactlyOnceWith(join(workspaceDir(BOT), "MEMORY.md"), "- after\r\n", { mode: 0o600 });
+    write.mockRestore();
+  });
+
   it("saveMemoryFile without a base writes as before", () => {
     writeMemoryFile(BOT, "- newer from another PC\n");
     expect(saveMemoryFile(BOT, "- older client\n")).toMatchObject({ conflict: false, revision: memoryRevision("- older client\n") });
@@ -290,6 +304,13 @@ describe("workspace", () => {
     const prompt = memorySystemPrompt(BOT);
     expect(prompt).toContain("or you catch your own mistake, save the lesson as one line in that same turn");
     expect(prompt).toContain("never save passwords, keys, tokens or account numbers");
+  });
+
+  it("tells the bot to save lessons under the Lessons heading", () => {
+    const dir = ensureWorkspace(BOT);
+    expect(memorySystemPrompt(BOT)).toContain("save the lesson as one line in that same turn under ## Lessons");
+    writeFileSync(join(dir, "MEMORY.md"), "# Memory\n- one fact\n");
+    expect(memorySystemPrompt(BOT)).toContain("save the lesson as one line in that same turn under ## Lessons");
   });
 
   it("names both load budgets in the guidance, with no size notice for a small file", () => {
