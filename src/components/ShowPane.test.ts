@@ -246,8 +246,8 @@ it("hides only Show and Check behind the other tabs, never the Media list", () =
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
-  await render({ item: item("C:\w\a.png", "image"), card: running, source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), card: running, source, hidden: false });
   expect(tabs()).toEqual(["Show", "Media"]);
-  await render({ item: item("C:\w\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
+  await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
   expect(tabs()).toEqual(["Show", "Check", "Media"]);
 });
