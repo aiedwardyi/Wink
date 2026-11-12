@@ -69,4 +69,14 @@ describe("room files folder", () => {
     expect(existsSync(missing)).toBe(false);
     expect(readFileSync(join(old, "room1", "file1"), "utf8")).toBe("original");
   });
+
+  it("switches off an unplugged drive only to an empty folder", async () => {
+    writeFileSync(setting, JSON.stringify({ path: join(DATA_DIR, "unplugged-drive") }));
+    mkdirSync(join(next, "room1"), { recursive: true });
+    await expect(moveRoomFiles(pick)).rejects.toMatchObject({ status: 503 });
+    rmSync(next, { recursive: true });
+    expect(await moveRoomFiles(pick)).toEqual({ path: next, error: null });
+    expect(JSON.parse(readFileSync(setting, "utf8"))).toEqual({ path: next });
+    expect(() => holdRoomFiles()()).not.toThrow();
+  });
 });
