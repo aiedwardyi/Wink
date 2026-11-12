@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   Archive,
@@ -102,7 +102,7 @@ import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
-import { ArchivedBotsPanel, BotListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
+import { ArchivedBotsPanel, BotListItem, RecentlyDeletedPanel, type MenuState, type SidebarRowDrag, type TrashedBot } from "./SidebarConversations";
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
@@ -649,11 +649,14 @@ export function Sidebar({
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trashBots, setTrashBots] = useState<TrashedBot[]>([]);
   const [exportingTeam, setExportingTeam] = useState(false);
   const [teamFeedback, setTeamFeedback] = useState<{
     error: boolean;
     text: string;
     undo?: TeamImportResult;
+    restoreBotId?: string;
   } | null>(null);
   const [deleteReach, setDeleteReach] = useState<"local" | "every-pc" | null>(null);
   const deletePresence = usePresence(deleteTarget);
@@ -695,7 +698,7 @@ export function Sidebar({
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -708,6 +711,7 @@ export function Sidebar({
       else if (roomMenu) setRoomMenu(null);
       else if (wizard) setWizard(false);
       else if (archivedBotsOpen) setArchivedBotsOpen(false);
+      else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
     };
@@ -948,6 +952,28 @@ export function Sidebar({
       setTeamLibraryOpen(true);
     });
   }, []);
+
+  const refreshTrash = useCallback(() => {
+    void api("/api/bot-trash")
+      .then((body: { bots?: TrashedBot[] }) => setTrashBots(body?.bots ?? []))
+      .catch(() => {});
+  }, []);
+  // a delete here or on another PC changes the bot list, and the menu shows the newest count
+  useEffect(() => {
+    refreshTrash();
+  }, [refreshTrash, state.bots.length, plusOpen]);
+
+  const undoTrash = async (botId: string) => {
+    setTeamFeedback(null);
+    try {
+      const response = await api(`/api/bot-trash/${botId}/restore`, { method: "POST" });
+      dispatch({ type: "botPatched", bot: response.bot });
+      dispatch({ type: "select", id: botId });
+      refreshTrash();
+    } catch (cause) {
+      setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
 
   useEffect(() => {
     if (!teamFeedback) return;
@@ -1636,7 +1662,7 @@ export function Sidebar({
               <>
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
                 <div data-closing={closing || undefined} inert={closing} className={cn(
-                  "animate-pop-in absolute top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
+                  "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
                   density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
                 )}>
                   <button
@@ -1683,6 +1709,19 @@ export function Sidebar({
                       <Archive size={16} className="text-ink-secondary" />
                       <span className="flex-1">{t("chrome.archivedBots")}</span>
                       <span className="text-[11.5px] text-ink-secondary">{archivedBots.length}</span>
+                    </button>
+                  )}
+                  {trashBots.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setPlusOpen(false);
+                        setTrashOpen(true);
+                      }}
+                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    >
+                      <Trash2 size={16} className="shrink-0 text-ink-secondary" />
+                      <span className="flex-1 whitespace-nowrap">{t("chrome.recentlyDeleted")}</span>
+                      <span className="text-[11.5px] text-ink-secondary">{trashBots.length}</span>
                     </button>
                   )}
                 </div>
@@ -1878,7 +1917,10 @@ export function Sidebar({
           body={t(deleteReach === "every-pc" ? "chrome.deleteBotBodyAllPcs" : "chrome.deleteBotBody", { name: deletePresence.value.name })}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
-            if (deleteTarget) dispatch({ type: "deleteBot", botId: deleteTarget.id });
+            if (deleteTarget) {
+              dispatch({ type: "deleteBot", botId: deleteTarget.id });
+              setTeamFeedback({ error: false, text: t("chrome.botTrashed", { name: deleteTarget.name }), restoreBotId: deleteTarget.id });
+            }
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
@@ -1923,6 +1965,17 @@ export function Sidebar({
             bots={archivedBots}
             closing={closing}
             onClose={() => setArchivedBotsOpen(false)}
+            onRestored={(message) => setTeamFeedback({ error: false, text: message })}
+          />
+        )}
+      </Presence>
+      <Presence open={trashOpen}>
+        {(closing) => (
+          <RecentlyDeletedPanel
+            bots={trashBots}
+            closing={closing}
+            onClose={() => setTrashOpen(false)}
+            onChanged={refreshTrash}
             onRestored={(message) => setTeamFeedback({ error: false, text: message })}
           />
         )}
@@ -1972,6 +2025,14 @@ export function Sidebar({
               {pendingTeamUndo && (
                 <button
                   onClick={() => void undoTeamLoad(pendingTeamUndo)}
+                  className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
+                >
+                  {t("chrome.undo")}
+                </button>
+              )}
+              {teamFeedback.restoreBotId && (
+                <button
+                  onClick={() => void undoTrash(teamFeedback.restoreBotId!)}
                   className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
                 >
                   {t("chrome.undo")}

@@ -437,6 +437,9 @@ import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from ".
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { BotTrash, type TrashEntry } from "./bot-trash.ts";
+import { createBotTrashActions } from "./bot-trash-actions.ts";
+import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
 import { isVoiceLine, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -1537,6 +1540,7 @@ function publishProfileChanges(): number {
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return 0;
   ensureProfileSyncWorkspace(folder);
   pruneProfileSyncSectionAliases();
+  const marks = botTrash ? publishTrashMarks(trashSyncHost(), folder) : 0;
   const now = Date.now();
   const baseCheckpoint = profileSyncSettings.seenCheckpoint || undefined;
   const synced = profileSyncSettings.syncedHashes;
@@ -1547,16 +1551,21 @@ function publishProfileChanges(): number {
     ...localSectionChanges(),
     { entity: "order", entityId: profileSyncSettings.workspaceId, changes: localOrderChanges(true) },
   ]);
-  const liveBotIds = new Set(store.bots.map((bot) => bot.id));
+  // a trashed or timer-emptied bot keeps its sync id and is not missing
+  const liveBotIds = new Set([
+    ...store.bots.map((bot) => bot.id),
+    ...store.trash.entries.filter((entry) => entry.step === "trashed").map((entry) => entry.record.id),
+    ...store.trash.emptied.map((note) => note.botId),
+  ]);
   const deletes = botDeletesToPublish(profileSyncSettings.botMap, liveBotIds, profileSyncSettings.pendingBotDeletes);
   if (deletes.missing) console.warn(`bot sync: ${deletes.missing} synced bot(s) missing here without a delete; not publishing deletes`);
   const deleted = deletes.publish;
   const clearsPending = deletes.pendingBotDeletes.length !== profileSyncSettings.pendingBotDeletes.length;
-  if (!changed.length && !deleted.length && !clearsPending) return 0;
+  if (!marks && !changed.length && !deleted.length && !clearsPending) return 0;
   const record = (
     input: Omit<ProfileSyncOperation, "format" | "version" | "operationId" | "deviceId" | "sequence" | "recordedAt">,
   ) => nextProfileSyncOperation(baseCheckpoint ? { ...input, baseCheckpoint } : input, now);
-  let written = 0;
+  let written = marks;
   for (const item of changed.flatMap((unsynced) => ownOpSyncChanges(compatibleSyncChanges(synced, unsynced)))) {
     try {
       writeSyncOperation(folder, record(item));
@@ -1650,6 +1659,7 @@ function importProfileChanges(): void | Promise<void> {
   }
   const sectionNames = new Map(Object.values(state.sections).map((section) => [section.id, String(section.name ?? "")]));
   const synced = profileSyncSettings.syncedHashes;
+  const marks = botTrash ? importTrashMarks(trashSyncHost(), state) : { trashed: [], revive: [] };
   const plan = planProfileImport({
     state,
     deviceId: profileSyncSettings.deviceId,
@@ -1660,6 +1670,7 @@ function importProfileChanges(): void | Promise<void> {
     localOrder: localOrderChanges(false),
     restore: store.botsFile === "missing",
     pendingBotDeletes: profileSyncSettings.pendingBotDeletes,
+    ...marks,
   });
   const chiefs: string[] = [];
   const missingAssets: string[] = [];
@@ -1692,6 +1703,7 @@ function importProfileChanges(): void | Promise<void> {
     }
   }
   const finish = () => {
+    if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
     for (const key of Object.keys(state.tombstones).filter((value) => value.startsWith("bot:"))) {
       const globalId = key.slice("bot:".length);
       for (const [localId, mappedGlobalId] of Object.entries(profileSyncSettings.botMap)) {
@@ -1769,7 +1781,7 @@ async function localVmDeleteRefusal(botId: string): Promise<string | null> {
   return null;
 }
 
-async function deleteBotFully(bot: BotRecord): Promise<void> {
+async function stopBotWork(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
   const instance = botAccounts.instance(bot);
@@ -1791,6 +1803,10 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   const target = perBotLocalVmTarget(bot.id);
   localVmIdles.get(target.key)?.cancel();
   localVmIdles.delete(target.key);
+}
+
+async function deleteBotFully(bot: BotRecord): Promise<void> {
+  await stopBotWork(bot);
   const threadIds = new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)]);
   store.deleteBot(bot.id);
   for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
@@ -2292,6 +2308,8 @@ function syncProfiles(): void | Promise<void> {
     for (const bot of store.bots) {
       if (!botHasActiveTurn(bot.id)) syncMemory(bot.id);
     }
+    profileSyncPassed = true;
+    emptyExpiredTrash();
   };
   if (pending instanceof Promise) {
     return pending.then(after, (error) => {
@@ -3305,6 +3323,28 @@ function isUnattended(botId?: string | null): boolean {
   return true;
 }
 let routines: RoutineManager | null = null;
+let botTrash: BotTrash | null = null;
+// the trash timer waits for the first profile sync pass of this run
+let profileSyncPassed = false;
+const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
+const botTrashActions = createBotTrashActions({
+  host: trashSyncHost,
+  queueDeletes: (syncIds) => {
+    for (const syncId of syncIds) if (!profileSyncSettings.pendingBotDeletes.includes(syncId)) profileSyncSettings.pendingBotDeletes.push(syncId);
+    profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
+    scheduleProfilePublish();
+  },
+  awaitingSync: () => Boolean(profileSyncSettings.syncChats && profileSyncSettings.folder) && !profileSyncPassed,
+});
+
+function emptyExpiredTrash(): void {
+  if (!botTrash) return;
+  try {
+    botTrashActions.emptyExpired();
+  } catch (error) {
+    console.warn("bot trash: timer failed", error);
+  }
+}
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 const localVmLeases = new LocalVmLeasePool(30 * 60_000);
 const localVmLifecycleBusy = new Set<string>();
@@ -5977,6 +6017,19 @@ if (recoveryOwners.length > 0) {
     ),
   );
 }
+class ServerBotTrash extends BotTrash {
+  // stopping switches routines off, so it runs after the entry has listed the ones a Restore turns back on
+  override trash(botId: string, opts?: { syncId?: string; deletedAt?: number }): TrashEntry {
+    const bot = store.bot(botId);
+    const entry = super.trash(botId, opts);
+    if (bot) void stopBotWork(bot).catch((error) => console.warn("bot trash: stop failed", error));
+    return entry;
+  }
+}
+botTrash = new ServerBotTrash(store, routines);
+botTrash.start();
+emptyExpiredTrash();
+setInterval(emptyExpiredTrash, 6 * 60 * 60_000).unref?.();
 // One chat per bot: open each idle bot on its newest user chat, never a routine run.
 const routineThreads = routineThreadIds();
 for (const bot of store.bots) {
@@ -8136,14 +8189,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const refusal = await localVmDeleteRefusal(bot.id);
       if (refusal) return json(res, 409, { error: refusal });
-      const globalId = profileSyncSettings.botMap[bot.id];
-      if (globalId && !profileSyncSettings.pendingBotDeletes.includes(globalId)) {
-        profileSyncSettings.pendingBotDeletes.push(globalId);
-        profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      }
-      await deleteBotFully(bot);
+      botTrashActions.trash(bot.id);
       return json(res, 200, { ok: true });
     }
+
+    if (method === "GET" && path === "/api/bot-trash") return json(res, 200, { bots: botTrashActions.list() });
+    m = path.match(/^\/api\/bot-trash\/([\w-]+)\/restore$/);
+    if (m && method === "POST") {
+      try {
+        return json(res, 200, { bot: publicBot(botTrashActions.restore(m[1])) });
+      } catch (error) {
+        return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (method === "POST" && path === "/api/bot-trash/empty") return json(res, 200, { emptied: botTrashActions.emptyNow() });
 
     if (method === "GET" && path === "/api/whats-new") return json(res, 200, whatsNew.pending() ?? { release: null });
     if (method === "POST" && path === "/api/whats-new/seen") {
