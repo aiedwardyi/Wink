@@ -179,6 +179,18 @@ describe("MSP turns (fake host)", () => {
       expect(sent(dump)).toBe("RULES\n\ntwo");
     });
 
+    it("goes out again after a turn that was stopped", async () => {
+      const dump = join(scratch, "muse-system-stopped.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create("hang");
+      for (const [text, resumeCursor] of [["one", undefined], ["two", "fake-msp-session"]] as const) {
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-system", text, system: "RULES", resumeCursor });
+        await vi.waitFor(() => expect(sent(dump)).toBe(`RULES\n\n${text}`));
+        await instance.adapter.interruptTurn("t-system");
+        expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ stopReason: "cancelled" });
+      }
+    });
+
     it("goes out on the fresh session a rejected resume falls back to", async () => {
       const dump = join(scratch, "muse-system-fallback.json");
       process.env.FAKE_MSP_DUMP = dump;
