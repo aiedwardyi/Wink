@@ -235,6 +235,20 @@ describe("smooth glow", () => {
     expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
   });
 
+  it("rebuilds a context that lost its alpha, and paints no layer when a fresh one has none either", async () => {
+    const source = { dpr: 1, size: [40, 40], back: [0, 0, 0], aura: [aura, 0, 0, 40, 30], lift: 0.7, ray: null, halo: [aura, 18], badge: [10, 5, 20], shadow: "", veil: [aura, 1], swell: "", orbits: [], live: null } as Parameters<typeof render>[0];
+    const fake = (alpha: number) => new Proxy({ isContextLost: () => false, getProgramParameter: () => true, getExtension: () => null, readPixels: (...args: unknown[]) => { (args[6] as Uint8Array).fill(alpha); } } as Record<string, unknown>, { get: (gl, key) => key in gl ? gl[key as string] : () => ({}) });
+    const paint = async (...alphas: number[]) => {
+      vi.resetModules();
+      const made: unknown[] = [];
+      vi.stubGlobal("OffscreenCanvas", class { width = 1; height = 1; getContext() { const gl = fake(alphas[made.length] ?? 0); (gl as { canvas: unknown }).canvas = this; made.push(gl); return gl; } });
+      const { render: fresh } = await import("./MemoryMapGlowPaint");
+      return { layers: fresh(source).layers, made: made.length };
+    };
+    expect(await paint(255, 0)).toMatchObject({ made: 2, layers: expect.any(Array) });
+    expect(await paint(255, 255)).toEqual({ made: 2, layers: null });
+  });
+
   it("answers with no layers when the painter throws", async () => {
     const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("self", { postMessage: sent, close() {} });
