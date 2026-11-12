@@ -45,7 +45,7 @@ export function buildMediaIndex(threadId: string, path: readonly Message[]): Med
 }
 
 function same(a: MediaList, b: MediaList): boolean {
-  return a.kind === b.kind && (["ids", "at", "name", "ref"] as const).every((column) => a[column].every((value, n) => value === b[column][n]));
+  return a.ids.length === b.ids.length && a.kind === b.kind && (["ids", "at", "name", "ref"] as const).every((column) => a[column].every((value, n) => value === b[column][n]));
 }
 
 /** Builds a chat's index on its first ask and again only after that chat changes. */

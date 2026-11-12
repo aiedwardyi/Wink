@@ -394,6 +394,9 @@ describe("Team rooms for the host", () => {
     // the sidebar folds for the pane, and happy-dom reports a canceled fold as unhandled
     const matchMedia = window.matchMedia.bind(window);
     vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : matchMedia(query));
+    // happy-dom has no layout, and Media draws only the cells that fit its measured pane
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("show-media-scroll") ? 412 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("show-media-scroll") ? 600 : 0; });
     await boot({ groups: [teamRoom()], route: (call) => call.path === "/api/rooms/r1/files" ? Response.json({ files: [{ id, name: "map.png", type: "image/png", bytes: 2048, at: 1, sender: "Edward" }], used: 0, capacity: 1, error: null }) : undefined });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     await click(button("Show and media"));
