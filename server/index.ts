@@ -8015,6 +8015,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await threadRoutes.turns(res, m);
     }
 
+    // the Media tab's whole timeline, fetched when the tab opens
+    m = path.match(/^\/api\/threads\/([\w-]+)\/media$/);
+    if (m && method === "GET") {
+      return await threadRoutes.media(res, m, url);
+    }
+
     // the composer's catching-up line while this PC pulls what it missed
     m = path.match(/^\/api\/catching-up\/([\w-]+)$/);
     if (m && method === "GET") {

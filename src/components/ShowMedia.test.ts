@@ -4,45 +4,86 @@ import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
-import { closeShow, showItem, useMediaThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { forgetMedia, type MediaWire } from "@/lib/media-index";
+import { useThumb } from "@/lib/media-thumbs";
+import { closeShow, showItem, showMedia, useMediaThread, useShowItem, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
+import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
 import { ShowPane } from "./ShowPane";
 
 vi.mock("./ShowPdf", () => ({ default: () => null }));
+// every cell asks for its thumb on each render, so the calls count the grid's renders
+vi.mock("@/lib/media-thumbs", async (load) => {
+  const real = await load<typeof import("@/lib/media-thumbs")>();
+  return { useThumb: vi.fn((src: string) => real.useThumb(src)) };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const upload: Message = { id: "u1", role: "user", kind: "text", at: 1, text: 'see\n<attached-image path="C:\\att\\abc-1.png" />\n<attached-file path="C:\\att\\notes.docx" name="notes.docx" size="2048" />' };
 const reply: Message = { id: "b1", role: "bot", kind: "text", at: 2, text: "Here: [chart.png](C:\\w\\chart.png), [deck.pdf](C:\\w\\deck.pdf), [data.zip](C:\\w\\data.zip)" };
-const older: Message = { id: "b0", role: "bot", kind: "text", at: 0, text: "Old: [first.pdf](C:\\w\\first.pdf)" };
 const id = (n: number) => String(n).padStart(24, "f");
 const roomFiles = [
   { id: id(3), name: "photo.png", type: "image/png", bytes: 10, at: 3, sender: "Mina" },
   { id: id(2), name: "plan.pdf", type: "application/pdf", bytes: 10, at: 2, sender: "Mina" },
   { id: id(1), name: "sheet.xlsx", type: "application/octet-stream", bytes: 10, at: 1, sender: "Host" },
 ];
+const NOVEMBER = new Date(2026, 10, 20, 12).getTime();
+const DAY = 86_400_000;
+
+type Entry = [messageId: string, at: number, kind: string, name: string, ref: string];
+const wire = (entries: Entry[], v = "1"): MediaWire => ({
+  v,
+  ids: entries.map((entry) => entry[0]),
+  at: entries.map((entry) => Math.floor(entry[1] / 1000)),
+  kind: entries.map((entry) => entry[2]).join(""),
+  name: entries.map((entry) => entry[3]),
+  ref: entries.map((entry) => entry[4]),
+});
+// newest first, two a day back from late November 2026
+const shots = (count: number) => wire(Array.from({ length: count }, (_, n): Entry => [`m${n}`, NOVEMBER - n * DAY / 2, "l", `shot-${n}.png`, `C:\\w\\shot-${n}.png`]));
 
 let root: Root;
 let host: HTMLElement;
 let shown: ShowItem | null = null;
 let calls: string[] = [];
 let room: { files: unknown[] } = { files: roomFiles };
+let media: Record<string, MediaWire> = {};
+const sizes = ["clientWidth", "clientHeight"].map((name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)!] as const);
 
 beforeEach(() => {
   calls = [];
   room = { files: roomFiles };
+  media = {};
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
-    if (url.includes("/messages?")) return Response.json({ messages: [older], hasMore: false });
+    const asked = url.match(/^\/api\/threads\/([^/?]+)\/media(?:\?v=(.+))?$/);
+    if (asked) {
+      const answer = media[asked[1]!] ?? wire([]);
+      return Response.json(asked[2] === answer.v ? { v: answer.v } : answer);
+    }
     if (url.endsWith("/files")) return Response.json({ ...room, used: 0, capacity: 1, error: null });
     return new Response(null, { status: 206 });
   }));
+  // happy-dom has no layout; the media scroller reads as a 412 x 600 pane
+  for (const [name, size] of [["clientWidth", 412], ["clientHeight", 600]] as const) {
+    Object.defineProperty(HTMLElement.prototype, name, { configurable: true, get() { return (this as HTMLElement).classList.contains("show-media-scroll") ? size : 0; } });
+  }
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); act(() => closeShow()); applyLocale("en"); delete window.ogb; vi.unstubAllGlobals(); });
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+  act(() => closeShow());
+  applyLocale("en");
+  forgetMedia();
+  delete window.ogb;
+  vi.unstubAllGlobals();
+  for (const [name, descriptor] of sizes) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+});
 
 function Pane({ source }: { source: MediaSource }) {
   const item = useShowItem();
@@ -51,10 +92,22 @@ function Pane({ source }: { source: MediaSource }) {
   return item || media ? createElement(ShowPane, { item: item ?? undefined, media, source, hidden: false }) : null;
 }
 
+// as the app holds it: the last open pane stays mounted, marked closing, for its exit
+function Presence({ source }: { source: MediaSource }) {
+  const item = useShowItem();
+  const media = useMediaThread() === source.threadId;
+  const pane = usePresence(item || media ? { item: item ?? undefined, media, source } : null);
+  return pane.mounted && pane.value ? createElement(ShowPane, { ...pane.value, hidden: false, closing: pane.closing }) : null;
+}
+
 const render = (source: MediaSource) => act(async () => root.render(createElement(Pane, { source })));
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); });
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === name)!;
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
+const thumbs = () => [...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src")!);
+const months = () => [...host.querySelectorAll("[data-media-month]")].map((head) => head.textContent);
+const scroller = () => host.querySelector<HTMLElement>(".show-media-scroll")!;
+const pointer = (el: Element, type: string, clientY: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientY })); });
 const chat: MediaSource = { threadId: "t1", messages: [upload, reply] };
 const deck: ShowItem = { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" };
 
@@ -71,12 +124,13 @@ it("switches between Show and Media", async () => {
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("deck.pdf");
 });
 
-it("lists a chat's images and files newest first", async () => {
+it("lists a chat's images and files newest first, the ones since it loaded on top", async () => {
+  media.t1 = wire([["u1", 1, "a", "abc-1.png", ""], ["u1", 1, "f", "notes.docx", "C:\\att\\notes.docx"]]);
   await act(async () => showItem(deck));
   await render(chat);
   await click(tab("Media"));
   await settle();
-  expect([...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src"))).toEqual([
+  expect(thumbs()).toEqual([
     "/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\chart.png"),
     "/api/attachments/abc-1.png",
   ]);
@@ -100,14 +154,20 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   expect(shown).toEqual(deck);
 });
 
-it("loads older pages only once Media opens", async () => {
+it("asks for the whole timeline only once Media opens, then for its version alone", async () => {
+  media.t1 = wire([["b0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]);
   await act(async () => showItem(deck));
   await render({ ...chat, hasMore: true });
   await settle();
-  expect(calls.filter((url) => url.includes("/messages?"))).toEqual([]);
+  expect(calls).toEqual([]);
   await click(tab("Media"));
   await settle();
-  expect(calls.filter((url) => url.includes("/messages?"))).toEqual(["/api/threads/t1/messages?limit=200&before=u1&pages=5"]);
+  expect(calls).toEqual(["/api/threads/t1/media"]);
+  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
+  await click(tab("Show"));
+  await click(tab("Media"));
+  await settle();
+  expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
   expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
 });
 
@@ -131,7 +191,6 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
 
 it("says so when there are no files yet, in English and Korean", async () => {
   room = { files: [] };
-  const { showMedia } = await import("@/lib/show-pane");
   await act(async () => showMedia("t9"));
   await render({ threadId: "t9", messages: [] });
   await settle();
@@ -144,21 +203,86 @@ it("says so when there are no files yet, in English and Korean", async () => {
   expect(tab("미디어")).toBeDefined();
 });
 
-it("keeps 300 files in a scrolling list with lazy thumbs", async () => {
-  const many = Array.from({ length: 300 }, (_, n): Message => ({ id: `m${n}`, role: "bot", kind: "text", at: n, text: `[shot-${n}.png](C:\\w\\shot-${n}.png)` }));
-  const { showMedia } = await import("@/lib/show-pane");
+it("mounts only the rows on screen out of 2,000 files, with the full height known at once", async () => {
+  media.t1 = shots(2_000);
   await act(async () => showMedia("t1"));
-  await render({ threadId: "t1", messages: many });
+  await render({ threadId: "t1", messages: [] });
   await settle();
-  const thumbs = host.querySelectorAll("[data-media-grid] img");
-  expect(thumbs).toHaveLength(300);
-  expect([...thumbs].every((img) => img.getAttribute("loading") === "lazy")).toBe(true);
-  expect(thumbs[0]!.getAttribute("src")).toContain("shot-299.png");
-  expect(readFileSync("src/components/ShowPane.css", "utf8")).toMatch(/\.show-media \{[^}]*overflow-y: auto/);
+  const first = thumbs();
+  expect(first.length).toBeGreaterThan(8);
+  expect(first.length).toBeLessThan(60);
+  expect(first[0]).toContain("shot-0.png");
+  // 3 columns of 129px cells and a 6px gap: 667 rows, plus a head for each month
+  expect(Number.parseFloat(host.querySelector<HTMLElement>("[data-media-grid]")!.style.height)).toBeGreaterThan(667 * 135);
+  await act(async () => { scroller().scrollTop = 45_000; scroller().dispatchEvent(new Event("scroll")); });
+  const later = thumbs();
+  expect(later.length).toBeLessThan(60);
+  expect(later).not.toContain(first[0]);
+  expect(Number(later[0]!.match(/shot-(\d+)/)![1])).toBeGreaterThan(900);
+});
+
+it("heads each month with a label that sticks, in English and Korean", async () => {
+  media.t1 = wire([
+    ["m2", NOVEMBER, "l", "late.png", "C:\\w\\late.png"],
+    ["m1", NOVEMBER - 30 * DAY, "l", "early.png", "C:\\w\\early.png"],
+    ["m0", NOVEMBER - 31 * DAY, "l", "early.pdf", "C:\\w\\early.pdf"],
+  ]);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  expect(months()).toEqual(["November 2026", "October 2026"]);
+  expect(readFileSync("src/components/ShowPane.css", "utf8")).toMatch(/\.show-media-month \{[^}]*position: sticky; top: 0/);
+  act(() => root.unmount());
+  root = createRoot(host);
+  applyLocale("ko");
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  expect(months()).toEqual(["2026년 11월", "2026년 10월"]);
+});
+
+it("dragging the scroll thumb shows the month beside it until 600 ms after release", async () => {
+  media.t1 = shots(2_000);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  const thumb = host.querySelector("[data-media-thumb]")!;
+  const bubble = () => host.querySelector("[data-media-bubble]");
+  expect(bubble()?.hasAttribute("data-shown") ?? false).toBe(false);
+  await pointer(thumb, "pointerdown", 0);
+  await pointer(thumb, "pointermove", 300);
+  expect(scroller().scrollTop).toBeGreaterThan(40_000);
+  expect(bubble()?.hasAttribute("data-shown")).toBe(true);
+  expect(bubble()?.textContent).toMatch(/^\w+ 20(25|26)$/);
+  expect(bubble()?.textContent).not.toBe("November 2026");
+  await pointer(thumb, "pointerup", 300);
+  expect(bubble()?.hasAttribute("data-shown")).toBe(true);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 650)));
+  expect(bubble()?.hasAttribute("data-shown")).toBe(false);
+});
+
+it("closing with X neither asks again nor touches the grid", async () => {
+  media.t1 = shots(200);
+  await act(async () => showMedia("t1"));
+  await act(async () => root.render(createElement(Presence, { source: { threadId: "t1", messages: [] } })));
+  await settle();
+  const grid = host.querySelector("[data-media-grid]")!;
+  const img = grid.querySelector("img");
+  const asked = calls.length;
+  const renders = vi.mocked(useThumb).mock.calls.length;
+  const changes: MutationRecord[] = [];
+  const watch = new MutationObserver((records) => changes.push(...records));
+  watch.observe(grid, { subtree: true, childList: true, attributes: true, characterData: true });
+  await click(host.querySelector('button[aria-label="Close"]'));
+  expect(host.querySelector("[data-closing]")).not.toBeNull();
+  expect(host.querySelector("[data-media-grid] img")).toBe(img);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  watch.disconnect();
+  expect(changes).toEqual([]);
+  expect(vi.mocked(useThumb).mock.calls.length).toBe(renders);
+  expect(calls.length).toBe(asked);
 });
 
 it("lists a room again only when a new message brings files", async () => {
-  const { showMedia } = await import("@/lib/show-pane");
   const text: Message = { id: "m1", role: "user", kind: "text", at: 1, text: "hi" };
   const sent: Message = { ...text, id: "m2", roomFiles: [{ id: id(4), name: "new.png", type: "image/png", bytes: 1 }] };
   await act(async () => showMedia("r-thread"));

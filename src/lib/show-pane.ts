@@ -1,7 +1,8 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Message } from "@/state/store";
+import { localLinks, showKind, type ShowKind } from "./chat-media";
 
-export type ShowKind = "image" | "pdf" | "page";
+export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
 export interface ShowItem {
   threadId: string;
@@ -9,20 +10,6 @@ export interface ShowItem {
   kind: ShowKind;
   /** a room file's own URL; a bot's file goes through linked-file */
   src?: string;
-}
-
-const KINDS = new Map<string, ShowKind>([["png", "image"], ["jpg", "image"], ["jpeg", "image"], ["gif", "image"], ["webp", "image"], ["pdf", "pdf"], ["html", "page"], ["htm", "page"]]);
-
-export function showKind(path: string): ShowKind | null {
-  const name = path.split(/[\\/]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? KINDS.get(name.slice(dot + 1).toLowerCase()) ?? null : null;
-}
-
-export const showName = (path: string) => path.split(/[\\/]/).pop() ?? path;
-
-export function linkedFileSrc(threadId: string, filePath: string): string {
-  return `/api/threads/${encodeURIComponent(threadId)}/linked-file?path=${encodeURIComponent(filePath)}`;
 }
 
 let showing: ShowItem | null = null;
@@ -70,21 +57,6 @@ export function useShowItem(): ShowItem | null {
 /** The thread whose pane is on the Media tab. */
 export function useMediaThread(): string | null {
   return useSyncExternalStore(subscribe, () => media, () => null);
-}
-
-const LINK = /\]\(\s*(?:<([^>\n]+)>|([^\s)]+))/g;
-
-/** Absolute local file links a bot reply hands over, in order. */
-export function localLinks(text: string): string[] {
-  const paths: string[] = [];
-  for (const match of text.matchAll(LINK)) {
-    let path = match[1] ?? match[2]!;
-    if (/^file:\/\//i.test(path)) {
-      try { path = decodeURIComponent(new URL(path).pathname).replace(/^\/([a-zA-Z]:)/, "$1"); } catch { continue; }
-    }
-    if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) paths.push(path);
-  }
-  return paths;
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));

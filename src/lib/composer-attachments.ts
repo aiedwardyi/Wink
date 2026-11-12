@@ -3,7 +3,7 @@
 // send, so every driver receives the same message shape.
 import { z } from "zod";
 
-import { holdReload } from "./reload-hold.js";
+import { holdReload } from "./reload-hold.ts";
 
 export type PasteAttachment = {
   kind: "paste";

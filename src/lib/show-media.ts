@@ -1,8 +1,6 @@
 import type { Message } from "@/state/store";
-import { splitAttachedImages } from "./composer-attachments";
-import { mediaList } from "./media-viewer";
-import { isShownMessage } from "./shown-message";
-import { linkedFileSrc, localLinks, showKind, showName, type ShowItem } from "./show-pane";
+import { mediaKey, messageRefs, showKind, type MediaRef } from "./chat-media";
+import type { ShowItem } from "./show-pane";
 import { hostRoomBase, isRoomPicture, roomFileUrl, type RoomFile } from "./team-rooms";
 
 export interface MediaSource {
@@ -16,6 +14,8 @@ export interface MediaSource {
 export interface MediaFile {
   key: string;
   name: string;
+  /** epoch ms of the message or upload that brought it */
+  at: number;
   /** none for a file only its own PC holds, like an attached one */
   src?: string;
   image?: boolean;
@@ -24,24 +24,20 @@ export interface MediaFile {
   path?: string;
 }
 
+export function mediaFile(threadId: string, ref: MediaRef, at: number): MediaFile {
+  const key = mediaKey(threadId, ref);
+  const { kind, name } = ref;
+  if (kind === "a" || kind === "u") return { key, name, at, src: key, image: true };
+  if (kind === "f") return { key, name, at, path: ref.ref };
+  const show = showKind(ref.ref);
+  return show === "image" ? { key, name, at, src: key, image: true } : { key, name, at, src: key, path: ref.ref, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
+}
+
 const seen = new WeakMap<Message, MediaFile[]>();
 
 function messageMedia(threadId: string, message: Message): MediaFile[] {
-  const cached = seen.get(message);
-  if (cached) return cached;
-  const files: MediaFile[] = mediaList([message]).map((image) => ({ key: image.src, name: image.name, src: image.src, image: true }));
-  if (message.kind === "text" && message.text && isShownMessage(message)) {
-    if (message.role === "user") for (const file of splitAttachedImages(message.text).files) files.push({ key: file.path, name: file.name, path: file.path });
-    else for (const path of localLinks(message.text)) {
-      const name = showName(path);
-      // No extension reads as a folder, which the folder sheet lists instead.
-      if (!/\.\w+$/.test(name)) continue;
-      const kind = showKind(path);
-      const src = linkedFileSrc(threadId, path);
-      files.push(kind === "image" ? { key: src, name, src, image: true } : { key: src, name, src, path, show: kind ? { threadId, path, kind } : undefined });
-    }
-  }
-  seen.set(message, files);
+  let files = seen.get(message);
+  if (!files) seen.set(message, files = messageRefs(message).map((ref) => mediaFile(threadId, ref, message.at)));
   return files;
 }
 
@@ -59,12 +55,12 @@ export function chatMedia(threadId: string, messages: readonly Message[]): Media
   return files;
 }
 
-export function roomMedia(threadId: string, roomId: string, files: readonly RoomFile[]): MediaFile[] {
+export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray<RoomFile & { at: number }>): MediaFile[] {
   const base = hostRoomBase(roomId);
   return files.map((file) => {
-    if (isRoomPicture(file)) return { key: file.id, name: file.name, src: roomFileUrl(base, file, true), image: true };
+    if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
     // A room previews only pictures; a PDF still draws from its bytes.
-    return { key: file.id, name: file.name, src, show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
+    return { key: file.id, name: file.name, at: file.at, src, show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
   });
 }
