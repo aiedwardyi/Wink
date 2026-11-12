@@ -248,7 +248,7 @@ function listable(name: string): boolean {
 /** The real path of a linked folder inside one of its message's roots, or null. */
 function folderGrant(folder: string, roots: readonly string[]): string | null {
   try {
-    const real = realpathSync(folder);
+    const real = realpathSync.native(folder);
     const root = roots.find((root) => insideRoot(real, [root]));
     if (!root || !statSync(real).isDirectory() || systemFolder(real)) return null;
     // A root may be a whole home folder, whose dot folders and AppData stay private.
@@ -393,7 +393,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
   }
   let real: string | null = null;
   try {
-    real = realpathSync(requested);
+    real = realpathSync.native(requested);
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
       sendJson(res, 404, { error: "not found" });
@@ -431,7 +431,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     if (asset) {
       const folder = dirname(real);
       try {
-        real = realpathSync(join(folder, asset));
+        real = realpathSync.native(join(folder, asset));
       } catch {
         sendJson(res, 404, { error: "not found" });
         return;
