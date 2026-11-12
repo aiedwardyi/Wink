@@ -97,7 +97,7 @@ export function useJoinedRoom(roomId: string, limit = 200, beforeOlder?: RefObje
     const load = async () => {
       const load = ++loadsHere;
       try {
-        const { status, body } = await read(`/api/joined/rooms/${roomId}?limit=${limit}`);
+        const { status, body } = await read(`/api/joined/rooms/${roomId}${limit === 200 ? "" : `?limit=${limit}`}`);
         if (!alive || load !== loadsHere) return;
         if (status === 200 && body?.room) {
           const seq: number | undefined = body.room.entries?.[0]?.seq;
