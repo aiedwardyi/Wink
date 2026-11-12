@@ -56,6 +56,7 @@ const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => 
 const asks: TaskAsk[] = [
   { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348", at: 100, changedAt: 100 },
   { id: "A2", ask: "Drop the old skin", status: "declined", at: 110, changedAt: 150 },
+  { id: "A3", ask: "Ship now or after review?", status: "open", kind: "question", choices: "Now / After review", at: 120, changedAt: 120 },
 ];
 
 describe("task resume packets", () => {

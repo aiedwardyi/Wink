@@ -161,9 +161,13 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
   const asks = packet.asks?.flatMap((item) => {
     const ask = clean(item.ask, ASK_LIMITS.ask);
     const ref = item.ref ? clean(item.ref, ASK_LIMITS.ref) : "";
+    const choices = item.choices ? clean(item.choices, ASK_LIMITS.ref) : "";
     if (!ask) return [];
     const at = Math.max(0, Math.trunc(item.at));
-    return [{ id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), at, changedAt: Math.max(0, Math.trunc(item.changedAt)) }];
+    return [{
+      id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), ...(item.kind ? { kind: item.kind } : {}), ...(choices ? { choices } : {}),
+      at, changedAt: Math.max(0, Math.trunc(item.changedAt)),
+    }];
   });
   if (asks?.length) normalized.asks = asks;
   return taskResumePacketSchema.parse(normalized);

@@ -6,8 +6,10 @@
 // bot's activity is never set to waiting-on-you.
 import { z } from "zod";
 
+import { answersQuestion, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
-import type { BotRecord, Message } from "./store.ts";
+import type { BotRecord, Message, Store } from "./store.ts";
+import { addQuestionAsk, answerQuestionAsk, type TaskAsk } from "./task-asks.ts";
 
 export const ASK_USER_TITLE = "Your bot has a question";
 export const ASK_USER_QUESTION_MAX = 2_000;
@@ -120,4 +122,32 @@ export function memberClosedAskNotes(messages: readonly Message[], botId: string
     if (sentByPerson(message)) return closedAskNotes(messages, message.text ?? "", message.id, botId);
   }
   return [];
+}
+
+/** The open ask_user card `next` closes unanswered: a newer card replaces it, or the person types past it without picking a choice. */
+export function skippedQuestion(before: readonly Message[], next: Message): Message | null {
+  const open = scanQuestion(before);
+  if (!open) return null;
+  if (isAskUserCard(next)) return open;
+  return answersQuestion(next) && !open.card!.options.includes(next.text?.trim() ?? "") ? open : null;
+}
+
+/** Files every question card that closes unanswered on its thread's asks list. `update` saves what `change` returns; null saves nothing. */
+export function watchSkippedQuestions(
+  store: Pick<Store, "onChange" | "activePath" | "importingSync">,
+  update: (threadId: string, change: (asks: TaskAsk[] | undefined) => TaskAsk[] | null) => void,
+  now = Date.now,
+): void {
+  store.onChange((change) => {
+    if (store.importingSync) return;
+    if (change.type === "message" && !change.imported) {
+      const path = store.activePath(change.threadId);
+      const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
+      if (card) update(change.threadId, (asks) => addQuestionAsk(asks, card.subtitle, card.options, now()));
+    } else if (change.type === "message.patch" && isAskUserCard(change.message) && change.message.card!.answered) {
+      // a card-typed answer can land just after its message filed the card as skipped
+      const { card, at } = change.message;
+      update(change.threadId, (asks) => answerQuestionAsk(asks, card!.subtitle, at, now()));
+    }
+  });
 }

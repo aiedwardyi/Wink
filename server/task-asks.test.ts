@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 12, 9, 0).getTime();
@@ -125,5 +125,66 @@ describe("task asks", () => {
     expect(tokens(asksBlock(list(5), NOW))).toBeLessThanOrEqual(150);
     expect(tokens(asksBlock(list(30), NOW))).toBeLessThanOrEqual(150);
     expect(tokens(asksBlock(list(30), NOW, true))).toBeLessThanOrEqual(700);
+  });
+
+  describe("skipped questions", () => {
+    const question = (id: number, overrides: Partial<TaskAsk> = {}) => ask(id, { ask: `question ${id}?`, kind: "question", choices: "Yes / No", ...overrides });
+    const GUIDE = " A question is your own card the user skipped: re-ask open ones 1-3 at a time at a natural pause, and close moot or answered ones.";
+
+    it("files a skipped card as an open question with its choices, clipped to the ask limits", () => {
+      expect(addQuestionAsk([ask(1)], "  Ship   it now?  ", ["Ship", "Wait"], NOW)).toEqual([
+        ask(1),
+        { id: "A2", ask: "Ship it now?", status: "open", kind: "question", choices: "Ship / Wait", at: NOW, changedAt: NOW },
+      ]);
+      const [long] = addQuestionAsk(undefined, "q".repeat(500), ["c".repeat(200)], NOW)!;
+      expect(long).toMatchObject({ ask: `${"q".repeat(79)}…`, choices: `${"c".repeat(79)}…` });
+      expect(addQuestionAsk(undefined, "Free text?", [], NOW)![0]).not.toHaveProperty("choices");
+    });
+
+    it("dedupes by words against open asks, and files again once the old one closed", () => {
+      expect(addQuestionAsk([question(1, { ask: "Ship it?" })], "ship  IT?", [], NOW)).toBeNull();
+      expect(addQuestionAsk([question(1, { ask: "Ship it?", status: "done" })], "Ship it?", [], NOW)?.map((item) => item.id)).toEqual(["A1", "A2"]);
+    });
+
+    it("keeps the 40 cap: drops the oldest closed first and never an open one", () => {
+      const kept = Array.from({ length: 40 }, (_, index) => ask(index + 1, { status: index < 2 ? "done" : "open" }));
+      expect(addQuestionAsk(kept, "One more?", [], NOW)?.map((item) => item.id)).toEqual([...Array.from({ length: 39 }, (_, index) => `A${index + 2}`), "A41"]);
+      expect(addQuestionAsk(Array.from({ length: 40 }, (_, index) => ask(index + 1)), "One more?", [], NOW)).toBeNull();
+    });
+
+    it("lets the bot close a question with the usual asks update", () => {
+      const { asks } = saved(mergeTaskAsks([question(1)], [{ id: "A1", status: "declined" }], NOW));
+      expect(asks).toEqual([question(1, { status: "declined", changedAt: NOW })]);
+      expect(asksBlock(asks, NOW, true)).toBe("");
+    });
+
+    it("takes back a question filed for the card just answered and closes an older one", () => {
+      expect(answerQuestionAsk([question(1, { at: NOW })], "question 1?", NOW, NOW)).toEqual([]);
+      expect(answerQuestionAsk([question(1)], "Question 1?", NOW, NOW)).toEqual([question(1, { status: "done", changedAt: NOW })]);
+      expect(answerQuestionAsk([ask(1, { ask: "question 1?" })], "question 1?", NOW, NOW)).toBeNull();
+    });
+
+    it("lists questions after the user's asks, never stale, with the re-ask line", () => {
+      const asks = [question(1, { changedAt: 0 }), ask(2)];
+      expect(asksBlock(asks, NOW, true).split("\n")).toEqual([
+        `[Wink asks list - 2 open. Build any summary or status from this list.${GUIDE}]`,
+        "- A2 open 11-12: ask number 2",
+        "- A1 open question 11-12: question 1? (choices: Yes / No)",
+      ]);
+      expect(asksNudge(asks, NOW, "thanks")).toBe("");
+      expect(asksBlock([ask(1, { changedAt: 0 }), ...Array.from({ length: 4 }, (_, index) => ask(index + 2)), question(9)], NOW)).not.toContain("question");
+    });
+
+    it("adds nothing to an ordinary turn and stays small on a status turn", () => {
+      const list = (count: number) => Array.from({ length: count }, (_, index) => question(index + 1, {
+        ask: "Should the model picker row keep the old look?",
+        choices: "Keep / New look / Ask me later",
+        changedAt: 0,
+      }));
+      expect([0, 5, 30].map((count) => tokens(asksNudge(list(count), NOW, "fix the login bug")))).toEqual([0, 0, 0]);
+      expect(tokens(asksBlock(list(30), NOW))).toBeLessThanOrEqual(250);
+      expect(tokens(asksNudge(list(5), NOW, "status?"))).toBeLessThanOrEqual(260);
+      expect(tokens(asksNudge(list(30), NOW, "status?"))).toBeLessThanOrEqual(1_250);
+    });
   });
 });
