@@ -4,7 +4,7 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { pipeline as chain, type Readable } from "node:stream";
@@ -25,10 +25,19 @@ export type StatsReply = { status: number; body: { ok: true; rejected: number } 
 export const STATS_PER_INSTALL_PER_DAY = 200;
 const DAY_MS = 86_400_000;
 const FILE_RE = /^(\d{4}-\d{2}-\d{2})\.ndjson(\.gz)?$/;
-const LINE_RE = /^\{"batch":"([a-f0-9]{32})","id":"([a-f0-9]{32})"/;
+const LINE_RE = /^\{"batch":"([a-f0-9]{32})","id":"([a-f0-9]{32})".*\]\}$/;
 const BAD: StatsReply = { status: 400, body: { error: "bad-stats" } };
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const sizeOf = (path: string) => stat(path).then((info) => info.size, () => -1);
+
+async function lastByte(path: string, size: number): Promise<number | undefined> {
+  const file = await open(path);
+  try {
+    return (await file.read(Buffer.alloc(1), 0, 1, size - 1)).buffer[0];
+  } finally {
+    await file.close();
+  }
+}
 
 interface Day {
   name: string;
@@ -89,7 +98,13 @@ export class StatsStore {
       const count = day.installs.get(id) ?? 0;
       if (count >= STATS_PER_INSTALL_PER_DAY) return { status: 429, body: { error: "stats-limit" } };
       if (day.bytes + bytes > this.config.maxDayBytes) return { status: 507, body: { error: "stats-full" } };
-      await appendFile(join(this.dir, `${day.name}.ndjson`), line, { mode: 0o600 });
+      try {
+        await appendFile(join(this.dir, `${day.name}.ndjson`), line, { mode: 0o600 });
+      } catch (error) {
+        // Part of the line may be on disk: read the file again before the next write.
+        this.day = undefined;
+        throw error;
+      }
       day.batches.add(batch);
       day.installs.set(id, count + 1);
       day.bytes += bytes;
@@ -123,23 +138,32 @@ export class StatsStore {
     await this.writes;
   }
 
-  /** Today's ids, counts and size, read back from its file after a restart. */
+  /** Today's ids, counts and size, read back from its file after a restart or a failed write. */
   private async today(): Promise<Day> {
     const name = dayOf(this.now());
     if (this.day?.name === name) return this.day;
     const day: Day = { name, batches: new Set(), installs: new Map(), bytes: 0 };
     const file = join(this.dir, `${name}.ndjson`);
-    if ((await sizeOf(file)) > 0) {
-      for await (const line of createInterface({ input: createReadStream(file), crlfDelay: Infinity })) {
+    const size = await sizeOf(file);
+    if (size > 0) {
+      // A write that died part way leaves a line with no newline: end it, and never count it as stored.
+      const cut = (await lastByte(file, size)) !== 0x0a;
+      if (cut) await appendFile(file, "\n");
+      const count = (line: string) => {
         const [, batch, id] = LINE_RE.exec(line) ?? [];
-        if (batch && id) {
-          day.batches.add(batch);
-          day.installs.set(id, (day.installs.get(id) ?? 0) + 1);
-        }
-        day.bytes += Buffer.byteLength(line) + 1;
+        if (!batch || !id) return;
+        day.batches.add(batch);
+        day.installs.set(id, (day.installs.get(id) ?? 0) + 1);
+      };
+      let held = "";
+      for await (const line of createInterface({ input: createReadStream(file), crlfDelay: Infinity })) {
+        count(held);
+        held = line;
       }
+      if (!cut) count(held);
+      day.bytes = size + (cut ? 1 : 0);
     }
-    this.earlier = this.day?.batches ?? new Set();
+    if (this.day) this.earlier = this.day.batches;
     this.day = day;
     return day;
   }

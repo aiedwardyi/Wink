@@ -50,6 +50,8 @@ export interface RelayLimits {
   roomCodeLookupsPerHour: number;
   /** POST /v1/stats, when the stats block is set. */
   statsPerIpPerHour: number;
+  /** GET /v1/stats/day/<date>. */
+  statsReadsPerIpPerMin: number;
 }
 
 export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
@@ -82,6 +84,7 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   roomCodeLookupsPerIpPerHour: 30,
   roomCodeLookupsPerHour: 1_000,
   statsPerIpPerHour: 120,
+  statsReadsPerIpPerMin: 30,
 });
 
 interface Bucket {

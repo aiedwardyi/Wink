@@ -89,6 +89,7 @@ describe("POST /v1/stats", () => {
     const res = await post(h, gzipSync(JSON.stringify(sent)), { ...JSON_TYPE, "content-encoding": "gzip" });
     expect(res.status).toBe(200);
     expect(await lines(h.dataDir)).toEqual([sent]);
+    expect((await post(h, gzipSync(JSON.stringify(batch())), { ...JSON_TYPE, "content-encoding": "GZip" })).status).toBe(200);
   });
 
   it("stores a repeated batch once", async () => {
@@ -186,6 +187,25 @@ describe("StatsStore", () => {
     expect((await again.submit(seen)).status).toBe(200);
     expect(await lines(s.dir)).toHaveLength(STATS_PER_INSTALL_PER_DAY + 1);
     await again.close();
+  });
+
+  it("ends a line a dead write left open, and takes that batch again", async () => {
+    const s = await store(() => NOON);
+    const [kept, cut, next] = [batch(), batch(), batch()];
+    await s.stats.submit(kept);
+    await s.stats.submit(cut);
+    await s.stats.close();
+    const file = join(s.dir, "stats", `${TODAY}.ndjson`);
+    const [first = "", second = ""] = (await readFile(file, "utf8")).split("\n");
+    await writeFile(file, `${first}\n${second.slice(0, -20)}`);
+    const again = await s.open();
+    expect((await again.submit(next)).status).toBe(200);
+    expect((await again.submit(cut)).status).toBe(200);
+    expect((await again.submit(kept)).status).toBe(200);
+    await again.close();
+    const stored = (await readFile(file, "utf8")).split("\n");
+    expect(stored).toEqual([first, second.slice(0, -20), stored[2], second, ""]);
+    expect(JSON.parse(stored[2] ?? "")).toEqual(next);
   });
 
   it("answers 507 once the day is full", async () => {

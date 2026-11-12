@@ -115,6 +115,14 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
   });
 }
 
+/** Reads a refused body out: closing on unread bytes resets the socket before the sender sees the reply. */
+function drain(req: IncomingMessage): Promise<void> {
+  return new Promise((done) => {
+    if (req.destroyed) done();
+    else req.once("end", done).once("close", done).resume();
+  });
+}
+
 export function createApiServer(opts: ApiOptions): Server {
   const { hub, limits, log } = opts;
   const enrollLimit = RateLimiter.perHour(limits.enrollPerIpPerHour, opts.now);
@@ -126,7 +134,7 @@ export function createApiServer(opts: ApiOptions): Server {
   const roomCodeHour = RateLimiter.perHour(limits.roomCodeLookupsPerIpPerHour, opts.now);
   const roomCodeAll = RateLimiter.perHour(limits.roomCodeLookupsPerHour, opts.now);
   const statsLimit = RateLimiter.perHour(limits.statsPerIpPerHour, opts.now);
-  const statsReadLimit = RateLimiter.perMinute(limits.pcsPerIpPerMin, opts.now);
+  const statsReadLimit = RateLimiter.perMinute(limits.statsReadsPerIpPerMin, opts.now);
   const { accounts, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
 
   function directoryCors(origin: string | undefined) {
@@ -223,10 +231,14 @@ export function createApiServer(opts: ApiOptions): Server {
       if (!statsLimit.take(ip)) return reply(res, 429, { error: "rate-limited" });
       if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) return reply(res, 415, { error: "content-type" });
       const sent = await readBody(req, STATS_MAX_BYTES);
-      if (!sent) return reply(res, 413, { error: "too-large" });
+      if (!sent) {
+        await drain(req);
+        return reply(res, 413, { error: "too-large" });
+      }
       let parsed: unknown;
       try {
-        const body = req.headers["content-encoding"] === "gzip" ? await inflate(sent, { maxOutputLength: STATS_MAX_INFLATED }) : sent;
+        const zipped = headerOne(req.headers["content-encoding"])?.toLowerCase() === "gzip";
+        const body = zipped ? await inflate(sent, { maxOutputLength: STATS_MAX_INFLATED }) : sent;
         parsed = JSON.parse(body.toString("utf8"));
       } catch (error) {
         // SAFETY: zlib rejects with Node errno errors; a SyntaxError has no code.
@@ -253,7 +265,13 @@ export function createApiServer(opts: ApiOptions): Server {
       const day = await stats.read(statsDay[1]);
       if (!day) return reply(res, 404, { error: "not-found" });
       res.writeHead(200, { "content-type": "application/x-ndjson", "content-encoding": "gzip", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-      return pipeline(day, res);
+      try {
+        await pipeline(day, res);
+      } catch (error) {
+        // SAFETY: streams fail with Node errno errors. A reader that hangs up is not a failure.
+        if ((error as NodeJS.ErrnoException).code !== "ERR_STREAM_PREMATURE_CLOSE") log.log("stats-read-failed", { peer });
+      }
+      return;
     }
 
     if (accounts && signinOrigin && url === "/v1/account") {
