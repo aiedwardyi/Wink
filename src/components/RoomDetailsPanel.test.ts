@@ -303,6 +303,17 @@ describe("People", () => {
     expect(mock.dispatched).toContainEqual({ type: "toggleAppSettings", open: true, section: "companion" });
   });
 
+  it("shares a group once on its first Invite and keeps the code up", async () => {
+    const now = shared([]);
+    await open({ group }, () => json({ code: CODE, group: now }));
+    await act(async () => section("people").querySelector<HTMLButtonElement>("[data-group-invite]")!.click());
+    await settle();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(RoomDetailsPanel, { group: now }))));
+    await settle();
+    expect(calls.filter((call) => call.path.endsWith("/share"))).toHaveLength(1);
+    expect(section("people").textContent).toContain(CODE.slice(0, 12));
+  });
+
   it("says why Invite has no code when the group is busy", async () => {
     await open({ group }, () => json({ error: "this group is working - finish that turn first" }, 409));
     expect(calls).toEqual([]);
