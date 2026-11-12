@@ -14,7 +14,7 @@
 }
 .usage-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .usage-toolbar button { position: relative; min-height: 22px; padding: 0 4px; white-space: nowrap; color: var(--color-ink-secondary); font-size: 12px; border-radius: var(--radius-md); }
-.usage-toolbar button:hover { background: var(--color-raised-hover); }
+@media (hover: hover) { .usage-toolbar button:hover { background: var(--color-raised-hover); } }
 .usage-count-switch { display: flex; gap: 2px; }
 .usage-count-switch [aria-pressed="true"] { background: color-mix(in oklab, var(--color-ink) 10%, transparent); color: var(--color-ink); }
 .usage-toolbar [data-usage-refresh] { display: inline-flex; align-items: center; justify-content: center; width: 22px; }
@@ -35,8 +35,9 @@
 [data-engine-row] .usage-email { white-space: normal; }
 .usage-name-button { display: inline-flex; justify-self: start; align-items: center; gap: 5px; max-width: 100%; border-radius: 3px; font-weight: 500; }
 .usage-name-button svg { flex: none; opacity: 0; color: var(--color-ink-secondary); }
-.usage-name-button:hover svg, .usage-name-button:focus-visible svg { opacity: 1; }
-.usage-name-button:hover [data-account-name] { text-decoration: underline; text-underline-offset: 3px; }
+.usage-name-button:focus-visible svg { opacity: 1; }
+@media (hover: hover) { .usage-name-button:hover svg { opacity: 1; } }
+@media (hover: hover) { .usage-name-button:hover [data-account-name] { text-decoration: underline; text-underline-offset: 3px; } }
 /* Whole device pixels: Chromium snaps the box's origin but not its size, so a fractional size blurs the bottom edge. */
 .usage-cells { display: block; flex: none; width: round(var(--cells-w, 120px), 1px / var(--dpr, 1)); height: round(var(--cell-h, 7px), 1px / var(--dpr, 1)); fill: currentColor; }
 .usage-cells > [data-cell="off"] { fill-opacity: 0.25; }

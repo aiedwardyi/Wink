@@ -6,7 +6,7 @@
 .verify-card-side { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 12px; color: var(--color-ink-secondary); font-size: 12.5px; font-weight: 500; }
 .verify-card-count { color: var(--color-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
 .verify-card-side button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; margin-block: -6px; padding: 6px 12px; border-radius: 8px; background: var(--color-raised-hover); color: var(--color-ink); cursor: pointer; }
-.verify-card-side button:hover { background: var(--color-control); }
+@media (hover: hover) { .verify-card-side button:hover { background: var(--color-control); } }
 .verify-card-side button:disabled { opacity: .5; cursor: default; }
 .verify-card-dots, .verify-card-tag { display: flex; align-items: center; gap: 3px; }
 .verify-card-dots i, .verify-card-tag i { width: 6px; height: 6px; flex: none; border-radius: 999px; }
@@ -42,7 +42,7 @@
 .verify-card-where { min-width: 0; }
 .verify-card-measure { min-width: 0; max-width: 24rem; color: var(--color-ink-secondary); font-family: var(--font-mono, ui-monospace), "Cascadia Mono", Consolas, monospace; font-size: 12px; text-align: right; }
 .verify-card-more { margin-top: 8px; color: var(--color-accent-text); font-size: 12.5px; font-weight: 500; cursor: pointer; }
-.verify-card-more:hover { text-decoration: underline; }
+@media (hover: hover) { .verify-card-more:hover { text-decoration: underline; } }
 .verify-card-unchecked { color: var(--color-ink-secondary); font-size: 12px; margin-top: 6px; }
 .verify-card-details-toggle { margin-top: 8px; padding: 0; color: var(--color-ink-secondary); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .verify-card-details { list-style: none; margin: 4px 0 0; padding: 0; color: var(--color-ink-secondary); font-size: 12px; }
