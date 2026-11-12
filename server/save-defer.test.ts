@@ -85,16 +85,21 @@ describe("saves off the reply path", () => {
     const stream = await openStream();
     const write = atomic.writeFileAtomic;
     const saved: number[] = [];
+    let botsSaved!: () => void;
+    const savedOnce = new Promise<void>((resolve) => { botsSaved = resolve; });
     vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, data, options) => {
       block(SLOW_MS);
       write(path, data, options);
-      if (path === BOTS) saved.push(Date.now());
+      if (path !== BOTS) return;
+      saved.push(Date.now());
+      botsSaved();
     });
     try {
       const arrived = stream.arrival();
       stream.res.write("data: turn.completed\n\n");
       settle(store, bot.id, bot.threadId);
-      const frame = await arrived;
+      // The frame can land before the deferred save has even started
+      const [frame] = await Promise.all([arrived, savedOnce]);
       expect(frame.text).toContain("turn.completed");
       expect(frame.at).toBeLessThan(saved[0]!);
       expect(saved).toHaveLength(1);

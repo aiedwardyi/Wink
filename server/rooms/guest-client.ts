@@ -780,6 +780,8 @@ export class GuestClient {
       this.changed(roomId);
     } else if (parsed.kind === "deleted") {
       if (!(await dropJoinedFiles(roomId, parsed.ids).then(() => true, () => false))) sync.undropped = true;
+      // A leave or remove can land during the drop, and the count write would put its row back
+      if (sync.stopped) return;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
       if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
