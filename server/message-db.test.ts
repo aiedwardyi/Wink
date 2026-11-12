@@ -196,6 +196,11 @@ describe("message-db", () => {
     expect(JSON.stringify(plan)).toContain("COVERING INDEX");
   });
 
+  it("finds handed mail at boot from an index, never a scan of every row", () => {
+    const plan = messageDatabase().prepare("EXPLAIN QUERY PLAN SELECT thread_id, id, json FROM messages WHERE json_extract(json, '$.comm.read.state') = 'handed'").all();
+    expect(plan.map((row) => row.detail)).toEqual(["SCAN messages USING INDEX messages_handed"]);
+  });
+
   it("deleteThread removes rows and state", () => {
     insertMessage("t4", msg("m1", "gone soon"));
     setActiveLeaf("t4", "m1");

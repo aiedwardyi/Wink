@@ -1,5 +1,5 @@
 import { fallbackError } from "@/lib/error-text";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -12,16 +12,20 @@ export function ProfileFields() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState(state.config?.profile?.name ?? "");
+  const savedName = state.config?.profile?.name ?? "";
+  const [name, setName] = useState(savedName);
+  const [shownName, setShownName] = useState(savedName);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [rejected, setRejected] = useState(false);
   const avatarUrl = state.config?.profile?.avatarUrl;
   // Null until the first config answer: a placeholder, never an empty name or a "?" photo.
   const loaded = state.config !== null;
-  useEffect(() => {
-    setName(state.config?.profile?.name ?? "");
-  }, [state.config?.profile?.name]);
+  // Synced during render, not in an effect, so the frame the profile arrives already has the name.
+  if (shownName !== savedName) {
+    setShownName(savedName);
+    setName(savedName);
+  }
 
   const send = async (request: () => Promise<ConfigStatus>, fallback: MessageKey) => {
     if (saving) return;
