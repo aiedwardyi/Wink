@@ -6,6 +6,7 @@ import { createConnection, createServer as createTcpServer, type AddressInfo, ty
 import { join } from "node:path";
 import type { TLSSocket } from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { PHONE_RELAY_OFF } from "../../shared/relay-protocol.ts";
 import { DATA_DIR } from "../config.ts";
@@ -543,6 +544,93 @@ describe("pictures and files in a team room, through the real door", () => {
     hostedSend(store.groups[0] as HostedGroup, { kind: "host" }, "after");
     await until(() => joinedEntries(roomId, 10).some((entry) => entry.text === "after"));
     expect(joinedEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", "after"]);
+  });
+});
+
+/** The entry 1.0.256 parses: one bad file type fails the whole line or snapshot. */
+const olderEntry = z.object({
+  seq: z.number().int().positive(),
+  id: z.string().regex(/^[\w-]{1,64}$/),
+  at: z.number(),
+  author: z.object({ kind: z.enum(["host", "person", "bot"]), id: z.string().regex(/^[\w-]{1,64}$/), name: z.string().max(200) }),
+  text: z.string().max(20_000),
+  replyToId: z.string().regex(/^[\w-]{1,64}$/).optional(),
+  files: z.array(z.object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
+    name: z.string().max(200),
+    type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+    bytes: z.number().int().positive(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    deleted: z.boolean().optional(),
+  })).max(50).optional(),
+});
+const olderSnapshot = z.object({ head: z.number().int().nonnegative(), entries: z.array(olderEntry).max(1_000), state: z.unknown() });
+
+/** A 1.0.256 teammate's door request: it sends the large-files header and nothing newer. */
+function olderDoor(roomId: string, path: string, body?: Buffer) {
+  let text = "";
+  let status = 0;
+  const done = new Promise<void>((resolve) => {
+    const req = requestHttps({
+      hostname: HOST, port: hop.port, ca: caPem, lookup: loopbackLookup, method: body ? "POST" : "GET", path: `/room/v1/rooms/${roomId}/${path}`,
+      headers: {
+        host: HOST, origin: `https://${HOST}`, authorization: `Bearer ${joinedKey(roomId)!.key}`, "x-wink-device": "pc-mina-0123456789abcdef", "x-orbit-room-files": "1",
+        ...(body ? { "content-length": String(body.length) } : {}),
+      },
+    }, (res) => {
+      status = res.statusCode!;
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => { text += chunk; });
+      res.on("end", resolve);
+      res.on("error", resolve);
+    });
+    req.on("error", () => resolve());
+    req.end(body);
+    older.push(req);
+  });
+  const frames = () => text.split("\n\n").slice(0, -1).filter((block) => block.startsWith("data: ")).map((block) => JSON.parse(block.slice(6)) as { kind: string; entry?: unknown });
+  return { done, frames, status: () => status, json: () => JSON.parse(text) };
+}
+
+let older: Array<{ destroy(): void }> = [];
+afterEach(() => {
+  for (const req of older) req.destroy();
+  older = [];
+});
+
+describe("a teammate on 1.0.256 and video or audio files", () => {
+  const mp4 = (size: number) => Buffer.concat([Buffer.from("\0\0\0\x18ftypisom\0\0\x02\0isomiso2", "latin1"), randomBytes(size - 24)]);
+  const mp3 = (size: number) => Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), randomBytes(size - 10)]);
+
+  it("keeps the room live and loadable, with the media named in the line", async () => {
+    const { roomId } = await joinedTeam();
+    const stream = olderDoor(roomId, `stream?after=${recentRoomEntries(roomId, 1)[0]!.seq}&with=bots`);
+    await until(() => stream.frames().some((frame) => frame.kind === "state"));
+    const fileIds = [(await hostUpload(roomId, mp4(4096), "clip.mp4")).id, (await hostUpload(roomId, mp3(4096), "song.mp3")).id, (await hostUpload(roomId, pdf(2048), "plan.pdf")).id];
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "watch this", fileIds })))).status).toBe(200);
+
+    await until(() => filesOf(roomId, "watch this").length === 3);
+    expect(filesOf(roomId, "watch this").map((file) => file.type)).toEqual(["video/mp4", "audio/mpeg", "application/pdf"]);
+    await until(() => stream.frames().some((frame) => frame.kind === "entry"));
+    const live = olderEntry.safeParse(stream.frames().find((frame) => frame.kind === "entry")!.entry);
+    expect(live.success, JSON.stringify(live.error?.issues)).toBe(true);
+    expect(live.data).toMatchObject({ text: "watch this\nclip.mp4\nsong.mp3", files: [{ name: "plan.pdf" }] });
+
+    const snapshot = olderDoor(roomId, "snapshot?with=bots");
+    await snapshot.done;
+    const parsed = olderSnapshot.safeParse(snapshot.json());
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(parsed.data!.entries.at(-1)).toMatchObject({ text: "watch this\nclip.mp4\nsong.mp3" });
+  });
+
+  it("refuses its video upload before keeping any bytes, while a current teammate's goes through", async () => {
+    const { roomId } = await joinedTeam();
+    const upload = olderDoor(roomId, `files?${new URLSearchParams({ uploadId: newUploadId(), name: "clip.mp4" })}`, mp4(4096));
+    await upload.done;
+    expect(upload.status()).toBe(415);
+    expect((await call("GET", `/api/rooms/${roomId}/files`)).json.files).toEqual([]);
+    expect(existsSync(join(DATA_DIR, "room-files", roomId)) ? readdirSync(join(DATA_DIR, "room-files", roomId)) : []).toEqual([]);
+    expect((await guestUpload(roomId, mp4(4096), "clip.mp4")).json.file).toMatchObject({ type: "video/mp4" });
   });
 });
 

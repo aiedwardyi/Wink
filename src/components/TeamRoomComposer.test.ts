@@ -105,12 +105,12 @@ describe("room file drop", () => {
     expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path).split("?")[0])).toEqual(["/api/joined/rooms/r9/files", "/api/joined/rooms/r9/send"]);
   });
 
-  it("shows the existing type refusal when the dropped upload is refused", async () => {
+  it("names the kinds a room takes when the dropped upload is refused", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "file-type" }, 415)));
     await render();
     await drag("drop", [file("program.exe", "application/octet-stream")]);
     await send();
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("This kind of file can't be shared.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Only pictures, video, audio, PDF, zip, Office and text files can be shared.");
     expect(host.textContent).toContain("program.exe");
     expect(fetch).toHaveBeenCalledOnce();
   });

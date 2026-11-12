@@ -342,15 +342,15 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
   return entries.slice(from);
 }
 
-function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
   const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
   const bots = url.searchParams.get("with") === "bots";
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles, media))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): void {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -359,7 +359,7 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles, media);
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   for (const frame of reactionFrames(group)) writeFrame(open, frame);
   // A teammate who was away missed the reset a delete sends.
@@ -447,10 +447,12 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
-  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
+  // Not a new x-orbit-room-files value: older hosts give large files only when that header is exactly "1".
+  const media = req.headers["x-orbit-room-media"] === "1";
+  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null, media);
   const largeFiles = req.headers["x-orbit-room-files"] === "1";
-  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles);
-  if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
+  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles, media);
+  if (action === "stream") return stream(res, url, group, guest.person, largeFiles, media);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "react") return react(req, res, guest.roomId, guest.person);
