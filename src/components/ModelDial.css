@@ -243,7 +243,7 @@
 
 .dial-rail { position: absolute; left: calc(var(--cx) + var(--R) + var(--cw) + 24px); top: calc(var(--cy) - 80px); display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid #ffffff12; border-radius: 16px; background: #0b0d11d9; box-shadow: 0 12px 30px #0009; }
 .dial-rail button { display: grid; width: 44px; height: 48px; place-items: center; border-radius: 11px; color: var(--ink-2); }
-.dial-rail button:hover { background: var(--dial-rail-hover, #ffffff0b); color: var(--ink); }
+@media (hover: hover) { .dial-rail button:hover { background: var(--dial-rail-hover, #ffffff0b); color: var(--ink); } }
 .dial-rail button[data-pick] { color: var(--accent); }
 .dial-typeahead { position: absolute; left: min(var(--cx) + var(--R) + var(--cw) - 28px, var(--pw) - var(--m) - 220px); top: calc(var(--cy) + 104px); width: 220px; color: var(--accent-ink); font: 500 max(12px, var(--floor))/1.5 var(--mono); opacity: 0; transition: opacity 200ms linear; }
 .dial-typeahead[data-on] { opacity: 1; transition: none; }
@@ -307,7 +307,7 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
 
 /* One view switch, beside the close button. */
 .model-cross-header .model-dial-view { padding: 6px 10px; border: 1px solid #ffffff1a; border-radius: 8px; font-size: 12px; }
-.model-cross-header .model-dial-view:hover { color: #f2f3f5; }
+@media (hover: hover) { .model-cross-header .model-dial-view:hover { color: #f2f3f5; } }
 
 /* Phone: dial on top facing down, cards as a drum below it. */
 .dial-stage[data-phone] { --face: 90deg; --top: env(safe-area-inset-top, 0px); --gap: max(0px, (var(--ph) - 800px - var(--top) - env(safe-area-inset-bottom, 0px)) / 3); --cx: 50%; --cy: calc(238px + var(--top) + var(--gap)); --cw: calc(var(--pw) - 32px); --ch: 58px; width: var(--pw); height: var(--ph); overflow: visible; clip-path: inset(0 -100vw); }
@@ -390,5 +390,5 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
   .dial-ring .track { border-color: color-mix(in srgb, var(--color-ink) 7%, transparent); }
   .dial-footer { border-top-color: color-mix(in srgb, var(--color-ink) 8%, transparent); }
   .model-cross-header .model-dial-view { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
-  .model-cross-header .model-dial-view:hover { color: var(--color-ink); }
+  @media (hover: hover) { .model-cross-header .model-dial-view:hover { color: var(--color-ink); } }
 }
