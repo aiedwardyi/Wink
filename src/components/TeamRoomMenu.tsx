@@ -1,20 +1,31 @@
-// The sidebar's way in: New team room (a name, nothing else) and Join team room (one code box).
+// The sidebar's way in: Join with code (one code box), plus each room's own menu items.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
+import { Copy, Files, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
-import { createTeamRoom, inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
+import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { TeamRoomFiles } from "./TeamRoomFiles";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 
-type Sheet = "create" | "join" | "rejoin" | "people" | "leave" | "remove" | null;
+export function TeamRoomFilesMenu({ roomId }: { roomId: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" onClick={() => setOpen(true)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>
+    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
+  </>;
+}
+
+type Sheet = "join" | "rejoin" | "people" | "leave" | "remove" | null;
 
 let sheet: Sheet = null;
 let roomTarget: { id: string; name: string } | null = null;
@@ -89,7 +100,7 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
     const result = await inviteToRoom(group.hosted.roomId);
     if (!("code" in result)) return setProblem(inviteErrorKey(result.status));
     try {
-      await navigator.clipboard.writeText(result.code);
+      await navigator.clipboard.writeText(result.short ?? result.code);
       onClose();
     } catch {
       setProblem("errors.request");
@@ -117,16 +128,10 @@ export function TeamRoomMenuItems({ onPick }: { onPick: () => void }) {
     openSheet(next);
   };
   return (
-    <>
-      <button onClick={() => pick("create")} className={ITEM}>
-        <UsersRound size={16} className="text-ink-secondary" />
-        {t("teamRoom.new")}
-      </button>
-      <button onClick={() => pick("join")} className={ITEM}>
-        <KeyRound size={16} className="text-ink-secondary" />
-        {t("teamRoom.joinMenu")}
-      </button>
-    </>
+    <button onClick={() => pick("join")} className={ITEM}>
+      <KeyRound size={16} className="text-ink-secondary" />
+      {t("teamRoom.joinMenu")}
+    </button>
   );
 }
 
@@ -159,60 +164,6 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
 
 const INPUT = "w-full rounded-lg border border-hairline/60 bg-inset px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:border-accent/60 focus:outline-none";
 
-function CreateSheet({ closing, onClose }: { closing: boolean; onClose: () => void }) {
-  const { t } = useI18n();
-  const { dispatch } = useStore();
-  const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const create = async () => {
-    const wanted = name.trim();
-    if (!wanted || creating) return;
-    setCreating(true);
-    setFailed(false);
-    try {
-      const { group } = await createTeamRoom(wanted);
-      dispatch({ type: "groupPatched", group });
-      dispatch({ type: "select", id: group.id });
-      onClose();
-    } catch {
-      setCreating(false);
-      setFailed(true);
-    }
-  };
-  return (
-    <Shell label={t("teamRoom.new")} closing={closing} onClose={onClose}>
-      <div className="mb-3 text-[15px] font-semibold text-ink">{t("teamRoom.new")}</div>
-      <input
-        autoFocus
-        maxLength={100}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) void create();
-        }}
-        placeholder={t("teamRoom.namePlaceholder")}
-        aria-label={t("teamRoom.namePlaceholder")}
-        className={INPUT}
-      />
-      {failed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
-      <div className="mt-3 flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
-          {t("groupWizard.cancel")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void create()}
-          disabled={!name.trim() || creating}
-          className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
-        >
-          {t("teamRoom.create")}
-        </button>
-      </div>
-    </Shell>
-  );
-}
-
 /** A valid code joins the moment it lands: no Enter, no button. */
 function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: () => void; rejoin?: { roomId: string; name: string } }) {
   const { t } = useI18n();
@@ -237,7 +188,9 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     }
     busy.current = false;
     setJoining(false);
-    setProblem(joinErrorKey(result.status, result.error));
+    const short = !rejoin && !looksLikeRoomCode(value);
+    setProblem(joinErrorKey(result.status, result.error, short));
+    if (short) setCode("");
     input.current?.select();
   };
 
@@ -247,7 +200,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     else setProblem(pasted && value.trim() ? "teamRoom.badCode" : null);
   };
 
-  useEffect(() => input.current?.focus(), []);
+  useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>("[data-join-boxes] input"))?.focus(), []);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
@@ -257,7 +210,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         <div title={rejoin.name} className="mb-2 truncate text-[13px] text-ink-secondary">{rejoin.name}</div>
         <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.rejoinCodeHint")}</p>
       </>}
-      <input
+      {rejoin ? <input
         ref={input}
         value={code}
         readOnly={joining}
@@ -276,7 +229,20 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         placeholder={t("teamRoom.codePlaceholder")}
         aria-label={t("teamRoom.codePlaceholder")}
         className={`${INPUT} font-mono text-[13px]`}
-      />
+      /> : <div data-join-boxes>
+        <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.shortCodePrompt")}</p>
+        <CodeBoxes
+          value={code}
+          disabled={joining}
+          label={t("teamRoom.shortCodeLabel")}
+          onChange={(value) => {
+            setCode(value);
+            setProblem(null);
+          }}
+          onDone={(value) => void join(value)}
+          onOther={(value) => (looksLikeRoomCode(value) ? void join(value) : setProblem("teamRoom.badCode"))}
+        />
+      </div>}
       <p role={problem ? "alert" : "status"} className={problem ? "mt-2 text-[12.5px] text-danger" : "mt-2 min-h-[1.25rem] text-[12.5px] text-ink-secondary"}>
         {problem ? t(problem) : joining ? t("teamRoom.joining") : ""}
       </p>
@@ -329,7 +295,6 @@ export function TeamRoomDialogs() {
   useEffect(() => { if (open === "leave") setLeaveFailed(false); }, [open]);
   return (
     <>
-      <Presence open={open === "create"}>{(closing) => <CreateSheet closing={closing} onClose={close} />}</Presence>
       <Presence open={open === "join"}>{(closing) => <JoinSheet closing={closing} onClose={close} />}</Presence>
       <Presence open={open === "rejoin" && Boolean(joinedId)}>
         {(closing) => <JoinSheet closing={closing} onClose={close} rejoin={{ roomId: joinedId!, name: roomTarget?.name ?? "" }} />}

@@ -125,7 +125,7 @@ export interface Message {
   /** Team rooms: the room log entry this line mirrors, its author and files. */
   author?: { kind: "host" | "person" | "bot"; id: string; name: string };
   roomEntryId?: string;
-  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number }>;
+  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number; deleted?: boolean }>;
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
@@ -146,6 +146,9 @@ export type GroupDefaultResponder =
 
 /** A room: several bots + you in one shared thread. */
 export interface Group {
+  picture?: string | null;
+  /** A team room's pinned line; `by` is "host" or "person:<id>". */
+  notice?: { entryId: string; by: string; at: number } | null;
   id: string;
   threadId: string;
   name: string;
@@ -184,7 +187,14 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }> } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[] } | { missing: true };
+}
+
+/** A person's first join to a shared group, once per seat. */
+export interface RoomJoin {
+  personId: string;
+  name: string;
+  at: number;
 }
 
 /** One of a channel's independent conversations. The channel's threadId
@@ -239,6 +249,8 @@ export interface TaskResumePacket {
   flushReason: "turn-end" | "progress" | "approval" | "stop" | "engine-switch" | "crash" | "pre-compaction" | "shutdown";
   lastEventId?: string;
   turnsAtWrite: number;
+  /** the bot's ask list; read through botAsks, which skips malformed items */
+  asks?: unknown[];
 }
 
 export interface TaskUsage {

@@ -108,6 +108,7 @@ function TimeLeft({ expiresAt }: { expiresAt: number }) {
   return (
     <div
       data-live-call-time-left
+      data-progress
       className="h-0.5 origin-left bg-accent/60"
       style={{ animation: `call-time-left ${ORDER_EXPIRY_MS}ms linear -${elapsed}ms forwards` }}
     />

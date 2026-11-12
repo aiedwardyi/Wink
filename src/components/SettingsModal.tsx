@@ -12,6 +12,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
+import { useModelDialFits } from "./ModelDial";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
@@ -29,7 +30,11 @@ import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
 import { isPhone, saveVibration, vibrationEnabled } from "@/lib/phone-swipe";
+import { modelDialEnabled } from "@/lib/feature-flags";
+import { saveModelPickerView, useModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
+import { savePickerLook, usePickerLook, type PickerLook } from "@/lib/picker-look";
 import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-box";
+import { useSkin } from "@/lib/skins";
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
@@ -43,6 +48,7 @@ import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
 import { ActivityCard } from "./ActivityCard";
+import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -327,6 +333,38 @@ function RainbowBoxRow() {
         value={box}
         options={(["off", "rainbow", "theme"] as const).map((id) => ({ id, label: t(`settings.rainbowBox.${id}`) }))}
         onChange={saveRainbowBox}
+      />
+    </Card>
+  );
+}
+
+function PickerLookRow() {
+  const { t } = useI18n();
+  const look = usePickerLook(useSkin());
+  return (
+    <Card>
+      <SegmentedRow<PickerLook>
+        label={t("settings.pickerLook.title")}
+        value={look}
+        options={(["dark", "light", "atelier"] as const).map((id) => ({ id, label: t(`settings.pickerLook.${id}`) }))}
+        onChange={savePickerLook}
+      />
+    </Card>
+  );
+}
+
+function PickerStyleRow() {
+  const { t } = useI18n();
+  const { state } = useStore();
+  const view = useModelPickerView();
+  if (!useModelDialFits(modelDialEnabled(state.config))) return null;
+  return (
+    <Card>
+      <SegmentedRow<ModelPickerView>
+        label={t("settings.pickerStyle.title")}
+        value={view}
+        options={(["dial", "list"] as const).map((id) => ({ id, label: t(`settings.pickerStyle.${id}`) }))}
+        onChange={saveModelPickerView}
       />
     </Card>
   );
@@ -630,6 +668,7 @@ export function SettingsModal({
                 {!window.ogb && <Card><PhoneNotificationSettings /></Card>}
                 <VibrationRow />
                 <UpdatesRow />
+                <RoomFilesFolderRow />
                 <ErrorReportsRow />
                 {showUsageStats() && <AnalyticsRow />}
                 <button
@@ -672,6 +711,8 @@ export function SettingsModal({
             {section === "themes" && (
               <>
                 <RainbowBoxRow />
+                <PickerLookRow />
+                <PickerStyleRow />
                 <Card>
                   <SkinPicker />
                 </Card>

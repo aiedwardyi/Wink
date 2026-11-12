@@ -578,7 +578,7 @@ function replayUnits(
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : body;
-      const speaker = message.role === "user" ? userName : (message.from?.name ?? "Bot");
+      const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
       return [{
         id: message.id,
         pathIndex,

@@ -12,8 +12,8 @@ import { cn } from "@/lib/cn";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "moss", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["inkwell", "graphite", "moss"]);
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "precision-dimmed", "bronze", "dim-sand", "wink-day", "notebook"];
+const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand"]);
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected

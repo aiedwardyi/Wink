@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, X } from "lucide-react";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
-import { useStore, type Message } from "@/state/store";
+import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -101,7 +101,7 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   endSelectMode();
   // the row is unselectable until now, and caret hit-testing skips unselectable text
   row.setAttribute("data-select-mode", "");
-  const content = row.querySelector("[data-orbit-message-content]") ?? row;
+  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content]") ?? row;
   const box = row.getBoundingClientRect();
   const word = wordAt(content, box.left + held.x, box.top + held.y);
   const sel = window.getSelection();
@@ -243,6 +243,8 @@ export interface MessageMenuTarget {
   user: boolean;
   pinned: boolean;
   canPin: boolean;
+  /** Pin reads as the team room's notice. */
+  notice?: boolean;
   queued?: { sendNow?: () => void; cancel: () => void };
 }
 
@@ -354,6 +356,7 @@ export function MessageMenu({
   target,
   onReply,
   onPin,
+  onReact,
   onClose,
 }: {
   x: number;
@@ -362,11 +365,11 @@ export function MessageMenu({
   target: MessageMenuTarget;
   onReply: (message: Message) => void;
   onPin: (message: Message) => void;
+  onReact?: (emoji: string) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
-  const { threadId, message, copyText, user, pinned, canPin } = target;
+  const { message, copyText, user, pinned, canPin } = target;
   const [expanded, setExpanded] = useState(false);
   useBackLayer(expanded, () => setExpanded(false));
   const [touch] = useState(isTouchPrimary);
@@ -405,7 +408,7 @@ export function MessageMenu({
   }, [expanded]);
 
   const toggle = (emoji: string) => {
-    dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
+    onReact?.(emoji);
     closeMenu(opener, ref.current, onClose);
   };
   const emojiButton = (emoji: string) => {
@@ -473,7 +476,7 @@ export function MessageMenu({
       onKeyDown={(e) => menuKeyDown(ref, e)}
       className={cn(MENU_CLASS, touch ? "w-[304px]" : "w-[248px]")}
     >
-      {!user && (
+      {!user && onReact && (
         <>
           {expanded ? (
             <div className="grid grid-cols-6 justify-items-center gap-0.5 px-2">
@@ -523,7 +526,7 @@ export function MessageMenu({
           {pinned
             ? <PinOff size={16} className="text-ink-secondary" />
             : <Pin size={16} className="text-ink-secondary" />}
-          {t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
+          {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
       {message.quick?.state !== "answer" && (

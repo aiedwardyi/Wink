@@ -367,6 +367,18 @@ describe("linked files", () => {
     }
   });
 
+  it("lets only Wink's own page frame a linked page, for the Show pane", async () => {
+    const { server, open } = await linkedSite({ "index.html": "<p>hi</p>" });
+    try {
+      const policy = (await open("index.html")).headers.get("content-security-policy") ?? "";
+      const ancestors = /frame-ancestors ([^;]+)/.exec(policy)?.[1].split(" ") ?? [];
+      expect(ancestors).toHaveLength(2);
+      expect(ancestors.every((source) => /^https?:\/\/(127\.0\.0\.1|localhost):\d+$/.test(source))).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("sandboxes every file beside a linked page, so an svg opened on its own cannot script", async () => {
     const { server, open } = await linkedSite({
       "index.html": '<a href="payload.svg">open</a>',

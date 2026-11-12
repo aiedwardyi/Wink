@@ -2,10 +2,11 @@ import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
+import { DaySeparator } from "./DaySeparator";
+import { JumpToLatest } from "./JumpToLatest";
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
-  ArrowDown,
   Check,
   ChevronDown,
   ChevronRight,
@@ -89,6 +90,7 @@ import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
+import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
@@ -127,26 +129,6 @@ const JOIN_TRIES = 3;
 const JOIN_RETRY_MS = 1000;
 /** Chat sync notices share this lead; Retry there would re-run the last turn. */
 const SYNC_NOTICE = "error: This chat also changed on another PC.";
-
-/** "Today" / "Yesterday" / "Mon, Aug 11" — real dates, not a hardcoded label. */
-function dayLabel(at: number, t: (key: import("@/lib/i18n").MessageKey) => string, locale: import("@/lib/i18n").LocaleId): string {
-  const d = new Date(at);
-  const now = new Date();
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-  if (diffDays === 0) return t("chat.today");
-  if (diffDays === 1) return t("chat.yesterday");
-  return d.toLocaleDateString(localeTag(locale), { weekday: "short", month: "short", day: "numeric" });
-}
-
-function DaySeparator({ at }: { at: number }) {
-  const { t, locale } = useI18n();
-  return (
-    <div className="py-3 text-center text-[13px] text-ink-secondary">
-      {dayLabel(at, t, locale)} {formatTime(at, localeTag(locale))}
-    </div>
-  );
-}
 
 function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }) {
   const { t, locale } = useI18n();
@@ -745,7 +727,7 @@ const MessagesList = memo(function MessagesList({
           const first = item.messages[0];
           const forceOpen = found || item.messages.some((step) => step.id === focusedId);
           return (
-            <div key={item.id} className="contents" data-run={item.id} {...logLine(skin === "logfile", first.at, item.messages)}>
+            <div key={item.id} className="contents" data-run={item.id} data-settled={i < items.length - 1 ? "" : undefined} {...logLine(skin === "logfile", first.at, item.messages)}>
               {newDay && <DaySeparator at={first.at} />}
               {item.kind === "memory" ? (
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
@@ -872,7 +854,7 @@ const MessagesList = memo(function MessagesList({
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
-          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
+          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
             {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
@@ -1079,7 +1061,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   if (rehydrated) setSeenSnapshot(state.snapshots);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
-  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+  const earlier = useMemo(() => createEarlierWindow(shown, {
     terminal, workers: rowWorkers, renders: (message) => messageVisible(message, { showToolCalls, showActivities, transcript: shown }),
   }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
@@ -1091,7 +1073,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlier.start(prepended, scrollRef.current) : undefined));
     } else if (prepended < 0) {
       const { id, index } = windowAnchor.current;
       const at = id ? shown.findIndex((message) => message.id === id) : -1;
@@ -1350,12 +1332,20 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   // viewport to the end. Re-pinning only arms future content; Jump to latest
   // and this effect on new rows do the scrolling. The one exception is the
   // user's own send, which re-anchors via onSend even from scrollback.
-  useEffect(() => {
+  // Each scrollHeight read lays out the transcript: commits pin once per frame, streamed text via the resize observer.
+  const pinFrame = useRef(0);
+  const pinBottom = useCallback(() => {
+    cancelAnimationFrame(pinFrame.current);
+    pinFrame.current = 0;
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
-  }, [bot.id, messages.length, streaming, reasoning, turnSignal, bot.busy, composerDock.pad]);
+  }, []);
+  useEffect(() => {
+    if (!pinFrame.current) pinFrame.current = requestAnimationFrame(pinBottom);
+  }, [pinBottom, bot.id, messages.length, bot.busy, composerDock.pad]);
+  useEffect(() => () => cancelAnimationFrame(pinFrame.current), []);
 
   // Late layout, images and viewport changes fire no scroll event, so the pill and fill read geometry here too.
   const [newestBelow, setNewestBelow] = useState(false);
@@ -1372,18 +1362,14 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const content = contentRef.current;
     if (!content) return;
     const observer = new ResizeObserver(() => {
-      const el = scrollRef.current;
-      if (el && followRef.current) {
-        el.scrollTo({ top: el.scrollHeight });
-        previousScrollTop.current = el.scrollTop;
-      }
+      pinBottom();
       measure();
     });
     observer.observe(content);
     // a growing composer shrinks the viewport; re-pin before paint
     if (scrollRef.current) observer.observe(scrollRef.current);
     return () => observer.disconnect();
-  }, [measure]);
+  }, [measure, pinBottom]);
 
   // A plain tail too short to scroll pages older rows in until it fills or the thread runs out.
   // A widening window still to commit is not short of rows.
@@ -1408,7 +1394,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       return;
     }
     preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
-    const start = earlierStart(startIndex, scrollRef.current);
+    const start = earlier.start(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1432,7 +1418,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const [showEarlier, cancelEarlier] = useEarlierPage({
     key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : bot.hasMore),
     scrollRef, previousScrollTop, expand: expandEarlier,
+    settle: () => {
+      const end = earlier.end(startIndex, scrollRef.current);
+      if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
+    },
   });
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1764,7 +1755,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           aria-label={t("chat.conversationAria", { name: bot.name })}
         >
           {(hiddenCount > 0 || (jump.messages ? jump.hasMore : bot.hasMore)) && (
-            <div className="flex justify-center pt-2">
+            <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
@@ -1879,22 +1870,14 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
       />
 
       {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onClose={() => setMenu(null)} />
+        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
       ) : menu ? (
         <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
       ) : null}
 
       {/* Reading scrollback — one tap back to the end, streaming or not */}
       {latestShown && (
-        <button
-          data-jump-latest
-          onClick={jumpToLatest}
-          aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
-          style={{ bottom: composerDock.height }}
-        >
-          <ArrowDown size={13} /> {t("chat.jumpToLatest")}
-        </button>
+        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
       )}
 
       {/* Keyed by task: each conversation keeps its own draft and a failed

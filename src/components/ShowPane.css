@@ -1,0 +1,32 @@
+/* The checker keeps its dock; a file docks wider so pages and slides read. */
+@container verify-watch (min-width: 660px) {
+  .verify-watch[data-wide] { --dock: max(380px, 46cqi); }
+}
+.show-pane { --head: 40px; flex-direction: column; align-items: stretch; }
+.show-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 4px; height: var(--head); padding: 10px 6px 0 12px; }
+.show-pane-tabs { display: flex; padding: 2px; border-radius: 8px; background: var(--color-inset); }
+.show-pane-tabs button { height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; cursor: default; }
+.show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
+.show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
+.show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame { min-height: calc(100% - var(--head) - 20px); }
+
+.show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
+.show-frame-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.show-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--color-inset); overflow: hidden; }
+.show-stage > :not(.verify-watch-banner) { opacity: 0; transition: opacity var(--motion-moderate) var(--ease-standard); }
+.show-stage[data-ready] > * { opacity: 1; }
+.show-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.show-stage iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.show-pdf { flex: 1; min-height: 0; width: 100%; padding: 12px; object-fit: contain; }
+.show-pager { display: flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 4px 0 8px; color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .show-stage > * { transition: none; }
+}
+
+/* A phone has no side room: the pane is a full-screen sheet over the chat. */
+@media (max-width: 767px) {
+  .verify-watch.show-pane { position: fixed; inset: 0; z-index: 50; width: 100%; margin: 0; padding-top: env(safe-area-inset-top); border-left-width: 0; box-shadow: none; }
+  .show-pane-head { height: auto; padding: 6px 0 0 12px; }
+  .show-pane-tabs button { height: 32px; }
+  .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
+}

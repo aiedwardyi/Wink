@@ -38,6 +38,7 @@ const portableBotChanges = z.object({
   memoryDocument: z.string().trim().max(240).nullable().optional(),
   projectNotes: z.string().trim().max(1_024).nullable().optional(),
   pinnedMessageId: ID.nullable().optional(),
+  trashed: z.boolean().optional(),
 }).strict();
 const sectionChanges = z.object({
   name: z.string().trim().min(1).max(100).optional(),
@@ -373,7 +374,7 @@ export function parseSyncOperationText(text: string): ProfileSyncOperation {
 }
 
 // Bot fields older builds reject travel in their own op, under an extension those builds never read.
-const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style" } as const;
+const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style", trashed: "trash" } as const;
 
 function ownOpFields(changes: Record<string, unknown>) {
   return Object.entries(OWN_OP_EXTENSIONS).filter(([field]) => field in changes &&
@@ -388,7 +389,7 @@ export function syncOperationFileName(operation: ProfileSyncOperation): string {
   return `${String(operation.sequence).padStart(12, "0")}-${safe(operation.deviceId)}-${safe(operation.operationId)}.${ext}`;
 }
 
-const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style)$/.test(name);
+const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash)$/.test(name);
 
 export function writeSyncOperation(folder: string, operation: ProfileSyncOperation): string {
   const parsed = parseSyncOperation(operation);
@@ -773,6 +774,10 @@ export function planProfileImport(input: {
   /** bots.json was lost: mapped bots missing here come back, except deletes not yet published. */
   restore?: boolean;
   pendingBotDeletes?: readonly string[];
+  /** Sync ids in this PC's trash: never created or brought back here. */
+  trashed?: readonly string[];
+  /** Sync ids this PC's timer emptied and another PC restored: they come back whole, under their old id. */
+  revive?: readonly string[];
 }): ProfileImportPlan {
   const { state, deviceId, synced } = input;
   const botMap = { ...input.botMap };
@@ -782,13 +787,16 @@ export function planProfileImport(input: {
   for (const remote of Object.values(state.bots)) {
     // a same-named unmapped bot was made separately; binding it by name would merge two bots
     const localId = localIdForSyncId(botMap, remote.id) ?? null;
-    if (localId && !byId.has(localId)) {
+    const live = localId !== null && byId.has(localId);
+    if (!live && (remote.trashed === true || input.trashed?.includes(remote.id))) continue;
+    if (localId && !live) {
+      const revived = input.revive?.includes(remote.id) === true;
       // deleted here; its tombstone goes out on the next publish
-      if (!input.restore || input.pendingBotDeletes?.includes(remote.id)) continue;
+      if (!revived && (!input.restore || input.pendingBotDeletes?.includes(remote.id))) continue;
       // every field, this device's own ops too: its copy went with bots.json
       const { id: _id, ...apply } = remote;
       plan.bots.push({ globalId: remote.id, localId, apply });
-      restored = true;
+      if (!revived) restored = true;
       continue;
     }
     const apply = remoteFieldsToApply(state, deviceId, synced, "bot", remote.id, remote, localId ? byId.get(localId)!.changes : null);

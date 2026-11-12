@@ -4,21 +4,38 @@ import { softwareRender } from "./MemoryMapMotion";
 interface Painted { key: string; glow: HTMLElement[]; rings: HTMLCanvasElement[]; live: HTMLCanvasElement | null }
 interface Reply { renderer?: string; layers: ImageBitmap[] | null }
 
-// busy is shared on purpose: one worker, so one WebGL context, at a time
-let unsupported = false, busy = false;
+// one worker for the page's life, so one WebGL context and one shader build; busy keeps it to one paint at a time
+let unsupported = false, busy = false, worker: Worker | undefined, answer: ((layers: ImageBitmap[] | null) => void) | undefined;
 // the canvases of the last map to leave, for the next one to open
 let painted: Painted | undefined;
 
 /** False once a paint has failed here, so the map keeps its CSS glow. */
 export const paintsGlow = () => !unsupported && typeof Worker !== "undefined" && typeof OffscreenCanvas !== "undefined";
 
+function painter() {
+  if (worker instanceof Worker) return worker;
+  const made = new Worker(new URL("./MemoryMapGlow.worker.ts", import.meta.url), { type: "module" });
+  const reply = (layers: ImageBitmap[] | null) => { const done = answer; answer = undefined; done?.(layers); };
+  made.onmessage = ({ data }: MessageEvent<Reply>) => reply(data.renderer !== undefined && softwareRender(data.renderer) ? null : data.layers);
+  made.onerror = () => { made.terminate(); worker = undefined; reply(null); };
+  return (worker = made);
+}
+
+/** Starts the painter and builds its shader, so the first open only paints. */
+export function warmGlow() {
+  if (!paintsGlow() || worker) return;
+  try {
+    painter().postMessage(null);
+  } catch {
+    // a worker the page may not start: the first paint finds out and keeps the CSS glow
+  }
+}
+
 // the shader builds and paints off the main thread; null when this browser cannot paint it
 function paint(source: Source) {
   return new Promise<ImageBitmap[] | null>((done) => {
-    const worker = new Worker(new URL("./MemoryMapGlow.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = ({ data }: MessageEvent<Reply>) => done(data.renderer !== undefined && softwareRender(data.renderer) ? null : data.layers);
-    worker.onerror = () => { worker.terminate(); done(null); };
-    worker.postMessage(source);
+    answer = done;
+    painter().postMessage(source);
   });
 }
 

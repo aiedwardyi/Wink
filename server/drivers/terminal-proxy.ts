@@ -152,7 +152,7 @@ export const TOOLS = [
       `Gemini: ${REPORT_TEXT.agy}agy --model <model-id> --dangerously-skip-permissions -i '<prompt>'. ` +
       `${workerModelsText()} ` +
       "Engine CLIs run in the PowerShell pane; check them there, not from another shell. " +
-      "Only when the user requests an account, prefix with $env:CODEX_HOME='Usage name or known home'; or $env:CLAUDE_CONFIG_DIR='Usage name or known home'; otherwise workers use Main. $env:CODEX_HOME='OpenAI credit'; bills the saved OpenAI key's API credit. " +
+      "Only when the user requests an account, prefix with $env:CODEX_HOME='Usage name or known home'; or $env:CLAUDE_CONFIG_DIR='Usage name or known home'; otherwise workers use Main. Accounts marked unavailable in Usage cannot run Codex workers. " +
       REPORT_TEXT.spawn,
     inputSchema: {
       type: "object",

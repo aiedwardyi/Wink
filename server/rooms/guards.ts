@@ -4,15 +4,8 @@ import { roomById, roomPeople, type RoomPerson } from "./db.ts";
 import { nameClash } from "./names.ts";
 import { roomJoins, type RoomJoin } from "./share.ts";
 
-/** Team rooms run only on engines whose relaunches and lifetime they bound. */
-const ROOM_ENGINES: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
-
-export const roomEngineAllowed = (driverKind: string | undefined) => driverKind !== undefined && ROOM_ENGINES.has(driverKind);
-
 /** Why these bots can't be a team room's bots, if they can't. */
-export function roomBotsRefusal(bots: ReadonlyArray<{ name: string; driverKind: string | undefined }>, people: readonly string[] = []): string | null {
-  const off = bots.find((bot) => !roomEngineAllowed(bot.driverKind));
-  if (off) return `${off.name} can only answer in team rooms on Claude or Codex`;
+export function roomBotsRefusal(bots: ReadonlyArray<{ name: string }>, people: readonly string[] = []): string | null {
   const clash = nameClash(bots.map((bot) => bot.name), people);
   return clash ? `someone in this room is already called ${clash}` : null;
 }

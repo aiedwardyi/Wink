@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import type { AccountContext } from "./account-policy.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { codexPromoBlocked } from "../electron/codex-promo.mjs";
 
 export const CODEX_CREDIT_ID = "codex-credit";
 export const CODEX_CREDIT_NAME = "OpenAI credit";
@@ -48,7 +49,10 @@ export function withCodexCredit<T extends Deps>(deps: T): T {
     return live?.id === id && live.generation === generation ? live : undefined;
   };
   return { ...deps,
-    available: (id: string, generation: number) => Boolean(own(id, generation)) || deps.available(id, generation),
+    available: (id: string, generation: number) => {
+      const account = own(id, generation);
+      return account ? !codexPromoBlocked(account.home, generation) : deps.available(id, generation);
+    },
     resumeAccount: (id: string, generation: number) => own(id, generation) ?? deps.resumeAccount?.(id, generation),
     nameOf: (id: string, engine: string) => credit()?.account.id === id ? CODEX_CREDIT_NAME : deps.nameOf?.(id, engine) ?? engine,
     accounts: () => [...(deps.accounts?.() ?? []), ...[credit()?.account ?? []].flat()],

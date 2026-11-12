@@ -25,6 +25,7 @@ import { applyPendingModel } from "./pending-model.ts";
 import { clearAccountSessions } from "./account-sessions.ts";
 import { validateProjectNotes } from "./project-notes.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { coalescedSave } from "./save-defer.ts";
 import { redactToolMessage } from "./tool-detail.ts";
 import { redactVerifyCard } from "./verify-message.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
@@ -251,7 +252,16 @@ export interface GroupTaskRecord {
  * messages follow `defaultResponder`; explicit @mentions always override it.
  * The bulletin is the room's shared instructions — every member's turn gets
  * it as part of its system prompt. */
+/** A team room's pinned line; `by` is "host" or "person:<id>". */
+export interface RoomNotice {
+  entryId: string;
+  by: string;
+  at: number;
+}
+
 export interface GroupRecord {
+  picture?: string;
+  notice?: RoomNotice;
   id: string;
   /** The active task's thread. Direct-message channels remain single-threaded. */
   threadId: ThreadId;
@@ -749,9 +759,15 @@ export class Store {
   private writeListeners = new Set<(threadId: string) => void>();
   private syncWrite?: (threadId: string, mutations: SyncMutation[], write: () => void) => void;
   private syncImport = false;
+  private coalesce: boolean;
+  private botsSave = coalescedSave(() => {
+    this.saveList(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+    this.pruneSessionSystems();
+  });
 
-  constructor(defaultSelection: () => ModelSelection) {
+  constructor(defaultSelection: () => ModelSelection, opts: { coalesceSaves?: boolean } = {}) {
     this.defaultSelection = defaultSelection;
+    this.coalesce = opts.coalesceSaves === true;
     mkdirSync(DATA_DIR, { recursive: true });
     try {
       this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
@@ -945,8 +961,17 @@ export class Store {
   }
 
   saveBots() {
-    this.saveList(BOTS_FILE, JSON.stringify(this.bots, null, 2));
-    this.pruneSessionSystems();
+    this.botsSave.now();
+  }
+
+  /** Turn and send bookkeeping: one write per tick, after the reply's frames leave. A crash loses at most that tick. */
+  private saveBotsSoon() {
+    if (this.coalesce) this.botsSave.soon();
+    else this.botsSave.now();
+  }
+
+  flushSaves() {
+    this.botsSave.flush();
   }
 
   /** A dropped resume cursor takes its session's system text with it. */
@@ -1097,7 +1122,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();
@@ -1553,7 +1578,7 @@ export class Store {
     return true;
   }
 
-  patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {
+  patchBot(id: string, patch: Partial<BotRecord>, opts: { soon?: boolean } = {}): BotRecord | null {
     const bot = this.bot(id);
     if (!bot) return null;
     // Settings Clear is cwd: null. Drop the remembered auto-folder too or
@@ -1568,7 +1593,8 @@ export class Store {
       delete bot.lastProjectCwd;
       bot.projectFolderClearedAt = Date.now();
     }
-    this.saveBots();
+    if (opts.soon) this.saveBotsSoon();
+    else this.saveBots();
     this.emit({ type: "bot", botId: id });
     return bot;
   }
@@ -1593,7 +1619,7 @@ export class Store {
     applyPendingModel(bot);
     if (nextThreadId) bot.activeThreadId = nextThreadId;
     else delete bot.activeThreadId;
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
     return bot;
   }
@@ -1633,7 +1659,7 @@ export class Store {
     // The legacy mirror follows the task visible in chat, never a detached
     // routine task working in the background.
     if (!threadId || bot.threadId === threadId) bot.resumeCursors[instanceId] = cursor;
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
   }
 
@@ -1674,7 +1700,7 @@ export class Store {
       delete next.lastInput;
       task.usage = next;
     }
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
   }
 
@@ -1694,7 +1720,7 @@ export class Store {
       delete task.resumeSeed;
     }
     if (mirrorsBot) bot.resumeCursors = {};
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
   }
 
@@ -1739,7 +1765,7 @@ export class Store {
     const current = task.resumeSeed;
     if (current && current.instanceId === seed.instanceId && current.cursor === seed.cursor && current.compactionId === seed.compactionId) return;
     task.resumeSeed = { ...seed };
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   /** Keep a settled turn's prompt sizes under the session it ran on. A cursor
@@ -1758,7 +1784,7 @@ export class Store {
     const same = task.nativePrompt?.cursor === cursor ? task.nativePrompt : undefined;
     const window = contextWindow && task.lastModel ? { model: task.lastModel, tokens: contextWindow } : task.nativePrompt?.window;
     task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, growth: prompt.last - (same?.last ?? prompt.first), window };
-    this.saveBots();
+    this.saveBotsSoon();
     return task.nativePrompt;
   }
 
@@ -1792,7 +1818,7 @@ export class Store {
     const next = noteId ?? task?.paneNotesDeliveredId ?? null;
     if (!task || task.paneNotesDeliveredId === next) return;
     task.paneNotesDeliveredId = next;
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   markReactionsDelivered(botId: string, threadId: string, keys: string[]) {
@@ -1800,7 +1826,7 @@ export class Store {
     const same = task?.reactionsDelivered?.length === keys.length && keys.every((key, i) => task.reactionsDelivered?.[i] === key);
     if (!task || same) return;
     task.reactionsDelivered = keys;
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   /** Marks a steer carried, added once the model took it in; keeps what a later dispatch recorded. */
@@ -1825,7 +1851,7 @@ export class Store {
     if (!task || (task.lastInstanceId === instanceId && task.lastModel === model)) return;
     task.lastInstanceId = instanceId;
     task.lastModel = model;
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   /** Bank one settled turn onto its task. Called once per turn.completed;
@@ -1860,7 +1886,7 @@ export class Store {
       costUsd: cost === null ? prevCost : (prevCost ?? 0) + cost,
       turns: prev.turns + 1,
     };
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
     return task.usage;
   }
@@ -1876,14 +1902,14 @@ export class Store {
     if (opts.none) {
       if (task.cwd !== null) {
         task.cwd = null;
-        this.saveBots();
+        this.saveBotsSoon();
         this.emit({ type: "bot", botId });
       }
       return null;
     }
     if (task.cwd === undefined) {
       task.cwd = Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
-      this.saveBots();
+      this.saveBotsSoon();
       this.emit({ type: "bot", botId });
     }
     return task.cwd;
@@ -1896,7 +1922,7 @@ export class Store {
     const bot = this.bot(botId);
     if (!bot || !cwd || bot.lastProjectCwd === cwd) return;
     bot.lastProjectCwd = cwd;
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   /** Drop a remembered project so a ruled-out folder does not stick. */
@@ -1904,7 +1930,7 @@ export class Store {
     const bot = this.bot(botId);
     if (!bot?.lastProjectCwd) return;
     delete bot.lastProjectCwd;
-    this.saveBots();
+    this.saveBotsSoon();
   }
 
   /** The folder a room's member turns run in. Pins on the first turn that
@@ -2232,7 +2258,7 @@ export class Store {
     if (!task || task.title !== UNTITLED_TASK) return;
     task.title = titleFromMessage(text);
     this.persistTask(task);
-    this.saveBots();
+    this.saveBotsSoon();
     this.emit({ type: "bot", botId });
   }
 

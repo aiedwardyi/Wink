@@ -1,4 +1,5 @@
 // One AudioContext per call: worklet capture out, 24 kHz voice in, dropped at once on barge-in.
+import { boop, ring } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
 
 const VOICE_RATE = 24_000;
@@ -14,6 +15,8 @@ export class CallAudio {
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly output = new Audio();
   private mic: AnalyserNode | null = null;
+  private cutRing: (() => void) | null = null;
+  private tailMs = 0;
   private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
   onStart: () => void = () => {};
@@ -47,6 +50,22 @@ export class CallAudio {
     // Open the speaker stream after capture selects Android's call audio mode.
     this.output.srcObject = this.destination.stream;
     await this.output.play();
+  }
+
+  /** Straight to the call output: the meter stays the voice's. */
+  ring() {
+    this.stopRing();
+    this.cutRing = ring(this.ctx, this.destination);
+  }
+
+  stopRing() {
+    this.cutRing?.();
+    this.cutRing = null;
+  }
+
+  /** Call before close(): the output stays open just long enough to finish it. */
+  boop() {
+    this.tailMs = boop(this.ctx, this.destination);
   }
 
   /** Loudness 0-1 of the voice, or of whoever is louder when `mic` is on; read per frame. */
@@ -113,11 +132,16 @@ export class CallAudio {
 
   close() {
     this.flush();
-    this.output.pause();
-    this.output.srcObject = null;
-    for (const track of this.destination.stream.getTracks()) track.stop();
+    this.stopRing();
     this.node?.disconnect();
     for (const track of this.stream?.getTracks() ?? []) track.stop();
-    void this.ctx.close().catch(() => {});
+    const release = () => {
+      this.output.pause();
+      this.output.srcObject = null;
+      for (const track of this.destination.stream.getTracks()) track.stop();
+      void this.ctx.close().catch(() => {});
+    };
+    if (this.tailMs) setTimeout(release, this.tailMs);
+    else release();
   }
 }

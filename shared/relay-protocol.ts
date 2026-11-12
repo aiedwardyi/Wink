@@ -55,6 +55,8 @@ export const readyMessageSchema = z.object({
   /** The relay takes `active` frames. Older PCs strip this field. */
   active: z.literal(true).optional(),
   reportOwner: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** The relay takes `roomcode` frames. Older PCs strip this field. */
+  roomCodes: z.literal(true).optional(),
 });
 /** Relay to PC: a phone waits on an empty pool. */
 export const wantMessageSchema = z.object({ type: z.literal("want"), n: count });
@@ -73,6 +75,15 @@ export const snaggedMessageSchema = z.object({ type: z.literal("snagged"), id: z
 /** PC to relay, only after a ready with `active`: its person used Wink just now. */
 export const activeMessageSchema = z.object({ type: z.literal("active") });
 
+/** A short room join code: 6 characters with no 0, O, 1 or I. */
+export const ROOM_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+export const ROOM_CODE_RE = /^[2-9A-HJ-NP-Z]{6}$/;
+export const ROOM_CODE_TTL_MS = 7 * 24 * 60 * 60_000;
+/** PC to relay, only after a ready with `roomCodes`: a new short code that points at this PC. */
+export const roomCodeMessageSchema = z.object({ type: z.literal("roomcode"), id: z.string().max(64) });
+/** Relay to PC: the code and when it expires, or neither when the relay refused. */
+export const roomCodedMessageSchema = z.object({ type: z.literal("roomcoded"), id: z.string(), code: z.string().regex(ROOM_CODE_RE).optional(), exp: count.optional() });
+
 export const relayMessageSchema = z.discriminatedUnion("type", [
   helloMessageSchema,
   authMessageSchema,
@@ -86,6 +97,8 @@ export const relayMessageSchema = z.discriminatedUnion("type", [
   snagMessageSchema,
   snaggedMessageSchema,
   activeMessageSchema,
+  roomCodeMessageSchema,
+  roomCodedMessageSchema,
 ]);
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
@@ -101,6 +114,8 @@ export type GoMessage = z.infer<typeof goMessageSchema>;
 export type SnagMessage = z.infer<typeof snagMessageSchema>;
 export type SnaggedMessage = z.infer<typeof snaggedMessageSchema>;
 export type ActiveMessage = z.infer<typeof activeMessageSchema>;
+export type RoomCodeMessage = z.infer<typeof roomCodeMessageSchema>;
+export type RoomCodedMessage = z.infer<typeof roomCodedMessageSchema>;
 
 export type ControlMessage =
   | HelloMessage
@@ -112,7 +127,9 @@ export type ControlMessage =
   | NoticeMessage
   | SnagMessage
   | SnaggedMessage
-  | ActiveMessage;
+  | ActiveMessage
+  | RoomCodeMessage
+  | RoomCodedMessage;
 export type DataMessage = JoinMessage | GoMessage;
 export type RelayMessage = ControlMessage | DataMessage;
 

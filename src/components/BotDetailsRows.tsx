@@ -109,13 +109,17 @@ function watchStyleMetrics(refit: () => void) {
 /** A textarea as tall as its text, so the panel stays the one thing that scrolls. */
 export function FitTextarea({ className, watchMetrics = false, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string; watchMetrics?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mounted = useRef(false);
   useLayoutEffect(() => {
-    if (ref.current) fit(ref.current);
+    // the mount fits in the ResizeObserver's first call, after layout: here it would force one mid-commit
+    const first = !mounted.current && typeof ResizeObserver !== "undefined";
+    mounted.current = true;
+    if (!first && ref.current) fit(ref.current);
   }, [props.value]);
   useEffect(() => {
     let alive = true;
     const refit = () => { if (alive && ref.current) fit(ref.current); };
-    void document.fonts?.ready.then(refit);
+    if (document.fonts?.status !== "loaded") void document.fonts?.ready.then(refit);
     document.fonts?.addEventListener("loadingdone", refit);
     return () => {
       alive = false;
@@ -145,7 +149,7 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
   useEffect(() => {
     const box = ref.current;
     if (!box || typeof ResizeObserver === "undefined") return;
-    let width = box.clientWidth;
+    let width = -1;
     const observer = new ResizeObserver(() => {
       if (box.clientWidth === width) return;
       width = box.clientWidth;

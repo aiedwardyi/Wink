@@ -49,6 +49,34 @@ async function fixture() {
   return { accounts, bases, third, turns, rateLimits, refresh, available, prepare, input };
 }
 
+it("skips an account marked for an API credit promo before refreshing usage", async () => {
+  const f = await fixture();
+  writeFileSync(join(f.third.home, ".wink-codex-promo.json"), JSON.stringify({ generation: f.third.generation }));
+  await expect(f.prepare(f.input)).rejects.toThrow("Pick another Codex account");
+  expect(f.refresh).not.toHaveBeenCalled();
+});
+
+it("skips a marked base account when account routing is off", async () => {
+  const home = join(DATA_DIR, "promo-unrouted");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, ".wink-codex-promo.json"), '{"generation":0}');
+  const unused = vi.fn();
+  const prepare = workers!.createWorkerLaunch({ enabled: () => false, bases: () => ({}), available: () => true,
+    resolveWorkerTurn: () => undefined, usage: Object.assign(unused, { invalidate() {} }) });
+  const input = { botId: "bot", command: "codex 'task'", environment: { CODEX_HOME: home } };
+  await expect(prepare(input)).rejects.toThrow("Pick another Codex account");
+  await expect(prepare({ ...input, unrouted: true })).rejects.toThrow("Pick another Codex account");
+  expect(unused).not.toHaveBeenCalled();
+});
+
+it("uses the captured account when the inherited home is marked", async () => {
+  const f = await fixture();
+  const home = join(DATA_DIR, "promo-inherited");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, ".wink-codex-promo.json"), '{"generation":0}');
+  expect(await f.prepare({ ...f.input, environment: { CODEX_HOME: home } })).toMatchObject({ kind: "managed", account: { id: f.third.id } });
+});
+
 function mainRouting(f: Awaited<ReturnType<typeof fixture>>, resumeAccount?: () => AccountContext) {
   const blocked = new Set<string>();
   const registry = { accountAvailable: (id: string) => !blocked.has(id) } as unknown as ProviderRegistry;

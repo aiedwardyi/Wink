@@ -12,6 +12,7 @@ import { DATA_DIR } from "../config.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
 import { FILE_PATH, fileRoute } from "./file-routes.ts";
 import { ROOM_DISK_BYTES, sweepRoomFiles } from "./files.ts";
+import { moveRoomFiles, roomFilesRoot } from "./files-folder.ts";
 
 const disk = vi.hoisted(() => ({ shortWrites: false, failSync: null as { path: string; code: string } | null }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -163,14 +164,13 @@ describe("room file types", () => {
 });
 
 describe("room file limits", () => {
-  it("cut pictures past 10 MB and files past 25 MB while streaming, keeping nothing", async () => {
+  it("cut pictures past 100 MB and files past 1 GB while streaming, keeping nothing", async () => {
     const room = createRoom("Team").id;
     const big = png(1024 * 1024);
-    const picture = await upload(room, [big, ...Array.from({ length: 10 }, () => randomBytes(1024 * 1024))]);
-    expect(picture).toMatchObject({ status: 413, json: { error: "pictures can be up to 10 MB" } });
+    const picture = await upload(room, [big, ...Array.from({ length: 100 }, () => big)]);
+    expect(picture).toMatchObject({ status: 413, json: { error: "pictures can be up to 100 MB" } });
     const line = Buffer.alloc(1024 * 1024, "a");
-    expect(await upload(room, Array.from({ length: 26 }, () => line))).toMatchObject({ status: 413, json: { error: "files can be up to 25 MB" } });
-    expect(await call("POST", `/rooms/${room}/files?uploadId=${newUploadId()}`, { body: Buffer.from("x"), headers: { "content-length": String(26 * 1024 * 1024) } }).catch(() => null)).toMatchObject({ status: 413 });
+    expect(await call("POST", `/rooms/${room}/files?uploadId=${newUploadId()}`, { body: line, headers: { "content-length": String(1024 ** 3 + 1) } }).catch(() => null)).toMatchObject({ status: 413, json: { error: "files can be up to 1 GB" } });
     expect(rows(room)).toEqual([]);
     expect(readdirSync(roomDir(room))).toEqual([]);
   });
@@ -184,9 +184,9 @@ describe("room file limits", () => {
     expect(await upload(createRoom("Other").id, Buffer.alloc(200, "a"))).toMatchObject({ status: 200 });
   });
 
-  it("allow 30 uploads per person per 10 minutes", async () => {
+  it("allow 50 uploads per person per 10 minutes", async () => {
     const room = createRoom("Team").id;
-    for (let i = 0; i < 30; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
+    for (let i = 0; i < 50; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
     expect(await upload(room, Buffer.from("one more"), {}, "p1")).toMatchObject({ status: 429, json: { error: "too many files at once, try again in a few minutes" } });
     expect((await upload(room, Buffer.from("someone else"), {}, "p2")).status).toBe(200);
   });
@@ -274,6 +274,33 @@ describe("room file isolation", () => {
 });
 
 describe("room file edges", () => {
+  it("keeps a picked folder's own files through a boot sweep", async () => {
+    const room = createRoom("Team").id;
+    const file = (await upload(room, Buffer.from("kept"))).json.file;
+    const pick = join(DATA_DIR, "Documents");
+    mkdirSync(join(pick, "Photos"), { recursive: true });
+    writeFileSync(join(pick, "notes.txt"), "mine");
+    writeFileSync(join(pick, "Photos", "trip.jpg"), "mine");
+    await moveRoomFiles(pick);
+    mkdirSync(join(roomFilesRoot(), "Scans"));
+    writeFileSync(join(roomFilesRoot(), "Scans", "receipt.pdf"), "mine");
+    sweepRoomFiles();
+    expect(readFileSync(join(pick, "notes.txt"), "utf8")).toBe("mine");
+    expect(readFileSync(join(pick, "Photos", "trip.jpg"), "utf8")).toBe("mine");
+    expect(readFileSync(join(roomFilesRoot(), "Scans", "receipt.pdf"), "utf8")).toBe("mine");
+    expect((await call("GET", `/rooms/${room}/files/${file.id}`)).status).toBe(200);
+  });
+
+  it("keeps the current picture and sweeps a replaced day-old picture", async () => {
+    const room = createRoom("Team").id;
+    const old = (await upload(room, png(64))).json.file;
+    const current = (await upload(room, png(64))).json.file;
+    exec("UPDATE room_files SET at = ?", Date.now() - 25 * 60 * 60_000);
+    (sweepRoomFiles as (...args: unknown[]) => void)([{ hosted: { roomId: room }, picture: current.id }]);
+    expect((await call("GET", `/rooms/${room}/files/${current.id}/preview`)).status).toBe(200);
+    expect((await call("GET", `/rooms/${room}/files/${old.id}/preview`)).status).toBe(404);
+  });
+
   it("hold a room's cap when uploads race for the last space", async () => {
     const room = createRoom("Team").id;
     expect((await upload(room, Buffer.from("first"))).status).toBe(200);

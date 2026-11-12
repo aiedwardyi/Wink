@@ -172,6 +172,12 @@
   justify-content: flex-end;
 }
 
+/* Rows are display:contents wrappers, so their children carry the containment. */
+[data-orbit-transcript] [data-settled] > * {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 80px;
+}
+
 /* These skins zero the bot padding the chips pull up into. */
 :is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
   padding-bottom: 0.875rem;
@@ -382,34 +388,35 @@ html:lang(ko) {
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="atelier"] {
   color-scheme: light;
-  --color-app: #f5f1eb;           /* outermost ground */
-  --color-panel: #fbf8f2;         /* sidebar */
+  --color-app: #f0e9de;           /* outermost ground */
+  --color-panel: #f8f3ea;         /* sidebar */
   --color-raised: #ffffff;        /* content — raised means lighter here */
-  --color-raised-hover: #f2e9dc;  /* warm beige doubles as the hover fill */
+  --color-raised-hover: #eadfcd;  /* warm beige doubles as the hover fill */
   --color-card: #ffffff;
-  --color-inset: #f5f1eb;         /* inset surfaces pick the rail tone back up */
-  --color-control: #ece4d6;       /* raised is white here and so is a card, so
+  --color-inset: #efe8dc;         /* inset surfaces pick the rail tone back up */
+  --color-control: #e4d9c6;       /* raised is white here and so is a card, so
                                      a control needs its own tone: 1.26:1 on a
                                      card, and raised-hover still lifts off it */
-  --color-hairline: #c8bda8;      /* #ece7dd was 1.11:1 on the rail → 1.65:1 */
+  --color-hairline: #b3a78e;      /* #ece7dd was 1.11:1 on the rail */
 
   --color-ink: #1a1a18;           /* 17.4:1 on white */
-  --color-ink-secondary: #6b6559; /* #8b8578 was 3.67:1 → 5.78:1 */
+  --color-ink-secondary: #615b50; /* #8b8578 was 3.67:1 */
 
   /* Two accent tones: the fill carries white, the text stands on white. */
   --color-accent: #a05f25;        /* #b06a2c darkened → 5.05:1 */
   --color-accent-border: #b06a2c; /* the original tone lives on as the border */
-  --color-accent-text: #96551f;   /* for links on a light ground — 5.81:1 */
+  --color-accent-text: #8c4e1b;   /* for links on a light ground */
   --color-focus: #96551f;         /* the ring rides the accent, not Grok blue */
   --color-accent-ink: #ffffff;
-  --color-bubble-user: #f2e9dc;   /* your own messages in the badge beige */
+  --color-bubble-user: #ead9c0;   /* your own messages in the badge beige */
 
-  --color-success: #3f6b47;
+  --color-success: #3a6442;
   --color-danger: #a33a32;
   --color-danger-ink: #ffffff;
-  --color-warning: #7a5f31;       /* darkened → 4.98:1 */
-  --color-scrollbar: #c9c0ae;
+  --color-warning: #70572c;       /* darkened */
+  --color-scrollbar: #ab9f87;
   --color-maus-line: #6b6559;
+  --color-edge: #8b8069;
 
   /* Syntax on --color-inset (code blocks). github-dark-default tokens are
      remapped from these; code is 13px so each pair must clear 4.5:1. */
@@ -2230,7 +2237,7 @@ html:lang(ko) {
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
 }
 
-@scope ([data-skin="precision"], [data-skin="mono-hud"], [data-skin="servo-gray"]) to ([data-skin]) {
+@scope ([data-skin="precision"], [data-skin="precision-dimmed"], [data-skin="mono-hud"], [data-skin="servo-gray"]) to ([data-skin]) {
   [data-orbit-message] {
     border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 68%, transparent);
     padding-block: 0.5rem;
@@ -2329,7 +2336,7 @@ html:lang(ko) {
   --hud-composer-background: linear-gradient(160deg, #414850, #353c44 60%, #2d333b);
 }
 
-@scope ([data-skin="precision"]) to ([data-skin]) {
+@scope ([data-skin="precision"], [data-skin="precision-dimmed"]) to ([data-skin]) {
   [data-orbit-message-body] {
     max-width: min(54rem, 94%);
   }
@@ -2345,14 +2352,14 @@ html:lang(ko) {
 }
 
 @media (max-width: 767px) {
-  @scope ([data-skin="precision"]) to ([data-skin]) {
+  @scope ([data-skin="precision"], [data-skin="precision-dimmed"]) to ([data-skin]) {
     [data-orbit-message-body] {
       max-width: 96%;
     }
   }
 }
 
-@scope ([data-skin="precision"]) to ([data-skin]) {
+@scope ([data-skin="precision"], [data-skin="precision-dimmed"]) to ([data-skin]) {
   [data-orbit-message="bot"] .orbit-message-speaker {
     display: block;
     margin: 0 0 4px 14px;
@@ -3881,31 +3888,32 @@ html:lang(ko) {
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="wink-day"] {
   color-scheme: light;
-  --color-app: #f7f5fb;
-  --color-panel: #efedf6;
+  --color-app: #eeebf7;
+  --color-panel: #e3dff0;
   --color-raised: #ffffff;
-  --color-raised-hover: #ede9f4;
+  --color-raised-hover: #f3f0fa;
   --color-card: #ffffff;
-  --color-inset: #f0eef6;
-  --color-control: #e5e1ee;
-  --color-hairline: #c4c0d6;
+  --color-inset: #e9e5f3;
+  --color-control: #d9d4e9;
+  --color-hairline: #aaa4c6;
 
   --color-ink: #1f2747;
   --color-ink-secondary: #545b7c;
 
-  --color-accent: #c81e69;
-  --color-accent-border: #e0458b;
+  --color-accent: #b91a61;
+  --color-accent-border: #dc4188;
   --color-accent-text: #b3195d;
   --color-focus: #b3195d;
   --color-accent-ink: #ffffff;
-  --color-bubble-user: #fde8f1;
+  --color-bubble-user: #fad6e6;
 
-  --color-success: #1d7048;
-  --color-danger: #b3261e;
+  --color-success: #17633e;
+  --color-danger: #a5211a;
   --color-danger-ink: #ffffff;
-  --color-warning: #8a5800;
-  --color-scrollbar: #c4c0d6;
+  --color-warning: #7b4e00;
+  --color-scrollbar: #9f99bd;
   --color-maus-line: #545b7c;
+  --color-edge: #7f79a3;
   --orbit-ring-a: #ff5a8a;
   --orbit-ring-b: #ffcc4d;
 
@@ -3981,7 +3989,7 @@ html:lang(ko) {
 
   [data-orbit-composer-frame] {
     background: var(--color-card);
-    border: 1px solid var(--color-hairline);
+    border: 1px solid var(--color-edge);
     border-radius: var(--radius-xl);
     box-shadow: 0 10px 24px -18px rgb(31 39 71 / 0.35);
   }
@@ -4000,6 +4008,22 @@ html:lang(ko) {
   }
 }
 
+@scope ([data-skin="atelier"]) to ([data-skin]) {
+  [data-orbit-composer-frame] {
+    border: 1px solid var(--color-edge);
+  }
+
+  [data-orbit-composer-frame]:focus-within {
+    border-color: var(--color-accent-border);
+  }
+}
+
+@scope (:is([data-skin="wink-day"], [data-skin="atelier"])) to ([data-skin]) {
+  [data-sidebar-search] {
+    box-shadow: inset 0 0 0 1px var(--color-edge);
+  }
+}
+
 [data-skin="wink"] :is(input, textarea) { caret-color: #ffd447; }
 [data-skin="wink-cyber"] :is(input, textarea) { caret-color: #aaff5a; }
 [data-skin="wink-violet"] :is(input, textarea) { caret-color: #6ef0be; }
@@ -4014,6 +4038,7 @@ html:lang(ko) {
 /* Keep the rail-to-glyph gap after skin-specific bot padding rules. */
 :root[data-shape="boxy"]:is(
   [data-skin="precision"],
+  [data-skin="precision-dimmed"],
   [data-skin="mono-hud"],
   [data-skin="servo-gray"],
   [data-skin="notebook"],
@@ -4161,6 +4186,16 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   );
 }
 
+/* Deep hues so the ring clears 3:1 on a light ground. */
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"], [data-skin="dim-sand"]) [data-orbit-rainbow]:not([data-orbit-rainbow="theme"]) > span {
+  background: conic-gradient(in oklch, oklch(0.55 0.2 27), oklch(0.55 0.2 330), oklch(0.5 0.19 265), oklch(0.55 0.1 215), oklch(0.55 0.16 145), oklch(0.55 0.115 95), oklch(0.55 0.2 27));
+}
+
+/* The plain field edge stays under the faint ring at rest. */
+:is([data-skin="wink-day"], [data-skin="atelier"], [data-skin="precision-dimmed"], [data-skin="bronze"], [data-skin="dim-sand"]) [data-orbit-composer-frame][data-rainbow]:not(:focus-within) {
+  border-color: var(--color-edge) !important;
+}
+
 [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] {
   opacity: 1;
 }
@@ -4216,7 +4251,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   [data-hold-menu][data-select-mode] {
     -webkit-touch-callout: default;
   }
-  [data-hold-menu][data-select-mode] [data-orbit-message-content] {
+  [data-hold-menu][data-select-mode] :is([data-orbit-message-content], [data-team-room-content]) {
     -webkit-user-select: text;
     user-select: text;
   }
@@ -4343,7 +4378,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   opacity: 0.75;
 }
 /* A stronger halo reads as a smudge on light grounds. */
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"]) .orbit-ring-halo {
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .orbit-ring-halo {
   opacity: 0.55;
 }
 .orbit-ring-host > :not(.orbit-ring) {
@@ -4952,11 +4987,13 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   /* Stop spatial motion instead of accelerating infinite animations. Loading
      icons keep a slow opacity pulse, so progress remains visible without
      rotation, bounce, or flicker. */
-  *,
-  *::before,
-  *::after {
+  /* 0s, not a tiny duration: with transition-property all, any restyle of a big
+     subtree would start a transition on every element in it. Progress keeps time. */
+  :where(:not([data-progress])),
+  ::before,
+  ::after {
     animation: none !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
@@ -5000,21 +5037,21 @@ button:disabled.bg-danger {
    pre background, so those colours sit on --color-inset. Scoped to the light
    skins and VS Code Dark, whose editor syntax palette replaces the inline
    values. The contrast checker enumerates the theme's emitted foregrounds. */
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki {
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki {
   color: var(--color-syntax-fg) !important;
 }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#8b949e" i] { color: var(--color-syntax-comment) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#ff7b72" i] { color: var(--color-syntax-keyword) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#a5d6ff" i] { color: var(--color-syntax-string) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#d2a8ff" i] { color: var(--color-syntax-function) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#79c0ff" i] { color: var(--color-syntax-constant) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#ffa657" i],
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#f2cc60" i] { color: var(--color-syntax-variable) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#7ee787" i] { color: var(--color-syntax-tag) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#ffa198" i] { color: var(--color-syntax-invalid) !important; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#e6edf3" i],
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#f0f6fc" i],
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"]) .shiki span[style*="#161b22" i] { color: var(--color-syntax-fg) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#8b949e" i] { color: var(--color-syntax-comment) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#ff7b72" i] { color: var(--color-syntax-keyword) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#a5d6ff" i] { color: var(--color-syntax-string) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#d2a8ff" i] { color: var(--color-syntax-function) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#79c0ff" i] { color: var(--color-syntax-constant) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#ffa657" i],
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#f2cc60" i] { color: var(--color-syntax-variable) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#7ee787" i] { color: var(--color-syntax-tag) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#ffa198" i] { color: var(--color-syntax-invalid) !important; }
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#e6edf3" i],
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#f0f6fc" i],
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="vscode-dark"], [data-skin="dim-sand"]) .shiki span[style*="#161b22" i] { color: var(--color-syntax-fg) !important; }
 
 /* The paper skins use the same Shiki source palette with their own
    readable foreground tokens. */
@@ -5110,7 +5147,7 @@ button:disabled.bg-danger {
 :is([data-skin="terminal"], [data-skin="terminal-dracula"], [data-skin="terminal-ice"], [data-skin="paper-tape"], [data-skin="logfile"], [data-skin="multiplexer"], [data-skin="modal"]) .turn-rail-host {
   --turn-shade: rgb(0 0 0 / 0.7);
 }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"]) .turn-rail-host {
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .turn-rail-host {
   --turn-shade: color-mix(in srgb, var(--color-ink) 42%, transparent);
 }
 .turn-rail-host[hidden] {
