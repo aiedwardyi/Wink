@@ -26,7 +26,7 @@ export interface MediaFile {
 
 const seen = new WeakMap<Message, MediaFile[]>();
 
-function messageMedia(threadId: string, message: Message): MediaFile[] {
+export function messageMedia(threadId: string, message: Message): MediaFile[] {
   const cached = seen.get(message);
   if (cached) return cached;
   const files: MediaFile[] = mediaList([message]).map((image) => ({ key: image.src, name: image.name, src: image.src, image: true }));

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { File as FileIcon, PanelRight } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { fetchOlderPage } from "@/lib/message-pages";
-import { chatMedia, roomMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
+import { chatMedia, messageMedia, roomMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
 import { showItem } from "@/lib/show-pane";
 import { hostRoomBase, type RoomFile } from "@/lib/team-rooms";
 import type { Message } from "@/state/store";
@@ -12,30 +12,40 @@ import { MediaViewer } from "./MediaViewer";
 
 const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 
+/** Older batches of 1,000 messages a long chat lists at most. */
+const MEDIA_BATCHES = 5;
+
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
-function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource): MediaFile[] | null {
+function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, frame: RefObject<HTMLDivElement | null>) {
   const [older, setOlder] = useState<Message[]>([]);
   const [room, setRoom] = useState<RoomFile[] | null>(null);
-  const start = useRef({ before: messages[0]?.id, hasMore });
+  const paging = useRef({ before: messages[0]?.id, more: !!hasMore, busy: false, batches: 0, alive: true });
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
 
-  useEffect(() => {
-    const { before, hasMore: more } = start.current;
-    if (roomId || !more || !before) return;
-    let alive = true;
-    void (async () => {
-      let got: Message[] = [];
-      for (let cursor = before; ;) {
-        const page = await fetchOlderPage(threadId, cursor, 5);
-        if (!alive) return;
-        got = [...page.messages, ...got];
-        setOlder(got);
-        if (!page.hasMore || !page.messages[0]) return;
-        cursor = page.messages[0].id;
-      }
-    })().catch(() => {});
-    return () => { alive = false; };
+  const loadOlder = useCallback(() => {
+    const page = paging.current;
+    if (roomId || page.busy || !page.more || !page.before || page.batches >= MEDIA_BATCHES) return;
+    page.busy = true;
+    page.batches++;
+    fetchOlderPage(threadId, page.before, 5).then((got) => {
+      page.busy = false;
+      if (!page.alive) return;
+      page.more = got.hasMore && !!got.messages[0];
+      page.before = got.messages[0]?.id;
+      setOlder((was) => [...got.messages, ...was]);
+    }, () => { page.busy = false; });
   }, [threadId, roomId]);
+
+  useEffect(() => {
+    paging.current.alive = true;
+    return () => { paging.current.alive = false; };
+  }, []);
+
+  // Keeps going until the list fills the pane; scrolling down loads the rest.
+  useEffect(() => {
+    const el = frame.current;
+    if (!older.length || (el && el.scrollHeight <= el.clientHeight)) loadOlder();
+  }, [older, loadOlder, frame]);
 
   // Lists again when a new message brings files.
   useEffect(() => {
@@ -45,22 +55,32 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource): Me
     return () => { alive = false; };
   }, [roomId, latest]);
 
-  return useMemo(() => {
+  // A streamed chunk without a new file keeps the same list.
+  const keys = roomId ? "" : messages.flatMap((message) => messageMedia(threadId, message).map((file) => file.key)).join("\n");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const current = useMemo(() => messages, [keys]);
+
+  const files = useMemo(() => {
     if (roomId) return room && roomMedia(threadId, roomId, room);
-    const loaded = new Set(messages.map((message) => message.id));
-    return chatMedia(threadId, [...older.filter((message) => !loaded.has(message.id)), ...messages]);
-  }, [threadId, roomId, room, older, messages]);
+    const loaded = new Set(current.map((message) => message.id));
+    return chatMedia(threadId, [...older.filter((message) => !loaded.has(message.id)), ...current]);
+  }, [threadId, roomId, room, older, current]);
+  return { files, loadOlder };
 }
 
 export function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
   const { t } = useI18n();
-  const files = useMediaFiles(source);
+  const frame = useRef<HTMLDivElement>(null);
+  const { files, loadOlder } = useMediaFiles(source, frame);
   const [open, setOpen] = useState<MediaFile | null>(null);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
   const at = open ? images.indexOf(open) : -1;
 
   return (
-    <div className="verify-watch-frame show-media @container/media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
+    <div ref={frame} onScroll={(event) => {
+      const el = event.currentTarget;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) loadOlder();
+    }} className="verify-watch-frame show-media @container/media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
       {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
       {images.length > 0 && (
         <div data-media-grid className="grid grid-cols-3 gap-1.5 @[420px]/media:grid-cols-4">
