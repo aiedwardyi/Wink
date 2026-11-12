@@ -59,6 +59,12 @@ export async function saveFileCopy(filePath, { dialog, downloads, window, fsp = 
   return true;
 }
 
+export async function saveLocalFile(rawPath, { dialog, downloads, window, ...options }) {
+  const { filePath, directory } = await resolveOpenTarget(rawPath, options);
+  if (directory) throw new Error("That path is not a file");
+  return saveFileCopy(filePath, { dialog, downloads, window, fsp: options.fsp });
+}
+
 // File name the Save dialog offers for an image menu target. A data: URL
 // takes its extension from the media type; a name-less path falls back to
 // image.png; the query never becomes the name.

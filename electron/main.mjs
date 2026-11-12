@@ -68,7 +68,7 @@ import { PACKAGE_INSTALL_SCHEME, packageUrlFromCommandLine, packageUrlFromDeepLi
 import { WINDOWS_CAPTION_HEIGHT, applyWindowsTitleBarOverlay, windowChromeOptions } from "./window-chrome.mjs";
 import { restoreWindowZoom, routeZoomShortcut, setImageZoomOwned } from "./window-zoom.mjs";
 import { contextMenuTemplate } from "./context-menu.mjs";
-import { fileMenuFor, imageFetchFor, openLocalFile, saveImageCopy } from "./open-file.mjs";
+import { fileMenuFor, imageFetchFor, openLocalFile, saveImageCopy, saveLocalFile } from "./open-file.mjs";
 import { readClipboardImage } from "./clipboard-image.mjs";
 import {
   ensureManagedComposioCredentials,
@@ -1769,6 +1769,12 @@ ipcMain.handle("desktop:file-menu", async (event, rawPath, rawBase) => {
     onSaveError: (error) => dialog.showErrorBox(nativeText("native.saveCopyFailed"), error?.message ?? String(error)),
   });
   Menu.buildFromTemplate(template).popup({ window });
+});
+
+ipcMain.handle("desktop:save-file", async (event, rawPath) => {
+  const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  await saveLocalFile(rawPath, { dialog, downloads: app.getPath("downloads"), window })
+    .catch((error) => dialog.showErrorBox(nativeText("native.saveCopyFailed"), error?.message ?? String(error)));
 });
 
 // A screenshot paste can reach the page as 0 bytes; the composer reads it again here.

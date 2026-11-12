@@ -896,7 +896,7 @@ describe("relative file links", () => {
   });
 
   describe("show cards", () => {
-    const text = ["signups.png", "launch-deck.pdf", "sync-flow.html", "notes.md"].map((name) => `[${name}](C:\\w\\${name})`).join("\n\n");
+    const text = ["signups.png", "launch-deck.pdf", "sync-flow.html", "notes.md", "report.docx"].map((name) => `[${name}](C:\\w\\${name})`).join("\n\n");
     let host: HTMLElement;
     let root: Root;
     const cards = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card]")];
@@ -916,15 +916,30 @@ describe("relative file links", () => {
       applyLocale("en");
     });
 
-    it("turns image, PDF and web page links into cards with the panel icon", () => {
-      expect(cards().map((card) => card.textContent)).toEqual(["signups.pngImage", "launch-deck.pdfPDF", "sync-flow.htmlWeb page"]);
-      expect(cards().every((card) => card.querySelector("[data-show-icon]"))).toBe(true);
+    it("turns image, PDF, web page and document links into cards, the showable ones with the panel icon", () => {
+      expect(cards().map((card) => card.textContent)).toEqual(["signups.pngImage", "launch-deck.pdfPDF", "sync-flow.htmlWeb page", "report.docxDOCX"]);
+      expect(cards().map((card) => Boolean(card.querySelector("[data-show-icon]")))).toEqual([true, true, true, false]);
       expect(host.querySelector("[data-file-link]")?.textContent).toBe("notes.md");
+    });
+
+    it("opens a document card in its default app", async () => {
+      await act(async () => cards()[3]!.click());
+      expect(window.ogb!.openFile).toHaveBeenCalledWith("C:\\w\\report.docx", undefined);
+      expect(cards()[3]!.hasAttribute("data-showing")).toBe(false);
+    });
+
+    it("drops the parentheses a bot wraps around a card", async () => {
+      const wrapped = "- **PDF:**\n  `C:\\w\\a.pdf`\n  ([a.pdf](<C:\\w\\a.pdf>))\n- see (the [notes](C:\\w\\notes.md))";
+      await act(async () => root.render(createElement(ChatMarkdown, { key: "wrapped", text: wrapped, threadId: "t1" })));
+      const item = host.querySelector("li")!;
+      expect(item.querySelector("[data-show-card]")).not.toBeNull();
+      expect(item.textContent).not.toMatch(/[()]/);
+      expect(host.querySelectorAll("li")[1]!.textContent).toBe("see (the notes)");
     });
 
     it("lights the showing card and a tap shows it again after a close", async () => {
       await act(async () => showItem({ threadId: "t1", path: "C:\\w\\sync-flow.html", kind: "page" }));
-      expect(cards().map((card) => card.hasAttribute("data-showing"))).toEqual([false, false, true]);
+      expect(cards().map((card) => card.hasAttribute("data-showing"))).toEqual([false, false, true, false]);
       await act(async () => closeShow());
       expect(cards().some((card) => card.hasAttribute("data-showing"))).toBe(false);
       await act(async () => cards()[2]!.click());
@@ -935,11 +950,33 @@ describe("relative file links", () => {
     it("names the kinds in Korean", async () => {
       applyLocale("ko");
       await act(async () => root.render(createElement(ChatMarkdown, { key: "ko", text, threadId: "t1" })));
-      expect(cards().map((card) => card.textContent)).toEqual(["signups.png이미지", "launch-deck.pdfPDF", "sync-flow.html웹 페이지"]);
+      expect(cards().map((card) => card.textContent)).toEqual(["signups.png이미지", "launch-deck.pdfPDF", "sync-flow.html웹 페이지", "report.docxDOCX"]);
     });
   });
 
-  it.each(["zip", "md", "txt", "docx"])("opens a linked %s from an authenticated browser without the desktop bridge", async (ext) => {
+  it.each(["zip", "txt", "docx"])("saves a linked %s card from an authenticated browser without the desktop bridge", async (ext) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const saved: [string | null, string | null][] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = `C:/Users/mredw/Desktop/file.${ext}`;
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `([file](${file}))`, threadId: "t1" })));
+      const card = host.querySelector<HTMLButtonElement>("[data-show-card]")!;
+      expect(card.textContent).toBe(`file.${ext}${ext.toUpperCase()}`);
+      expect(host.textContent).not.toMatch(/[()]/);
+      await act(async () => card.click());
+      expect(saved).toEqual([[`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`, `file.${ext}`]]);
+    } finally {
+      await act(async () => root.unmount());
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens a linked md from an authenticated browser without the desktop bridge", async () => {
+    const ext = "md";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
     const host = document.createElement("div");
     const root = createRoot(host);
@@ -983,7 +1020,7 @@ describe("relative file links", () => {
     }
   });
 
-  it.each([["unlisted-folder", 404, false], ["empty.zip", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
+  it.each([["unlisted-folder", 404, false], ["empty.py", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status, headers: { "content-range": "bytes */0" } })));
     const host = document.createElement("div");
     const root = createRoot(host);

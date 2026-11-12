@@ -131,7 +131,7 @@ describe("linked files", () => {
       writerDeviceId: () => null, rootsFor: () => [folder],
     }));
     try {
-      for (const ext of ["txt", "exe", "png"]) {
+      for (const ext of ["json", "exe", "png"]) {
         const target = join(root, `target.${ext}`);
         writeFileSync(target, "private");
         vi.mocked(realpathSync).mockReturnValueOnce(target);
@@ -186,14 +186,34 @@ describe("linked files", () => {
     }
   });
 
-  it("keeps unlinked, non-media, hidden, AppData, system, and disguised files outside roots refused", async () => {
+  it("hands over a bot-linked Desktop document outside roots as a download", async () => {
+    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "mredw", "Desktop");
+    mkdirSync(desktop, { recursive: true });
+    const file = join(desktop, "UN-Certificate_Vertia.docx");
+    writeFileSync(file, "docx-bytes");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "bot", text: `([UN-Certificate_Vertia.docx](<${file}>))` }],
+      writerDeviceId: () => null, rootsFor: () => [join(desktop, "..", "bot")],
+    }));
+    try {
+      const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-disposition")).toMatch(/^attachment;/);
+      expect(await response.text()).toBe("docx-bytes");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps unlinked, code, hidden, AppData, system, and disguised files outside roots refused", async () => {
     const root = temp("linked-media-policy-", process.cwd());
     const folder = join(root, "bot");
     const desktop = join(root, "Users", "mredw", "Desktop");
     mkdirSync(folder);
     mkdirSync(desktop, { recursive: true });
     const refused = [
-      ...["txt", "json", "html", "exe"].map((ext) => join(desktop, `linked.${ext}`)),
+      ...["json", "html", "exe", "ts"].map((ext) => join(desktop, `linked.${ext}`)),
       join(desktop, ".hidden", "linked.png"),
       join(desktop, ".linked.png"),
       join(root, "Users", "someone-else", "aPpDaTa", "Local", "linked.mp4"),
@@ -207,7 +227,7 @@ describe("linked files", () => {
     }
     const alias = join(desktop, "junction.mp4");
     symlinkSync(dirname(refused[0]!), alias, "junction");
-    const disguised = join(alias, "linked.txt");
+    const disguised = join(alias, "linked.json");
     const mediaAlias = join(desktop, "appdata.mp4");
     symlinkSync(dirname(refused[6]!), mediaAlias, "junction");
     const secretMedia = join(mediaAlias, "linked.mp4");
