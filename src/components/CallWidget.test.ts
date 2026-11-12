@@ -8,6 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot, CallWidgetSlot } from "./CallSlots";
+import { CallVoicePicker } from "./CallVoicePicker";
 import { ChatView } from "./ChatView";
 
 const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; closed: boolean }>, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined, puts: [] as unknown[] }));
@@ -78,6 +79,7 @@ let host: HTMLElement;
 const render = (chat: Bot | null) => act(async () => root.render(createElement(StoreProvider, null,
   chat ? createElement(ChatView, { bot: chat }) : null,
   createElement("aside", { "data-test-sidebar": true }, createElement(CallWidgetSlot as (props: object) => ReactNode, {})),
+  createElement("section", { "data-test-settings": true }, createElement(CallVoicePicker)),
   createElement(CallHostSlot),
   createElement(Selected),
 )));
@@ -100,7 +102,8 @@ async function mount(chat: Bot) {
 
 const button = (scope: ParentNode, label: string) => scope.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const widget = () => host.querySelector<HTMLElement>("[data-test-sidebar] [data-call-widget]");
-const menu = () => document.querySelector<HTMLElement>("[data-call-menu]");
+const settings = () => host.querySelector<HTMLElement>("[data-test-settings]")!;
+const pills = (label: string) => [...settings().querySelectorAll<HTMLElement>(`[role=radiogroup][aria-label="${label}"] [role=radio]`)];
 
 async function call() {
   await act(async () => button(host, "Call Atlas")!.click());
@@ -113,7 +116,6 @@ async function call() {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
-  document.querySelectorAll("[data-call-menu]").forEach((el) => el.remove());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -180,57 +182,37 @@ describe("call follows you", () => {
     expect(widget()!.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("Not sent: Fix the login page bug. (declined)");
   });
 
-  it("opens the voice and language menu on right-click without calling", async () => {
+  it("calls on a plain click and opens nothing on right-click", async () => {
     await mount(atlas);
-    await act(async () => button(host, "Call Atlas")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
-    const open = menu()!;
-    const voices = [...open.querySelectorAll<HTMLElement>("[data-call-voice]")];
-    expect(voices.map((v) => v.textContent)).toEqual(["BrightZephyr", "FirmKore", "WarmSulafat", "UpbeatPuck", "FriendlyAchird", "InformativeCharon"]);
-    expect(open.querySelector('[data-call-voice="Kore"]')!.getAttribute("aria-checked")).toBe("true");
-    expect([...open.querySelectorAll("[data-call-language]")].map((l) => l.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => button(host, "Call Atlas")!.dispatchEvent(right));
+    expect(right.defaultPrevented).toBe(false);
+    expect(document.querySelector("[role=menu]")).toBeNull();
     expect(fakes.engines).toHaveLength(0);
-
-    await act(async () => open.querySelector<HTMLButtonElement>('[data-call-voice="Charon"]')!.click());
-    expect(fakes.puts).toEqual([{ liveCall: { voice: "Charon" } }]);
-    await vi.waitFor(() => expect(menu()).toBeNull());
-    await act(async () => button(host, "Call Atlas")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
-    expect(menu()!.querySelector('[data-call-voice="Charon"]')!.getAttribute("aria-checked")).toBe("true");
-    await act(async () => menu()!.querySelector<HTMLButtonElement>('[data-call-language="ko"]')!.click());
-    expect(fakes.puts.at(-1)).toEqual({ liveCall: { language: "ko" } });
-  });
-
-  it("opens the menu on a long press and the press does not call", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      await mount(atlas);
-      const phone = button(host, "Call Atlas")!;
-      const touch = { clientX: 10, clientY: 10, identifier: 1, target: phone };
-      await act(async () => phone.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, touches: [touch as unknown as Touch] })));
-      await act(async () => { vi.advanceTimersByTime(500); });
-      expect(menu()).not.toBeNull();
-      await act(async () => phone.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })));
-      await act(async () => phone.click());
-      expect(posts.some((path) => path.endsWith("/call/token"))).toBe(false);
-      expect(fakes.engines).toHaveLength(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("says a voice picked mid-call waits for the next call", async () => {
-    await mount(atlas);
     await call();
-    await act(async () => button(host, "Hang up on Atlas")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
-    expect(menu()!.textContent).toContain("Your next call uses it.");
+  });
+});
+
+describe("call voice in Settings", () => {
+  it("offers two voices and Auto / English / Korean, and saves each pick", async () => {
+    await mount(atlas);
+    expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Warm", "true"], ["Deep", "false"]]);
+    expect(pills("Call language").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Auto", "true"], ["English", "false"], ["한국어", "false"]]);
+    await act(async () => pills("Call voice")[1]!.click());
+    expect(fakes.puts).toEqual([{ liveCall: { voice: "Charon" } }]);
+    await vi.waitFor(() => expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true"));
+    await act(async () => pills("Call language")[2]!.click());
+    expect(fakes.puts.at(-1)).toEqual({ liveCall: { language: "ko" } });
+    expect(fakes.engines).toHaveLength(0);
   });
 
-  it("labels the menu in Korean", async () => {
+  it("labels the card in Korean", async () => {
     await mount(atlas);
     applyLocale("ko");
     try {
-      await act(async () => button(host, "Call Atlas")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
-      const text = menu()!.textContent!;
-      for (const word of ["목소리", "밝은", "단단한", "언어", "자동", "한국어", "English"]) expect(text).toContain(word);
+      await render(atlas);
+      const text = settings().textContent!;
+      for (const word of ["통화 목소리", "따뜻한", "낮은", "통화 언어", "자동", "한국어", "English"]) expect(text).toContain(word);
     } finally {
       applyLocale("en");
     }

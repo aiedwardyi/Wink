@@ -77,11 +77,11 @@ describe("call token", () => {
   it("a voice picked mid-call waits for the next call", async () => {
     const h = harness();
     const first = await h.post("token");
-    h.cfg.liveCall = { voice: "Puck" };
+    h.cfg.liveCall = { voice: "Charon" };
     await h.post("token", { callId: first.data.callId, resume: true });
     await h.post("token");
     const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
-    expect([voice(1), voice(2)]).toEqual(["Kore", "Puck"]);
+    expect([voice(1), voice(2)]).toEqual(["Kore", "Charon"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {

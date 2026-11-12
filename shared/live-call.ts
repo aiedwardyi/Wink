@@ -3,8 +3,8 @@
 export const LIVE_MODEL = "gemini-3.8-live";
 /** The call voice until the person picks another. */
 export const LIVE_VOICE = "Kore";
-/** Six of Gemini Live's prebuilt voices, higher to lower. */
-export const LIVE_VOICES = ["Zephyr", "Kore", "Sulafat", "Puck", "Achird", "Charon"] as const;
+/** Gemini Live prebuilt voices offered in Settings: the default and a clear lower one. */
+export const LIVE_VOICES = ["Kore", "Charon"] as const;
 export type LiveVoice = (typeof LIVE_VOICES)[number];
 /** Auto answers in English or Korean, whichever the person speaks, else the app language. */
 export const LIVE_LANGUAGES = ["auto", "en", "ko"] as const;

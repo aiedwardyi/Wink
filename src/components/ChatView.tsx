@@ -115,7 +115,6 @@ import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
 import { endCall } from "@/lib/call";
 import { dropCall, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
-import { CallMenu, useCallMenuPress } from "./CallMenu";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -952,9 +951,6 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const liveCall = useActiveCall();
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
-  const [callMenu, setCallMenu] = useState<HTMLElement | null>(null);
-  const callButtonRef = useRef<HTMLButtonElement>(null);
-  const callPress = useCallMenuPress(() => setCallMenu(callButtonRef.current));
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
   const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
   const elsewhere = routineWorkingElsewhere(
@@ -1576,15 +1572,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
           {/* Before the chip: the phone header fits the chip as its last control. */}
           <button
-            ref={callButtonRef}
             type="button"
             aria-pressed={onLiveCall}
             aria-label={liveCallLabel}
             title={liveCallLabel}
-            {...callPress.props}
             // The audio context is born in the tap: phones only let it play from one.
             onClick={() => {
-              if (callPress.held()) return;
               if (onLiveCall) {
                 // Release the call first, or the desktop's old call overlay mounts for a render.
                 endCall(bot.id);
@@ -1598,7 +1591,6 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           >
             <Phone size={18} />
           </button>
-          {callMenu && <CallMenu opener={callMenu} onCall={Boolean(liveCall)} onClose={() => setCallMenu(null)} />}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
