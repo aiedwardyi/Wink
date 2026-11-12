@@ -6,9 +6,10 @@ import { useI18n } from "@/lib/i18n";
 import { fetchOlderPage } from "@/lib/message-pages";
 import { chatMedia, messageMedia, roomMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
 import { showItem } from "@/lib/show-pane";
-import { hostRoomBase, type RoomFile } from "@/lib/team-rooms";
+import { hostRoomBase } from "@/lib/team-rooms";
 import type { Message } from "@/state/store";
 import { MediaViewer } from "./MediaViewer";
+import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved, type RoomFiles } from "./RoomMedia";
 
 const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 
@@ -18,9 +19,10 @@ const MEDIA_BATCHES = 5;
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
 function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, frame: RefObject<HTMLDivElement | null>) {
   const [older, setOlder] = useState<Message[]>([]);
-  const [room, setRoom] = useState<RoomFile[] | null>(null);
+  const [room, setRoom] = useState<RoomFiles | null>(null);
   const paging = useRef({ before: messages[0]?.id, more: !!hasMore, busy: false, batches: 0, alive: true });
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
+  const removed = useRoomFilesRemoved();
 
   const loadOlder = useCallback(() => {
     const page = paging.current;
@@ -51,9 +53,9 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, fra
   useEffect(() => {
     if (!roomId) return;
     let alive = true;
-    request(`${hostRoomBase(roomId)}/files`).then((list: { files: RoomFile[] }) => { if (alive) setRoom(list.files); }, () => { if (alive) setRoom((was) => was ?? []); });
+    request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles) => { if (alive) setRoom(list); }, () => { if (alive) setRoom((was) => was ?? { files: [], error: "unreachable" }); });
     return () => { alive = false; };
-  }, [roomId, latest]);
+  }, [roomId, latest, removed]);
 
   // A streamed chunk without a new file keeps the same list.
   const keys = roomId ? "" : messages.flatMap((message) => messageMedia(threadId, message).map((file) => file.key)).join("\n");
@@ -61,17 +63,17 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, fra
   const current = useMemo(() => messages, [keys]);
 
   const files = useMemo(() => {
-    if (roomId) return room && roomMedia(threadId, roomId, room);
+    if (roomId) return room && roomMedia(threadId, roomId, room.files);
     const loaded = new Set(current.map((message) => message.id));
     return chatMedia(threadId, [...older.filter((message) => !loaded.has(message.id)), ...current]);
   }, [threadId, roomId, room, older, current]);
-  return { files, loadOlder };
+  return { files, loadOlder, room };
 }
 
 export function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
   const { t } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
-  const { files, loadOlder } = useMediaFiles(source, frame);
+  const { files, loadOlder, room } = useMediaFiles(source, frame);
   const [open, setOpen] = useState<MediaFile | null>(null);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
   const at = open ? images.indexOf(open) : -1;
@@ -81,6 +83,7 @@ export function ShowMedia({ source, maximized }: { source: MediaSource; maximize
       const el = event.currentTarget;
       if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) loadOlder();
     }} className="verify-watch-frame show-media @container/media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
+      {room && <RoomFilesNotice list={room} />}
       {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
       {images.length > 0 && (
         <div data-media-grid className="grid grid-cols-3 gap-1.5 @[420px]/media:grid-cols-4">
@@ -97,6 +100,7 @@ export function ShowMedia({ source, maximized }: { source: MediaSource; maximize
         <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpen(null)} previous={at > 0} next={at < images.length - 1}
           onNavigate={(step) => setOpen(images[at + step] ?? open)} />
       )}
+      {source.roomId && room && <RoomMedia roomId={source.roomId} list={room} files={files} frame={frame} />}
     </div>
   );
 }
