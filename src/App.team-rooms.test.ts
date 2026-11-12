@@ -707,6 +707,22 @@ describe("Team rooms for a teammate", () => {
     expect(store.selectedId).not.toBe("joined:r9");
   });
 
+  it("keeps a wrong short code in its boxes, so one typo is one fix", async () => {
+    await boot({
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
+        if (call.path === "/api/joined/join") return reply({ error: "not-found" }, 404);
+        return undefined;
+      },
+    });
+    await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
+    await openPlus();
+    await click(button("Join with code"));
+    await paste($<HTMLInputElement>('input[aria-label="Room code 1"]'), "ABCDEF");
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')).not.toBeNull());
+    expect([...document.querySelectorAll<HTMLInputElement>("[data-join-boxes] input")].map((box) => box.value).join("")).toBe("ABCDEF");
+  });
+
   it("walks connecting, live, offline, removed and left, sending only while live", async () => {
     let view = joinedView("joined", "connecting");
     await boot({

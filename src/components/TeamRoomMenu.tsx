@@ -204,7 +204,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     }
     const short = !rejoin && !looksLikeRoomCode(value);
     setProblem(joinErrorKey(result.status, result.error, short));
-    if (short) setCode("");
     input.current?.select();
   };
 
