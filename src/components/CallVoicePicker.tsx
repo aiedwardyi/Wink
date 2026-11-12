@@ -34,7 +34,7 @@ export function CallVoicePicker() {
     stop();
     if (was === name) return;
     // Bundled in public/, so nothing loads until the first tap and no key is needed.
-    const audio = new Audio(`/voice-preview/${name}-${locale === "ko" ? "ko" : "en"}.mp3`);
+    const audio = new Audio(`/voice-preview/${name}-${language === "auto" ? (locale === "ko" ? "ko" : "en") : language}.mp3`);
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);

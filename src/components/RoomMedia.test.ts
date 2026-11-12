@@ -150,6 +150,16 @@ it("a room file offers Save as and Delete, and Save as downloads it", async () =
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
+it("Escape closes a file's menu and leaves the pane open", async () => {
+  await open(roomSource);
+  await filesTab();
+  rightClick(fileRow("plan.pdf"));
+  await settle();
+  await act(async () => { item("Save as").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(host.querySelector("[data-show-media]")).not.toBeNull();
+});
+
 it("a bot chat's file offers Save as and Show in folder on the desktop, and its pictures keep the native menu", async () => {
   const saveFile = vi.fn(async () => {});
   const showInFolder = vi.fn(async () => {});

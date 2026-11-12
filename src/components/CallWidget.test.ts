@@ -172,6 +172,18 @@ describe("call follows you", () => {
     expect(button(host, "Call Juno")).not.toBeNull();
   });
 
+  it("switches to another bot's call on one press", async () => {
+    await mount(atlas);
+    const first = await call();
+    await render(juno);
+    await act(async () => button(host, "Call Juno")!.click());
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(2));
+    expect(first.closed).toBe(true);
+    await act(async () => fakes.engines[1]!.events.ready());
+    await vi.waitFor(() => expect(host.querySelector("[data-call-box]")).not.toBeNull());
+    expect(fakes.engines[1]!.closed).toBe(false);
+  });
+
   it("answers the order from the widget in another chat", async () => {
     await mount(atlas);
     const engine = await call();
@@ -228,6 +240,27 @@ describe("call voice in Settings", () => {
     } finally {
       applyLocale("en");
     }
+  });
+
+  it("labels the header call button in Korean", async () => {
+    await mount(atlas);
+    applyLocale("ko");
+    try {
+      await render(atlas);
+      await act(async () => button(host, "Atlas 통화 시작")!.click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      expect(button(host, "Atlas 통화 끊기")).not.toBeNull();
+    } finally {
+      applyLocale("en");
+    }
+  });
+
+  it("previews in the call language, not the app's", async () => {
+    await mount(atlas);
+    await act(async () => pills("Call language")[2]!.click());
+    await vi.waitFor(() => expect(pills("Call language")[2]!.getAttribute("aria-checked")).toBe("true"));
+    await act(async () => preview("Jenn")!.click());
+    expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
   });
 
   it("previews without selecting, one clip at a time, loading none until asked", async () => {

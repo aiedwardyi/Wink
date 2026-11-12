@@ -100,6 +100,7 @@ function GroupListItem({
   drag,
   onReselect,
   joined = false,
+  picture,
   preview,
   unread,
   at,
@@ -110,6 +111,7 @@ function GroupListItem({
   drag?: SidebarRowDrag;
   onReselect?: () => void;
   joined?: boolean;
+  picture?: string;
   preview?: string;
   unread?: number;
   at?: number;
@@ -236,7 +238,7 @@ function GroupListItem({
         aria-keyshortcuts={drag?.onMove ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
       >
         <span className="relative shrink-0">
-          {group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
+          {joined ? <RoomPicture src={picture} size={density === "compact" ? 32 : 48} /> : group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
           <UnreadCountBadge count={unreadCount} selected={selected} />
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>

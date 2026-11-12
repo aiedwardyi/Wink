@@ -203,8 +203,11 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
     };
   }, [bot.id, call, onEnd]);
 
+  // The first render still reads the call it replaces as owner; only a later switch hangs this one up.
+  const owned = useRef(false);
   useEffect(() => {
-    if (snap.status !== "ended" && (owner === null || owner === bot.id)) return;
+    if (owner === bot.id) owned.current = true;
+    if (snap.status !== "ended" && (owner === null || owner === bot.id || !owned.current)) return;
     endCall(bot.id);
     onEnd();
   }, [bot.id, onEnd, owner, snap.status]);

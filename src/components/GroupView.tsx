@@ -61,11 +61,15 @@ import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen
 import { ApprovalCard } from "./ApprovalCard";
 import { GroupMemberRoster } from "./GroupMemberRoster";
 import { RoomTitle } from "./RoomTitle";
+import { RoomAlertsBell } from "./RoomAlertsBell";
+import { RoomNotice } from "./RoomNotice";
+import { RoomPicture } from "./RoomPicture";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { hostRoomBase, reactionNames, roomJoins, roomPeople } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, setHostNotice } from "@/lib/team-rooms";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -471,8 +475,9 @@ export const Transcript = memo(function Transcript({
               message: m,
               copyText: attachedImages?.display ?? m.text ?? "",
               user,
-              pinned: group.pinnedMessageId === m.id,
-              canPin: user || (!streaming && !docked?.live),
+              pinned: roomBase ? group.notice?.entryId === m.roomEntryId : group.pinnedMessageId === m.id,
+              canPin: (!roomBase || Boolean(m.roomEntryId)) && (user || (!streaming && !docked?.live)),
+              notice: Boolean(roomBase),
             }
             : null;
         const detectedOptions =
@@ -1183,6 +1188,7 @@ export function GroupView({ group: live }: { group: Group }) {
   );
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
+    if (group.hosted) return void setHostNotice(group.id, group.notice?.entryId === message.roomEntryId ? null : message.roomEntryId!).catch(() => {});
     dispatch({
       type: "patchGroup",
       groupId: group.id,
@@ -1554,7 +1560,7 @@ export function GroupView({ group: live }: { group: Group }) {
         )}
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
-          <RoomTitle name={group.name} />
+          <RoomTitle name={group.name} picture={group.hosted && group.picture && <RoomPicture key={group.id} src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
@@ -1580,6 +1586,12 @@ export function GroupView({ group: live }: { group: Group }) {
               <GroupPeopleFaces group={group} />
             </GroupMemberRoster>
           )}
+          {group.hosted && (
+            <>
+              <RoomAlertsBell chat={group.id} />
+              <ShowPaneButton threadId={group.threadId} />
+            </>
+          )}
         </div>
       </div>
 
@@ -1603,7 +1615,14 @@ export function GroupView({ group: live }: { group: Group }) {
       )}
 
       {/* Pinned message banner — resolves against the room's full transcript */}
-      {(() => {
+      {group.hosted ? group.notice?.entryId && (
+        <RoomNotice
+          base={hostRoomBase(group.hosted.roomId)}
+          line={hostLines(group.messages.filter((m) => m.roomEntryId === group.notice!.entryId))[0]}
+          text={roomNoticeText(group)}
+          onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
+        />
+      ) : (() => {
         const pinned = pinnedMessage?.kind === "text" ? pinnedMessage : undefined;
         const text = pinned ? pinPreview(pinned.role === "user" ? "user" : "bot", pinned.text ?? "") : "";
         if (!pinned || !text) return null;
