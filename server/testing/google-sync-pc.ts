@@ -5,7 +5,8 @@ import { parentPort, workerData } from "node:worker_threads";
 import { z } from "zod";
 
 import { BotTrash, trashedWorkspaceDir } from "../bot-trash.ts";
-import { finishRevive, importTrashMarks, publishTrashMarks, restoreBot, trashBot, type TrashSyncHost } from "../bot-trash-sync.ts";
+import { createBotTrashActions, trashDaysLeft } from "../bot-trash-actions.ts";
+import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "../bot-trash-sync.ts";
 import { closeMessageDb } from "../message-db.ts";
 import { writeDeviceRecord } from "../device-sync.ts";
 import {
@@ -51,6 +52,14 @@ let busy = false;
 // a build before the trash: never reads a mark
 let old = false;
 const host: TrashSyncHost = { dataDir, store, trash, settings: () => settings, now };
+const trashActions = createBotTrashActions({
+  host: () => host,
+  queueDeletes: (syncIds) => {
+    settings.pendingBotDeletes.push(...syncIds);
+    save();
+  },
+  awaitingSync: () => false,
+});
 
 function save(): void {
   settings = saveProfileSyncSettings(dataDir, settings);
@@ -187,7 +196,7 @@ function places(): Places {
     bots: store.bots.map((bot) => place(bot, workspaceDir(bot.id))).sort(byName),
     trash: store.trash.entries.map((entry) => {
       const dir = existsSync(trashedWorkspaceDir(entry.record.id)) ? trashedWorkspaceDir(entry.record.id) : workspaceDir(entry.record.id);
-      return { ...place(entry.record, dir), syncId: entry.syncId ?? null, daysLeft: Math.max(1, Math.ceil((entry.arrivedAt + 30 * DAY - now()) / DAY)) };
+      return { ...place(entry.record, dir), syncId: entry.syncId ?? null, daysLeft: trashDaysLeft(entry.arrivedAt, now()) };
     }).sort(byName),
   };
 }
@@ -285,21 +294,16 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
     case "places":
       return places();
     case "trash":
-      trashBot(host, live(args.bot!).id);
+      trashActions.trash(live(args.bot!).id);
       return;
     case "restore":
-      restoreBot(host, trashed(args.bot!).record.id);
+      trashActions.restore(trashed(args.bot!).record.id);
       return;
-    case "empty": {
-      // Empty now: the permanent delete queues as Delete's does today
-      const entry = trashed(args.bot!);
-      trash.empty([entry.record.id], { tellOthers: true });
-      if (entry.syncId) settings.pendingBotDeletes.push(entry.syncId);
-      save();
+    case "empty":
+      trashActions.emptyNow([trashed(args.bot!).record.id]);
       return;
-    }
     case "timer":
-      trash.empty(store.trash.entries.filter((entry) => now() - entry.arrivedAt >= 30 * DAY).map((entry) => entry.record.id), { tellOthers: false });
+      trashActions.emptyExpired();
       return;
     case "oldDelete": {
       // Delete on a build before the trash
