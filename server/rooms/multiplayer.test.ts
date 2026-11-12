@@ -10,7 +10,7 @@ import { z } from "zod";
 import { DATA_DIR } from "../config.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
-import { askById, closeAsksDb, configureRoomAsks, hostedTurnRefused, roomAsks, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
+import { askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, publishTurnAnswer } from "./multiplayer.ts";
@@ -91,12 +91,56 @@ describe("a teammate's line in a shared bot group", () => {
     expect(hostedSend(group, said(sora), "@Edward lunch?").ask).toBeNull();
   });
 
-  it("queues an untagged line behind their last request when the group has one bot", () => {
+  it("queues a line behind their last request when the group has one bot, tagged or not", () => {
     expect(hostedSend(group, said(sora), "hey").ask).toMatchObject({ botId: wink });
     const next = hostedSend(group, said(sora), "can you check the login page?");
     expect(next.ask).toMatchObject({ botId: wink, state: "queued", entryId: next.entry.id });
-    expect(deps.dispatch).toHaveBeenCalledTimes(2);
-    expect(() => hostedSend(group, said(sora), "@Wink and this")).toThrow(expect.objectContaining({ status: 429, message: "wait for your last request to finish" }));
+    const tagged = hostedSend(group, said(sora), "@Wink and this");
+    expect(tagged.ask).toMatchObject({ botId: wink, state: "queued", entryId: tagged.entry.id });
+    expect(deps.dispatch).toHaveBeenCalledTimes(3);
+  });
+
+  it("answers the lines queued behind an open request in one turn, in order, each by name", () => {
+    const mina = addPerson(group.hosted.roomId, "Mina", "chat", ["Wink"]);
+    const open = hostedSend(group, said(sora), "hey").ask!;
+    expect(startAsk(open.id)).toBe(true);
+    const lead = hostedSend(group, said(sora), "check the login page").ask!;
+    const rider = hostedSend(group, said(mina), "@Wink and the signup page").ask!;
+    const riders = askRiders(lead.id);
+    expect(riders.map((row) => row.id)).toEqual([rider.id]);
+    expect(askNote(lead.id, "Wink", riders)).toBe('("Sora" asked you: "check the login page". Then "Mina" asked you: "@Wink and the signup page". Reply to them as "Wink".)');
+    settleAsk(open.id, true);
+    expect(startAsk(lead.id, riders)).toBe(true);
+    expect([askById(lead.id)!.state, askById(rider.id)!.state]).toEqual(["running", "running"]);
+    const since = store.messagesFor(group.threadId).length;
+    botRow("both done");
+    publishTurnAnswer(store, group, group.threadId, { id: wink, name: "Wink" }, since, lead.id);
+    expect([askById(lead.id)!.state, askById(rider.id)!.state]).toEqual(["done", "done"]);
+    expect(botEntries().map((entry) => [entry.text, entry.replyToId])).toEqual([["both done", lead.entryId]]);
+  });
+
+  it("cancels one rider without stopping the turn it rides, and fails the rest with a stopped lead", async () => {
+    const mina = addPerson(group.hosted.roomId, "Mina", "chat", ["Wink"]);
+    const joon = addPerson(group.hosted.roomId, "Joon", "chat", ["Wink"]);
+    const lead = hostedSend(group, said(sora), "one").ask!;
+    const first = hostedSend(group, said(mina), "two").ask!;
+    const second = hostedSend(group, said(joon), "three").ask!;
+    expect(startAsk(lead.id, askRiders(lead.id))).toBe(true);
+    expect(await endAsk(first.id, "cancelled")).toBe(true);
+    expect(deps.stopTurn).not.toHaveBeenCalled();
+    expect(askById(first.id)!.state).toBe("cancelled");
+    (deps.stopTurn as ReturnType<typeof vi.fn>).mockImplementation(async (_ask: RoomAsk, ended: () => Promise<unknown>) => void await ended());
+    expect(await endAsk(lead.id, "cancelled")).toBe(true);
+    expect([askById(lead.id)!.state, askById(second.id)!.state]).toEqual(["cancelled", "failed"]);
+  });
+
+  it("never folds asks once the group has two bots", () => {
+    const pip = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
+    store.patchGroup(group.id, { memberIds: [wink, pip] });
+    const both = store.group(group.id) as HostedGroup;
+    const lead = hostedSend(both, said(sora), "@Wink one").ask!;
+    hostedSend(both, said(addPerson(group.hosted.roomId, "Mina", "chat", ["Wink", "Pip"])), "@Wink two");
+    expect(askRiders(lead.id)).toEqual([]);
   });
 
   it("wakes nobody on a plain line once the group has two bots", () => {
