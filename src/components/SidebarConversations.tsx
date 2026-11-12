@@ -310,7 +310,7 @@ function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 48;
+  const avatarSize = iconOnly ? 44 : density === "compact" ? 32 : 40;
   // the visible branch, so a version switch changes the row with the chat
   const visible = previewMessages(bot);
   const last = visible.filter(isShownMessage).at(-1);
@@ -417,7 +417,7 @@ function BotListItem({
           <span
             className={cn(
               "flex min-w-0 flex-1 items-center gap-1.5 text-ink",
-              density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+              density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
             )}
           >
             {bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
@@ -430,7 +430,7 @@ function BotListItem({
               className={cn("min-w-0 truncate", !bot.chiefOfStaff && "flex-1")}
               inputClassName={cn(
                 "w-full rounded bg-inset px-1 py-0.5",
-                density === "compact" ? "text-[13px] font-medium" : "text-[15px] font-semibold",
+                density === "compact" ? "text-[13px] font-medium" : "text-[14px] font-semibold",
               )}
             />
             {bot.chiefOfStaff && (

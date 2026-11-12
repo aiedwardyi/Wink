@@ -437,7 +437,7 @@ describe("Sidebar priority ordering", () => {
       }));
       await vi.waitFor(() => expect(rows()).toHaveLength(7));
       expect(rows().map((row) => row.getAttribute("data-sidebar-row-id"))).toEqual(["c", "f", "a", "b", "d", "e", "g"]);
-      expect(rows().map(avatarWidth)).toEqual(["48px", "48px", "32px", "32px", "32px", "32px", "32px"]);
+      expect(rows().map(avatarWidth)).toEqual(["40px", "40px", "32px", "32px", "32px", "32px", "32px"]);
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -925,7 +925,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     expect(profileButton).toBeLessThan(expandedUpdate);
     expect(footer).toContain("overflow-x-hidden");
     expect(footer).not.toContain("border-t");
-    expect(conversations).toContain("density === \"compact\" ? 32 : 48");
+    expect(conversations).toContain("density === \"compact\" ? 32 : 40");
     expect(conversations).toContain("gap-2 px-3 py-1.5 pr-12");
     expect(source).toContain("min-w-0 flex-1 overflow-x-hidden overflow-y-auto");
   });
