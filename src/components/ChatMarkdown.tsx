@@ -21,6 +21,7 @@ import { linkedFileSrc, showItem, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
+import { cardFile } from "../../shared/file-cards";
 import { unwrapUserTags } from "../../shared/user-tags";
 import { windowsPathLinks } from "../../shared/windows-path-links";
 
@@ -121,6 +122,27 @@ export const resolveRelativePath = (href: string, base?: string | null): string 
   }
   return drive + parts.join(win ? "\\" : "/");
 };
+
+const cardLink = (href: string) => {
+  const path = localFilePath(href) ?? (isRelativeHref(href) ? href : null);
+  return Boolean(path && (showKind(path) || cardFile(path)));
+};
+
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
+
+// A bot often wraps a file link in "( )", which left lone parens above and below its card.
+function remarkCardParens() {
+  const walk = (node: MdNode) => node.children?.forEach((child, i, all) => {
+    const before = all[i - 1];
+    const after = all[i + 1];
+    if (child.type === "link" && child.url && cardLink(child.url) && before?.type === "text" && after?.type === "text" && /\(\s*$/.test(before.value ?? "") && after.value?.startsWith(")")) {
+      before.value = before.value!.replace(/\(\s*$/, "");
+      after.value = after.value.slice(1);
+    }
+    walk(child);
+  });
+  return walk;
+}
 
 const StreamingContext = createContext(false);
 const MarkdownTextContext = createContext("");
@@ -244,7 +266,7 @@ export function streamBlocks(text: string): string[] {
 const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: string; components: Components }) {
   return (
     <MarkdownTextContext.Provider value={text}>
-      <Markdown remarkPlugins={[remarkGfm, remarkWindowsPaths]} components={components} urlTransform={urlTransform}>
+      <Markdown remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkCardParens]} components={components} urlTransform={urlTransform}>
         {text}
       </Markdown>
     </MarkdownTextContext.Provider>
@@ -472,7 +494,7 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
 
   return (
     <>
-      {card && threadId ? <ShowCard threadId={threadId} path={filePath} onOpen={() => void show(threadId)} /> : <button
+      {card && threadId ? <ShowCard threadId={threadId} path={filePath} onOpen={() => void (showKind(filePath) ? show(threadId) : open())} /> : <button
         ref={ref}
         type="button"
         onClick={() => void open()}
@@ -577,7 +599,7 @@ function PhoneFile({
     return <ReadableImage src={src} alt="" data-phone-media="image" className="max-h-96 max-w-full rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (showKind(filePath)) return <ShowCard threadId={threadId} path={filePath} />;
+  if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} />;
   if (!kind) {
     return (
       <a href={src} download rel="noreferrer" className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
@@ -601,7 +623,7 @@ function LocalFileLink({
 }) {
   const streaming = useContext(StreamingContext);
   if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
-  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && showKind(filePath))}>{children}</DesktopFileLink>;
+  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))}>{children}</DesktopFileLink>;
 }
 
 // Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content

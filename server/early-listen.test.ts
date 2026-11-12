@@ -96,6 +96,15 @@ describe("startEarlyListen", () => {
     expect(missing.headers.get("cache-control")).toBe("no-store");
   });
 
+  it("serves the pdf worker module as JavaScript", async () => {
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
+    mkdirSync(join(dir, "assets"));
+    writeFileSync(join(dir, "assets", "pdf.worker.min-AAAA1111.mjs"), "export {};");
+    const { early, base } = await listen();
+    early.staticDir = dir;
+    expect((await fetch(`${base}/assets/pdf.worker.min-AAAA1111.mjs?v=1`)).headers.get("content-type")).toBe("text/javascript");
+  });
+
   it("revalidates index.html with an ETag and sees a new build at once", async () => {
     const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     writeFileSync(join(dir, "index.html"), "<html><body>build one</body></html>");

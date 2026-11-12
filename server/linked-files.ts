@@ -8,6 +8,7 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
+import { cardFile } from "../shared/file-cards.ts";
 import { windowsPathLinks } from "../shared/windows-path-links.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 
@@ -219,7 +220,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
 }
 
 function outsideMedia(real: string): boolean {
-  if (!mediaType(real) || /^[\\/]{2}/.test(real)) return false;
+  if (!(mediaType(real) || cardFile(real)) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
   return !systemFolder(real);

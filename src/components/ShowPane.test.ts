@@ -148,3 +148,38 @@ it("shares one spot with the checker", async () => {
   expect(app).toContain('panel === "show" ? closeShow()');
   expect(app).toContain('...(show || media ? ["show" as const] : [])');
 });
+
+it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {
+  applyLocale(locale);
+  const saveFile = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(window, "ogb", { configurable: true, value: { saveFile } });
+  try {
+    await render({ item: item("C:\\w\\cert.pdf", "pdf"), hidden: false });
+    await act(async () => button(label)!.click());
+    expect(saveFile).toHaveBeenCalledWith("C:\\w\\cert.pdf");
+  } finally {
+    Reflect.deleteProperty(window, "ogb");
+  }
+});
+
+it("downloads the shown file in a browser", async () => {
+  const saved: [string | null, string | null][] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
+  await render({ item: item("C:\\w\\cert.pdf", "pdf"), hidden: false });
+  await act(async () => button("Save a copy")!.click());
+  expect(saved).toEqual([[src("C:\\w\\cert.pdf"), "cert.pdf"]]);
+});
+
+it("offers Open when the file can't be shown", async () => {
+  const openFile = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(window, "ogb", { configurable: true, value: { openFile } });
+  try {
+    await render({ item: item("C:\\w\\broken.png", "image"), hidden: false });
+    await act(async () => { host.querySelector("img")!.dispatchEvent(new Event("error")); });
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Could not show this file");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-show-fallback]")!.click());
+    expect(openFile).toHaveBeenCalledWith("C:\\w\\broken.png");
+  } finally {
+    Reflect.deleteProperty(window, "ogb");
+  }
+});

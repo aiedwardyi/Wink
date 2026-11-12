@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { fileMenuFor, imageBytes, imageFetchFor, imageSaveName, openLocalFile, saveImageCopy } from "./open-file.mjs";
+import { fileMenuFor, imageBytes, imageFetchFor, imageSaveName, openLocalFile, saveImageCopy, saveLocalFile } from "./open-file.mjs";
 
 // Creating a symlink on Windows needs elevation or developer mode, so the
 // symlink case only runs where the runner can actually make one.
@@ -231,6 +231,22 @@ describe("file link menu", () => {
     await assert.rejects(menuFor("clip.mp4", { dialog }).menu, { message: "That file path is invalid" });
     await assert.rejects(menuFor("//evil/share/a.mp4", { dialog, platform: "win32" }).menu, { message: "That file path is invalid" });
     await assert.rejects(menuFor(file("other.mp4"), { dialog, base: path.join(dir, "bot") }).menu, { message: "That file is outside the bot's folder" });
+  });
+});
+
+describe("file save", () => {
+  it("copies a file outside any bot folder to the chosen path", async () => {
+    const p = file("desktop-cert.docx");
+    const dest = path.join(dir, "saved-cert.docx");
+    const dialog = { showSaveDialog: async (_window, options) => ({ canceled: options.defaultPath !== path.join(dir, "desktop-cert.docx"), filePath: dest }) };
+    assert.equal(await saveLocalFile(p, { dialog, downloads: dir }), true);
+    assert.equal(fs.readFileSync(dest, "utf8"), "x");
+  });
+
+  it("opens no dialog for a folder or a rejected path", async () => {
+    const dialog = { showSaveDialog: async () => assert.fail("no dialog") };
+    await assert.rejects(saveLocalFile(dir, { dialog, downloads: dir }), { message: "That path is not a file" });
+    await assert.rejects(saveLocalFile(path.join(dir, "gone.pdf"), { dialog, downloads: dir }), { message: "That file no longer exists" });
   });
 });
 
