@@ -29,7 +29,9 @@ import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
 import { isPhone, saveVibration, vibrationEnabled } from "@/lib/phone-swipe";
+import { savePickerLook, usePickerLook, type PickerLook } from "@/lib/picker-look";
 import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-box";
+import { useSkin } from "@/lib/skins";
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
@@ -328,6 +330,21 @@ function RainbowBoxRow() {
         value={box}
         options={(["off", "rainbow", "theme"] as const).map((id) => ({ id, label: t(`settings.rainbowBox.${id}`) }))}
         onChange={saveRainbowBox}
+      />
+    </Card>
+  );
+}
+
+function PickerLookRow() {
+  const { t } = useI18n();
+  const look = usePickerLook(useSkin());
+  return (
+    <Card>
+      <SegmentedRow<PickerLook>
+        label={t("settings.pickerLook.title")}
+        value={look}
+        options={(["dark", "light", "atelier"] as const).map((id) => ({ id, label: t(`settings.pickerLook.${id}`) }))}
+        onChange={savePickerLook}
       />
     </Card>
   );
@@ -674,6 +691,7 @@ export function SettingsModal({
             {section === "themes" && (
               <>
                 <RainbowBoxRow />
+                <PickerLookRow />
                 <Card>
                   <SkinPicker />
                 </Card>
