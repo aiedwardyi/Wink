@@ -16,7 +16,7 @@ export const isHostedThread = (store: Pick<Store, "groupByThread">, threadId: st
 /** The owner's linked files stay open on a shared group's older tasks; only the shared thread is closed. */
 export const linkedFilesClosed = (group: GroupRecord | undefined, threadId: string) => Boolean(group?.hosted) && group!.threadId === threadId;
 
-export type HostedRoomView = { missing: true } | { name: string; people: RoomPerson[]; joins: RoomJoin[]; removed: Array<{ id: string; name: string }>; noticeText?: string };
+export type HostedRoomView = { missing: true } | { name: string; people: RoomPerson[]; joins: RoomJoin[]; removed?: Array<{ id: string; name: string }>; noticeText?: string };
 
 /** A hosted group restored without its rooms.db rows reads as missing, never as an empty room. */
 export function hostedRoomView(hosted: NonNullable<GroupRecord["hosted"]>, notice?: RoomNotice): HostedRoomView {
@@ -27,7 +27,7 @@ export function hostedRoomView(hosted: NonNullable<GroupRecord["hosted"]>, notic
     const names = new Map(joins.map((join) => [join.personId, join.name]));
     const removed = barredPeople(room.id).flatMap((id) => (names.has(id) ? [{ id, name: names.get(id)! }] : []));
     const pinned = notice && roomEntry(room.id, notice.entryId)?.text;
-    return { name: room.name, people: roomPeople(room.id), joins, removed, ...(pinned && pinned !== noticeText(pinned) ? { noticeText: pinned } : {}) };
+    return { name: room.name, people: roomPeople(room.id), joins, ...(removed.length ? { removed } : {}), ...(pinned && pinned !== noticeText(pinned) ? { noticeText: pinned } : {}) };
   } catch {
     return { missing: true };
   }

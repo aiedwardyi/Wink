@@ -392,7 +392,7 @@ describe("remove", () => {
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
     expect(await letBack(id, mina.body.person.id, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
     expect(await letBack(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
-    expect(hostedRoomView(group.hosted)).toMatchObject({ removed: [] });
+    expect(hostedRoomView(group.hosted)).not.toHaveProperty("removed");
     expect(await letBack(id, mina.body.person.id)).toEqual({ status: 404, body: { error: "not found" } });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toMatchObject({ status: 200, body: { person: { name: "Mina" } } });
     expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);

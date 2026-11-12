@@ -57,7 +57,7 @@ describe("Let back in", () => {
       if (init?.method === "POST" && !path.endsWith("/invites")) posts.push(path);
       return new Response(JSON.stringify(path.endsWith("/invites") ? { code: "old-code" } : { ok: true }));
     }));
-    const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [], joins: [], removed: [{ id: "mina", name: "Mina" }] } } as TeamRoom;
+    const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [{ id: "joon", name: "Joon" }], removed: [{ id: "mina", name: "Mina" }] } } as TeamRoom;
     root = createRoot(document.body.appendChild(document.createElement("main")));
     await act(async () => root!.render(createElement(TeamRoomPeople, { group, onClose: () => {}, triggerRef: { current: null } })));
     expect(document.querySelector("[data-room-removed]")?.textContent).toBe("MinateamRoom.letBack");
@@ -69,10 +69,10 @@ describe("Let back in", () => {
   it("moves a removed teammate to the removed rows, or says the code changed when it was retired", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     for (const codeChanged of [false, true]) {
-      vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => new Response(JSON.stringify(
+      vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => new Response(JSON.stringify(
         init?.method === "DELETE" ? { ok: true, ...(codeChanged ? { codeChanged } : {}) } : { code: "old-code" },
       ))));
-      const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [{ id: "mina", name: "Mina" }], joins: [] } } as TeamRoom;
+      const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [{ id: "mina", name: "Mina" }] } } as TeamRoom;
       root = createRoot(document.body.appendChild(document.createElement("main")));
       await act(async () => root!.render(createElement(TeamRoomPeople, { group, onClose: () => {}, triggerRef: { current: null } })));
       await act(async () => button("teamRoom.removeNamed").click());

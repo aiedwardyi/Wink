@@ -51,7 +51,7 @@ describe("team room guards", () => {
   it("shows a restored room without its data as missing, never empty", () => {
     expect(hostedRoomView({ roomId: "restored-without-rooms-db" })).toEqual({ missing: true });
     const room = createRoom("Team");
-    expect(hostedRoomView({ roomId: room.id })).toEqual({ name: "Team", people: [], joins: [], removed: [] });
+    expect(hostedRoomView({ roomId: room.id })).toEqual({ name: "Team", people: [], joins: [] });
   });
 
   it("gives the host a long pinned line in full, and trims an old long pin on load", () => {
