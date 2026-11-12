@@ -4952,11 +4952,13 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   /* Stop spatial motion instead of accelerating infinite animations. Loading
      icons keep a slow opacity pulse, so progress remains visible without
      rotation, bounce, or flicker. */
-  *,
-  *::before,
-  *::after {
+  /* 0s, not a tiny duration: with transition-property all, any restyle of a big
+     subtree would start a transition on every element in it. Progress keeps time. */
+  :where(:not([data-progress])),
+  ::before,
+  ::after {
     animation: none !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }

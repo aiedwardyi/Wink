@@ -909,6 +909,8 @@ describe("SettingsPanel memory autosave", () => {
     };
     const width = vi.spyOn(owner("clientWidth"), "clientWidth", "get").mockReturnValue(320);
     const height = vi.spyOn(owner("scrollHeight"), "scrollHeight", "get").mockReturnValue(900);
+    // a browser's observer reports each box once on observe
+    vi.stubGlobal("ResizeObserver", class { constructor(private run: () => void) {} observe() { this.run(); } disconnect() {} });
     try {
       await render("bot-1");
       expect(box().style.height).toBe("900px");
