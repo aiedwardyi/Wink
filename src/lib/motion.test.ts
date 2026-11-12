@@ -14,14 +14,13 @@ const token = (name: string) => theme.match(new RegExp(`--${name}: ([^;]+);`))?.
 const rule = (selector: string) => motionCss.match(new RegExp(`(?:^|\\n)${selector.replace(/[[\]()*.]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
 
 describe("shared motion tokens", () => {
-  it("ports Carbon's productive motion as six tokens that every bare transition uses", () => {
+  it("ports Carbon's productive motion as five tokens that every bare transition uses", () => {
     expect(styles).toContain('@import "./motion.css";');
     // @carbon/motion 11.55.0: duration-fast-02, moderate-01, moderate-02 and the productive curves
     expect(token("motion-fast")).toBe("110ms");
     expect(token("motion-moderate")).toBe("150ms");
     expect(token("motion-large")).toBe("240ms");
     expect(token("ease-standard")).toBe("cubic-bezier(0.2, 0, 0.38, 0.9)");
-    expect(token("ease-entrance")).toBe("cubic-bezier(0, 0, 0.38, 0.9)");
     expect(token("ease-exit")).toBe("cubic-bezier(0.2, 0, 1, 0.9)");
     expect(token("default-transition-duration")).toBe("var(--motion-fast)");
     expect(token("default-transition-timing-function")).toBe("var(--ease-standard)");
@@ -44,9 +43,23 @@ describe("shared motion tokens", () => {
     expect(`${motion.MOTION_MODERATE_MS}ms`).toBe(token("motion-moderate"));
     expect(`${motion.MOTION_LARGE_MS}ms`).toBe(token("motion-large"));
     expect(motion.EASE_STANDARD).toBe(token("ease-standard"));
-    expect(motion.EASE_ENTRANCE).toBe(token("ease-entrance"));
-    expect(motion.EASE_SOFT).toBe(token("ease-soft"));
+    expect(motion.EASE_EXIT).toBe(token("ease-exit"));
     expect(PRESENCE_EXIT_MS).toBe(motion.MOTION_FAST_MS);
+  });
+
+  it("keeps two easings, the retired names standing in for standard", async () => {
+    expect(theme.match(/cubic-bezier\(/g)).toHaveLength(2);
+    expect(token("ease-entrance")).toBe("var(--ease-standard)");
+    expect(token("ease-soft")).toBe("var(--ease-standard)");
+    const motion = await import("./motion");
+    expect(motion.EASE_ENTRANCE).toBe(motion.EASE_STANDARD);
+    expect(motion.EASE_SOFT).toBe(motion.EASE_STANDARD);
+  });
+
+  it("lands a docked panel with the fold, its shell opaque from the first frame", () => {
+    expect(token("animate-panel-slide")).toBe("panel-slide var(--motion-large) var(--ease-standard)");
+    expect(motionCss).toMatch(/@keyframes panel-slide \{\s*from \{ translate: 28px 0; \}\s*\}/);
+    expect(read("components/SettingsPanel.tsx")).toContain("md:animate-panel-slide md:*:animate-fade-in");
   });
 
   it("keeps the swipe follow-through on its own spring, carrying the finger's speed", async () => {
@@ -58,6 +71,13 @@ describe("shared motion tokens", () => {
   it("makes everything instant under reduced motion", () => {
     const reduce = motionCss.match(/@media \(prefers-reduced-motion: reduce\) \{\s*:root \{([^}]*)\}/)?.[1] ?? "";
     expect(reduce.match(/--[\w-]+: 0s;/g)).toEqual(["--motion-fast: 0s;", "--motion-moderate: 0s;", "--motion-large: 0s;"]);
+  });
+
+  it("resets transitions to 0s under reduced motion, never a tiny duration, and lets progress keep time", () => {
+    const reset = styles.match(/:where\(:not\(\[data-progress\]\)\),\s*::before,\s*::after \{([^}]*)\}/)?.[1] ?? "";
+    expect(reset).toContain("transition-duration: 0s !important;");
+    expect(styles).not.toContain("0.01ms");
+    expect(read("components/LiveCallBar.tsx")).toMatch(/data-live-call-time-left\s+data-progress/);
   });
 });
 

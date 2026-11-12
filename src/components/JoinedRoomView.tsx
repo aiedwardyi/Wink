@@ -9,7 +9,7 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, roomPictureUrl } from "@/lib/team-rooms";
+import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
@@ -30,7 +30,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const peopleButton = useRef<HTMLButtonElement>(null);
   const entries = room?.entries;
   const bots = room?.state?.bots;
-  const lines = useMemo(() => joinedLines(entries ?? [], bots), [entries, bots]);
+  const meId = room?.me.id;
+  const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
+  const people = room?.state?.people;
+  const host = room?.state?.host;
+  const names = useMemo(() => reactionNames(people ?? [], host, bots), [people, host, bots]);
+  const notice = room?.state?.notice;
   const base = joinedRoomBase(roomId);
   const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const name = room?.state?.roomName ?? "";
@@ -93,6 +98,14 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         people={room?.state?.people}
         hostName={room?.state?.host}
         onReply={selectReply}
+        reactionNames={names}
+        onReact={room?.canReact ? (message, emoji) => void reactInJoinedRoom(roomId, message.roomEntryId ?? message.id, emoji).catch(() => {}) : undefined}
+        notice={{
+          entryId: notice?.entryId,
+          text: room?.noticeEntry?.text,
+          canUnpin: notice?.by === `person:${meId}`,
+          set: room?.canReact ? (entryId) => void setJoinedNotice(roomId, entryId).catch(() => {}) : undefined,
+        }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}

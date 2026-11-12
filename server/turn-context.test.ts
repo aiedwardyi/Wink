@@ -409,6 +409,64 @@ describe("buildTurnContext", () => {
   });
 });
 
+describe("asks in the task record", () => {
+  const now = new Date(2026, 10, 12, 9, 0).getTime();
+  const old = now - 7 * 60 * 60 * 1000;
+  const record = {
+    goal: "Ship the release",
+    plan: [],
+    completed: [],
+    blockers: [],
+    nextAction: "Run smoke tests",
+    asks: [
+      { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user" as const, ref: "PR #1348", at: old, changedAt: old },
+      { id: "A2", ask: "Drop the old skin", status: "declined" as const, at: old, changedAt: old },
+      { id: "A3", ask: "Fix the login redirect", status: "building" as const, at: now - 1_000, changedAt: now - 1_000 },
+    ],
+  };
+  const lines = "- A1 waiting-for-user stale 11-12: Review the model picker PR (PR #1348)\n- A3 building 11-12: Fix the login redirect";
+  const stale = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it.]\n${lines}`;
+  const listed = `[Wink asks list - 2 open, 1 stale: no change in 6+ hours, so raise it with the user now, then update it. Build any summary or status from this list.]\n${lines}`;
+  const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };
+
+  it.each([
+    ["a compaction", { recycled: true, recycleReason: "compaction" as const }],
+    ["a new session", { fresh: true }],
+  ])("carries open asks across %s with the stale one flagged", (_, boundary) => {
+    const out = buildTurnContext({ ...plain, ...boundary, taskRecordText: taskRecordBlock(record, 6_000, { now }) });
+    expect(out.turnText).toContain(`Blockers: 0 total; none\n${stale}`);
+    expect(out.turnText).not.toContain("Drop the old skin");
+  });
+
+  it("keeps the asks in the record after a stop", () => {
+    const text = taskRecordBlock(record, 6_000, { now, recovering: true, latestUserText: "continue" });
+    expect(text).toContain("The previous turn was interrupted");
+    expect(text).toContain(stale);
+  });
+
+  it("puts the stale nudge on a resumed turn that carries no record", () => {
+    const out = buildTurnContext({ ...plain, taskRecordText: taskRecordBlock(record, 6_000, { now }), asksText: stale });
+    expect(out).toEqual({ turnText: `${stale}\n\nthanks`, resume: true });
+  });
+
+  it("lists every open ask once when the record rides a status turn", () => {
+    const out = buildTurnContext({
+      ...plain,
+      text: "status?",
+      fresh: true,
+      taskRecordText: taskRecordBlock(record, 6_000, { now, allAsks: true }),
+      asksText: listed,
+    });
+    expect(out.turnText).toContain(listed);
+    expect(out.turnText.split("[Wink asks list")).toHaveLength(2);
+  });
+
+  it("adds nothing for a record whose asks are all closed", () => {
+    const bare = { goal: record.goal, plan: [], completed: [], blockers: [], nextAction: record.nextAction };
+    expect(taskRecordBlock({ ...bare, asks: [record.asks[1]!] }, 6_000, { now })).toBe(taskRecordBlock(bare));
+  });
+});
+
 describe("task record progress", () => {
   it("shows bot milestones after settled turns without reply copies", () => {
     let record = seedTaskResumePacket({

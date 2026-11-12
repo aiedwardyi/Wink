@@ -11,7 +11,7 @@ export function useStage(last: number, now = false): number {
   const [stage, setStage] = useState(now ? last : 0);
   useEffect(() => {
     if (stage < last) startTransition(() => setStage(stage + 1));
-  }, [stage]);
+  }, [stage, last]);
   return stage;
 }
 

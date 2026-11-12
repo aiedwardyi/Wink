@@ -16,6 +16,14 @@ vi.mock("@/state/store", async (original) => ({
 }));
 
 describe("chat errors", () => {
+  it("localizes API credit promo failures without raw details", async () => {
+    const { chatErrorText } = await import("./error-text");
+    for (const line of ["codex_byok_restricted_by_api_credit_promo", "This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account."]) {
+      expect(chatErrorText(`error: ${line}`, "Wink", en)).toEqual({ text: "This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account.", raw: undefined });
+      expect(chatErrorText(`error: ${line}`, "Wink", ko)).toEqual({ text: "이 OpenAI 키의 조직은 API 크레딧 프로모션을 사용 중이라 Codex를 쓸 수 없어요. 다른 Codex 계정을 선택하세요.", raw: undefined });
+    }
+  });
+
   it("localizes a send refused for a signed-out account", async () => {
     const { classifyChatError } = await import("../../shared/chat-error");
     const { chatBannerError } = await import("./error-text");

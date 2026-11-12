@@ -42,7 +42,7 @@ function rig(target: "bot" | "group") {
   const tracker = parsed.statements.find((node) => ts.isVariableStatement(node)
     && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "unreadTurns"));
   const botUnread = find(completed, (node) => ts.isIfStatement(node)
-    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true });')!;
+    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true }, { soon: true });')!;
   const groupUnread = find(completed, (node) => ts.isExpressionStatement(node)
     && node.getText(parsed).startsWith("store.patchGroup(group.id, { busyBotId: null,"))!;
   const decision = find(completed, (node) => ts.isVariableStatement(node)
@@ -60,7 +60,7 @@ function rig(target: "bot" | "group") {
   const roomFallback = find(roomTurn, (node) => ts.isIfStatement(node)
     && node.expression.getText(parsed) === "store.group(group.id)?.busyBotId === bot.id")!;
   const deps: Record<string, unknown> = {
-    runtimeErrorTool, accounts: new Map(),
+    runtimeErrorTool, accounts: new Map(), refreshCodexPromo: () => {}, usageBoard: { touch() {} },
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },

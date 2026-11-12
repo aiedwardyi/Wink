@@ -538,7 +538,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
       expect(calls().map(({ el }) => el)).not.toContain(aside);
       expect(calls()).toEqual([
         { el: expect.anything(), keyframes: [{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], options: { ...motion, fill: "forwards" } },
-        { el: view, keyframes: [{ marginLeft: "296px" }, { marginLeft: "0px" }], options: motion },
+        { el: view, keyframes: [{ transform: "translateX(296px)" }, { transform: "none" }], options: motion },
       ]);
 
       animate.mockClear();
@@ -546,10 +546,9 @@ describe("Sidebar layout controls with phone collapse restored", () => {
       expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe("0");
       expect(window.localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe("360");
       expect(aside.getAttribute("style")).toContain("width: 360px");
-      // No fill: a clip left on the aside would clip its fixed overlays.
+      // The view slides off the list, which is already its full width.
       expect(calls()).toEqual([
-        { el: aside, keyframes: [{ clipPath: "inset(0 296px 0 0)" }, { clipPath: "inset(0)" }], options: motion },
-        { el: view, keyframes: [{ marginLeft: "-296px" }, { marginLeft: "0px" }], options: motion },
+        { el: view, keyframes: [{ transform: "translateX(-296px)" }, { transform: "none" }], options: motion },
       ]);
     } finally {
       window.localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
@@ -559,7 +558,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     }
   });
 
-  it("reverses an interrupted toggle from the current edge and slides rigid views", async () => {
+  it("reverses an interrupted toggle from the current edge and leaves overlays still", async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "0");
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "360");
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -581,7 +580,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
         root.render(createElement(
           StoreProvider,
           null,
-          createElement(Sidebar, { open: false, onClose: () => {}, rigidView: true }),
+          createElement(Sidebar, { open: false, onClose: () => {} }),
           createElement("main"),
           createElement("div", { style: { position: "fixed" } }),
         )),
@@ -593,7 +592,6 @@ describe("Sidebar layout controls with phone collapse restored", () => {
 
       const toggle = () => host.querySelector('button[aria-label="Collapse sidebar to avatars"], button[aria-label="Expand sidebar"]');
       const view = host.querySelector("main")!;
-      const aside = host.querySelector("aside")!;
       await act(async () => toggle()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       expect(animate.mock.contexts.slice(1)).toEqual([view]);
       expect(animate.mock.calls[1]?.[0]).toEqual([{ transform: "translateX(296px)" }, { transform: "none" }]);
@@ -601,9 +599,8 @@ describe("Sidebar layout controls with phone collapse restored", () => {
       animate.mockClear();
       await act(async () => toggle()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       expect(cancel).toHaveBeenCalledTimes(2);
-      expect(animate.mock.contexts).toEqual([aside, view]);
+      expect(animate.mock.contexts).toEqual([view]);
       expect(animate.mock.calls.map(([keyframes]) => keyframes)).toEqual([
-        [{ clipPath: "inset(0 148px 0 0)" }, { clipPath: "inset(0)" }],
         [{ transform: "translateX(-148px)" }, { transform: "none" }],
       ]);
     } finally {

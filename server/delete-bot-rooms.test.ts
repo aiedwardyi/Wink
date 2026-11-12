@@ -94,12 +94,14 @@ describe("deleteBotFully", () => {
   });
 
   it("interrupts a room turn the bot is running before the store forgets the room claim", () => {
-    const body = fn("deleteBotFully");
-    const lookup = body.indexOf("store.groups.find((g) => g.busyBotId === bot.id)");
-    const interrupt = body.indexOf("interruptTurn(busyGroup.threadId)");
+    const stop = fn("stopBotWork");
+    const lookup = stop.indexOf("store.groups.find((g) => g.busyBotId === bot.id)");
     expect(lookup).toBeGreaterThan(-1);
-    expect(interrupt).toBeGreaterThan(lookup);
-    expect(body.indexOf("store.deleteBot(bot.id);")).toBeGreaterThan(interrupt);
+    expect(stop.indexOf("interruptTurn(busyGroup.threadId)")).toBeGreaterThan(lookup);
+    const body = fn("deleteBotFully");
+    const stopped = body.indexOf("await stopBotWork(bot);");
+    expect(stopped).toBeGreaterThan(-1);
+    expect(body.indexOf("store.deleteBot(bot.id);")).toBeGreaterThan(stopped);
   });
 
   it("removes the event logs of every task, not just the open one", async () => {
@@ -119,7 +121,7 @@ describe("deleteBotFully", () => {
       perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
       EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, removeRotatingLog,
     };
-    const javascript = ts.transpileModule(`${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const javascript = ts.transpileModule(`${fn("stopBotWork")}\n}\n${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const deleteBotFully = new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));
 
     await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "claude" }, tasks: [{ threadId: "t1" }, { threadId: "t2" }] });

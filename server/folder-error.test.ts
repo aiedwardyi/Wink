@@ -3,6 +3,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { runtimeErrorTool } from "./chat-error.ts";
+import { refreshCodexPromo } from "./codex-promo.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import type { Message } from "./store.ts";
 import { INCOMPLETE_LOG_MESSAGE } from "./harness/bus.ts";
@@ -15,8 +16,8 @@ const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error
 
 function errorRow(event: Extract<RuntimeEvent, { type: "runtime.error" }>) {
   const rows: Message[] = [];
-  const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "runtimeErrorTool", "accounts", javascript);
-  run(event, { start() {} }, { messagesFor: () => [] }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE, runtimeErrorTool, new Map());
+  const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "runtimeErrorTool", "accounts", "refreshCodexPromo", "usageBoard", javascript);
+  run(event, { start() {} }, { messagesFor: () => [] }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE, runtimeErrorTool, new Map(), refreshCodexPromo, { touch() {} });
   return rows[0];
 }
 

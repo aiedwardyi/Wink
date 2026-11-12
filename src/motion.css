@@ -1,9 +1,11 @@
-/* Wink motion: IBM Carbon's productive motion, ported as six shared tokens.
+/* Wink motion: IBM Carbon's productive motion, ported as five shared tokens.
    Source: @carbon/motion 11.55.0 (Apache-2.0) and
    https://carbondesignsystem.com/elements/motion/overview/
    src/lib/motion.ts mirrors the numbers for motion that script drives, and
    motion.test.ts fails if the two drift apart. No component carries its own
-   duration or curve for a collapse or an expand. */
+   duration or curve for a collapse or an expand. A panel or sheet moves by
+   transform and opacity only: layout snaps once, on the first frame. The few
+   playful one-offs that keep their own timing live in src/lib/motion-character.ts. */
 @theme static {
   /* duration-fast-02: chevron turn, hover, tooltip in, every exit */
   --motion-fast: 110ms;
@@ -11,16 +13,17 @@
   --motion-moderate: 150ms;
   /* duration-moderate-02: sidebar collapse, phone drawer, sheet swipes */
   --motion-large: 240ms;
-  /* productive easings: standard stays on screen, entrance arrives, exit leaves */
+  /* two easings: standard for all that enters or moves, exit for all that leaves */
   --ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9);
-  --ease-entrance: cubic-bezier(0, 0, 0.38, 0.9);
   --ease-exit: cubic-bezier(0.2, 0, 1, 0.9);
-  /* not Carbon: lands flat, for a fold whose rows below travel far */
-  --ease-soft: cubic-bezier(0.25, 0.1, 0.25, 1);
+  /* retired names, kept as aliases: parts that move together share one curve */
+  --ease-entrance: var(--ease-standard);
+  --ease-soft: var(--ease-standard);
 
   --default-transition-duration: var(--motion-fast);
   --default-transition-timing-function: var(--ease-standard);
   --animate-panel-in: panel-in var(--motion-moderate) var(--ease-entrance);
+  --animate-panel-slide: panel-slide var(--motion-large) var(--ease-standard);
   --animate-pop-in: pop-in var(--motion-moderate) var(--ease-entrance);
   --animate-fade-in: fade-in var(--motion-moderate) var(--ease-entrance);
   --animate-tip-in: tip-in var(--motion-fast) var(--ease-entrance);
@@ -29,6 +32,11 @@
 @keyframes panel-in {
   from { transform: translateX(28px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
+}
+/* a docked panel's shell is opaque from the first frame and lands with the bot-list fold; only its content fades.
+   translate, not transform: the fold moves it by transform too, and two on one element both leave the compositor */
+@keyframes panel-slide {
+  from { translate: 28px 0; }
 }
 @keyframes panel-out {
   to { transform: translateX(28px); opacity: 0; }

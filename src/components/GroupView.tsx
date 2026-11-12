@@ -78,6 +78,7 @@ import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { shortPath } from "@/lib/short-path";
+import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
@@ -1285,7 +1286,7 @@ export function GroupView({ group: live }: { group: Group }) {
   const revealOlder = useRef(false);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
-  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+  const earlier = useMemo(() => createEarlierWindow(shown, {
     terminal, workers: rowWorkers, renders: (message) => messageVisible(message, showToolCalls, showActivities),
   }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
@@ -1294,7 +1295,7 @@ export function GroupView({ group: live }: { group: Group }) {
     if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlier.start(prepended, scrollRef.current) : undefined));
     }
   }
   const {
@@ -1459,7 +1460,7 @@ export function GroupView({ group: live }: { group: Group }) {
       return;
     }
     preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
-    const start = earlierStart(startIndex, scrollRef.current);
+    const start = earlier.start(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1483,7 +1484,12 @@ export function GroupView({ group: live }: { group: Group }) {
   const [showEarlier, cancelEarlier] = useEarlierPage({
     key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : group.hasMore),
     scrollRef, previousScrollTop, expand: expandEarlier,
+    settle: () => {
+      const end = earlier.end(startIndex, scrollRef.current);
+      if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
+    },
   });
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1801,7 +1807,7 @@ export function GroupView({ group: live }: { group: Group }) {
             </div>
           )}
           {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (
-            <div className="flex justify-center pt-2">
+            <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
