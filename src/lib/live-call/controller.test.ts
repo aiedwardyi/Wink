@@ -705,6 +705,7 @@ describe("asRequest", () => {
   it("turns the voice's offer into the person's request", () => {
     expect(asRequest("Want me to give you the file path for the Vertia certificate?")).toBe("Give me the file path for the Vertia certificate.");
     expect(asRequest("Do you want me to turn your documents into PDFs?")).toBe("Turn my documents into PDFs.");
+    expect(asRequest("Want me to find something you like?")).toBe("Find something you like.");
     expect(asRequest("파일 경로를 알려드릴까요?")).toBe("파일 경로를 알려줘.");
     expect(asRequest("PDF로 변환할까요?")).toBe("PDF로 변환해줘.");
     expect(asRequest("Fix the login page bug.")).toBe("Fix the login page bug.");

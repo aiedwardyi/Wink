@@ -34,7 +34,7 @@ const SUMMARY_MAX_CHARS = 280;
 const TRANSCRIPT_MAX_CHARS = 12_000;
 const CALL_LINES_TOKENS = 2_000;
 // Old product names the voice would read aloud from notes, chat or a description.
-const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/gi;
+const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/g;
 const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
 
 type LiveCallDeps = {

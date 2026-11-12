@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
-import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag } from "./live-call.ts";
+import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -160,7 +160,11 @@ describe("call token", () => {
     await h.post("token", {}, bot.id);
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("your project teacher for Wink");
-    expect(brief).not.toMatch(/Orbit|OpenMaus|MausBot/i);
+    expect(brief).not.toMatch(/Orbit|OpenMaus|MausBot/);
+  });
+
+  it("only the capitalized old name is replaced", () => {
+    expect(plainNames("Neptune's orbit, in Orbit", "Teacher")).toBe("Neptune's orbit, in Wink");
   });
 
   it("a bot named Orbit keeps its name", async () => {

@@ -89,7 +89,7 @@ const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should
 export function asRequest(order: string): string {
   const text = order.trim();
   if (OFFER_EN.test(text)) {
-    const rest = text.replace(OFFER_EN, "").replace(/[?.!\s]+$/, "").replace(/\byou\b/gi, "me").replace(/\byour\b/gi, "my");
+    const rest = text.replace(OFFER_EN, "").replace(/[?.!\s]+$/, "").replace(/\b(for|to|with|give|send|show|tell) you\b/gi, "$1 me").replace(/\byour\b/gi, "my");
     return `${rest.charAt(0).toUpperCase()}${rest.slice(1)}.`;
   }
   return text.replace(/\s?드릴까요\s*\?*$/, "줘.").replace(/할까요\s*\?*$/, "해줘.");
