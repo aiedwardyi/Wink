@@ -5,8 +5,10 @@ import { X } from "lucide-react";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { usePresence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 
+import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
 import { RoomOwnName } from "./RoomOwnName";
 
@@ -22,6 +24,8 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
   const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const confirm = usePresence(removing);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -125,7 +129,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
               <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{person.name}</span>
               {group && <button
                 type="button"
-                onClick={() => void remove(person.id)}
+                onClick={() => setRemoving(person)}
                 aria-label={t("teamRoom.removeNamed", { name: person.name })}
                 className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
               >
@@ -136,6 +140,19 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
           {people.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}
         </ul>
       </div>
+      {confirm.mounted && confirm.value && (
+        <ConfirmDialog
+          closing={confirm.closing}
+          title={t("teamRoom.removeTitle", { name: confirm.value.name })}
+          body={t("teamRoom.removeBody")}
+          confirmLabel={t("teamRoom.remove")}
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            setRemoving(null);
+            void remove(confirm.value!.id);
+          }}
+        />
+      )}
     </div>
   );
 }

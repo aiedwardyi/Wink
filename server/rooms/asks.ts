@@ -363,19 +363,19 @@ export function spend(roomId: string, personId: string, kind: "message" | "ask")
   db().prepare("INSERT INTO room_spend (room_id, person_id, kind, at) VALUES (?, ?, ?, ?)").run(roomId, personId, kind, Date.now());
 }
 
-/** Why this person can't send now, if they can't. The host has no quota. */
-export function sendRefusal(roomId: string, personId: string, ask: RoomGrant | "held" | null): string | null {
+/** Why this person can't send now, if they can't. The host has no quota. `behind` lets work wait behind their open request. */
+export function sendRefusal(roomId: string, personId: string, ask: RoomGrant | "held" | null, behind = false): string | null {
   const now = Date.now();
   if (spent(roomId, "message", now - DAY, personId) >= ROOM_LIMITS.messagesPerPersonDay) return "you've sent today's limit of messages in this room";
   if (spent(roomId, "message", now - DAY) >= ROOM_LIMITS.messagesPerRoomDay) return "this room has reached today's message limit";
   if (!ask) return null;
   const mine = roomAsks(roomId, ["held", "queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === personId);
   if (ask === "held") return mine.filter((row) => row.state === "held").length >= ROOM_LIMITS.heldPerPerson ? "you already have 3 requests waiting" : null;
-  return askRefusal(roomId, personId, ask, mine);
+  return askRefusal(roomId, personId, ask, mine, behind);
 }
-function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: RoomAsk[]): string | null {
+function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: RoomAsk[], behind = false): string | null {
   const now = Date.now();
-  if (ask === "work" && mine.filter((row) => row.grant === "work" && row.state !== "held").length >= ROOM_LIMITS.openWorkPerPerson) return "wait for your last request to finish";
+  if (ask === "work" && !behind && mine.filter((row) => row.grant === "work" && row.state !== "held").length >= ROOM_LIMITS.openWorkPerPerson) return "wait for your last request to finish";
   if (spent(roomId, "ask", now - HOUR, personId) >= ROOM_LIMITS.asksPerPersonHour) return "you've asked the bot the most it takes in an hour";
   if (spent(roomId, "ask", now - HOUR) >= ROOM_LIMITS.asksPerRoomHour) return "this room has asked the bot the most it takes in an hour";
   return null;

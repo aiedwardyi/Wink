@@ -32,8 +32,11 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   let bot = !person || peopleOnlyRoom(roomId) ? null : route();
   if (person) {
     let refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
+    const solo = Boolean(refusal && bot && !route(false));
+    // The only bot takes an untagged line after its current turn, like a 1:1 queue.
+    if (solo) refusal = sendRefusal(roomId, person.id, "work", true);
     // An untagged line to the only bot is still chat when that bot can't take it.
-    if (refusal && bot && !route(false)) {
+    if (refusal && solo) {
       bot = null;
       refusal = sendRefusal(roomId, person.id, null);
     }
