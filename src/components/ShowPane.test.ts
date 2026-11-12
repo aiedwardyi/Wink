@@ -101,12 +101,31 @@ it("docks files wide and closes from the header", async () => {
   expect(shown).toBeNull();
 });
 
+it("collapses from the left like Bot details, on desktop only", async () => {
+  await act(async () => showItem(item("C:\w\a.png", "image")));
+  await render({ item: item("C:\w\a.png", "image"), hidden: false });
+  const collapse = host.querySelector(".show-pane-head > button")!;
+  expect(collapse.getAttribute("aria-label")).toBe("Collapse Show and Media");
+  expect(collapse.getAttribute("title")).toBe("Collapse Show and Media");
+  expect(button("Close")).not.toBeNull();
+  await act(async () => (collapse as HTMLElement).click());
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  await render({ item: item("C:\w\a.png", "image"), hidden: false });
+  expect(document.querySelector('button[aria-label="Collapse Show and Media"]')).toBeNull();
+  expect(document.querySelector('button[aria-label="Close"]')).not.toBeNull();
+});
+
 it("speaks Korean", async () => {
   applyLocale("ko");
   await render({ item: item("C:\\w\\sync-flow.html", "page"), hidden: false });
   expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
   expect(button("새로고침")).not.toBeNull();
   expect(button("닫기")).not.toBeNull();
+  expect(button("보기와 미디어 접기")).not.toBeNull();
 });
 
 it("shares one spot with the checker", async () => {

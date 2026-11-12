@@ -901,6 +901,10 @@ export function Sidebar({
         motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
       }
     }
+    // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
+    for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
+      motions.push(el.animate([{ translate: `${-railShift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
+    }
     // the list's raised badges would show through the view sliding off it
     const raised = shift < 0 && view instanceof HTMLElement ? view : null;
     if (raised) {
