@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, roomTeamBots, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
@@ -11,6 +11,7 @@ import { useStore } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
 import { RoomOwnName } from "./RoomOwnName";
+import { MyRoomBots, TeammateBots } from "./RoomTeamBots";
 
 export function TeamRoomPeople({ group, joined, closing = false, onClose, triggerRef }: {
   group?: TeamRoom;
@@ -139,6 +140,8 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
           ))}
           {people.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}
         </ul>
+        {group && roomId && <TeammateBots roomId={roomId} bots={roomTeamBots(group)} people={people} onProblem={() => setProblem("errors.request")} />}
+        {joined?.status === "joined" && joined.state?.teamBots && <MyRoomBots room={joined} onProblem={() => setProblem("errors.request")} />}
       </div>
       {confirm.mounted && confirm.value && (
         <ConfirmDialog

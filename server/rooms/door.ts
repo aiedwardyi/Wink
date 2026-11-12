@@ -9,7 +9,7 @@ import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
 import type { Message, Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
-import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
+import { committedRoomText, noticeText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, RoomError, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
   broadcastDoorReactions,
@@ -30,11 +30,14 @@ import {
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
 import { deletedRoomFiles } from "./files.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, teamBotSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
+import { addTeamBot, removePersonTeamBots, removeTeamBot, teamBot, teamBots } from "./team-bots.ts";
 
 const MINUTE = 60_000;
 const BODY_BYTES = 16 * 1024;
+/** A bot answer is up to 20k characters of any script. */
+const BOT_BODY_BYTES = 96 * 1024;
 const JOIN_BODY_BYTES = 1024;
 const SNAPSHOT_ENTRIES = 200;
 /** Under the 4 MiB reply cap older guests read, with room left for state. */
@@ -43,8 +46,8 @@ const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 /** Under the 256 KB frame cap guests read. */
 const REACTION_FRAME_BYTES = 192 * 1024;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|bots|bot-send|asks\/[\w-]{1,64}\/cancel|bots\/([\w-]{1,64})\/remove)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", bots: "POST", "bot-send": "POST", "remove-bot": "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
 const JOIN_STATUS = {
@@ -127,7 +130,9 @@ function doorGroup(roomId: string): HostedGroup | null {
 }
 
 /** The host's and the bots' names, which no guest may take. */
-const takenNames = (group: HostedGroup) => [door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? [])];
+const takenNames = (group: HostedGroup) => [
+  door!.deps.hostName(), ...group.memberIds.flatMap((id) => door!.deps.store.bot(id)?.name ?? []), ...teamBots(group.hosted.roomId).map((bot) => bot.name),
+];
 
 function sharedState(group: HostedGroup) {
   const people = roomPeople(group.hosted.roomId).map((person) => ({ id: person.id, name: person.name }));
@@ -135,8 +140,9 @@ function sharedState(group: HostedGroup) {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
   });
+  const teamBotList = teamBots(group.hosted.roomId).map(({ id, name, color, owner }) => ({ id, name, color, owner }));
   return {
-    roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots,
+    roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, teamBots: teamBotList,
     ...(group.picture ? { picture: group.picture } : {}),
     ...(group.notice ? { notice: group.notice } : {}),
   };
@@ -252,6 +258,74 @@ async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: stri
   const notice = { entryId, by, at: Date.now(), text: noticeText(entry.text) };
   door!.deps.store.patchGroup(call.group.id, { notice });
   send(res, 200, { notice });
+}
+
+/** A teammate adds one of their own bots; it answers only them, from their PC. */
+async function addBot(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.names.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  try {
+    const people = roomPeople(roomId).map((candidate) => candidate.name);
+    const bot = addTeamBot(roomId, person.id, call.fields.name, call.fields.color, [...takenNames(call.group), ...people]);
+    pushRoomState(roomId);
+    tellHost(roomId);
+    send(res, 200, { bot });
+  } catch (error) {
+    if (!(error instanceof RoomError)) throw error;
+    send(res, error.status, { error: error.message });
+  }
+}
+
+async function removeBot(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson, botId: string): Promise<void> {
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  if (!removeTeamBot(roomId, botId, person.id)) return notFound(res);
+  pushRoomState(roomId);
+  tellHost(roomId);
+  send(res, 200, { ok: true });
+}
+
+/** The host's Remove for any teammate's bot. */
+export function removeRoomTeamBot(roomId: string, botId: string): boolean {
+  const removed = removeTeamBot(roomId, botId);
+  if (removed) {
+    pushRoomState(roomId);
+    tellHost(roomId);
+  }
+  return removed;
+}
+
+async function botSend(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  const body = await readJson(req, BOT_BODY_BYTES);
+  if (!body.ok) return bodyError(res, body.status);
+  const group = doorGroup(roomId);
+  if (!group) return notFound(res);
+  const bearer = bearerOf(req);
+  const still = bearer ? guestByKey(bearer) : null;
+  if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
+  const fields = record(body.value);
+  const { botId, text, replyToId } = fields ?? {};
+  if (typeof botId !== "string" || typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
+  const bot = /^[\w-]{1,64}$/.test(botId) ? teamBot(roomId, botId) : null;
+  if (!bot || bot.owner !== person.id) return send(res, 403, { error: "forbidden" });
+  if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
+  let sendId: string | undefined;
+  try {
+    sendId = parseSendId(fields?.sendId === undefined ? undefined : String(fields.sendId));
+  } catch {
+    return send(res, 400, { error: "bad sendId" });
+  }
+  try {
+    const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === bot.id) : undefined;
+    const entry = earlier?.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : earlier ? null : teamBotSend(group, person, bot, text, replyToId, sendId);
+    if (!entry) return send(res, 409, { error: "sendId was used for another message" });
+    send(res, 200, { entry: doorEntry(entry) });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status === undefined) throw error;
+    send(res, status, { error: (error as Error).message });
+  }
 }
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
@@ -424,6 +498,7 @@ function tellHost(roomId: string): void {
 export function removeRoomPerson(roomId: string, personId: string, keep?: Duplex): boolean {
   const removed = removeGuest(roomId, personId, keep);
   if (removed) {
+    removePersonTeamBots(roomId, personId);
     pushRoomState(roomId);
     tellHost(roomId);
   }
@@ -438,7 +513,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host) : notFound(res);
   const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
   const route = file ?? ROUTE.exec(url.pathname);
-  const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
+  const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[3] ? "remove-bot" : route?.[2];
   if (!route || !action || (method !== (METHODS[action] ?? "POST") && !(file && method === "DELETE"))) return notFound(res);
   const guest = guestFor(req, res, relay.peer);
   if (!guest) return;
@@ -455,6 +530,9 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "react") return react(req, res, guest.roomId, guest.person);
   if (action === "notice") return pinNotice(req, res, guest.roomId, guest.person);
+  if (action === "bots") return addBot(req, res, guest.roomId, guest.person);
+  if (action === "remove-bot") return removeBot(req, res, guest.roomId, guest.person, route![3]!);
+  if (action === "bot-send") return botSend(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

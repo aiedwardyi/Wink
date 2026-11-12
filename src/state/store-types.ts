@@ -123,7 +123,7 @@ export interface Message {
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
   /** Team rooms: the room log entry this line mirrors, its author and files. */
-  author?: { kind: "host" | "person" | "bot"; id: string; name: string };
+  author?: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
   roomEntryId?: string;
   roomFiles?: Array<{ id: string; name: string; type: string; bytes: number; deleted?: boolean }>;
   /** emoji reactions; by = "user" or a member botId. */
@@ -187,7 +187,15 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[] } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[] } | { missing: true };
+}
+
+/** A teammate's own bot in a team room; it runs on its owner's PC. */
+export interface TeamBot {
+  id: string;
+  name: string;
+  color: string;
+  owner: string;
 }
 
 /** A person's first join to a shared group, once per seat. */

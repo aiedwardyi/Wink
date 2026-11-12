@@ -1,5 +1,5 @@
 // People-only team rooms: one this PC hosts (a hosted group with no bots), or one it joined elsewhere.
-import type { Group, Message, RoomJoin } from "@/state/store-types";
+import type { Group, Message, RoomJoin, TeamBot } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
 import type { MessageKey } from "./i18n";
@@ -29,6 +29,14 @@ export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boole
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
 
+const NO_BOTS: TeamBot[] = [];
+
+export const roomTeamBots = (group: Group) => (group.room && "people" in group.room ? group.room.teamBots ?? NO_BOTS : NO_BOTS);
+
+/** "Pete-Coder · Peter's" for a teammate's bot whose owner is still in the room. */
+export const ownerName = (author: RoomAuthor | undefined, people: readonly JoinedPerson[]): string | undefined =>
+  author?.kind === "bot" && author.owner ? people.find((person) => person.id === author.owner)?.name : undefined;
+
 const NO_JOINS: RoomJoin[] = [];
 
 // One empty list, so a memoized transcript keeps its props.
@@ -51,11 +59,13 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; notice?: { entryId: string; by: string; at: number; text?: string } } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; teamBots?: TeamBot[]; notice?: { entryId: string; by: string; at: number; text?: string } } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
   /** False for an older host: no emoji row and no notice pin. */
   canReact?: boolean;
+  /** This PC's own bots in the room: the host's id and the local bot's. */
+  myBots?: Array<{ id: string; botId: string; working?: boolean; error?: "busy" | "failed" }>;
 }
 
 export interface JoinedBot {
@@ -188,6 +198,18 @@ export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
 
 export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });
+}
+
+export function removeTeamBot(roomId: string, botId: string): Promise<{ ok: true }> {
+  return request(`${hostRoomBase(roomId)}/bots/${botId}`, { method: "DELETE" });
+}
+
+export function addMyBot(roomId: string, botId: string): Promise<unknown> {
+  return request(`${joinedRoomBase(roomId)}/bots`, { method: "POST", body: JSON.stringify({ botId }) });
+}
+
+export function removeMyBot(roomId: string, id: string): Promise<unknown> {
+  return request(`${joinedRoomBase(roomId)}/bots/${id}`, { method: "DELETE" });
 }
 
 export async function joinRoom(code: string): Promise<{ room: JoinedView } | Refused> {

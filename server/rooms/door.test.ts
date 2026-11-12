@@ -623,7 +623,7 @@ describe("snapshot and stream", () => {
     expect(res.body.entries[0]).toEqual({ seq: 6, id: expect.any(String), at: expect.any(Number), author: { kind: "host", id: "host", name: "Edward" }, text: "line 6" });
     expect(res.body.state).toEqual({
       version: expect.any(Number), roomName: "Team", instructions: "Be kind", host: "Edward",
-      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina" }], bots: [], myAsks: [],
+      me: { id: personId, name: "Mina" }, people: [{ id: personId, name: "Mina" }], bots: [], teamBots: [], myAsks: [],
     });
     for (let i = 1; i < 30; i += 1) expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).status).toBe(200);
     expect((await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key })).body).toEqual({ error: "rate-limited" });

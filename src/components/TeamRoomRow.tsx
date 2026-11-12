@@ -12,7 +12,7 @@ import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import type { PreviewImage } from "@/lib/media-viewer";
-import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomFile, type RoomLine } from "@/lib/team-rooms";
+import { isRoomPicture, ownerName, roomFileUrl, roomMessage, type JoinedPerson, type RoomFile, type RoomLine } from "@/lib/team-rooms";
 import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
@@ -303,7 +303,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
             const own = mine(line);
             const before = lines[index - 1];
             const named = !own && (!before || before.author.id !== line.author.id || before.author.kind !== line.author.kind);
-            const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
+            const owner = ownerName(line.author, people);
+            const authorName = owner ? t("teamRoom.botOwner", { name: line.author.name, owner }) : line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
             const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
             const quote = line.replyToId ? byId.get(line.replyToId) : undefined;
             const newDay = !before || new Date(before.at).toDateString() !== new Date(line.at).toDateString();

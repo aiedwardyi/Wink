@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { removeFromRoom, roomPeople, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
+import { removeFromRoom, roomPeople, roomTeamBots, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
+import { TeammateBots } from "./RoomTeamBots";
 
 export function GroupPeople({ group }: { group: Group }) {
   const { t } = useI18n();
@@ -91,6 +92,7 @@ export function GroupPeople({ group }: { group: Group }) {
           ))}
         </ul>
       )}
+      {group.hosted && <TeammateBots roomId={group.hosted.roomId} bots={roomTeamBots(group)} people={people} onProblem={() => setProblem("errors.request")} />}
       {confirm.mounted && confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}

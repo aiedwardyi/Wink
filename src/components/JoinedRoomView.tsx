@@ -29,7 +29,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
   const entries = room?.entries;
-  const bots = room?.state?.bots;
+  const hostBots = room?.state?.bots;
+  const teamBots = room?.state?.teamBots;
+  const bots = useMemo(() => (teamBots?.length ? [...(hostBots ?? []), ...teamBots] : hostBots), [hostBots, teamBots]);
+  const myBots = room?.myBots;
+  // Only this PC's own room bots answer this PC; the host's bots answer everyone.
+  const askable = useMemo(() => [...(hostBots ?? []), ...(teamBots ?? []).filter((bot) => myBots?.some((mine) => mine.id === bot.id))], [hostBots, teamBots, myBots]);
   const meId = room?.me.id;
   const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
   const people = room?.state?.people;
@@ -108,7 +113,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={room?.state?.bots} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
+        {status === null && myBots?.map((bot) => {
+          const botName = teamBots?.find((candidate) => candidate.id === bot.id)?.name ?? "";
+          const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
+          return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
+        })}
+        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
       </div>
       <Presence open={leaving}>
         {(closing) => (

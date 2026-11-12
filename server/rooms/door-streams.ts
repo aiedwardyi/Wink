@@ -32,6 +32,8 @@ export interface DoorState {
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
   bots: Array<{ id: string; name: string; color: string }>;
+  /** Teammates' own bots; only a host that takes them sends this. */
+  teamBots: Array<{ id: string; name: string; color: string; owner: string }>;
   myAsks: never[];
 }
 

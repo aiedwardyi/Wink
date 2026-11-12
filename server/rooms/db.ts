@@ -17,6 +17,8 @@ export interface RoomAuthor {
   kind: "host" | "person" | "bot";
   id: string;
   name: string;
+  /** The person whose own bot this is, on a teammate's PC. */
+  owner?: string;
 }
 
 export interface RoomRecord {
@@ -132,9 +134,9 @@ function open(): DatabaseSync {
     CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log
     BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
   `);
-  if (!(db.prepare("PRAGMA table_info(log)").all() as Array<{ name: string }>).some((column) => column.name === "files")) {
-    db.exec("ALTER TABLE log ADD COLUMN files TEXT");
-  }
+  const columns = (db.prepare("PRAGMA table_info(log)").all() as Array<{ name: string }>).map((column) => column.name);
+  if (!columns.includes("files")) db.exec("ALTER TABLE log ADD COLUMN files TEXT");
+  if (!columns.includes("author_owner")) db.exec("ALTER TABLE log ADD COLUMN author_owner TEXT");
   return db;
 }
 
@@ -205,16 +207,16 @@ export function addPerson(roomId: string, name: unknown, level: RoomLevel, taken
 
 type LogRow = {
   seq: number; id: string; at: number; author_kind: RoomAuthor["kind"]; author_id: string; author_name: string; text: string;
-  reply_to_id: string | null; ask_id: string | null; grant_kind: RoomGrant | null; clean: number | null; files: string | null;
+  reply_to_id: string | null; ask_id: string | null; grant_kind: RoomGrant | null; clean: number | null; files: string | null; author_owner: string | null;
 };
 
-const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files";
+const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner";
 
 const rowToEntry = (row: LogRow): RoomEntry => ({
   seq: row.seq,
   id: row.id,
   at: row.at,
-  author: { kind: row.author_kind, id: row.author_id, name: row.author_name },
+  author: { kind: row.author_kind, id: row.author_id, name: row.author_name, ...(row.author_owner ? { owner: row.author_owner } : {}) },
   text: row.text,
   ...(row.reply_to_id ? { replyToId: row.reply_to_id } : {}),
   ...(row.ask_id ? { askId: row.ask_id } : {}),
@@ -283,13 +285,13 @@ export function appendRoomEntry(roomId: string, draft: RoomEntryDraft, at = Date
   if (!roomById(roomId)) throw new RoomError(404, "no such room");
   if (draft.replyToId !== undefined && !roomEntry(roomId, draft.replyToId)) throw new RoomError(404, "no such message in this room");
   const row = db().prepare(`
-    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files)
-    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files, author_owner)
+    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${LOG_COLUMNS}
   `).get(
     roomId, roomId, newId(), at, draft.author.kind, draft.author.id, draft.author.name, text,
     draft.replyToId ?? null, draft.askId ?? null, draft.grant ?? null, draft.clean === undefined ? null : Number(draft.clean),
-    draft.files?.length ? JSON.stringify(draft.files) : null,
+    draft.files?.length ? JSON.stringify(draft.files) : null, draft.author.owner ?? null,
   ) as LogRow;
   return rowToEntry(row);
 }

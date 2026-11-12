@@ -1,14 +1,14 @@
 // The host's People actions in a hosted team room: Invite, which hands back
 // the room's one code, and Remove, which also keeps that PC from rejoining with
-// it. Local only (/api/rooms/), owner only.
+// it, or takes out a teammate's bot. Local only (/api/rooms/), owner only.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { json } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
-import { removeRoomPerson } from "./door.ts";
+import { removeRoomPerson, removeRoomTeamBot } from "./door.ts";
 import { barRoomPerson, roomCode, shortRoomCode } from "./invites.ts";
 
-const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64}))$/;
+const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64})|bots\/([\w-]{1,64}))$/;
 
 export interface PeopleRouteDeps {
   store: Pick<Store, "groups">;
@@ -24,11 +24,14 @@ export interface PeopleRouteDeps {
 export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, method: string, path: string, deps: PeopleRouteDeps): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
-  const [, roomId, personId] = route as unknown as [string, string, string | undefined];
+  const [, roomId, personId, botId] = route as unknown as [string, string, string | undefined, string | undefined];
   const served = deps.store.groups.some((group) => group.hosted?.roomId === roomId);
-  if (!served || method !== (personId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
+  if (!served || method !== (personId || botId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
   else if (deps.botCaller) json(res, 403, { error: "forbidden" });
-  else if (personId) {
+  else if (botId) {
+    if (removeRoomTeamBot(roomId, botId)) json(res, 200, { ok: true });
+    else json(res, 404, { error: "not found" });
+  } else if (personId) {
     if (removeRoomPerson(roomId, personId)) {
       barRoomPerson(roomId, personId);
       json(res, 200, { ok: true });
