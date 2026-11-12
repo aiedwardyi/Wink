@@ -6,6 +6,9 @@ import { useI18n } from "@/lib/i18n";
 import { typedRoomName } from "@/lib/team-rooms";
 import { api, useStore } from "@/state/store";
 
+import { InitialsAvatar, profileInitials } from "./Avatar";
+import { DETAILS_ROW } from "./BotDetailsRows";
+
 export function RoomOwnName({ name }: { name: string }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -30,8 +33,9 @@ export function RoomOwnName({ name }: { name: string }) {
     }
   };
   return (
-    <li className="rounded-lg px-2 py-1.5">
-      <div className="flex min-w-0 items-center gap-2">
+    <li className={`${DETAILS_ROW} py-2`}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <InitialsAvatar initials={profileInitials({ name })} size={24} tone="bg-control" />
         {editing ? (
           <>
             <input

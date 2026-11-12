@@ -1,12 +1,12 @@
 // The sidebar's way in: Join with code (one code box), plus each room's own menu items.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Files, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
+import { Copy, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
-import { showMedia } from "@/lib/show-pane";
+import { openRoomDetails } from "@/lib/room-details";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -14,14 +14,8 @@ import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
-import { TeamRoomPeople } from "./TeamRoomPeople";
 
-export function TeamRoomFilesMenu({ threadId }: { threadId: string }) {
-  const { t } = useI18n();
-  return <button type="button" onClick={() => showMedia(threadId)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>;
-}
-
-type Sheet = "join" | "rejoin" | "people" | "leave" | "remove" | null;
+type Sheet = "join" | "rejoin" | "leave" | "remove" | null;
 
 let sheet: Sheet = null;
 let roomTarget: { id: string; name: string } | null = null;
@@ -104,7 +98,7 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
   };
   return (
     <>
-      <button type="button" onClick={() => pick("people")} className={ITEM}>
+      <button type="button" onClick={() => { dispatch({ type: "select", id: group.id }); openRoomDetails(dispatch); onClose(); }} className={ITEM}>
         <UsersRound size={16} className="text-ink-secondary" />
         {t("teamRoom.people")}
       </button>
@@ -292,10 +286,8 @@ export function TeamRoomDialogs() {
   const [removeFailed, setRemoveFailed] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveFailed, setLeaveFailed] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const open = useSyncExternalStore(watch, () => sheet);
   const close = () => openSheet(null);
-  const group = state.groups.find((each) => each.id === roomTarget?.id);
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
   const leave = async () => {
     if (!joinedId || leaving) return;
@@ -333,9 +325,6 @@ export function TeamRoomDialogs() {
       <Presence open={open === "join"}>{(closing) => <JoinSheet closing={closing} onClose={close} />}</Presence>
       <Presence open={open === "rejoin" && Boolean(joinedId)}>
         {(closing) => <JoinSheet closing={closing} onClose={close} rejoin={{ roomId: joinedId!, name: roomTarget?.name ?? "" }} />}
-      </Presence>
-      <Presence open={open === "people" && isTeamRoom(group)}>
-        {(closing) => isTeamRoom(group) && createPortal(<TeamRoomPeople group={group} closing={closing} onClose={close} triggerRef={triggerRef} />, document.body)}
       </Presence>
       <Presence open={open === "leave" && Boolean(joinedId)}>
         {(closing) => <ConfirmDialog

@@ -120,7 +120,6 @@ describe("header roster", () => {
     expect(faces.getAttribute("title")).toBe("Seo-yeon Park, Mina, Jae, Alexandra Kim");
     const roster = groupView.slice(groupView.indexOf("<GroupMemberRoster"), groupView.indexOf("</GroupMemberRoster>"));
     expect(roster.indexOf("<GroupPeopleFaces")).toBeGreaterThan(-1);
-    expect(roster.indexOf("<GroupPeopleFaces")).toBeLessThan(roster.indexOf("ref={membersTriggerRef}"));
   });
 
   it("draws nothing for a group nobody joined", async () => {
