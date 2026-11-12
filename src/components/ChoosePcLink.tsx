@@ -2,12 +2,13 @@ import { Monitor } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import { isPhone } from "@/lib/phone-swipe";
 
 export function ChoosePcLink({ iconOnly = false }: { iconOnly?: boolean }) {
   const { t } = useI18n();
   const host = window.location.hostname;
   const pc = /^[a-z2-7]{16}\.(.+)$/.exec(host);
-  if (window.ogb || host.endsWith(".ts.net") || !pc) return null;
+  if (window.ogb || !isPhone() || host.endsWith(".ts.net") || !pc) return null;
   const label = t("chrome.choosePc");
   return (
     <a

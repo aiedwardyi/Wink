@@ -169,10 +169,13 @@ describe("DeviceSwitcher", () => {
     expect(host.textContent).toBe("");
   });
 
-  it("is hidden off a phone", async () => {
+  it("jumps in place from a desktop browser", async () => {
     setPhone(false);
-    const { host } = await renderView([device("home", { current: true }), device("work")]);
-    expect(host.textContent).toBe("");
+    const { host, navigate } = await renderView([device("home", { current: true }), device("work")]);
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    expect(host.querySelector("ul")?.className).toContain("absolute");
+    await act(async () => click(document.querySelector("[data-device-id=work]")!));
+    expect(navigate).toHaveBeenCalledWith("https://work.tail1234.ts.net/");
   });
 
   it("leaves the sidebar to the phone header", async () => {

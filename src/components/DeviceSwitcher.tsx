@@ -74,7 +74,7 @@ export function useDevices(enabled: boolean, watching = false) {
 
 type Navigate = (url: string) => void;
 
-/** Phones jump in place from the bot list, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
+/** Browsers jump in place, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
 export function DeviceSwitcher({
   navigate = leaveFor,
   labeled = false,
@@ -92,7 +92,7 @@ export function DeviceSwitcher({
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const deviceWindow = window.ogb?.deviceWindow;
-  const visible = labeled || Boolean(deviceWindow);
+  const visible = labeled || Boolean(deviceWindow) || (!window.ogb && !isPhone());
   const [open, setOpen] = useState(false);
   const [devices, reload] = useDevices(visible, open);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
