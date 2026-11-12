@@ -10,6 +10,7 @@ import { closeAsksDb, configureRoomAsks, roomAsks, type HostedGroup } from "./as
 import { closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson, removeRoomTeamBot } from "./door.ts";
 import { closeInvitesDb, createInvite } from "./invites.ts";
+import { createPeopleOnlyRoom, peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
@@ -130,6 +131,14 @@ describe("teammates' own bots", () => {
     const peter = await join("Peter");
     for (let n = 1; n <= 5; n++) expect((await call(room("bots"), "POST", peter.key, { name: `Bot ${n}` })).status).toBe(200);
     expect((await call(room("bots"), "POST", peter.key, { name: "Bot 6" })).body.error).toBe("too many bots");
+  });
+
+  it("leaves a people-only room people-only", async () => {
+    group = store.createGroup("Crew", [], false, undefined, undefined, { roomId: createPeopleOnlyRoom("Crew").id }) as HostedGroup;
+    const peter = await join("Peter");
+    expect((await call(room("bots"), "POST", peter.key, { name: "Pete-Coder" })).status).toBe(200);
+    expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
+    expect(store.group(group.id)?.memberIds).toEqual([]);
   });
 
   it("posts a bot answer only for its owner, as a bot line with no ask", async () => {

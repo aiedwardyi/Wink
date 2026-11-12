@@ -25,7 +25,7 @@ function reply(res: ServerResponse, status: number, body: unknown, close = false
 }
 
 /** Upload, download or preview for one room member: "host" or a person id. `match` is FILE_PATH's. */
-export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, res: ServerResponse, url: URL, roomId: string, owner: string, still?: () => boolean): Promise<void> {
+export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, res: ServerResponse, url: URL, roomId: string, owner: string, still?: () => boolean, media = true): Promise<void> {
   const action = fileAction(match);
   if (action !== "upload") {
     try {
@@ -34,7 +34,7 @@ export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, re
     return;
   }
   try {
-    const file = await saveRoomFile(req, roomId, { owner, name: url.searchParams.get("name"), uploadId: url.searchParams.get("uploadId"), still });
+    const file = await saveRoomFile(req, roomId, { owner, name: url.searchParams.get("name"), uploadId: url.searchParams.get("uploadId"), still, media });
     reply(res, 200, { file });
   } catch (error) {
     const status = (error as { status?: number }).status;

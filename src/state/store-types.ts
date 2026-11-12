@@ -187,7 +187,7 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[] } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[]; teamBots?: TeamBot[]; removed?: Array<{ id: string; name: string }>; noticeText?: string } | { missing: true };
 }
 
 /** A teammate's own bot in a team room; it runs on its owner's PC. */

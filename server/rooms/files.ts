@@ -109,7 +109,8 @@ function sniffMedia(head: Buffer): string | null {
   const latin = head.toString("latin1");
   if (latin.startsWith("ftyp", 4)) return STILL_BRAND.test(latin.slice(8, 12)) ? null : FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
   if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
-  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && ((head[1] ?? 0) & 0x06) !== 0)) return "audio/mpeg";
+  // Layer II or III only: a UTF-16 text file opens FF FE, which reads as a layer I frame.
+  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && [0x02, 0x04].includes((head[1] ?? 0) & 0x06))) return "audio/mpeg";
   if (latin.startsWith("RIFF") && latin.startsWith("WAVE", 8)) return "audio/wav";
   return null;
 }
@@ -128,6 +129,7 @@ function sniff(head: Buffer): { type: string; max: number } {
 }
 
 const BINARY_TEXT = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/;
+const REFUSED = "only pictures, video, audio, PDF, zip, Office and text files can be shared";
 
 /** Display name only: no folders, no control or reserved characters. */
 function cleanName(raw: string | null): string {
@@ -200,12 +202,14 @@ export interface Upload {
   uploadId: string | null;
   /** Rechecked once the bytes are on disk, before the row: the uploader may have been removed meanwhile. */
   still?: () => boolean;
+  /** False for a teammate build that fails a whole room on video or audio entries. */
+  media?: boolean;
 }
 
 type Received = { ok: true; bytes: number; sha256: string; type: string } | { ok: false; status: number; error: string };
 
 /** Streams the body into `file`, cut at the first byte past a limit. Never buffered whole. */
-function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }): Promise<Received> {
+function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
   return new Promise((resolve) => {
     const hash = createHash("sha256");
     const text = new TextDecoder("utf-8", { fatal: true });
@@ -236,9 +240,9 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       hash.update(chunk);
       if (kind!.type === "text/plain") {
         try {
-          if (BINARY_TEXT.test(text.decode(chunk, { stream: true }))) return fail(415, "this kind of file can't be shared");
+          if (BINARY_TEXT.test(text.decode(chunk, { stream: true }))) return fail(415, REFUSED);
         } catch {
-          return fail(415, "this kind of file can't be shared");
+          return fail(415, REFUSED);
         }
       }
       req.pause();
@@ -251,6 +255,7 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       kind = sniff(Buffer.concat(head!));
       const chunks = head!;
       head = null;
+      if (!media && /^(video|audio)\//.test(kind.type)) return fail(415, REFUSED);
       for (const chunk of chunks) write(chunk);
     };
     req.on("data", (chunk: Buffer) => {
@@ -276,9 +281,9 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       if (done) return;
       if (kind!.type === "text/plain") {
         try {
-          if (BINARY_TEXT.test(text.decode())) return fail(415, "this kind of file can't be shared");
+          if (BINARY_TEXT.test(text.decode())) return fail(415, REFUSED);
         } catch {
-          return fail(415, "this kind of file can't be shared");
+          return fail(415, REFUSED);
         }
       }
       void writes.then(() => finish({ ok: true, bytes: size, sha256: hash.digest("hex"), type: kind!.type }), () => fail(500, "couldn't save the file"));
@@ -317,7 +322,7 @@ async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): P
   let received: Received;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    received = await receive(req, temp, roomId, base, counted);
+    received = await receive(req, temp, roomId, base, counted, upload.media !== false);
   } catch {
     received = { ok: false, status: 500, error: "couldn't save the file" };
   } finally {
@@ -334,7 +339,10 @@ async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): P
     if (upload.still && !upload.still()) throw statusError(401, "unauthorized");
     await rename(temp, blob);
     await syncDir(dir);
-    const file: FileRow = { id, owner: upload.owner, name: cleanName(upload.name), type: received.type, bytes: received.bytes, sha256: received.sha256 };
+    const name = cleanName(upload.name);
+    // Audio-only mp4s often carry the isom brand; the name only picks audio over video, never whether a file is taken.
+    const type = received.type === "video/mp4" && /\.m4a$/i.test(name) ? "audio/mp4" : received.type;
+    const file: FileRow = { id, owner: upload.owner, name, type, bytes: received.bytes, sha256: received.sha256 };
     const kept = withDb((db) => {
       const room = db.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM room_files WHERE room_id = ?").get(roomId) as { bytes: number };
       if (room.bytes + file.bytes > ROOM_DISK_BYTES && !db.prepare("SELECT 1 FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?").get(roomId, file.owner, upload.uploadId)) {

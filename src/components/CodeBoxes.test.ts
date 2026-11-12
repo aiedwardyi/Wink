@@ -97,6 +97,18 @@ describe("6-box code input", () => {
     expect(document.activeElement).toBe(boxes[1]);
   });
 
+  it("clears only the box Backspace is on in a full code, and finishes once it is typed again", async () => {
+    const { boxes, onDone } = await mount();
+    for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);
+    onDone.mockClear();
+    await key(boxes[2]!, "Backspace");
+    expect(boxes.map((box) => box.value)).toEqual(["G", "H", "", "K", "L", "M"]);
+    expect(document.activeElement).toBe(boxes[2]);
+    await type(boxes[2]!, "X");
+    expect(value(boxes)).toBe("GHXKLM");
+    expect(onDone).toHaveBeenCalledExactlyOnceWith("GHXKLM");
+  });
+
   it("finishes once the last box is typed", async () => {
     const { boxes, onDone } = await mount();
     for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);

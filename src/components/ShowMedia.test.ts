@@ -197,7 +197,7 @@ it("says so when there are no files yet, in English and Korean", async () => {
   applyLocale("ko");
   await render({ threadId: "t9", roomId: "r1", messages: [] });
   await settle();
-  expect(host.querySelector("[data-show-media]")?.textContent).toBe("아직 파일이 없어요");
+  expect(host.querySelector(".show-media-empty")?.textContent).toBe("아직 파일이 없어요");
   expect(tab("미디어")).toBeDefined();
 });
 

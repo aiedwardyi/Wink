@@ -240,6 +240,16 @@ describe("join", () => {
     expect(seen.every((row) => row.headers.cookie === undefined)).toBe(true);
   });
 
+  it("never joins this PC's own room: it names the hosted group and sends nothing", async () => {
+    route = quietDoor;
+    const own = vi.fn((code: string) => (code.trim() === CODE ? "g-host" : null));
+    expect(await guest({ ownRoom: own }).join(`  ${CODE}
+`)).toEqual({ ok: false, status: 409, error: "own-room", groupId: "g-host" });
+    expect(await joinedRoute("POST", "/api/joined/join", client!, async () => ({ code: CODE }))).toEqual({ status: 409, body: { error: "own-room", groupId: "g-host" } });
+    expect(seen).toEqual([]);
+    expect(joinedRoom("r1")).toBeNull();
+  });
+
   it("follows no redirect and stores nothing on a refusal", async () => {
     route = (_req, res) => {
       res.writeHead(307, { location: `https://${HOST}/room/v1/join2` });
@@ -273,7 +283,7 @@ describe("sync", () => {
     await until(() => seen.some((row) => row.url.includes("/stream")));
     expect(seen.some((row) => row.url === "/room/v1/join")).toBe(false);
     expect(seen.filter((row) => row.url.includes("/snapshot"))).toHaveLength(cached ? 0 : 1);
-    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC });
+    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC, "x-orbit-room-files": "1", "x-orbit-room-media": "1" });
   });
 
   it("keeps the live stream when started after joining", async () => {
@@ -519,6 +529,27 @@ describe("deleted files", () => {
     count = undefined;
     await until(() => asked.length >= 4);
     expect(asked.slice(0, 4)).toEqual(["0", "3", "3", "3"]);
+  });
+
+  it("holds the count while a deleted file's copy can't be dropped, so the next stream sends it again", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    const copy = join(DATA_DIR, "joined-files", "r1", "a".repeat(24));
+    mkdirSync(join(copy, "held"), { recursive: true });
+    const asked: string[] = [];
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (!req.url?.includes("/stream")) return;
+      asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["a".repeat(24)], count: 3 })}\n\n`);
+      setTimeout(() => res.destroy(), 50);
+    };
+    guest({ timing: { retryMs: 10 } }).start();
+    await until(() => asked.length >= 2);
+    expect(asked.slice(0, 2)).toEqual(["0", "0"]);
+    rmSync(copy, { recursive: true });
+    await until(() => asked.includes("3"));
+    expect(existsSync(copy)).toBe(false);
   });
 });
 

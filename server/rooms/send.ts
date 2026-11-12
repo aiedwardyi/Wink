@@ -33,14 +33,13 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   const roomBots = teamBots(roomId);
   const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
   const nonWaking = [hostName(), ...people.map((candidate) => candidate.name), ...roomBots.map((roomBot) => roomBot.name)];
-  const route = (soloWakes = true) => roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, soloWakes && !quotesRoomBot);
-  let bot = !person || peopleOnlyRoom(roomId) ? null : route();
+  let bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot);
   if (person) {
     let refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
-    const solo = Boolean(refusal && bot && !route(false));
-    // The only bot takes an untagged line after its current turn, like a 1:1 queue.
+    const solo = Boolean(refusal && bot && bots.length === 1);
+    // The only bot takes a line after its current turn, tagged or not, like a 1:1 queue.
     if (solo) refusal = sendRefusal(roomId, person.id, "work", true);
-    // An untagged line to the only bot is still chat when that bot can't take it.
+    // A line to the only bot is still chat when that bot can't take it.
     if (refusal && solo) {
       bot = null;
       refusal = sendRefusal(roomId, person.id, null);

@@ -152,6 +152,14 @@ describe("task asks", () => {
       expect(addQuestionAsk(Array.from({ length: 40 }, (_, index) => ask(index + 1)), "One more?", [], NOW)).toBeNull();
     });
 
+    it("caps open questions apart, so they never block the bot's own asks", () => {
+      const questions = Array.from({ length: 10 }, (_, index) => question(index + 1));
+      expect(addQuestionAsk(questions, "One more?", [], NOW)?.map((item) => item.id)).toEqual([...Array.from({ length: 9 }, (_, index) => `A${index + 2}`), "A11"]);
+      const full = [...questions, ...Array.from({ length: 30 }, (_, index) => ask(index + 11))];
+      const { asks } = saved(mergeTaskAsks(full, [{ ask: "One more", status: "open" }], NOW));
+      expect(asks.map((item) => item.id)).toEqual([...Array.from({ length: 39 }, (_, index) => `A${index + 2}`), "A41"]);
+    });
+
     it("lets the bot close a question with the usual asks update", () => {
       const { asks } = saved(mergeTaskAsks([question(1)], [{ id: "A1", status: "declined" }], NOW));
       expect(asks).toEqual([question(1, { status: "declined", changedAt: NOW })]);
