@@ -5,7 +5,19 @@ export const SHORT_CODE_LENGTH = 6;
 const KEEP = /[^2-9A-HJ-NP-Z]/g;
 const PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
 
-export const shortCodeChars = (text: string) => text.toUpperCase().replace(KEEP, "");
+// With Korean input on, letters arrive as Hangul; these are the 2-set keys for conjoining initials, vowels and finals.
+const HANGUL_KEYS: Array<[number, string[]]> = [
+  [0x1100, "R R S E E F A Q Q T T D W W C Z X V G".split(" ")],
+  [0x1161, "K O I O J P U P H HK HO HL Y N NJ NP NL B M ML L".split(" ")],
+  [0x11a8, "R R RT S SW SG E F FR FA FQ FT FX FV FG A Q QT T T D W C Z X V G".split(" ")],
+];
+const keyOf = (ch: string) => {
+  const point = ch.codePointAt(0)!;
+  for (const [start, keys] of HANGUL_KEYS) if (point >= start && point < start + keys.length) return keys[point - start];
+  return ch;
+};
+
+export const shortCodeChars = (text: string) => [...text.normalize("NFKD")].map(keyOf).join("").toUpperCase().replace(KEEP, "");
 
 export const BOX = "size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold text-ink";
 
