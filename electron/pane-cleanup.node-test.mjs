@@ -2051,6 +2051,41 @@ test("a link walk that fails partway cannot clear a later row", async (t) => {
   fs.unlinkSync(link);
 });
 
+test("a gone link cannot hide a sibling that reaches the target", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  const elsewhere = path.join(f.home, "elsewhere");
+  fs.mkdirSync(elsewhere);
+  const alias = path.join(f.home, "shared", "alias");
+  fs.mkdirSync(path.dirname(alias));
+  fs.symlinkSync(elsewhere, alias, kind);
+  const [first, second] = ["a-host", "b-host"].map((name) => path.join(f.worktreeRoot, name, "link"));
+  for (const link of [first, second]) {
+    fs.mkdirSync(path.dirname(link));
+    fs.symlinkSync(alias, link, kind);
+  }
+  await eligible(f);
+  let loads = 0;
+  const cleanup = createPaneCleanup({ ...f.options, pinned: () => {
+    if (++loads === 2) {
+      fs.unlinkSync(first);
+      fs.unlinkSync(alias);
+      fs.symlinkSync(target, alias, kind);
+    }
+    return [];
+  } });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.ok(loads >= 2);
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["linked"]);
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(second);
+  fs.unlinkSync(alias);
+});
+
 test("a fresh reflog keeps an otherwise idle worktree", async (t) => {
   const f = fixture(t);
   const { target } = repo(f);

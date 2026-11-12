@@ -533,7 +533,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const pending = [...groups.values()];
     for (let start = 0; start < pending.length; start += 64) await Promise.all(pending.slice(start, start + 64).map(async (group) => {
       let real = null;
-      try { real = canonical(await fsp.realpath(group[0].file)); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      try { real = canonical(await fsp.realpath(group[0].destination)); } catch (error) { if (error.code !== "ENOENT") throw error; }
       for (const link of group) link.real = real;
     }));
   };
@@ -878,7 +878,7 @@ if (!isMainThread && workerData?.paneCleanup) {
     asks.set(id, resolve);
     parentPort.postMessage({ type: "panes", id });
   });
-  const cleanup = createPaneCleanup({ ...options, pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: String(error) }) });
+  const cleanup = createPaneCleanup({ ...options, pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
   parentPort.on("message", async ({ type, id, session, keep, panes: open }) => {
     if (type === "panes") {
       asks.get(id)?.(open);
