@@ -74,6 +74,8 @@ export interface JoinedView {
   canReact?: boolean;
   /** This PC's own bots in the room: the host's id and the local bot's. */
   myBots?: Array<{ id: string; botId: string; working?: boolean; error?: "busy" | "failed" }>;
+  /** The host answered Leave with 404: the room was deleted. */
+  gone?: boolean;
 }
 
 export interface JoinedBot {

@@ -1858,3 +1858,92 @@ describe("AUDIT4B-VOICE", () => {
     expect(call.state().notice).toBeUndefined();
   });
 });
+
+describe("AUDIT5-FIX", () => {
+  it.each([
+    ["Hi, what can I do for you?", "Okay, tell Nova to delete the old build folders."],
+    ["How can I help?", "Alright, push the release branch."],
+    ["Anything else?", "Sure, wipe the staging database and reseed it."],
+    ["무엇을 도와드릴까요?", "배포 해줘."],
+    ["무엇을 도와드릴까요?", "네 스테이징 디비 지워줘."],
+    ["Anything else?", "Yes."],
+    ["무엇을 도와드릴까요?", "네."],
+    ["Want me to restart it?", "Yes, and delete the old logs."],
+  ])("after %s, %s is not a yes to the order", async (said, heard) => {
+    const { call, engine, posts } = await started();
+    engine().events.said(said);
+    engine().events.turnDone();
+    engine().events.heard(heard);
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Delete the old build folders." } }]);
+    expect(call.state().pending?.order).toBe("Delete the old build folders.");
+    await flush();
+    expect(messagesOf(posts)).toEqual([]);
+  });
+
+  it.each([
+    ["It is green. Want me to restart it?", "Yes, please."],
+    ["PDF로 변환할까요?", "네, 보내주세요."],
+    ["파일 삭제해줄까요?", "네."],
+    ["Should I restart it?", "Okay, do it."],
+  ])("after the offer %s, %s confirms it", async (said, heard) => {
+    const { call, engine, posts } = await started();
+    engine().events.said(said);
+    engine().events.turnDone();
+    engine().events.heard(heard);
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Restart it." } }]);
+    expect(call.state().pending).toBeUndefined();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Restart it."]);
+  });
+
+  it.each([true, false])("a card readout cut by echo is read again, and the next line is not its answer (audio started %s)", async (started_) => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine, posts } = await started({}, audio);
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    engine().events.answering();
+    if (started_) {
+      audio.onStart();
+      audio.playing = true;
+      engine().events.said("I have a question: restart");
+    }
+    engine().events.interrupted();
+    audio.playing = false;
+    audio.onIdle();
+    expect(notices(engine())).toHaveLength(2);
+    engine().events.heard("Yeah, go on.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts)).toEqual([]);
+  });
+
+  it("an offer that expires after its tool call is gone still reads as not declined", async () => {
+    vi.useFakeTimers();
+    const { engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Search the logs." } }]);
+    engine().events.toolCancel(["t1"]);
+    vi.advanceTimersByTime(45_000);
+    vi.useRealTimers();
+    expect(engine().texts).toContain("[Wink] Not sent: Search the logs. (expired: no answer came in time. They did not decline.)");
+  });
+
+  it("a card read out in full stays armed when echo trips the tail", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine, posts } = await started({}, audio);
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    engine().events.answering();
+    audio.onStart();
+    audio.playing = true;
+    engine().events.said("Nova asks: restart at 8:15 PM? Yes or no?");
+    engine().events.turnDone();
+    engine().events.interrupted();
+    audio.playing = false;
+    audio.onIdle();
+    expect(notices(engine())).toHaveLength(1);
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+  });
+});

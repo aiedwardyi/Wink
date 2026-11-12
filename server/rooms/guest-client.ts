@@ -56,6 +56,7 @@ const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
 const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
+const MAX_VIEW_ENTRIES = 10_000;
 const UPLOAD_MS = 10 * 60_000;
 /** About 1 Mbps, the slowest uplink an upload may average before it is cut. */
 const UPLOAD_BYTES_PER_MS = 125;
@@ -123,6 +124,8 @@ export interface JoinedView {
   canReact: boolean;
   /** This PC's own bots the room still lists, by the host's id. */
   myBots: Array<{ id: string; botId: string; working?: boolean; error?: string }>;
+  /** The host answered Leave with 404: the room was deleted. */
+  gone?: true;
 }
 
 /** `groupId` is the room this PC hosts, when its own code was entered. */
@@ -187,6 +190,7 @@ export class GuestClient {
   private readonly alerts = new Map<string, RoomAlert>();
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
+  private readonly gone = new Set<string>();
   private readonly changing = new Set<string>();
   private joining = 0;
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
@@ -215,11 +219,34 @@ export class GuestClient {
     return joinedRooms().map((room) => this.view(room));
   }
 
-  room(roomId: string): (JoinedView & { entries: JoinedEntry[]; noticeEntry?: JoinedEntry }) | null {
+  /** Held rows only, contiguous from the oldest held to the newest, so `hasMore` is the oldest seq past 1. */
+  room(roomId: string, limit = VIEW_ENTRIES): (JoinedView & { entries: JoinedEntry[]; hasMore: boolean; noticeEntry?: JoinedEntry }) | null {
     const room = joinedRoom(roomId);
     if (!room) return null;
     const notice = room.state?.notice && joinedEntry(roomId, room.state.notice.entryId);
-    return { ...this.view(room), entries: joinedEntries(roomId, VIEW_ENTRIES), ...(notice ? { noticeEntry: notice } : {}) };
+    const entries = joinedEntries(roomId, Math.min(Math.max(1, Math.trunc(limit) || VIEW_ENTRIES), MAX_VIEW_ENTRIES));
+    return { ...this.view(room), entries, hasMore: entries.length < MAX_VIEW_ENTRIES && (entries[0]?.seq ?? 1) > 1, ...(notice ? { noticeEntry: notice } : {}) };
+  }
+
+  /** Local rows first; else the host's page before `before`. False when nothing older can be had. */
+  async older(roomId: string, before: unknown): Promise<GuestResult<boolean>> {
+    if (!joinedRoom(roomId)) return failed(404, "not found");
+    if (typeof before !== "number" || !Number.isSafeInteger(before) || before < 1) return failed(400, "bad request");
+    if (joinedEntries(roomId, 1, before).length) return { ok: true, value: true };
+    const creds = joinedKey(roomId);
+    if (before === 1 || !creds) return { ok: true, value: false };
+    const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot?with=bots&before=${before}`, creds.key);
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return reply;
+    }
+    const page = snapshotSchema.safeParse(reply.value);
+    if (!page.success) return unavailable();
+    // An older host ignores `before` and sends its newest page.
+    const older = page.data.entries.filter((entry) => entry.seq < before);
+    if (joinedKey(roomId)?.key !== creds.key) return { ok: true, value: false };
+    addJoinedEntries(roomId, older);
+    return { ok: true, value: older.length > 0 };
   }
 
   /** Toggles this PC's mark on a line through the door. */
@@ -308,6 +335,7 @@ export class GuestClient {
     saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
+    this.gone.delete(roomId);
     this.follow(roomId);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
@@ -356,9 +384,12 @@ export class GuestClient {
     if (!creds) return { ok: true, value: this.view(room) };
     this.leaving.add(creds.key);
     const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/leave`, creds.key, "{}");
-    if (reply.ok || reply.status === 401) this.end(roomId, creds.key, "left");
+    // A deleted room or a host that never answers would otherwise keep a dead room here for good.
+    const done = reply.ok || [401, 404, 503].includes(reply.status);
+    if (done) this.end(roomId, creds.key, "left");
+    if (!reply.ok && reply.status === 404) this.gone.add(roomId);
     this.leaving.delete(creds.key);
-    if (!reply.ok && reply.status !== 401) return reply;
+    if (!done) return reply;
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
@@ -582,7 +613,7 @@ export class GuestClient {
     const myBots = room.status === "joined" && listed.size
       ? myRoomBots(room.roomId).filter((bot) => listed.has(bot.id)).map(({ id, botId }) => ({ id, botId, ...this.deps.botTurn?.(room.roomId, id) }))
       : [];
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {

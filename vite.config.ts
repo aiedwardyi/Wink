@@ -2,9 +2,10 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { pdfjsData } from "./scripts/pdfjs-data.mjs";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), pdfjsData()],
   build: {
     // Electron 43 ships Chromium 140; skip legacy transforms and the
     // modulepreload polyfill the packaged window does not need.

@@ -10,10 +10,10 @@ import { closeShow, showItem, useCheckThread, useShowItem, type ShowItem } from 
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPane } from "./ShowPane";
 
-const pdf = vi.hoisted(() => ({ pages: [] as number[] }));
+const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown }));
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: {},
-  getDocument: () => ({
+  getDocument: (params: unknown) => (pdf.params = params, {
     promise: Promise.resolve({
       numPages: 8,
       getPage: async (n: number) => {
@@ -65,6 +65,12 @@ it("pages a PDF one page at a time", async () => {
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("2 / 8"));
   expect(host.querySelector("[data-show-pager]")?.textContent).toContain("2 / 8");
   expect(pdf.pages).toEqual([1, 2]);
+});
+
+it("loads a PDF with the shipped CMaps, so fonts that are not embedded still draw Korean", async () => {
+  await render({ item: item("C:\\w\\견적서.pdf", "pdf"), hidden: false });
+  await until(() => Boolean(pdf.params));
+  expect(pdf.params).toMatchObject({ cMapUrl: "/pdfjs/cmaps/", cMapPacked: true });
 });
 
 it("shows a web page sandboxed, and Reload loads it again", async () => {

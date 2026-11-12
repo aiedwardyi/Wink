@@ -22,7 +22,7 @@ import { ENDED_FLUSH_MS } from "./door-streams.ts";
 import { GuestClient } from "./guest-client.ts";
 import { barRoomPerson, closeInvitesDb, createInvite, revokeGuestKeys, roomCode } from "./invites.ts";
 import { joinedRoute } from "./joined-routes.ts";
-import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
 import { publishTurnAnswer } from "./multiplayer.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
@@ -386,6 +386,29 @@ describe("teammate and the real door", () => {
     expect(recentRoomEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome"]);
   });
 
+  it("pages a new teammate back past the 200-line snapshot, local rows first", async () => {
+    const group = teamRoom();
+    for (let i = 1; i <= 450; i += 1) hostSays(group, `line ${i}`);
+    const c = teammate();
+    c.start();
+    const roomId = group.hosted.roomId;
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    expect(c.room(roomId)).toMatchObject({ hasMore: true, entries: expect.arrayContaining([expect.objectContaining({ seq: 251 })]) });
+    const older = (before: number) => joinedRoute("POST", `/api/joined/rooms/${roomId}/older`, c, async () => ({ before }));
+    expect((await older(251))?.body).toEqual({ more: true });
+    const page = await joinedRoute("GET", `/api/joined/rooms/${roomId}`, c, async () => ({}), new URLSearchParams({ limit: "400" }));
+    expect((page?.body as { room: { entries: Array<{ seq: number }> } }).room.entries[0]?.seq).toBe(51);
+    hop.up = false;
+    hop.drop();
+    expect((await older(100))?.body).toEqual({ more: true });
+    hop.up = true;
+    expect((await older(51))?.body).toEqual({ more: true });
+    expect(c.room(roomId, 600)).toMatchObject({ hasMore: false });
+    expect(c.room(roomId, 600)!.entries.map((entry) => entry.seq)).toEqual(Array.from({ length: 450 }, (_, i) => i + 1));
+    expect((await older(1))?.body).toEqual({ more: false });
+  });
+
   it("reloads a snapshot on reset", async () => {
     const { c, group, roomId } = await joinedTeam();
     c.stop();
@@ -425,6 +448,27 @@ describe("teammate and the real door", () => {
     expect(joinedKey(roomId)).toBeNull();
     expect(texts(roomId)).toEqual(["welcome"]);
     expect(await c.send(roomId, "bye")).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("leaves and removes a room the host deleted while this PC was off, and says it is gone", async () => {
+    const { c, group, roomId } = await joinedTeam();
+    c.stop();
+    store.deleteGroup(group.id);
+    c.start();
+    expect(await c.leave(roomId)).toMatchObject({ ok: true, value: { status: "left", gone: true } });
+    expect(joinedKey(roomId)).toBeNull();
+    expect(await c.remove(roomId)).toEqual({ ok: true, value: true });
+    expect(joinedRoom(roomId)).toBeNull();
+  });
+
+  it("leaves on this PC when the host can't be reached", async () => {
+    const { c, roomId } = await joinedTeam();
+    hop.up = false;
+    hop.drop();
+    const left = await c.leave(roomId);
+    expect(left).toMatchObject({ ok: true, value: { status: "left" } });
+    expect(left.ok && "gone" in left.value).toBe(false);
+    expect(await c.remove(roomId)).toEqual({ ok: true, value: true });
   });
 
   it("never runs a model, a loopback fetch or a group, and the key stays in joined.db", async () => {
@@ -560,6 +604,23 @@ describe("a shared bot group", () => {
     expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
     await live(c, roomId);
     expect(seqs(roomId).at(-1)).toBe(200);
+  });
+
+  it("lands a 1.2 MB catch-up for a teammate who was away, and an older build reads it too", async () => {
+    const { group, roomId, says } = crew();
+    says("welcome");
+    const c = teammate();
+    c.start();
+    expect((await c.join(codeFor(group, "Mina"))).ok).toBe(true);
+    await live(c, roomId);
+    c.stop();
+    for (let i = 0; i < 60; i += 1) says(`${i} ${"a".repeat(19_990)}`);
+    c.start();
+    await until(() => joinedCursor(roomId) === 61, 10_000);
+    expect(seqs(roomId)).toHaveLength(61);
+    const older = olderStream(roomId, joinedKey(roomId)!.key);
+    await until(() => older.frames.filter((frame) => frame.kind === "entry").length === 61, 10_000);
+    older.close();
   });
 });
 

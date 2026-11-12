@@ -5,7 +5,7 @@ import { isSentByPerson } from "../../../shared/open-question";
 import { activeLocale } from "@/lib/i18n";
 import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
-import { claimsDone, consentOf } from "./consent";
+import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 import { asksAboutDone, asksForChange, asksToRepeat, claimOf } from "./guard";
 
@@ -84,6 +84,11 @@ const UNANSWERED: Record<string, string> = { expired: "expired: no answer came i
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
 const request = (text: string): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map() });
 const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should i)\s+/i;
+// "How can I help?" and "무엇을 도와드릴까요?" ask, they offer nothing to say yes to.
+const offered = (said: string) => {
+  const last = said.split(/(?<=[.!?])\s+/).at(-1) ?? "";
+  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
+};
 
 /** The voice's offer as the person's request: "Want me to fix it?" posts as "Fix it." */
 export function asRequest(order: string): string {
@@ -352,7 +357,8 @@ export class LiveCall {
           this.generating = false;
           this.guarded = false;
           this.doneTold = false;
-          if (this.playing) this.playing.ended = true;
+          // A held line whose turn never finished was not heard in full.
+          if (!this.playing?.ended) this.cutPlaying();
           return;
         }
         const share = this.deps.audio.heardShare();
@@ -426,7 +432,7 @@ export class LiveCall {
     const heard = UNANSWERED[result] ?? result;
     for (const id of live) engine!.sendToolResult(id, name, note ? `${heard}. ${note}` : heard);
     if (live.length) return;
-    this.held.push({ text: `[Wink] ${told(result, subject)}` });
+    this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
 
@@ -453,7 +459,7 @@ export class LiveCall {
     }
     this.stats.orders.proposed += 1;
     // A yes to the voice's own question, before it said anything new, already confirms the order.
-    const yes = !this.req.accounted && consentOf(this.req.text) === "yes" && /\?\s*$/.test(this.lastSaid) && !spokenText(this.saidBuf) && !this.turnHadAudio;
+    const yes = !this.req.accounted && bareYes(this.req.text) && offered(this.lastSaid) && !spokenText(this.saidBuf) && !this.turnHadAudio;
     this.req.accounted = true;
     const expiresAt = this.now() + ORDER_EXPIRY_MS;
     const expire = () => {

@@ -250,8 +250,8 @@ export function saveRoomTranslation(roomId: string, entryId: string, lang: strin
 }
 
 /** The newest `limit` entries, oldest first. */
-export function recentRoomEntries(roomId: string, limit: number): RoomEntry[] {
-  const rows = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? ORDER BY seq DESC LIMIT ?`).all(roomId, limit) as LogRow[];
+export function recentRoomEntries(roomId: string, limit: number, before = Number.MAX_SAFE_INTEGER): RoomEntry[] {
+  const rows = db().prepare(`SELECT ${LOG_COLUMNS} FROM log WHERE room_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`).all(roomId, before, limit) as LogRow[];
   return rows.reverse().map(rowToEntry);
 }
 

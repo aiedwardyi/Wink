@@ -21,6 +21,7 @@ export function useTranslationAvailable(base: string): boolean {
   useEffect(() => {
     let current = true;
     setAvailable(false);
+    if (!base) return;
     const check = () => {
       void request(`${base}/translate`).then((body) => { if (current) setAvailable(body.available === true); }, () => { if (current) setAvailable(false); });
     };

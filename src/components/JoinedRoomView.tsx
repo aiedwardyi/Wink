@@ -1,5 +1,5 @@
 // A room joined on someone else's Wink. Only its lines and files reach this screen.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LogOut, Users } from "lucide-react";
 
 import { request } from "@/lib/api-request";
@@ -20,11 +20,16 @@ import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomCo
 import { TeamRoomPeople } from "./TeamRoomPeople";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
+const PAGE = 200;
+
 export function JoinedRoomView({ roomId }: { roomId: string }) {
   const { t } = useI18n();
   const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
-  const room = useJoinedRoom(roomId);
+  const [limit, setLimit] = useState(PAGE);
+  const beforeOlder = useRef<(() => void) | null>(null);
+  const paging = useRef<number | null>(null);
+  const room = useJoinedRoom(roomId, limit, beforeOlder);
   const [leaving, setLeaving] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
@@ -35,6 +40,19 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const myBots = room?.myBots;
   // Only this PC's own room bots answer this PC; the host's bots answer everyone.
   const askable = useMemo(() => [...(hostBots ?? []), ...(teamBots ?? []).filter((bot) => myBots?.some((mine) => mine.id === bot.id))], [hostBots, teamBots, myBots]);
+  const first = entries?.[0]?.seq;
+  const loadOlder = useCallback((beforeCommit: () => void) => {
+    // Held per oldest row, so a scroll before the bigger page lands asks once; nothing more stops it.
+    if (first === undefined || paging.current === first) return;
+    paging.current = first;
+    void request(`${joinedRoomBase(roomId)}/older`, { method: "POST", body: JSON.stringify({ before: first }) })
+      .then(({ more }) => {
+        if (!more) return;
+        beforeOlder.current = beforeCommit;
+        setLimit((shown) => shown + PAGE);
+      })
+      .catch(() => { paging.current = null; });
+  }, [roomId, first]);
   const meId = room?.me.id;
   const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
   const people = room?.state?.people;
@@ -50,7 +68,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     : phase === "connecting" ? t("teamRoom.connecting")
     : phase === "offline" ? t("teamRoom.offline", { host: room?.state?.host ?? "" })
     : phase === "removed" ? t("teamRoom.removed")
-    : phase === "left" ? t("teamRoom.left")
+    : phase === "left" ? t(room?.gone ? "teamRoom.gone" : "teamRoom.left")
     : null;
   const me = room?.me.id;
   const composerPeople = room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined;
@@ -97,6 +115,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       <TeamRoomTranscript
         key={base}
         lines={lines}
+        hasMore={Boolean(room?.hasMore)}
+        loadOlder={loadOlder}
         mine={(line) => line.author.kind === "person" && line.author.id === me}
         base={base}
         label={t("chat.roomAria", { name })}
@@ -113,12 +133,17 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {status === null && myBots?.map((bot) => {
-          const botName = teamBots?.find((candidate) => candidate.id === bot.id)?.name ?? "";
-          const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
-          return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
-        })}
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
+        {joined ? (
+          <>
+            {status !== null && <div role="status" className="mb-2 px-5 text-center text-[13px] text-ink-secondary">{status}</div>}
+            {status === null && myBots?.map((bot) => {
+              const botName = teamBots?.find((candidate) => candidate.id === bot.id)?.name ?? "";
+              const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
+              return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
+            })}
+            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
+          </>
+        ) : <TeamRoomStatus text={status ?? ""} />}
       </div>
       <Presence open={leaving}>
         {(closing) => (

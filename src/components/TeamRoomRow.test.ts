@@ -126,6 +126,26 @@ it("names a bot line with the bot's face, on the left", async () => {
   expect(label.querySelector("svg, img")).not.toBeNull();
 });
 
+it("renders a bot line's markdown and makes web links clickable on every line", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {},
+    lines: [
+      { id: "bot", at: 1, author: { kind: "bot", id: "b1", name: "Wink" }, color: "blue", text: "**Done** - see [notes](C:/work/notes.md) and https://example.com/a.", files: [] },
+      { id: "person", at: 2, author: { kind: "person", id: "p1", name: "Mina" }, text: "**not bold** see https://example.com/b, ok", files: [] },
+    ],
+    mine: () => false, base: "/api/joined/rooms/r1", label: "Crew",
+  }))));
+  const bot = host.querySelector<HTMLElement>('[data-mid="bot"]')!;
+  expect(bot.querySelector("strong")?.textContent).toBe("Done");
+  expect(bot.textContent).not.toContain("**");
+  expect([...bot.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/a"]);
+  expect(bot.textContent).toContain("notes");
+  const person = host.querySelector<HTMLElement>('[data-mid="person"]')!;
+  expect(person.textContent).toContain("**not bold**");
+  expect([...person.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/b"]);
+});
+
 describe("room transcript reads like a 1:1 chat", () => {
   const day = 86_400_000;
   const line = (id: string, at: number, extra: Partial<RoomLine> = {}): RoomLine => ({ id, at, author: { kind: "person", id: "p1", name: "Mina" }, text: `text ${id}`, files: [], ...extra });
