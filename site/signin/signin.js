@@ -5,6 +5,7 @@
   // 16 chars, lowercase base32, same alphabet as relay labels.
   const LABEL_RE = /^[a-z2-7]{16}$/;
   const M_RE = /^[A-Za-z0-9_-]{43}$/;
+  const PHONE_RE = /iPhone|iPod|Android.*Mobile/;
   const CLIENT_RE = /^[0-9A-Za-z_-]+(?:\.[0-9A-Za-z_-]+)*\.apps\.googleusercontent\.com$/;
   const BASE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
   const LAST_PC = "wink-signin-pc";
@@ -17,6 +18,7 @@
 
   let gis = null;
   let config = null;
+  let listed = [];
 
   const $ = (id) => document.getElementById(id);
   const say = (text, tone) => {
@@ -124,7 +126,19 @@
     });
   }
 
+  function openPc(button, pc) {
+    if (button.disabled) return;
+    for (const other of $("list").children) other.disabled = true;
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    button.replaceChildren(spinner, `Opening ${pc.name}…`);
+    button.setAttribute("aria-busy", "true");
+    go(pc.label, "?g=1");
+  }
+
   function showList(pcs) {
+    listed = pcs;
     say("Choose a PC.");
     const list = $("list");
     list.hidden = false;
@@ -134,7 +148,7 @@
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = pc.name;
-      button.addEventListener("click", () => go(pc.label, "?g=1"));
+      button.addEventListener("click", () => openPc(button, pc));
       list.append(button);
     }
   }
@@ -181,6 +195,23 @@
     slot.replaceChildren();
   }
 
+  // Google draws a plain button, then swaps in its own frame once it loads.
+  function revealWhenDrawn(slot) {
+    const reveal = () => {
+      clearTimeout(timeout);
+      observer.disconnect();
+      slot.classList.add("ready");
+    };
+    const drawn = () => {
+      const frame = slot.querySelector("iframe");
+      if (frame && frame.offsetHeight > 0) reveal();
+    };
+    const observer = new MutationObserver(drawn);
+    const timeout = setTimeout(reveal, 1500);
+    observer.observe(slot, { childList: true, subtree: true, attributes: true, attributeFilter: ["style"] });
+    drawn();
+  }
+
   function requestToken(nonce, autoSelect) {
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -197,6 +228,7 @@
         if (!slot) return;
         buttonShown = true;
         slot.hidden = false;
+        slot.classList.remove("ready");
         slot.replaceChildren();
         gis.renderButton(slot, {
           type: "standard",
@@ -206,6 +238,7 @@
           shape: "rectangular",
           width: 300,
         });
+        revealWhenDrawn(slot);
       };
       try {
         gis.cancel();
@@ -311,6 +344,12 @@
     }
     void returnLeg(pc, m).catch(() => say(GOOGLE_DOWN, "error"));
   }
+
+  if (PHONE_RE.test(navigator.userAgent)) $("subtitle").textContent = "Reach Wink on your PC from this phone.";
+  // Back from a PC restores this page from bfcache with the PC buttons still opening.
+  addEventListener("pageshow", (event) => {
+    if (event.persisted && !$("list").hidden) showList(listed);
+  });
 
   const ready = googleId();
   if (ready) run(ready);
