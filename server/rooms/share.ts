@@ -8,7 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { json } from "../http-helpers.ts";
 import type { GroupRecord, Message, Store } from "../store.ts";
 import { appendRoomEntry, committedRoomText, createRoom, roomById, roomsDatabase, type RoomAuthor, type RoomPerson } from "./db.ts";
-import { roomCode } from "./invites.ts";
+import { roomCode, shortRoomCode } from "./invites.ts";
 import { markPeopleOnly } from "./people-only.ts";
 
 /** The carry: the active task's newest lines, the same window as a snapshot. */
@@ -150,7 +150,7 @@ export function roomJoins(roomId: string): RoomJoin[] {
 /** POST /api/groups/:id/share. Local only, owner only. False when the path isn't ours. */
 export async function shareRoute(
   _req: IncomingMessage, res: ServerResponse, method: string, path: string,
-  deps: ShareDeps & { botCaller: boolean; publicGroupState(group: GroupRecord): unknown },
+  deps: ShareDeps & { botCaller: boolean; publicGroupState(group: GroupRecord): unknown; mintRoomCode?(): Promise<{ code: string; exp: number } | null> },
 ): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
@@ -159,8 +159,9 @@ export async function shareRoute(
   else {
     try {
       const shared = shareGroup(deps, route[1]!);
+      const short = deps.mintRoomCode ? await shortRoomCode(shared.roomId, deps.mintRoomCode) : null;
       const updated = deps.store.group(route[1]!);
-      json(res, updated ? 200 : 500, updated ? { ...shared, group: deps.publicGroupState(updated) } : { error: "group vanished" });
+      json(res, updated ? 200 : 500, updated ? { ...shared, ...(short ? { short } : {}), group: deps.publicGroupState(updated) } : { error: "group vanished" });
     } catch (error) {
       const status = (error as { status?: number }).status;
       if (status === undefined) throw error;

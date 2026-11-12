@@ -21,7 +21,7 @@ import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
 import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { hostedRoomView } from "./guards.ts";
-import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites } from "./invites.ts";
+import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, shortRoomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 
@@ -332,6 +332,23 @@ describe("door routes", () => {
     const { invite, secret } = createInvite(loose.id, "Joon", "chat", ["Edward"]);
     expect(await post("/room/v1/join", { code: `wkr1:${HOST}:${invite.id}.${secret}` })).toMatchObject({ status: 404, body: { error: "no-invite" } });
     expect(roomInvites(loose.id).map((row) => row.id)).toEqual([invite.id]);
+  });
+});
+
+describe("short codes", () => {
+  it("joins with a live short code and hands back the long one", async () => {
+    const group = peopleRoom();
+    await shortRoomCode(group.hosted.roomId, async () => ({ code: "ABCDEF", exp: Date.now() + MINUTE }));
+    const long = roomCode(group.hosted.roomId);
+    const res = await post("/room/v1/join", { code: "abcdef", name: "Mina", device: "pc-mina-0123456789abcdef" });
+    expect(res.status).toBe(200);
+    expect(res.body.code).toBe(`wkr1:${HOST}:${long.id}.${long.secret}`);
+  });
+
+  it("refuses an unknown short code as no invite", async () => {
+    peopleRoom();
+    const res = await post("/room/v1/join", { code: "GHJKLM", name: "Mina", device: "pc-mina-0123456789abcdef" });
+    expect(res).toMatchObject({ status: 404, body: { error: "no-invite" } });
   });
 });
 

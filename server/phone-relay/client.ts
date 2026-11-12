@@ -40,6 +40,7 @@ export const MAX_PARALLEL_OPENS = 4;
 export const REFILL_RETRY_BASE_MS = 1_000;
 export const REFILL_RETRY_CAP_MS = 30_000;
 export const SNAG_TIMEOUT_MS = 30_000;
+export const ROOM_CODE_TIMEOUT_MS = 5_000;
 /** Activity from while the relay was down is sent on the next ready if it is this fresh. */
 export const ACTIVE_HOLD_MS = 5 * 60_000;
 /** A data channel that closes sooner than this counts as a failed open. */
@@ -120,6 +121,8 @@ interface Session {
   pingSentAt: number | null;
   snags: boolean;
   snagWait: { id: string; settle(ok: boolean): void } | null;
+  roomCodes: boolean;
+  roomCodeWaits: Map<string, (minted: { code: string; exp: number } | null) => void>;
   active: boolean;
   reportOwner?: string;
   channels: Set<DataChannel>;
@@ -146,6 +149,7 @@ export class RelayClient {
   private lastError: string | null = null;
   private nextRetryAt: number | null = null;
   private activeAt: number | null = null;
+  private roomCodeSeq = 0;
 
   constructor(options: RelayClientOptions) {
     this.opts = options;
@@ -180,6 +184,25 @@ export class RelayClient {
       session.cancels.add(timeout);
       session.snagWait = wait;
       this.send(session.socket, { type: "snag", data: snag });
+    });
+  }
+
+  /** Null when the relay is down, old or refuses. Only after a ready that offered room codes: an older relay closes the channel on one. */
+  mintRoomCode(): Promise<{ code: string; exp: number } | null> {
+    const session = this.session;
+    if (!session?.ready || !session.roomCodes) return Promise.resolve(null);
+    const id = `r${++this.roomCodeSeq}`;
+    return new Promise((resolve) => {
+      const timeout = this.clock.schedule(ROOM_CODE_TIMEOUT_MS, () => settle(null));
+      const settle = (minted: { code: string; exp: number } | null) => {
+        if (!session.roomCodeWaits.delete(id)) return;
+        timeout();
+        session.cancels.delete(timeout);
+        resolve(minted);
+      };
+      session.cancels.add(timeout);
+      session.roomCodeWaits.set(id, settle);
+      this.send(session.socket, { type: "roomcode", id });
     });
   }
 
@@ -277,6 +300,8 @@ export class RelayClient {
       pingSentAt: null,
       snags: false,
       snagWait: null,
+      roomCodes: false,
+      roomCodeWaits: new Map(),
       active: false,
       channels: new Set(),
       cancels: new Set(),
@@ -334,6 +359,7 @@ export class RelayClient {
       case "ready":
         if (!session.authSent || session.ready) throw new Error("unexpected ready");
         session.snags = msg.snags === true;
+        session.roomCodes = msg.roomCodes === true;
         session.active = msg.active === true;
         session.reportOwner = msg.reportOwner;
         this.onReady(session, msg.session, msg.poolToken, msg.pool.min, msg.pool.max, msg.ticket);
@@ -357,6 +383,9 @@ export class RelayClient {
         return;
       case "snagged":
         if (session.snagWait?.id === msg.id) session.snagWait.settle(true);
+        return;
+      case "roomcoded":
+        session.roomCodeWaits.get(msg.id)?.(msg.code && msg.exp ? { code: msg.code, exp: msg.exp } : null);
         return;
       case "notice":
         if (msg.code === "draining") {
@@ -424,6 +453,7 @@ export class RelayClient {
     if (!session) return;
     this.session = null;
     session.snagWait?.settle(false);
+    for (const settle of [...session.roomCodeWaits.values()]) settle(null);
     this.refillTimer?.();
     this.refillTimer = null;
     for (const cancel of session.cancels) cancel();
