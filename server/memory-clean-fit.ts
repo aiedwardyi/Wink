@@ -33,9 +33,15 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
   const month = `notes-${new Date(at).toISOString().slice(0, 7)}`;
   const plain = (line: string) => line.replace(/\r$/, "");
   const bytes = (line: string) => Buffer.byteLength(plain(line)) + 1;
+  const bullet = (line = "") => /^\s*(?:[-*+]|\d+[.)])\s/.test(line);
+  // two lines on one subject ask the same route question, and a stale pair wants a replace, not a topic
+  const subject = (line: string) => plain(line).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\s*\(noted \d{4}-\d\d-\d\d\)/g, "").split(/:\s| - /)[0]!.trim().toLowerCase();
+  const subjects = new Map<string, number>();
+  for (const line of lines) if (line.trim()) subjects.set(subject(line), (subjects.get(subject(line)) ?? 0) + 1);
   // lines the user has not talked about this week go first, then the oldest, then the largest
   let pool = lines.flatMap((line, i) => {
-    if (!over || !line.trim() || /^#/.test(line) || guarded.has(i + 1) || openLine(line) || used.has(i + 1) || asked.some((item) => rememberCovered(item.text, line))) return [];
+    if (!over || !line.trim() || /^#/.test(line) || !bullet(line) && bullet(lines[i + 1]) || subjects.get(subject(line))! > 1 || guarded.has(i + 1) || openLine(line) || used.has(i + 1)
+      || asked.some((item) => rememberCovered(item.text, line))) return [];
     const words = [...contentWords(line)];
     return [{ id: i + 1, hot: words.filter((word) => heard.has(word)).length / Math.max(1, words.length), noted: /\(noted (\d{4}-\d\d-\d\d)\)/.exec(line)?.[1] ?? "", bytes: bytes(line) }];
   }).sort((a, b) => a.hot - b.hot || a.noted.localeCompare(b.noted) || b.bytes - a.bytes);

@@ -147,7 +147,9 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
       const changed = new Set(list.changes.flatMap(changeIds));
       const guarded = protectedLines(source.text, input.typed);
       const rows = source.text.split("\n");
-      scopes.set(source.file, recallScope(source.text, list, input.typed, entries.flatMap((entry) => entry.header.file === source.file && entry.header.after ? [entry.header.after] : []))
+      // a pointer row the night extended answers the file questions, so it is in scope wherever it sits
+      scopes.set(source.file, recallScope(source.text, list, input.typed, entries.flatMap((entry) => entry.header.file !== source.file ? [] : entry.header.after ? [entry.header.after]
+        : entry.header.op === "file" && !entry.header.topic ? entry.header.at : []))
         .filter((id) => changed.has(id) || guarded.has(id) || Buffer.byteLength(rows[id - 1]!) <= 300));
     }
     const texts = [...sources.map((source) => [source.file, after.get(source.file)!] as const), ...topics.map((topic) => [topic.file, topic.text] as const)];
@@ -179,9 +181,17 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
     for (const [kind, count] of [["changed", 12], ["protected", 4], ["absent", 2]] as const) {
       if (questions.filter((q) => q.kind === kind).length !== count || questions.some((q) => (q.kind === "absent") !== (q.answer === null))) return { ok: false, stage, detail: "Invalid recall coverage", tokens };
     }
-    if (questions.some((q) => q.file !== undefined && (q.kind !== "changed" || !topics.some((topic) => topic.file === q.file))) || topics.some((topic) => !questions.some((q) => q.file === topic.file))) return { ok: false, stage, detail: "Invalid recall coverage", tokens };
+    if (questions.some((q) => q.file !== undefined && (q.kind !== "changed" || !topics.some((topic) => topic.file === q.file)))) return { ok: false, stage, detail: "Invalid recall coverage", tokens };
     if (new Set(questions.map((q) => q.question)).size !== 18) return { ok: false, stage, detail: "Duplicate recall questions", tokens };
     const routes = await routeQuestions(filed, Array.isArray(asked) ? [] : (asked as { routes?: unknown } | null)?.routes, call, input.propose);
+    // a topic the quiz skipped takes its file question from one of its own routes, in place of the last plain changed question
+    for (const topic of topics) {
+      if (questions.some((q) => q.file === topic.file)) continue;
+      const route = routes.find((item) => item.file === topic.file && !questions.some((q) => q.question === item.question));
+      const at = questions.findLastIndex((q) => q.kind === "changed" && q.file === undefined);
+      if (!route || at < 0) return { ok: false, stage, detail: "Invalid recall coverage", tokens };
+      questions[at] = { kind: "changed", question: route.question, answer: topic.file, file: topic.file };
+    }
     const routeReads = await answerRoutes(routes, memory, topics, call, input.recall, input.propose);
     const history = entries.filter((entry) => entry.header.op !== "merge" && entry.header.op !== "file").flatMap((entry) => entry.lines.map((line) => line.replace(/\r$/, "")));
     const answers = answersSchema.parse(parseReply(await call(input.recall, [

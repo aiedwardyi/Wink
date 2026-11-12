@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { cleanFiles, sleepInput, validateChangeList, type CleanInput } from "./memory-clean.ts";
+import { factParts } from "./memory-clean-coverage.ts";
 import { appendBlock } from "./memory-clean-format.ts";
 import { rememberCovered } from "./memory-clean-validate.ts";
-import { sleepEngines } from "./testing/sleep-verdicts.ts";
+import { sleepEngines, sleepRoutes } from "./testing/sleep-verdicts.ts";
 
 const now = Date.UTC(2026, 10, 12);
 const syllables = ["ka", "lo", "mi", "ne", "ru", "so", "ti", "va", "be", "du"];
@@ -79,5 +80,67 @@ describe("memory cleanup latent walls", () => {
     expect(filed(result.header)).toBeGreaterThan(3);
     expect(filed(result.header)).toBeLessThanOrEqual(24);
     expect(Buffer.byteLength(result.memory)).toBeLessThan(Buffer.byteLength(text) - 1000);
+  });
+});
+
+describe("memory cleanup recall-stage walls", () => {
+  it("files no heading line and neither line of a same-subject pair", async () => {
+    const text = `Safety\n- Studio at Uiwang: entry number 4170\n- Studio at Uiwang: entry number 4952\n- Dentist: Dr. Kasquilick at 10:40\n- Dentist - Dr. Kasquilick at 10:40\n${memory(260)}`;
+    const result = await night(text, { user: [] });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.topics.flatMap((topic) => topic.text.split("\n")).filter((line) => /Safety|Uiwang|Dentist/.test(line))).toEqual([]);
+  });
+
+  it("keeps a title abbreviation inside its fact part", () => {
+    expect(factParts("- Dentist: Dr. Kasquilick, 2026-12-12 at 10:40 (noted 2026-11-07)")).toEqual(["Dentist: Dr. Kasquilick, 2026-12-12 at 10:40"]);
+  });
+
+  it("asks each filed topic's file question when the quiz leaves it out", async () => {
+    const engines = sleepEngines();
+    const keys = new Map<string, string | null>(Array.from({ length: 18 }, (_, i) => [`Fact ${i}?`, i < 16 ? `value ${i}` : null] as const));
+    let asked: string[] = [];
+    const propose = async (prompt: string) => prompt.startsWith("[memory-clean:questions]")
+      ? JSON.stringify({ questions: [...keys].map(([question, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question, answer })), routes: sleepRoutes(prompt) })
+      : engines.propose(prompt);
+    const recall = async (prompt: string) => {
+      if (!prompt.startsWith("[memory-clean:answers]")) return engines.recall(prompt);
+      asked = JSON.parse(/^Questions: (.*)$/m.exec(prompt)![1]!);
+      const path = /memory\/notes-[\w-]+\.md/.exec(prompt)?.[0] ?? null;
+      return JSON.stringify(asked.map((question) => keys.has(question) ? keys.get(question) : path));
+    };
+    const result = await night(memory(150), { user: [], propose, recall });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) expect(asked.filter((question) => !keys.has(question))).toHaveLength(result.topics.length);
+  });
+
+  it("lists each filed line's parts for its routes, an instruction clause included", async () => {
+    const engines = sleepEngines();
+    let sources: Array<{ text: string; parts?: string[] }> = [];
+    const propose = async (prompt: string) => {
+      if (prompt.startsWith("[memory-clean:questions]")) sources = JSON.parse(/^Route sources: (.*)$/m.exec(prompt)![1]!);
+      return engines.propose(prompt);
+    };
+    const line = `- ${word(901)} talking points live in the ${word(902)} notes. Help him practice it.`;
+    expect(await night(`${line}\n${memory(150)}`, { user: [], propose, recall: engines.recall })).toMatchObject({ ok: true });
+    expect(sources.find((source) => source.text === line)?.parts).toEqual(factParts(line));
+    expect(factParts(line)).toContain("Help him practice it.");
+  });
+
+  it("shows the quiz answers a pointer row the night extended", async () => {
+    const first = await night(memory(150), { user: [] });
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) return;
+    const engines = sleepEngines();
+    const recall = async (prompt: string) => {
+      const reply = await engines.recall(prompt);
+      if (!prompt.startsWith("[memory-clean:answers]")) return reply;
+      return JSON.stringify((JSON.parse(reply) as Array<string | null>).map((answer) => answer?.startsWith("memory/") && !prompt.includes(answer) ? null : answer));
+    };
+    const topic = (file: string) => first.topics.find((item) => item.file === file)?.text ?? null;
+    const far = `## Pinned\n${[1, 2, 3, 4].map((n) => `- ${word(950 + n)} pin`).join("\n")}\n## Later\n${[5, 6, 7].map((n) => `- ${word(950 + n)} keeps ${word(960 + n)} rope`).join("\n")}\n`;
+    const second = await night(first.memory + far, { history: appendBlock("", first.block), user: [], topic, propose: engines.propose, recall });
+    expect(second).toMatchObject({ ok: true });
+    if (second.ok) expect(second.memory.split("\n").filter((line) => line.startsWith("- memory/notes-"))).toHaveLength(1);
   });
 });
