@@ -1,17 +1,28 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { File as FileIcon, PanelRight } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { File as FileIcon, FileArchive, FileAudio, FileCode, FileSpreadsheet, FileText, Play, Presentation, type LucideIcon } from "lucide-react";
 
-import { useI18n } from "@/lib/i18n";
+import { formatSize } from "@/lib/composer-attachments";
+import { localeTag, useI18n } from "@/lib/i18n";
 import { FILE_ROW, GAP, HEAD, PAD, monthAt, useMediaGrid, type GridLayout, type GridMonth } from "@/lib/media-grid";
-import { heldMedia, loadMedia, mediaMonths, withLive } from "@/lib/media-index";
+import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
 import { showItem } from "@/lib/show-pane";
+import { MediaMenu } from "./MediaMenu";
 import { MediaViewer } from "./MediaViewer";
 import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved } from "./RoomMedia";
 
-const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
+const ROW = "flex w-full min-w-0 items-center gap-3 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 const BUBBLE_MS = 600;
+const KINDS: MediaKind[] = ["photos", "files"];
+const ICONS: Array<[RegExp, LucideIcon]> = [
+  [/\.(pdf|docx?|txt|md|rtf|odt)$/i, FileText],
+  [/\.(xlsx?|csv|ods)$/i, FileSpreadsheet],
+  [/\.(pptx?|odp|key)$/i, Presentation],
+  [/\.(zip|rar|7z|tar|gz)$/i, FileArchive],
+  [/\.(html?|css|jsx?|tsx?|json|py|xml|ya?ml)$/i, FileCode],
+  [/\.(mp3|wav|m4a|flac|ogg)$/i, FileAudio],
+];
 
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
 function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
@@ -33,23 +44,39 @@ function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
 export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
   const { t, locale } = useI18n();
   const { files, room } = useMediaFiles(source);
-  const months = useMemo(() => mediaMonths(files ?? [], locale), [files, locale]);
+  const photos = useMemo(() => files?.filter((file) => file.image || file.video) ?? [], [files]);
+  const others = useMemo(() => files?.filter((file) => !file.image && !file.video) ?? [], [files]);
+  const [, repaint] = useReducer((n: number) => n + 1, 0);
+  const kind: MediaKind = others.length && (!photos.length || pickedKind(source.threadId, source.roomId) === "files") ? "files" : "photos";
+  const months = useMemo(() => mediaMonths(kind === "photos" ? photos : others, locale), [kind, photos, others, locale]);
+  const day = useMemo(() => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }), [locale]);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
   const [open, setOpen] = useState<MediaFile | null>(null);
   const at = open ? images.indexOf(open) : -1;
   const scroller = useRef<HTMLDivElement>(null);
   const { layout, viewport, from, to } = useMediaGrid(scroller, months);
+  const choose = (next: MediaKind) => {
+    if (next === kind) return;
+    pickKind(source.threadId, source.roomId, next);
+    scroller.current!.scrollTop = 0;
+    repaint();
+  };
 
   return (
     <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
       {room && <RoomFilesNotice list={room} />}
+      {photos.length > 0 && others.length > 0 && (
+        <div role="tablist" data-media-kinds className="show-media-kinds">
+          {KINDS.map((each) => <button key={each} type="button" role="tab" aria-selected={kind === each} onClick={() => choose(each)}>{t(each === "photos" ? "show.photos" : "show.files")}</button>)}
+        </div>
+      )}
       <div className="show-media-body">
         <div ref={scroller} className="show-media-scroll">
           {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
           {layout.height > 0 && (
             <div data-media-grid style={{ height: layout.height }}>
               {layout.months.map((month) => month.top < to && month.top + month.height > from && (
-                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} onOpen={setOpen} />
+                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={setOpen} />
               ))}
             </div>
           )}
@@ -60,12 +87,13 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
         <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpen(null)} previous={at > 0} next={at < images.length - 1}
           onNavigate={(step) => setOpen(images[at + step] ?? open)} />
       )}
-      {source.roomId && room && <RoomMedia roomId={source.roomId} list={room} files={files} frame={scroller} />}
+      <MediaMenu frame={scroller} files={files} roomId={source.roomId} readOnly={Boolean(room?.error)} />
+      {source.roomId && room && <RoomMedia list={room} />}
     </div>
   );
 });
 
-const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; onOpen: (file: MediaFile) => void }) {
+const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void }) {
   const { columns, cell } = layout;
   const pitch = cell + GAP;
   const rows = Math.ceil(month.images.length / columns);
@@ -77,10 +105,12 @@ const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, o
   return (
     <section style={{ top: month.top, height: month.height }}>
       <h3 data-media-month className="show-media-month">{month.label}</h3>
-      {month.images.slice(firstCell, Math.max(firstCell, endCell)).map((file, n) => (
-        <MediaCell key={file.key} file={file} top={HEAD + Math.floor((firstCell + n) / columns) * pitch} left={((firstCell + n) % columns) * pitch} size={cell} onOpen={onOpen} />
-      ))}
-      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} />)}
+      {month.images.slice(firstCell, Math.max(firstCell, endCell)).map((file, n) => {
+        const top = HEAD + Math.floor((firstCell + n) / columns) * pitch;
+        const left = ((firstCell + n) % columns) * pitch;
+        return file.video ? <MediaVideo key={file.key} file={file} top={top} left={left} size={cell} /> : <MediaCell key={file.key} file={file} top={top} left={left} size={cell} onOpen={onOpen} />;
+      })}
+      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} day={day} />)}
     </section>
   );
 });
@@ -159,16 +189,37 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   );
 }
 
-function MediaRow({ file, top }: { file: MediaFile; top: number }) {
-  const body = <>
-    {file.show ? <PanelRight size={14} aria-hidden="true" className="shrink-0 text-ink-secondary" /> : <FileIcon size={14} aria-hidden="true" className="shrink-0 text-ink-secondary" />}
-    <span className="min-w-0 flex-1 truncate">{file.name}</span>
-  </>;
+function MediaVideo({ file, top, left, size }: { file: MediaFile; top: number; left: number; size: number }) {
+  return (
+    <MediaOpen file={file} style={{ top, left, width: size, height: size }}
+      className="absolute flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2 text-ink-secondary focus-visible:outline-2 focus-visible:outline-accent">
+      <Play size={22} aria-hidden="true" />
+      <span className="w-full truncate text-center text-[11px]">{file.name}</span>
+    </MediaOpen>
+  );
+}
+
+function MediaRow({ file, top, day }: { file: MediaFile; top: number; day: Intl.DateTimeFormat }) {
+  const Icon = ICONS.find(([type]) => type.test(file.name))?.[1] ?? FileIcon;
+  const about = [file.size !== undefined && formatSize(file.size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
+  return (
+    <MediaOpen file={file} style={{ top }} className={ROW} row>
+      <Icon aria-hidden="true" className="size-8 shrink-0 rounded-md bg-raised p-2 text-ink-secondary" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{file.name}</span>
+        <span className="block truncate text-[11.5px] text-ink-secondary">{about}</span>
+      </span>
+    </MediaOpen>
+  );
+}
+
+/** Shows what Show can draw, opens the rest in its app on the desktop, else downloads it. */
+function MediaOpen({ file, style, className, row, children }: { file: MediaFile; style: CSSProperties; className: string; row?: boolean; children: ReactNode }) {
+  const props = { "data-media-file": row || undefined, "data-media-key": file.key, style, className };
   const show = file.show;
   const openFile = file.path ? window.ogb?.openFile : undefined;
-  const style = { top };
-  if (show) return <button type="button" data-media-file data-media-key={file.key} title={file.name} onClick={() => showItem(show)} style={style} className={ROW}>{body}</button>;
-  if (openFile) return <button type="button" data-media-file data-media-key={file.key} title={file.path} onClick={() => void openFile(file.path!).catch(() => {})} style={style} className={ROW}>{body}</button>;
-  if (file.src) return <a href={file.src} download={file.name} data-media-file data-media-key={file.key} title={file.name} style={style} className={ROW}>{body}</a>;
-  return <div data-media-file data-media-key={file.key} title={file.name} style={style} className={ROW}>{body}</div>;
+  if (show) return <button type="button" {...props} title={file.name} onClick={() => showItem(show)}>{children}</button>;
+  if (openFile) return <button type="button" {...props} title={file.path} onClick={() => void openFile(file.path!).catch(() => {})}>{children}</button>;
+  if (file.src) return <a href={file.src} download={file.name} {...props} title={file.name}>{children}</a>;
+  return <div {...props} title={file.name}>{children}</div>;
 }

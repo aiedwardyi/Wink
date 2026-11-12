@@ -1,6 +1,8 @@
 // The Media tab's index of one chat: every picture and file on the active path,
 // newest first and each once, columnar so thousands of files stay light on the wire.
-import { mediaKey, messageRefs, type MediaRef } from "../src/lib/chat-media.ts";
+import { stat } from "node:fs/promises";
+
+import { mediaKey, messageRefs, showKind, type MediaRef } from "../src/lib/chat-media.ts";
 
 import type { Message, Store } from "./store.ts";
 
@@ -14,6 +16,8 @@ export interface MediaIndex {
   kind: string;
   name: string[];
   ref: string[];
+  /** Bytes, when the attach tag or the disk says. */
+  size: Array<number | null>;
 }
 
 type MediaList = Omit<MediaIndex, "v">;
@@ -24,7 +28,7 @@ const boot = Date.now().toString(36);
 const refsOf = new WeakMap<Message, MediaRef[]>();
 
 export function buildMediaIndex(threadId: string, path: readonly Message[]): MediaList {
-  const index: MediaList = { ids: [], at: [], kind: "", name: [], ref: [] };
+  const index: MediaList = { ids: [], at: [], kind: "", name: [], ref: [], size: [] };
   const seen = new Set<string>();
   for (let i = path.length - 1; i >= 0; i--) {
     const message = path[i]!;
@@ -39,13 +43,23 @@ export function buildMediaIndex(threadId: string, path: readonly Message[]): Med
       index.kind += ref.kind;
       index.name.push(ref.name);
       index.ref.push(ref.ref);
+      index.size.push(ref.size ?? null);
     }
   }
   return index;
 }
 
 function same(a: MediaList, b: MediaList): boolean {
-  return a.ids.length === b.ids.length && a.kind === b.kind && (["ids", "at", "name", "ref"] as const).every((column) => a[column].every((value, n) => value === b[column][n]));
+  return a.ids.length === b.ids.length && a.kind === b.kind && (["ids", "at", "name", "ref", "size"] as const).every((column) => a[column].every((value, n) => value === b[column][n]));
+}
+
+async function linkedSizes(list: MediaList): Promise<MediaList> {
+  await Promise.all(list.ref.map(async (ref, n) => {
+    // a UNC path would authenticate to a remote host
+    if (list.kind[n] !== "l" || showKind(ref) === "image" || /^[\\/]{2}/.test(ref)) return;
+    list.size[n] = await stat(ref).then((info) => info.isFile() ? info.size : null, () => null);
+  }));
+  return list;
 }
 
 /** Builds a chat's index on its first ask and again only after that chat changes. */
@@ -58,11 +72,12 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
     if (change.type === "thread.deleted") held.delete(change.threadId);
     else dirty.add(change.threadId);
   });
-  return (threadId: string, v?: string | null): MediaIndex | { v: string } => {
+  return async (threadId: string, v?: string | null): Promise<MediaIndex | { v: string }> => {
     let index = held.get(threadId);
     if (!index || dirty.has(threadId)) {
       dirty.delete(threadId);
-      const list = buildMediaIndex(threadId, store.activePath(threadId));
+      const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId)));
+      index = held.get(threadId);
       if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
     }
     held.delete(threadId);

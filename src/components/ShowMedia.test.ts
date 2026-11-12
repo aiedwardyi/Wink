@@ -40,6 +40,7 @@ const wire = (entries: Entry[], v = "1"): MediaWire => ({
   kind: entries.map((entry) => entry[2]).join(""),
   name: entries.map((entry) => entry[3]),
   ref: entries.map((entry) => entry[4]),
+  size: entries.map(() => null),
 });
 // newest first, two a day back from late November 2026
 const shots = (count: number) => wire(Array.from({ length: count }, (_, n): Entry => [`m${n}`, NOVEMBER - n * DAY / 2, "l", `shot-${n}.png`, `C:\\w\\shot-${n}.png`]));
@@ -107,6 +108,9 @@ const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[rol
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
 const thumbs = () => [...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src")!);
 const months = () => [...host.querySelectorAll("[data-media-month]")].map((head) => head.textContent);
+const names = () => [...host.querySelectorAll("[data-media-file]")].map((row) => row.querySelector("span span")!.textContent);
+const row = (name: string) => [...host.querySelectorAll("[data-media-file]")].find((each) => each.querySelector("span span")!.textContent === name)!;
+const tiles = () => [...host.querySelectorAll("[data-media-grid] [data-media-key]")].map((tile) => tile.getAttribute("title"));
 const scroller = () => host.querySelector<HTMLElement>(".show-media-scroll")!;
 const pointer = (el: Element, type: string, clientY: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientY })); });
 const chat: MediaSource = { threadId: "t1", messages: [upload, reply] };
@@ -135,7 +139,8 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
     "/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\chart.png"),
     "/api/attachments/abc-1.png",
   ]);
-  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent)).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
+  await click(tab("Files"));
+  expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
 });
 
 it("an image opens full size, a showable file shows, the rest open as before", async () => {
@@ -148,9 +153,10 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   await click(host.querySelector("[data-media-grid] button"));
   expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await click([...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "data.zip")!);
+  await click(tab("Files"));
+  await click(row("data.zip"));
   expect(openFile).toHaveBeenCalledWith("C:\\w\\data.zip");
-  await click([...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "deck.pdf")!);
+  await click(row("deck.pdf"));
   expect(tab("Show").getAttribute("aria-selected")).toBe("true");
   expect(shown).toEqual(deck);
 });
@@ -164,12 +170,13 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   await click(tab("Media"));
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media"]);
-  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
+  await click(tab("Files"));
+  expect(names().at(-1)).toBe("first.pdf");
   await click(tab("Show"));
   await click(tab("Media"));
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
-  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
+  expect(names().at(-1)).toBe("first.pdf");
 });
 
 // `older` messages before the loaded page, paged or indexed; only the very first brings a file
@@ -190,7 +197,8 @@ it("lists the first file of a chat past 5,000 older messages", async () => {
   await act(async () => showMedia("t1"));
   await render({ ...chat, hasMore: true });
   for (let i = 0; i < 4; i++) await settle();
-  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent)).toContain("first.pdf");
+  await click(tab("Files"));
+  expect(names()).toContain("first.pdf");
 });
 
 it("asks once more when the timeline fails to load, without reopening Media", async () => {
@@ -200,7 +208,8 @@ it("asks once more when the timeline fails to load, without reopening Media", as
   for (let i = 0; i < 4; i++) await settle();
   await act(() => new Promise((resolve) => setTimeout(resolve, 1_100)));
   for (let i = 0; i < 4; i++) await settle();
-  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent)).toContain("first.pdf");
+  await click(tab("Files"));
+  expect(names()).toContain("first.pdf");
   expect(calls.filter((url) => url.includes("/media"))).toHaveLength(2);
 });
 
@@ -231,11 +240,12 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   expect(calls).toContain("/api/rooms/r1/files");
   expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(3)}/preview`);
   expect(host.querySelector("[data-media-grid] button")?.getAttribute("data-media-key")).toBe(id(3));
-  const sheet = [...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "sheet.xlsx")!;
+  await click(tab("Files"));
+  const sheet = row("sheet.xlsx");
   expect(sheet.getAttribute("data-media-key")).toBe(id(1));
   expect(sheet.getAttribute("href")).toBe(`/api/rooms/r1/files/${id(1)}`);
   expect(sheet.hasAttribute("download")).toBe(true);
-  await click([...host.querySelectorAll("[data-media-file]")].find((row) => row.textContent === "plan.pdf")!);
+  await click(row("plan.pdf"));
   expect(shown).toEqual({ threadId: "r-thread", path: "plan.pdf", kind: "pdf", src: `/api/rooms/r1/files/${id(2)}` });
 });
 
@@ -364,4 +374,92 @@ it("closes at its open width, with the same thumbs and no new fetch", async () =
   expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(1);
   await render(source);
   expect(host.querySelector("aside")!.style.getPropertyValue("--dock")).toBe("");
+});
+
+it("splits Media into Photos and Files, pictures and videos in one, every other file in the other", async () => {
+  const clip: Message = { id: "b2", role: "bot", kind: "text", at: 3, text: "Cut: [clip.mp4](C:\\w\\clip.mp4)" };
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, messages: [upload, reply, clip] });
+  await settle();
+  expect(tab("Photos").getAttribute("aria-selected")).toBe("true");
+  expect(tiles()).toEqual(["clip.mp4", "chart.png", "abc-1.png"]);
+  expect(host.querySelector("[data-media-file]")).toBeNull();
+  await click(tab("Files"));
+  expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
+  expect(host.querySelector("[data-media-grid] [data-media-key]:not([data-media-file])")).toBeNull();
+  applyLocale("ko");
+  await render({ ...chat, messages: [upload, reply, clip] });
+  expect(tab("파일").getAttribute("aria-selected")).toBe("true");
+  expect(tab("사진")).toBeDefined();
+});
+
+it("hides the switch when a chat has only one kind, and shows what it has", async () => {
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [{ ...reply, text: "[deck.pdf](C:\\w\\deck.pdf)" }] });
+  await settle();
+  expect(host.querySelector("[data-media-kinds]")).toBeNull();
+  expect(names()).toEqual(["deck.pdf"]);
+  media.t2 = shots(3);
+  await act(async () => showMedia("t2"));
+  await render({ threadId: "t2", messages: [] });
+  await settle();
+  expect(host.querySelector("[data-media-kinds]")).toBeNull();
+  expect(thumbs()).toHaveLength(3);
+});
+
+it("keeps each chat's last pick for the session, and switching never asks again", async () => {
+  media.t2 = wire([["m1", NOVEMBER, "l", "a.png", "C:\\w\\a.png"], ["m0", NOVEMBER, "l", "b.pdf", "C:\\w\\b.pdf"]]);
+  await act(async () => showMedia("t1"));
+  await render(chat);
+  await settle();
+  await click(tab("Files"));
+  const asked = calls.length;
+  await click(tab("Photos"));
+  await click(tab("Files"));
+  await settle();
+  expect(calls.length).toBe(asked);
+  await act(async () => showMedia("t2"));
+  await render({ threadId: "t2", messages: [] });
+  await settle();
+  expect(tab("Photos").getAttribute("aria-selected")).toBe("true");
+  await act(async () => showMedia("t1"));
+  await render(chat);
+  await settle();
+  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+  expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
+});
+
+it("a file row shows its kind, size and day, and in a room who sent it", async () => {
+  room = { files: [{ ...roomFiles[0]!, at: NOVEMBER }, { ...roomFiles[1]!, bytes: 2_500_000, at: NOVEMBER }, { ...roomFiles[2]!, at: NOVEMBER - DAY }] };
+  await act(async () => showMedia("r-thread"));
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  await settle();
+  await click(tab("Files"));
+  const rows = [...host.querySelectorAll("[data-media-file]")];
+  expect(rows.map((row) => row.textContent)).toEqual(["plan.pdf2.4 MB · Mina · Nov 20", "sheet.xlsx10 B · Host · Nov 19"]);
+  expect(rows.map((row) => row.querySelector("svg")!.getAttribute("class"))).toEqual([expect.stringContaining("lucide-file-text"), expect.stringContaining("lucide-file-spreadsheet")]);
+  act(() => root.unmount());
+  root = createRoot(host);
+  applyLocale("ko");
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [{ ...upload, at: NOVEMBER }] });
+  await settle();
+  await click(tab("파일"));
+  expect(host.querySelector("[data-media-file]")!.textContent).toBe("notes.docx2.0 KB · 11월 20일");
+});
+
+it("mounts only the file rows on screen out of 5,000, with the full height known at once", async () => {
+  media.t1 = wire([["p", NOVEMBER, "l", "a.png", "C:\\w\\a.png"], ...Array.from({ length: 5_000 }, (_, n): Entry => [`m${n}`, NOVEMBER - n * DAY / 2, "l", `doc-${n}.pdf`, `C:\\w\\doc-${n}.pdf`])]);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  await click(tab("Files"));
+  const first = names();
+  expect(first[0]).toBe("doc-0.pdf");
+  expect(first.length).toBeLessThan(60);
+  expect(Number.parseFloat(host.querySelector<HTMLElement>("[data-media-grid]")!.style.height)).toBeGreaterThan(5_000 * 44);
+  await act(async () => { scroller().scrollTop = 120_000; scroller().dispatchEvent(new Event("scroll")); });
+  const later = names();
+  expect(later.length).toBeLessThan(60);
+  expect(Number(later[0]!.match(/doc-(\d+)/)![1])).toBeGreaterThan(2_000);
 });

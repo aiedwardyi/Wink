@@ -20,16 +20,17 @@ describe("media index", () => {
       kind: "ullaf",
       name: ["chart.png", "deck.pdf", "shot.png", "abc-1.png", "notes.docx"],
       ref: ["https://example.com/chart.png", "C:\\w\\deck.pdf", "C:\\w\\shot.png", "", "C:\\att\\notes.docx"],
+      size: [null, 300, null, null, 2048],
     };
     const at = AT * 1000;
     const deck = linkedFileSrc("t1", "C:\\w\\deck.pdf");
     const shot = linkedFileSrc("t1", "C:\\w\\shot.png");
     expect(decodeMedia("t1", wire)).toEqual([
       { key: "https://example.com/chart.png", name: "chart.png", at, src: "https://example.com/chart.png", image: true },
-      { key: deck, name: "deck.pdf", at, src: deck, path: "C:\\w\\deck.pdf", show: { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" } },
+      { key: deck, name: "deck.pdf", at, src: deck, path: "C:\\w\\deck.pdf", size: 300, show: { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" } },
       { key: shot, name: "shot.png", at, src: shot, image: true },
       { key: "/api/attachments/abc-1.png", name: "abc-1.png", at, src: "/api/attachments/abc-1.png", image: true },
-      { key: "C:\\att\\notes.docx", name: "notes.docx", at, path: "C:\\att\\notes.docx" },
+      { key: "C:\\att\\notes.docx", name: "notes.docx", at, path: "C:\\att\\notes.docx", size: 2048 },
     ]);
   });
 

@@ -107,7 +107,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
       mediaIndex ??= createMediaIndex(store);
-      return json(res, 200, mediaIndex(threadId, url.searchParams.get("v")));
+      return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice

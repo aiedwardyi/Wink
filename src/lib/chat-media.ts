@@ -53,6 +53,8 @@ export interface MediaRef {
   name: string;
   /** the URL or path; empty for `a`, whose name is its address */
   ref: string;
+  /** bytes, from an attached file's tag */
+  size?: number;
 }
 
 /** The key the Media tab dedupes on: the picture's or file's URL, or an attached file's path. */
@@ -94,7 +96,7 @@ export function messageRefs(message: MediaMessage): MediaRef[] {
   if (message.role === "user") {
     const { images, files } = splitAttachedImages(text);
     images.forEach(attached);
-    for (const file of files) refs.push({ kind: "f", name: file.name, ref: file.path });
+    for (const file of files) refs.push({ kind: "f", name: file.name, ref: file.path, size: file.size });
     return refs;
   }
   // Only a picture needs the markdown parse, and every picture starts with "![".

@@ -19,18 +19,26 @@ export interface MediaFile {
   /** none for a file only its own PC holds, like an attached one */
   src?: string;
   image?: boolean;
+  /** sits with the pictures, opened like a file */
+  video?: boolean;
   show?: ShowItem;
   /** a local path the desktop opens */
   path?: string;
+  size?: number;
+  /** who sent it, in a room */
+  sender?: string;
 }
+
+const VIDEO = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
 
 export function mediaFile(threadId: string, ref: MediaRef, at: number): MediaFile {
   const key = mediaKey(threadId, ref);
-  const { kind, name } = ref;
+  const { kind, name, size } = ref;
   if (kind === "a" || kind === "u") return { key, name, at, src: key, image: true };
-  if (kind === "f") return { key, name, at, path: ref.ref };
+  const video = VIDEO.test(ref.ref) || undefined;
+  if (kind === "f") return { key, name, at, path: ref.ref, size, video };
   const show = showKind(ref.ref);
-  return show === "image" ? { key, name, at, src: key, image: true } : { key, name, at, src: key, path: ref.ref, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
+  return show === "image" ? { key, name, at, src: key, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
 }
 
 const seen = new WeakMap<Message, MediaFile[]>();
@@ -55,12 +63,13 @@ export function chatMedia(threadId: string, messages: readonly Message[]): Media
   return files;
 }
 
-export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray<RoomFile & { at: number }>): MediaFile[] {
+export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray<RoomFile & { at: number; sender?: string }>): MediaFile[] {
   const base = hostRoomBase(roomId);
   return files.map((file) => {
     if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
     // A room previews only pictures; a PDF still draws from its bytes.
-    return { key: file.id, name: file.name, at: file.at, src, show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
+    return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined,
+      show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
   });
 }

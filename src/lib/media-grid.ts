@@ -8,7 +8,7 @@ import type { MediaMonth } from "./media-index";
 export const PAD = 6;
 export const GAP = 6;
 export const HEAD = 34;
-export const FILE_ROW = 44;
+export const FILE_ROW = 52;
 
 export interface GridMonth extends MediaMonth {
   top: number;

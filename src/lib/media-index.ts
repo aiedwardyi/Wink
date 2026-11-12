@@ -16,7 +16,10 @@ export interface MediaWire {
   kind: string;
   name: string[];
   ref: string[];
+  size: Array<number | null>;
 }
+
+export type MediaKind = "photos" | "files";
 
 export interface MediaMonth {
   key: string;
@@ -38,16 +41,21 @@ const RETRY_MS = 1_000;
 const held = new Map<string, Held>();
 const loads = new Map<string, Promise<Held>>();
 const tails = new WeakMap<MediaFile[], { known: Set<string>; fresh: string; files: MediaFile[] }>();
+const kinds = new Map<string, MediaKind>();
 
 const heldKey = (threadId: string, roomId?: string) => roomId ? `room:${roomId}` : threadId;
 
 export function decodeMedia(threadId: string, wire: MediaWire): MediaFile[] {
   // SAFETY: the server writes one MediaRef kind letter per entry.
-  return wire.ref.map((ref, n) => mediaFile(threadId, { kind: wire.kind[n] as MediaRef["kind"], name: wire.name[n]!, ref }, wire.at[n]! * 1000));
+  return wire.ref.map((ref, n) => mediaFile(threadId, { kind: wire.kind[n] as MediaRef["kind"], name: wire.name[n]!, ref, size: wire.size[n] ?? undefined }, wire.at[n]! * 1000));
 }
 
 /** What this session last loaded, drawn at once while it is asked again. */
 export const heldMedia = (threadId: string, roomId?: string) => held.get(heldKey(threadId, roomId)) ?? null;
+
+/** The Photos or Files pick each chat last made this session. */
+export const pickedKind = (threadId: string, roomId?: string) => kinds.get(heldKey(threadId, roomId));
+export const pickKind = (threadId: string, roomId: string | undefined, kind: MediaKind) => void kinds.set(heldKey(threadId, roomId), kind);
 
 /** One request per chat or room at a time, asked once more after a failure. */
 export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
@@ -56,7 +64,7 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
   if (!load) {
     const was = held.get(key);
     const ask = (): Promise<Held> => roomId
-      ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
+      ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number; sender?: string }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
       : request(`/api/threads/${threadId}/media${was?.v ? `?v=${encodeURIComponent(was.v)}` : ""}`)
         .then((wire: MediaWire | { v: string }) => "ids" in wire ? { v: wire.v, files: decodeMedia(threadId, wire) } : was!);
     const next = ask().catch(() => new Promise((wait) => setTimeout(wait, RETRY_MS)).then(ask));
@@ -74,6 +82,7 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
 export function forgetMedia(): void {
   held.clear();
   loads.clear();
+  kinds.clear();
 }
 
 /** The index with what the open chat gained since it loaded on top; the same array while that stays the same. */
@@ -89,7 +98,7 @@ export function withLive(index: MediaFile[], live: readonly MediaFile[]): MediaF
   return tail.files;
 }
 
-/** Newest month first, each with its pictures, then its other files. */
+/** Newest month first, each with its pictures and videos, then its other files. */
 export function mediaMonths(files: readonly MediaFile[], locale: LocaleId): MediaMonth[] {
   const format = new Intl.DateTimeFormat(localeTag(locale), { year: "numeric", month: "long" });
   const months: MediaMonth[] = [];
@@ -106,7 +115,7 @@ export function mediaMonths(files: readonly MediaFile[], locale: LocaleId): Medi
       keys.add(key);
       months.push(month = { key, label: format.format(date), images: [], files: [] });
     }
-    (file.image ? month.images : month.files).push(file);
+    (file.image || file.video ? month.images : month.files).push(file);
   }
   return months;
 }
