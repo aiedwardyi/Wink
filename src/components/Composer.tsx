@@ -859,16 +859,16 @@ export function Composer({
     };
   }, [recording, editText, sendBlocked]);
 
-  const [winTip, setWinTip] = useState(false);
+  const [winTip, setWinTip] = useState(0);
   useEffect(() => {
     if (!winTip) return;
-    const timer = setTimeout(() => setWinTip(false), 5000);
+    const timer = setTimeout(() => setWinTip(0), 5000);
     return () => clearTimeout(timer);
   }, [winTip]);
   const winDictate = capabilities.host.platform === "win32";
   const showWinTip = () => {
     inputRef.current?.focus();
-    setWinTip(true);
+    setWinTip((n) => n + 1);
   };
 
   const toggleMic = () => {
@@ -885,7 +885,7 @@ export function Composer({
     <div className="pointer-events-none relative px-5 pb-3">
       {/* No fill or hairline on this wrapper — those were the black frame
           in the pill's top corners. The dock overlays the transcript. */}
-      {winTip && (
+      {winTip > 0 && (
         <p role="status" className="pointer-events-auto mb-2 px-1 text-[12px] text-ink-secondary">{t("composer.winDictateHint")}</p>
       )}
       {speechError && (

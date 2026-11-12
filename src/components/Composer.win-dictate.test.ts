@@ -53,6 +53,22 @@ describe("composer Windows dictate hint", () => {
     expect(host!.textContent).toContain("Press ⊞ + H to talk");
   });
 
+  it("hides the tip after 5s, restarting the timer on a repeat tap", async () => {
+    host_.platform = "win32";
+    vi.useFakeTimers();
+    try {
+      await mount();
+      const tap = () => act(async () => mic()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      await tap();
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      await tap();
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      expect(host!.textContent).toContain("Press ⊞ + H to talk");
+      await act(async () => { vi.advanceTimersByTime(2100); });
+      expect(host!.textContent).not.toContain("Press ⊞ + H to talk");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("shows no mic off Windows", async () => {
     host_.platform = "other";
     await mount();
