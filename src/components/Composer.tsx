@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, Clock, Mic, Paperclip, Square, TerminalSquare, User, Users, X } from "lucide-react";
+import { ArrowUp, Bot as BotIcon, Clock, Mic, Paperclip, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
@@ -15,6 +15,7 @@ import {
   rememberQueuedDraft,
   returnSendsToComposer,
   setRoomHolds,
+  settleRoomSend,
   takeRestoredSendId,
   updateDraftAttachment,
   useComposerDraft,
@@ -99,12 +100,12 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean };
+type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; agent?: boolean };
 
 export type RoomPerson = { id: string; name: string };
 
 /** A people room: same box, but its sends upload through the room route. */
-export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[] };
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[] };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
 
@@ -543,7 +544,10 @@ export function Composer({
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
     const pool: MentionChoice[] = room
-      ? (room.people ?? []).map((person) => ({ id: person.id, name: person.name, person: true }))
+      ? [
+          ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, agent: true })),
+          ...(room.people ?? []).map((person) => ({ id: person.id, name: person.name, person: true })),
+        ]
       : group
       ? [
           { id: "__everyone__", name: "everyone" },
@@ -557,7 +561,7 @@ export function Composer({
     // search: keep the picker closed so Enter sends instead of re-picking
     if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
     return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
 
@@ -671,23 +675,24 @@ export function Composer({
     : attachments.some((attachment) => attachment.kind === "upload");
   const replyRef = useRef(replyTo);
   replyRef.current = replyTo;
-  // The draft stays until the room accepts it: uploads can take minutes and fail.
+  // The text leaves the box at send like a bot chat; file chips stay as the upload's sign until the room accepts it.
   const sendRoom = async (target: ComposerRoom) => {
     const liveText = composerSendSourceText(inputRef.current?.value, text).trim();
-    const sent = attachments.filter((attachment) => attachment.kind === "upload");
+    const held = attachments;
+    const sent = held.filter((attachment) => attachment.kind === "upload");
     const files = sent.flatMap((attachment) => roomFile(attachment.id) ?? []);
     if (!liveText && !files.length) return;
-    const revision = draftRevision(draftId);
     const sentReply = replyTo ?? null;
     const request = startRoomSend(draftId, (sendId) => sendToRoom(target.base, liveText, files, sendId, sentReply?.roomEntryId ?? sentReply?.id));
     if (!request) return;
     hapticTick();
     onSend?.();
+    restoreComposerDraft(draftId, { text: "", attachments: held });
     const failed = await request;
     showRoomProblem(failed);
-    if (failed || draftRevision(draftId) !== revision) return;
+    settleRoomSend(draftId, liveText, new Set(held.map((attachment) => attachment.id)), Boolean(failed));
+    if (failed) return;
     for (const attachment of sent) dropRoomFile(attachment.id);
-    restoreComposerDraft(draftId, { text: "", attachments: [] });
     if (replyRef.current === sentReply) onClearReply?.();
   };
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
@@ -1024,13 +1029,17 @@ export function Composer({
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
                     size={24}
                   />
+                ) : peer.agent ? (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                    <BotIcon size={14} aria-hidden="true" />
+                  </span>
                 ) : (
                   <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot ? t("composer.agent") : t("composer.channel")}</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
           </div>

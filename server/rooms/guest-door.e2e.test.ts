@@ -264,7 +264,7 @@ describe("teammate and the real door", () => {
     expect(JSON.stringify(restarted.rooms())).not.toContain(shared.secret);
   });
 
-  it("keeps a host-removed PC barred from the same code", async () => {
+  it("keeps a host-removed PC out of the retired code", async () => {
     const group = teamRoom();
     const shared = roomCode(group.hosted.roomId);
     const code = `wkr1:${HOST}:${shared.id}.${shared.secret}`;
@@ -275,7 +275,7 @@ describe("teammate and the real door", () => {
     removeRoomPerson(group.hosted.roomId, person.id);
     barRoomPerson(group.hosted.roomId, person.id);
     await until(() => joinedRoom(group.hosted.roomId)?.status === "removed");
-    expect(await c.join(code)).toMatchObject({ ok: false, status: 403, error: "removed" });
+    expect(await c.join(code)).toMatchObject({ ok: false, status: 404, error: "no-invite" });
     expect(roomPeople(group.hosted.roomId)).toEqual([]);
   });
 

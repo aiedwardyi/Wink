@@ -63,6 +63,14 @@ describe("people in a shared group's chat", () => {
     expect(host.querySelector('[data-mid="u1"]')!.textContent).not.toContain("Host");
   });
 
+  it("shows a teammate's picture and file the way the room does", async () => {
+    const files = [{ id: "f1", name: "board.png", type: "image/png", bytes: 10 }, { id: "f2", name: "plan.pdf", type: "application/pdf", bytes: 20 }];
+    const host = await show([{ ...theirs, text: "", roomFiles: files }]);
+    const row = host.querySelector('[data-mid="u2"]')!;
+    expect(row.querySelector("img[alt='board.png']")?.getAttribute("src")).toBe("/api/rooms/r1/files/f1/preview");
+    expect(row.querySelector('a[download="plan.pdf"]')?.getAttribute("href")).toBe("/api/rooms/r1/files/f2");
+  });
+
   it("puts each first join where it happened, in the divider style", async () => {
     const host = await show([mine, theirs], [{ personId: "p1", name: "Seo-yeon Park", at: day + 30_000 }, { personId: "p2", name: "Mina", at: day + 120_000 }]);
     const lines = [...host.querySelectorAll<HTMLElement>("[data-room-join]")];

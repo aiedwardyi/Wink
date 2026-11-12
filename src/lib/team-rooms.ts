@@ -239,7 +239,9 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
       fileIds.push(body.file.id);
     }
     const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(replyToId !== undefined ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}) }) });
-    return res.ok ? null : { key: "teamRoom.sendFailed" };
+    if (res.ok) return null;
+    if (res.status !== 429) return { key: "teamRoom.sendFailed" };
+    return { key: (await responseBody(res))?.error === "wait for your last request to finish" ? "teamRoom.askBusy" : "teamRoom.askLimit" };
   } catch {
     return { key: "teamRoom.sendFailed" };
   }

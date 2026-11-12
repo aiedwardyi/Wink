@@ -4,9 +4,11 @@ import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { removeFromRoom, roomPeople, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
+import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomCode } from "./RoomCode";
 
 export function GroupPeople({ group }: { group: Group }) {
@@ -16,6 +18,8 @@ export function GroupPeople({ group }: { group: Group }) {
   const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [busy, setBusy] = useState(shared);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const confirm = usePresence(removing);
   const alive = useRef(true);
   const people = roomPeople(group);
 
@@ -76,7 +80,7 @@ export function GroupPeople({ group }: { group: Group }) {
               <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{person.name}</span>
               <button
                 type="button"
-                onClick={() => void remove(person.id)}
+                onClick={() => setRemoving(person)}
                 aria-label={t("teamRoom.removeNamed", { name: person.name })}
                 className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
               >
@@ -85,6 +89,19 @@ export function GroupPeople({ group }: { group: Group }) {
             </li>
           ))}
         </ul>
+      )}
+      {confirm.mounted && confirm.value && (
+        <ConfirmDialog
+          closing={confirm.closing}
+          title={t("teamRoom.removeTitle", { name: confirm.value.name })}
+          body={t("teamRoom.removeBody")}
+          confirmLabel={t("teamRoom.remove")}
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            setRemoving(null);
+            void remove(confirm.value!.id);
+          }}
+        />
       )}
     </section>
   );

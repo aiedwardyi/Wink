@@ -53,6 +53,7 @@ import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
+import { RoomFileRows, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
@@ -63,7 +64,7 @@ import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
-import { roomJoins } from "@/lib/team-rooms";
+import { hostRoomBase, roomJoins } from "@/lib/team-rooms";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -342,6 +343,7 @@ export const Transcript = memo(function Transcript({
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
   const skin = useSkin();
+  const roomBase = group.hosted ? hostRoomBase(group.hosted.roomId) : null;
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
@@ -540,7 +542,7 @@ export const Transcript = memo(function Transcript({
               />
               {m.text && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{m.text}</p>}
             </div>
-          ) : m.kind === "text" && m.text ? (
+          ) : m.kind === "text" && (m.text || m.roomFiles?.length) ? (
             <div
               data-orbit-message={user ? "user" : "bot"}
               className={cn("group flex w-full flex-col outline-none", mine ? "items-end" : "items-start")}
@@ -607,8 +609,10 @@ export const Transcript = memo(function Transcript({
                       {attachedImages && attachedImages.images.length > 0 && (
                         <AttachedImageGallery paths={attachedImages.images} />
                       )}
+                      {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
                       {attachedImages?.display ?? m.text}
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
+                      {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>

@@ -6,13 +6,15 @@ import { broadcastDoorEntry } from "./door-streams.ts";
 
 type MirrorStore = Pick<Store, "appendMessage" | "messagesFor" | "bot">;
 
-function mirrorRoomEntry(store: MirrorStore, threadId: string, entry: RoomEntry, sendId?: string): Message {
-  const replyTo = entry.replyToId && store.messagesFor(threadId).find((message) => message.roomEntryId === entry.replyToId);
+export type LocalRow = { text?: string; replyToId?: string };
+
+function mirrorRoomEntry(store: MirrorStore, threadId: string, entry: RoomEntry, sendId?: string, local: LocalRow = {}): Message {
+  const replyTo = local.replyToId ? { id: local.replyToId } : entry.replyToId && store.messagesFor(threadId).find((message) => message.roomEntryId === entry.replyToId);
   const bot = entry.author.kind === "bot" ? store.bot(entry.author.id) : undefined;
   return store.appendMessage(threadId, {
     role: entry.author.kind === "bot" ? "bot" : "user",
     kind: "text",
-    text: entry.text,
+    text: local.text ?? entry.text,
     at: entry.at,
     author: entry.author,
     roomEntryId: entry.id,
@@ -24,9 +26,9 @@ function mirrorRoomEntry(store: MirrorStore, threadId: string, entry: RoomEntry,
   });
 }
 
-/** Commit one entry to the room log, then mirror that committed row. */
-export function writeRoomEntry(store: MirrorStore, group: GroupRecord & { hosted: { roomId: string } }, draft: RoomEntryDraft, sendId?: string) {
+/** Commit one entry to the room log, then mirror that committed row, or the host's own `local` row. */
+export function writeRoomEntry(store: MirrorStore, group: GroupRecord & { hosted: { roomId: string } }, draft: RoomEntryDraft, sendId?: string, local?: LocalRow) {
   const entry = appendRoomEntry(group.hosted.roomId, draft);
   broadcastDoorEntry(group.hosted.roomId, entry);
-  return { entry, message: mirrorRoomEntry(store, group.threadId, entry, sendId) };
+  return { entry, message: mirrorRoomEntry(store, group.threadId, entry, sendId, local) };
 }

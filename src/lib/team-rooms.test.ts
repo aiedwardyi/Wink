@@ -175,4 +175,11 @@ describe("sending to a room", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     expect(await sendToRoom("/api/rooms/r1", "hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
   });
+
+  it("names a refused bot request", async () => {
+    for (const [error, key] of [["wait for your last request to finish", "teamRoom.askBusy"], ["you've asked the bot the most it takes in an hour", "teamRoom.askLimit"]]) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error }), { status: 429 })));
+      expect(await sendToRoom("/api/joined/rooms/r9", "@Wink hi", [], "send-0123456789abcdef")).toEqual({ key });
+    }
+  });
 });

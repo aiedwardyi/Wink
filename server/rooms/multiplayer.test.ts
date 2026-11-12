@@ -87,6 +87,18 @@ describe("a teammate's line in a shared bot group", () => {
     expect(hostedSend(group, said(sora), "@everyone lunch?").ask).toBeNull();
   });
 
+  it("never wakes the bot on a line to the host", () => {
+    expect(hostedSend(group, said(sora), "@Edward lunch?").ask).toBeNull();
+  });
+
+  it("posts an untagged line as plain chat while the only bot has their last request", () => {
+    expect(hostedSend(group, said(sora), "what's left?").ask).toMatchObject({ botId: wink });
+    const plain = hostedSend(group, said(sora), "lunch at 12?");
+    expect(plain.ask).toBeNull();
+    expect(plain.entry.text).toBe("lunch at 12?");
+    expect(() => hostedSend(group, said(sora), "@Wink and this")).toThrow(expect.objectContaining({ status: 429, message: "wait for your last request to finish" }));
+  });
+
   it("wakes nobody on a plain line once the group has two bots", () => {
     const pip = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
     store.patchGroup(group.id, { memberIds: [wink, pip] });

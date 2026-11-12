@@ -29,7 +29,7 @@ export function messageVisible(message: Message, showToolCalls: boolean, showAct
     case "note":
       return LIVE_VERIFY_V0 && Boolean(message.verify);
     case "text":
-      return Boolean(message.text) && isShownMessage(message);
+      return Boolean(message.text || message.roomFiles?.length) && isShownMessage(message);
     case "activity":
       return activityVisibleInChat(message, showActivities);
     case "secret":

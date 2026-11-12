@@ -12,7 +12,7 @@ import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import type { PreviewImage } from "@/lib/media-viewer";
-import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
+import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomFile, type RoomLine } from "@/lib/team-rooms";
 import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
@@ -26,6 +26,38 @@ import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageM
 import { ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
 import { RoomNotice } from "./RoomNotice";
+
+export const roomPictures = (base: string, files: readonly RoomFile[]) =>
+  files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
+
+/** A line's deleted notes and download rows, below its words. */
+export function RoomFileRows({ base, files, className }: { base: string; files: readonly RoomFile[]; className?: string }) {
+  const { t } = useI18n();
+  const rows = files.filter((file) => !file.deleted && !isRoomPicture(file));
+  return (
+    <>
+      {files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
+      {rows.length > 0 && (
+        <div className={cn("flex flex-col gap-1.5", className)}>
+          {rows.map((file) => (
+            <a
+              key={file.id}
+              href={roomFileUrl(base, file, false)}
+              download={file.name}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("viewer.download", { name: file.name })}
+              title={t("viewer.downloadTitle")}
+              className="block rounded-lg hover:bg-raised/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
+            </a>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
 
 /** No `set` hides Pin; `canUnpin` covers the current notice only. */
 export interface RoomNoticeControl {
@@ -44,7 +76,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
   const viewer = useMediaViewer();
   const translation = useRoomTranslation(base, line.entryId ?? line.id, locale);
   const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
-  const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
+  const pictures = roomPictures(base, line.files);
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
   const rowRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -137,25 +169,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
                   ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
                   : translation.text}
               </div>}
-              {line.files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
-              {files.length > 0 && (
-                <div className={cn("flex flex-col gap-1.5", line.text && "mt-2")}>
-                  {files.map((file) => (
-                    <a
-                      key={file.id}
-                      href={roomFileUrl(base, file, false)}
-                      download={file.name}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={t("viewer.download", { name: file.name })}
-                      title={t("viewer.downloadTitle")}
-                      className="block rounded-lg hover:bg-raised/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                    >
-                      <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
-                    </a>
-                  ))}
-                </div>
-              )}
+              <RoomFileRows base={base} files={line.files} className={cn(line.text && "mt-2")} />
             </div>
           </div>
         </div>
