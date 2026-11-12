@@ -498,7 +498,7 @@ function htmlPolicy(req: IncomingMessage, scope: string): string {
   const host = new URL(`http://${header(req.headers.host) ?? "127.0.0.1"}`).host;
   const sources = `http://${host}${scope} https://${host}${scope}`;
   // Never allow-same-origin: the page would share Wink's storage and session. Its files ride the grant.
-  return `sandbox allow-scripts; default-src ${sources}; script-src ${sources} 'unsafe-inline'; style-src ${sources} 'unsafe-inline'; img-src ${sources} data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+  return `sandbox allow-scripts; default-src ${sources}; script-src ${sources} 'unsafe-inline'; style-src ${sources} 'unsafe-inline'; img-src ${sources} data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://${host} https://${host}`;
 }
 
 function assetType(filePath: string): string | null {

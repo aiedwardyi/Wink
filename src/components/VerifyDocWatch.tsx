@@ -142,7 +142,7 @@ function useVisibility() {
   return visibility;
 }
 
-export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inline = false, onClose }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean; inline?: boolean; onClose(): void }) {
+export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inline = false, hosted, onClose }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean; inline?: boolean; hosted?: { maximized: boolean }; onClose(): void }) {
   const { locale } = useI18n();
   const c = copy[locale], d = docCopy[locale];
   const phone = useIsPhone();
@@ -152,7 +152,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const [round, setRound] = useState(0);
   const [maximized, setMaximized] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const expanded = maximized && !inline && !phone;
+  const expanded = (hosted ? hosted.maximized : maximized) && !inline && !phone;
   const stageRef = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const leadLine = useRef(0);
@@ -219,7 +219,9 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     return () => clearInterval(timer);
   }, [gate, live, phase]);
 
+  const ownKeys = !hosted;
   useEffect(() => {
+    if (!ownKeys) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
@@ -227,7 +229,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded]);
+  }, [expanded, ownKeys]);
 
   // The view reads down the document: it stays on the first chunk still open while later ones are checked beside it.
   const lead = show.bands.find(band => !band.done);
@@ -257,8 +259,8 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <span className="verify-watch-grow" />
-        {!inline && !phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={expanded ? c.restore : c.maximize} title={expanded ? c.restore : c.maximize}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={() => close.current()} aria-label={c.close} title={c.close}><X size={15} /></button>
+        {!hosted && !inline && !phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={expanded ? c.restore : c.maximize} title={expanded ? c.restore : c.maximize}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
+        {!hosted && <button type="button" className="verify-watch-icon" onClick={() => close.current()} aria-label={c.close} title={c.close}><X size={15} /></button>}
       </div>
       <div className="verify-watch-address"><span className="verify-watch-url" title={card.entry}>{card.site}</span></div>
       <div ref={stageRef} className="verify-doc-stage" aria-label={c.watch} onWheel={stop} onTouchMove={stop}>

@@ -85,6 +85,7 @@
     "mdast-util-gfm": "3.1.0",
     "micromark-extension-gfm": "3.0.0",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "4.10.38",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
