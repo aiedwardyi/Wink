@@ -1,9 +1,17 @@
 // Live call: Gemini Live is the bot's ears and mouth; the bot stays the only worker.
 
 export const LIVE_MODEL = "gemini-3.8-live";
-/** One voice for every bot. */
-export const LIVE_VOICE = "Kore";
-export const LIVE_GENERATION = { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } } };
+/** The call voice until the person picks another. */
+export const LIVE_VOICE = "Aoede";
+/** Gemini Live prebuilt voices offered in Settings, shown as Jenn and Eddie. */
+export const LIVE_VOICES = ["Aoede", "Achird"] as const;
+export type LiveVoice = (typeof LIVE_VOICES)[number];
+/** Auto answers in English or Korean, whichever the person speaks, else the app language. */
+export const LIVE_LANGUAGES = ["auto", "en", "ko"] as const;
+export type LiveLanguage = (typeof LIVE_LANGUAGES)[number];
+export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
+  return { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } };
+}
 export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 export const CALL_ID = /^c-[0-9a-f]{12}$/;

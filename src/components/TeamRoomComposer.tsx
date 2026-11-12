@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useBackLayer } from "@/lib/use-back-layer";
 import type { Message } from "@/state/store-types";
 
+import { CallWidgetSlot } from "./CallSlots";
 import { Composer, type RoomPerson } from "./Composer";
 
 export function useTeamRoomReply(base: string) {
@@ -21,7 +22,12 @@ export function useTeamRoomReply(base: string) {
 }
 
 export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, offline }: { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean }) {
-  return <Composer room={{ name, base, draftId, people, bots, offline }} replyTo={replyTo} onClearReply={onClearReply} />;
+  return (
+    <>
+      <CallWidgetSlot className="px-3 pb-2 md:hidden" />
+      <Composer room={{ name, base, draftId, people, bots, offline }} replyTo={replyTo} onClearReply={onClearReply} />
+    </>
+  );
 }
 
 /** Stands where the composer would, when this side can't send. */

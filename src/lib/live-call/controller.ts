@@ -274,7 +274,7 @@ export class LiveCall {
       return null;
     }
     this.callId = posted.data.callId;
-    return { url: posted.data.url, token: posted.data.token, model: posted.data.model, ...(resume && this.handle ? { handle: this.handle } : {}) };
+    return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
   private connect(session: LiveSession) {

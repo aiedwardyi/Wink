@@ -8,6 +8,7 @@ import { applyLocale } from "@/lib/i18n";
 import { LiveCall } from "@/lib/live-call/controller";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
+import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 
 const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
@@ -77,7 +78,7 @@ async function mount(key = false) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }))));
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: atlas }), createElement(CallHostSlot))));
   if (!fakes.config) await saveKey(key);
   return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }

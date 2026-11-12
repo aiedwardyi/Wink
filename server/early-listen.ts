@@ -25,6 +25,7 @@ export const EARLY_MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".json": "application/json",
   ".woff2": "font/woff2",
+  ".mp3": "audio/mpeg",
 };
 
 export type HarnessHandler = (req: IncomingMessage, res: ServerResponse) => unknown;

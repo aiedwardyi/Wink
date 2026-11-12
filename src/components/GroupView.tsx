@@ -20,6 +20,7 @@ import {
 } from "@/state/store";
 import type { RoomJoin } from "@/state/store-types";
 import { BotAvatar } from "./Avatar";
+import { CallWidgetSlot } from "./CallSlots";
 import { DockedPresence, MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
@@ -1806,6 +1807,7 @@ export function GroupView({ group: live }: { group: Group }) {
               busy={roomRecoveryBusy(group, recoveryBot.busy)}
             />
           )}
+          <CallWidgetSlot className="px-3 pb-2 md:hidden" />
           <Composer
             key={group.threadId}
             group={group}

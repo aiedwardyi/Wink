@@ -1,6 +1,8 @@
 // What a live voice engine gives the call controller; one adapter per vendor.
 
-export type LiveSession = { url: string; token: string; model: string; handle?: string };
+import type { LiveVoice } from "../../../shared/live-call";
+
+export type LiveSession = { url: string; token: string; model: string; voice?: LiveVoice; handle?: string };
 export type LiveToolCall = { id: string; name: string; args: Record<string, unknown> };
 
 export type LiveEvents = {

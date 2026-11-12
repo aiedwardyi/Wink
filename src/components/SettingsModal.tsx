@@ -24,6 +24,7 @@ import { GeometryPicker } from "./GeometryPicker";
 import { TerminalAppearanceRow } from "./TerminalAppearanceRow";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { LanguagePicker } from "./LanguagePicker";
+import { CallVoicePicker } from "./CallVoicePicker";
 import { useI18n } from "@/lib/i18n";
 import { isTransientUpdateError } from "../../shared/update-error.mjs";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
@@ -665,6 +666,7 @@ export function SettingsModal({
             {section === "general" && (
               <>
                 <LanguagePicker />
+                <CallVoicePicker />
                 {!window.ogb && <Card><PhoneNotificationSettings /></Card>}
                 <VibrationRow />
                 <UpdatesRow />
