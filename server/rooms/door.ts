@@ -21,7 +21,7 @@ import {
   openDoorStream,
   sendDoorState,
   trackDoorSocket,
-  writeFrame,
+  writeCatchUp,
   type DoorEntry,
   type DoorFrame,
   type DoorState,
@@ -344,13 +344,14 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
 
 function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
-  const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES);
+  const before = url.searchParams.get("before") ?? "";
+  const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES, /^\d{1,15}$/.test(before) ? Number(before) : undefined);
   const bots = url.searchParams.get("with") === "bots";
   send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+async function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): Promise<void> {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -360,18 +361,15 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
   const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
-  writeFrame(open, { kind: "state", state: doorState(group, person) });
-  for (const frame of reactionFrames(group)) writeFrame(open, frame);
-  // A teammate who was away missed the reset a delete sends.
+  const frames: DoorFrame[] = [{ kind: "state", state: doorState(group, person) }, ...reactionFrames(group)];
+  // A teammate who was away missed the deletions sent live.
   const seen = url.searchParams.get("deleted") ?? "";
   const deleted = deletedRoomFiles(roomId, /^\d{1,15}$/.test(seen) ? Number(seen) : 0);
-  if (deleted.ids.length) writeFrame(open, { kind: "deleted", ...deleted });
+  if (deleted.ids.length) frames.push({ kind: "deleted", ...deleted });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
-  if (after > head || head - after > REPLAY_ENTRIES) {
-    writeFrame(open, { kind: "reset" });
-    return goLive(open, head);
-  }
-  for (const entry of roomEntriesAfter(roomId, after, REPLAY_ENTRIES)) writeFrame(open, { kind: "entry", entry: doorEntry(entry) });
+  if (after > head || head - after > REPLAY_ENTRIES) frames.push({ kind: "reset" });
+  else for (const entry of roomEntriesAfter(roomId, after, REPLAY_ENTRIES)) frames.push({ kind: "entry", entry: doorEntry(entry) });
+  await writeCatchUp(open, frames);
   goLive(open, head);
 }
 

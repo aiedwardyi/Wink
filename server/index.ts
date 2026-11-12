@@ -8546,7 +8546,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams);
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);

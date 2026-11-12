@@ -104,8 +104,8 @@ type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; ag
 
 export type RoomPerson = { id: string; name: string };
 
-/** A people room: same box, but its sends upload through the room route. */
-export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[] };
+/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
 
@@ -635,7 +635,7 @@ export function Composer({
   const showRoomProblem = (problem: RoomProblem | null) =>
     setImageNotice(problem ? { threadId, text: t(problem.key, problem.vars) } : null);
   const pickFiles = async (picked: readonly File[], startedAt = performance.now()) => {
-    if (!picked.length) return;
+    if (!picked.length || room?.offline) return;
     if (room) {
       const kept = attachmentsRef.current.filter((a): a is UploadAttachment => a.kind === "upload");
       const problem = filesProblem([...kept, ...picked]);
@@ -740,7 +740,7 @@ export function Composer({
       busy,
       heldCount: queuedRef.current.length,
     });
-    if (action === "block" || uploading) return;
+    if (action === "block" || uploading || room?.offline) return;
     if (room) {
       void sendRoom(room);
       return;
@@ -1220,7 +1220,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!sendBlocked && (
+          {!sendBlocked && !room?.offline && (
             <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1418,7 +1418,7 @@ export function Composer({
           )}
           <button
             {...holdToSendAfter(send)}
-            disabled={uploading}
+            disabled={uploading || room?.offline}
             aria-label={t(busyChrome.sendAriaKey)}
             title={uploading ? t("composer.uploadWaiting") : t(busyChrome.sendTitleKey)}
             className={cn(

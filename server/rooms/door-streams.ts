@@ -107,9 +107,31 @@ function write(stream: DoorStream, chunk: string): void {
   if (stream.res.writableLength > MAX_BACKLOG_BYTES) stream.res.destroy();
 }
 
-export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
+function frameText(stream: DoorStream, frame: DoorFrame): string {
   const sent = frame.kind === "entry" ? { kind: "entry", entry: compatibleDoorEntry({ ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) }, stream.largeFiles !== false) } : frame;
-  write(stream, `data: ${JSON.stringify(sent)}\n\n`);
+  return `data: ${JSON.stringify(sent)}\n\n`;
+}
+
+export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
+  write(stream, frameText(stream, frame));
+}
+
+/** The catch-up waits on drain, so a long one never trips the cut live frames get. */
+export async function writeCatchUp(stream: DoorStream, frames: Iterable<DoorFrame>): Promise<void> {
+  const { res } = stream;
+  for (const frame of frames) {
+    if (res.writableEnded || res.destroyed) return;
+    if (res.write(frameText(stream, frame))) continue;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        res.off("drain", done);
+        res.off("close", done);
+        resolve();
+      };
+      res.on("drain", done);
+      res.on("close", done);
+    });
+  }
 }
 
 /** Registered and buffering: live frames wait until goLive. */
@@ -140,8 +162,8 @@ function deliver(stream: DoorStream, frame: DoorFrame): void {
 
 const roomStreams = (roomId: string) => [...streams].filter((stream) => stream.roomId === roomId);
 
-export function resetDoorRoom(roomId: string): void {
-  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "reset" });
+export function broadcastDoorDeleted(roomId: string, ids: string[], count: number): void {
+  for (const stream of roomStreams(roomId)) deliver(stream, { kind: "deleted", ids, count });
 }
 
 export function broadcastDoorEntry(roomId: string, entry: RoomEntry): void {

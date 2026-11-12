@@ -1,11 +1,11 @@
 // Rooms this PC joined elsewhere. Each "joined" frame names the room that changed.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { fetchResponse, responseBody } from "./api-request";
 import { openLiveEvents } from "./live-events";
 import type { JoinedEntry, JoinedView } from "./team-rooms";
 
-export type JoinedRoomDetail = JoinedView & { entries: JoinedEntry[]; noticeEntry?: JoinedEntry };
+export type JoinedRoomDetail = JoinedView & { entries: JoinedEntry[]; hasMore?: boolean; noticeEntry?: JoinedEntry };
 
 type Listener = (roomId: string | null) => void;
 
@@ -87,19 +87,24 @@ export function useLoadedJoinedRooms(): JoinedView[] {
   return useSyncExternalStore(watch, () => rooms);
 }
 
-/** undefined while loading, null once this PC no longer holds the room. */
-export function useJoinedRoom(roomId: string): JoinedRoomDetail | null | undefined {
+/** undefined while loading, null once this PC no longer holds the room. `beforeOlder` runs just before a page of older rows lands. */
+export function useJoinedRoom(roomId: string, limit = 200, beforeOlder?: RefObject<(() => void) | null>): JoinedRoomDetail | null | undefined {
   const [room, setRoom] = useState<{ roomId: string; detail: JoinedRoomDetail | null }>();
+  const oldest = useRef<{ roomId: string; seq?: number }>(undefined);
   useEffect(() => {
     let alive = true;
     let loadsHere = 0;
     const load = async () => {
       const load = ++loadsHere;
       try {
-        const { status, body } = await read(`/api/joined/rooms/${roomId}`);
+        const { status, body } = await read(`/api/joined/rooms/${roomId}?limit=${limit}`);
         if (!alive || load !== loadsHere) return;
-        if (status === 200 && body?.room) setRoom({ roomId, detail: body.room });
-        else if (status === 404) setRoom({ roomId, detail: null });
+        if (status === 200 && body?.room) {
+          const seq: number | undefined = body.room.entries?.[0]?.seq;
+          if (oldest.current?.roomId === roomId && seq !== undefined && seq < (oldest.current.seq ?? 0)) beforeOlder?.current?.();
+          oldest.current = { roomId, seq };
+          setRoom({ roomId, detail: body.room });
+        } else if (status === 404) setRoom({ roomId, detail: null });
       } catch {
         // keep what is on screen; the next frame reloads
       }
@@ -112,6 +117,6 @@ export function useJoinedRoom(roomId: string): JoinedRoomDetail | null | undefin
       alive = false;
       stop();
     };
-  }, [roomId]);
+  }, [roomId, limit, beforeOlder]);
   return room?.roomId === roomId ? room.detail : undefined;
 }

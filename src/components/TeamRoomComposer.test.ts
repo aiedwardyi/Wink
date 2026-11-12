@@ -150,11 +150,10 @@ describe("room file drop", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each(["offline", "removed", "left", "gone", "missing"])("has no drop intake when the paperclip is absent: %s", async (phase) => {
+  it.each(["removed", "left", "gone", "missing"])("has no drop intake when the paperclip is absent: %s", async (phase) => {
     await render(phase === "missing" ? "host" : "joined");
     await drag("dragenter", []);
     expect(host.textContent).toContain("Drop to attach files");
-    if (phase === "offline") joined.view!.link = "offline";
     if (phase === "removed" || phase === "left") joined.view!.status = phase;
     if (phase === "gone") joined.view = null;
     await render(phase === "missing" ? "host" : "joined", phase === "missing");
@@ -406,6 +405,36 @@ describe("room focus", () => {
     expect(document.activeElement).toBe(box());
   });
 
+  it("keeps the joined box and its focus while the link blips, holding Send until it is back", async () => {
+    await render("joined");
+    box().focus();
+    await type("안녕하세요");
+    joined.view!.link = "offline";
+    await render("joined");
+    expect(document.activeElement).toBe(box());
+    expect(box().value).toBe("안녕하세요");
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Unavailable. Edward is offline.");
+    expect(host.querySelector('[aria-label="Attach a file"]')).toBeNull();
+    await drag("drop", [file("blocked.txt")]);
+    await send();
+    expect(box().value).toBe("안녕하세요");
+    expect(host.textContent).not.toContain("blocked.txt");
+    expect(fetch).not.toHaveBeenCalled();
+    joined.view!.link = "live";
+    await render("joined");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await send();
+    expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path))).toEqual(["/api/joined/rooms/r9/send"]);
+  });
+
+  it.each(["en", "ko"])("says a room the host deleted is gone after Leave: %s", async (locale) => {
+    applyLocale(locale as "en" | "ko");
+    joined.view!.status = "left";
+    (joined.view as JoinedView).gone = true;
+    await render("joined");
+    expect(host.textContent).toContain(locale === "en" ? "This room is gone." : "없어진 채팅방이에요.");
+  });
+
   it("leaves the phone keyboard closed and handles a left room", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
     await render();
@@ -413,6 +442,17 @@ describe("room focus", () => {
     joined.view!.status = "left";
     await render("joined");
     expect(host.querySelector("textarea")).toBeNull();
+  });
+});
+
+describe("joined room paging", () => {
+  it("asks the room for older lines once when a teammate scrolls to the top", async () => {
+    Object.assign(joined.view!, { hasMore: true, entries: [{ seq: 201, id: "e201", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "line 201" }] });
+    await render("joined");
+    const pane = host.querySelector("[data-team-room-transcript]")!;
+    await act(async () => pane.dispatchEvent(new Event("scroll")));
+    await act(async () => pane.dispatchEvent(new Event("scroll")));
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [path, init?.body])).toEqual([["/api/joined/rooms/r9/older", JSON.stringify({ before: 201 })]]);
   });
 });
 

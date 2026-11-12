@@ -271,13 +271,13 @@ export function resetJoined(roomId: string): void {
   });
 }
 
-/** The newest `limit` entries, oldest first, each with its reactions. */
-export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
+/** The newest `limit` entries below `before`, oldest first, each with its reactions. */
+export function joinedEntries(roomId: string, limit: number, before = Number.MAX_SAFE_INTEGER): JoinedEntry[] {
   const rows = db().prepare(`
     SELECT entries.body, reactions.marks FROM entries
     LEFT JOIN reactions ON reactions.room_id = entries.room_id AND reactions.entry_id = json_extract(entries.body, '$.id')
-    WHERE entries.room_id = ? ORDER BY entries.seq DESC LIMIT ?
-  `).all(roomId, limit) as Array<{ body: string; marks: string | null }>;
+    WHERE entries.room_id = ? AND entries.seq < ? ORDER BY entries.seq DESC LIMIT ?
+  `).all(roomId, before, limit) as Array<{ body: string; marks: string | null }>;
   return rows.reverse().map((row) => {
     const entry = botLine(JSON.parse(row.body) as JoinedEntry);
     return row.marks ? { ...entry, reactions: JSON.parse(row.marks) as JoinedMark[] } : entry;
