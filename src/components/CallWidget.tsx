@@ -44,7 +44,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
   const { call } = live;
   const talking = snap.status === "listening" || snap.status === "speaking" || snap.status === "working";
   const open = () => dispatch({ type: "select", id: bot.id });
-  const label = words.openCall.replace("{bot}", bot.name);
+  const label = words.openCall.replace("{bot}", () => bot.name);
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
   const dot = (
     <span

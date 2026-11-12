@@ -6,8 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, useShowItem, type ShowItem } from "@/lib/show-pane";
-import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { closeShow, showItem, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPane } from "./ShowPane";
 
 const pdf = vi.hoisted(() => ({ pages: [] as number[] }));
@@ -128,25 +128,128 @@ it("speaks Korean", async () => {
   expect(button("보기와 미디어 접기")).not.toBeNull();
 });
 
-it("shares one spot with the checker", async () => {
+it("shares one pane with the checker, and Bot Details still takes the spot", async () => {
   const seen: Array<[boolean, boolean]> = [];
+  let details = false;
   function Slot() {
     const watch = useVerifyWatch();
     const show = useShowItem();
-    const panels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show ? ["show" as const] : [])];
-    useRightSlot(panels, (panel) => panel === "watch" ? closeVerifyWatch() : closeShow());
+    const panels: SlotPanel[] = [...(watch || show ? ["show" as const] : []), ...(details ? ["details" as const] : [])];
+    useRightSlot(panels, (panel) => { if (panel === "show") { closeVerifyWatch(); closeShow(); } else details = false; });
     seen.push([Boolean(watch), Boolean(show)]);
     return null;
   }
   await act(async () => root.render(createElement(Slot)));
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  expect(seen.at(-1)).toEqual([true, true]);
+  details = true;
+  await act(async () => root.render(createElement(Slot)));
+  expect(seen.at(-1)).toEqual([false, false]);
+  const app = readFileSync("src/App.tsx", "utf8");
+  expect(app).toContain('...(watch || show || media ? ["show" as const] : [])');
+});
+
+const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
+const selected = () => host.querySelector(".show-pane-tabs [aria-selected='true']")?.textContent;
+const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".show-pane-tabs [role='tab']")].find((el) => el.textContent === name)!;
+const source = { threadId: "t1", messages: [], hasMore: false };
+const probe = async (read: () => void) => {
+  const box = createRoot(document.createElement("div"));
+  function Probe() { read(); return null; }
+  await act(async () => box.render(createElement(Probe)));
+  act(() => box.unmount());
+};
+
+it("has no Check tab without a check", async () => {
+  await render({ item: item("C:\\w\\a.png", "image"), source, hidden: false });
+  expect(tabs()).toEqual(["Show", "Media"]);
+});
+
+it("the checker opens on Check, and Show keeps its file", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  let check: string | null = null;
+  await probe(() => { check = useCheckThread(); });
+  expect(check).toBe("t1");
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
+  expect(selected()).toBe("Check");
+  const aside = host.querySelector("aside")!;
+  expect(aside.dataset.tab).toBe("check");
+  expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).not.toBeNull();
+  expect(host.querySelector("img")?.getAttribute("src")).toBe(src("C:\\w\\a.png"));
+});
+
+it("switching tabs keeps the check alive and never reloads Show's file", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  const img = host.querySelector("img")!;
+  const checker = host.querySelector(".verify-watch-frame:not(.show-frame)")!;
+  await act(async () => tab("Show").click());
+  let check: string | null = "x";
+  let watching = false;
+  await probe(() => { check = useCheckThread(); watching = Boolean(useVerifyWatch()); });
+  expect(check).toBeNull();
+  expect(watching).toBe(true);
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, hidden: false });
+  expect(selected()).toBe("Show");
+  expect(host.querySelector("aside")!.dataset.tab).toBe("show");
+  expect(host.querySelector("img")).toBe(img);
+  expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
+  await act(async () => tab("Check").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
+  expect(selected()).toBe("Check");
+  expect(host.querySelector("img")).toBe(img);
+  expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
+});
+
+it("the Check tab opens the chat's finished check", async () => {
+  const done = { ...card, live: undefined, replay: ["run-0"] };
+  await render({ item: item("C:\\w\\a.png", "image"), card: done, source, hidden: false });
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
+  await act(async () => tab("Check").click());
+  let watching: unknown = null;
+  await probe(() => { watching = useVerifyWatch(); });
+  expect(watching).toEqual({ threadId: "t1", owner: "bot", live: false });
+});
+
+it("the header checker button fronts Check, then closes it from there", async () => {
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   await act(async () => showItem(item("C:\\w\\a.png", "image")));
-  expect(seen.at(-1)).toEqual([false, true]);
-  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
-  expect(seen.at(-1)).toEqual([true, false]);
-  const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('panel === "show" ? closeShow()');
-  expect(app).toContain('...(show || media ? ["show" as const] : [])');
+  let state: unknown[] = [];
+  function Probe() { state = [useCheckThread(), Boolean(useVerifyWatch()), useShowItem()?.path]; return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(state).toEqual([null, true, "C:\\w\\a.png"]);
+  await act(async () => toggleVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  expect(state).toEqual(["t1", true, "C:\\w\\a.png"]);
+  await act(async () => toggleVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  expect(state.slice(1)).toEqual([false, "C:\\w\\a.png"]);
+});
+
+it("speaks Korean on the Check tab", async () => {
+  applyLocale("ko");
+  await render({ watch: { card, threadId: "t1", live: false }, check: true, hidden: false });
+  expect(selected()).toBe("검사");
+});
+
+it("hides only Show and Check behind the other tabs, never the Media list", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
+  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media)');
+});
+
+it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  const running = { ...card, status: "running" as const, live: true as const, replay: [] };
+  await render({ item: item("C:\\w\\a.png", "image"), card: running, source, hidden: false });
+  expect(tabs()).toEqual(["Show", "Media"]);
+  await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {

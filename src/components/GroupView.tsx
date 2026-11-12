@@ -5,7 +5,7 @@
 import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, RefreshCw, Search, X } from "lucide-react";
 import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
@@ -54,13 +54,13 @@ import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
-import { RoomFileRows, roomPictures } from "./TeamRoomRow";
+import { RoomFileRows, RoomLineText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
-import { GroupMemberRoster } from "./GroupMemberRoster";
+import { GroupMemberRoster, ManageMembersButton } from "./GroupMemberRoster";
 import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
@@ -71,6 +71,7 @@ import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
 import { nextBulletin } from "@/lib/room-bulletin";
+import { useTranslationAvailable } from "@/lib/room-translate";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -345,6 +346,7 @@ export const Transcript = memo(function Transcript({
   const { state, dispatch } = useStore();
   const skin = useSkin();
   const roomBase = group.hosted ? hostRoomBase(group.hosted.roomId) : null;
+  const canTranslate = useTranslationAvailable(roomBase ?? "");
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
@@ -617,7 +619,7 @@ export const Transcript = memo(function Transcript({
                         <AttachedImageGallery paths={attachedImages.images} />
                       )}
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
-                      {attachedImages?.display ?? m.text}
+                      {roomBase ? <RoomLineText base={roomBase} entryId={person ? m.roomEntryId : undefined} text={attachedImages?.display ?? m.text ?? ""} canTranslate={canTranslate} /> : attachedImages?.display ?? m.text}
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
                     </>
@@ -1611,17 +1613,7 @@ export function GroupView({ group: live }: { group: Group }) {
               }}
             >
               <GroupPeopleFaces group={group} />
-              <button
-                ref={membersTriggerRef}
-                type="button"
-                title={t("room.manageMembers")}
-                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-                className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
-              >
-                <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
-                  <Plus size={11} />
-                </span>
-              </button>
+              <ManageMembersButton ref={membersTriggerRef} count={members.length} />
             </GroupMemberRoster>
           )}
         </div>

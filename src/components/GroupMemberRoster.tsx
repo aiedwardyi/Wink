@@ -1,6 +1,7 @@
 // The room header's member pictures, left to right in answer order. Drag one
 // (long-press first on touch) or Alt+Left/Right to change who answers first.
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type Ref } from "react";
+import { Plus } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 import { useMemberReorder } from "@/lib/use-member-reorder";
@@ -56,5 +57,23 @@ export function GroupMemberRoster({
       </div>
       {children}
     </div>
+  );
+}
+
+/** The dashed + after the pictures, for a room's members picker. */
+export function ManageMembersButton({ count, ref }: { count: number; ref: Ref<HTMLButtonElement> }) {
+  const { t } = useI18n();
+  return (
+    <button
+      ref={ref}
+      type="button"
+      title={t("room.manageMembers")}
+      aria-label={count === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count })}
+      className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
+    >
+      <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
+        <Plus size={11} />
+      </span>
+    </button>
   );
 }

@@ -12,6 +12,7 @@ import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, hostedTurnRefused, roomAskHooks, roomAsks, runAsk, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedRoomView } from "./guards.ts";
+import { closeInvitesDb } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend } from "./send.ts";
 import { saveRoomFile } from "./files.ts";
@@ -69,6 +70,7 @@ function forgedAsk(group: HostedGroup, state: "held" | "queued" | "running", ent
 const close = () => {
   configureRoomAsks(null);
   closeAsksDb();
+  closeInvitesDb();
   closeRoomsDb();
 };
 
@@ -117,10 +119,20 @@ describe("people-only room create", () => {
     expect(store.groups).toHaveLength(before);
   });
 
-  it("refuses adding a bot afterwards", async () => {
+  it("takes bots afterwards and goes back to people-only with none", async () => {
     const group = await peopleRoom();
-    expect(await call(routes().patch, { memberIds: [wink] }, [group.id])).toEqual({ status: 409, body: { error: "a people-only room has no bots" } });
-    expect(store.group(group.id)!.memberIds).toEqual([]);
+    const mina = addPerson(group.hosted.roomId, "Mina", "trusted", []);
+    expect(await call(routes().patch, { memberIds: [wink] }, [group.id])).toMatchObject({ status: 200, body: { group: { memberIds: [wink] } } });
+    expect(peopleOnlyRoom(group.hosted.roomId)).toBe(false);
+    expect(hostedSend(store.group(group.id) as HostedGroup, { kind: "person", id: mina.id }, "@Wink are you there?").ask).toMatchObject({ botId: wink });
+    expect(await call(routes().patch, { memberIds: [] }, [group.id])).toMatchObject({ status: 200, body: { group: { memberIds: [] } } });
+    expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
+  });
+
+  it("keeps a bot in a room nobody shares", async () => {
+    const created = await call(routes().create, { name: "Bots", memberIds: [wink] });
+    expect((await call(routes().patch, { memberIds: [] }, [created.body.group.id])).status).toBe(400);
+    expect(store.group(created.body.group.id)!.memberIds).toEqual([wink]);
   });
 
   it("never turns an existing bot room into a people-only room", async () => {

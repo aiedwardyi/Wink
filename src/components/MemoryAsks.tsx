@@ -21,7 +21,7 @@ function AskRows({ asks, className }: { asks: Ask[]; className: string }) {
       {asks.map((ask) => (
         <li key={`${ask.at}:${ask.text}`} data-status={ask.status}>
           <span className="mm-asks-text" title={ask.text}>{ask.text}</span>
-          <span className="mm-asks-tag">{t(TAGS[ask.status])}</span>
+          <span className="mm-asks-tag">{t(ask.question && !isClosed(ask) ? "bot.askQuestion" : TAGS[ask.status])}</span>
         </li>
       ))}
     </ul>

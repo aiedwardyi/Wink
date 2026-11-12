@@ -70,15 +70,16 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
   },
 };
 
-// Known outcome reasons; anything else (a server error) shows as sent.
+// Known outcome reasons; anything else (a server error) shows as sent in English and is dropped elsewhere.
 const REASONS: Record<LocaleId, Record<string, string>> = {
   en: {},
-  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요" },
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨" },
 };
 
 export function noticeText(notice: NonNullable<CallState["notice"]>, locale: LocaleId): string {
   const words = WORDS[locale] ?? WORDS.en;
-  return `${words[notice.kind]}: ${notice.text}${notice.why ? ` (${REASONS[locale]?.[notice.why] ?? notice.why})` : ""}`;
+  const why = notice.why && (REASONS[locale]?.[notice.why] ?? (locale === "en" ? notice.why : ""));
+  return `${words[notice.kind]}: ${notice.text}${why ? ` (${why})` : ""}`;
 }
 
 async function post(path: string, body: object): Promise<Posted> {
@@ -233,8 +234,8 @@ export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live;
       {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
       <div className={cn("flex items-center gap-2 p-3", narrow ? "flex-wrap" : "max-md:flex-wrap")}>
         <div className={cn("min-w-0 flex-1 text-sm text-ink", narrow ? "basis-full" : "max-md:basis-full")}>
-          <p>{words.send.replace("{bot}", bot.name)}</p>
-          <p className="font-medium">{snap.pending?.order}</p>
+          <p>{words.send.replace("{bot}", () => bot.name)}</p>
+          <p className="font-medium break-words">{snap.pending?.order}</p>
         </div>
         <button type="button" onClick={() => void call.answer(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
         <button type="button" onClick={() => void call.answer(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>

@@ -550,7 +550,7 @@ const watchRule = (selector: string) => {
 
 it("holds the docked panel for its exit and gives the chat its column back at once", () => {
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain("usePresence(watch && watchChat && watchCard");
+  expect(app).toContain("usePresence(paneWatch || showing || mediaOn");
   expect(app).toContain("closing={watchShown.closing}");
   expect(app).not.toContain('watchCard ? " verify-watch-dock"');
   expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*margin-left: calc\(-1 \* var\(--dock\)\); transition: none;/);

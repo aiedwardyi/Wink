@@ -44,7 +44,7 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
     const next = (value.slice(0, from) + chars + (keep ? value.slice(from + chars.length) : "")).slice(0, SHORT_CODE_LENGTH);
     onChange(next);
     focus(from + chars.length);
-    if (next.length === SHORT_CODE_LENGTH) onDone(next);
+    if (next.length === SHORT_CODE_LENGTH && !next.includes(" ")) onDone(next);
   };
 
   return (
@@ -53,7 +53,7 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
         <input
           key={i}
           ref={(el) => { boxes.current[i] = el; }}
-          value={value[i] ?? ""}
+          value={value[i]?.trim() ?? ""}
           readOnly={disabled}
           aria-label={`${label} ${i + 1}`}
           inputMode="text"
@@ -81,9 +81,10 @@ export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }:
           onKeyDown={(e) => {
             if (e.key !== "Backspace") return;
             e.preventDefault();
-            const at = value[i] ? i : i - 1;
+            const at = value[i]?.trim() ? i : i - 1;
             if (at < 0) return;
-            onChange(value.slice(0, at));
+            // A cleared box mid-code holds a space, so the boxes after it keep their letters.
+            onChange(`${value.slice(0, at)} ${value.slice(at + 1)}`.trimEnd());
             focus(at);
           }}
           className={`${BOX} outline-none focus:border-accent disabled:opacity-60`}

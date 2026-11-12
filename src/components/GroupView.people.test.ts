@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Group, Message } from "@/state/store";
 import type { RoomJoin } from "@/state/store-types";
 
+const storeState = vi.hoisted(() => ({ bots: [], instances: [], config: {} }));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
-    useStore: () => ({ state: { bots: [], instances: [], config: {} }, dispatch: () => undefined }),
+    useStore: () => ({ state: storeState, dispatch: () => undefined }),
     useStoreDispatch: () => () => undefined,
   };
 });
@@ -86,6 +87,20 @@ describe("people in a shared group's chat", () => {
     expect(lines[0]!.className).toBe("py-2 text-center text-[12px] text-ink-secondary");
     expect(lines[0]!.closest("[data-mid]")?.getAttribute("data-mid")).toBe("u2");
     expect(lines[1]!.closest("[data-mid]")).toBeNull();
+  });
+
+  it("translates a teammate's line for the host, never the host's own, and links web addresses", async () => {
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(
+      url === "/api/rooms/r1/translate" ? { available: true } : url === "/api/rooms/r1/entries/e2/translate" && init?.method === "POST" ? { text: "Hi everyone" } : {},
+    ), { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const host = await show([{ ...mine, text: "안녕 https://example.com/a" }, { ...theirs, text: "다들 안녕 https://example.com/b" }]);
+    expect(host.querySelector('[data-mid="u1"] [data-room-translate]')).toBeNull();
+    expect(host.querySelector('[data-mid="u1"] a')?.getAttribute("href")).toBe("https://example.com/a");
+    expect(host.querySelector('[data-mid="u2"] a')?.getAttribute("href")).toBe("https://example.com/b");
+    const button = host.querySelector<HTMLButtonElement>('[data-mid="u2"] [data-room-translate]')!;
+    await act(async () => button.click());
+    expect(host.querySelector('[data-mid="u2"] [data-room-translation]')?.textContent).toBe("Hi everyone");
   });
 
   it("says the join line in Korean", async () => {

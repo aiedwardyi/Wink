@@ -11,7 +11,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -57,7 +57,7 @@ const fetchImpl = async (input: RequestInfo | URL) => {
   if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false } });
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
-  if (path.endsWith("/messages")) return Response.json({ ok: true }, { status: 202 });
+  if (path.endsWith("/messages")) return fakes.messages?.() ?? Response.json({ ok: true }, { status: 202 });
   if (fakes.key && path.startsWith("/api/bots?")) return Response.json({ bots: [atlas], groups: [], computerControl: {} });
   return new Response("{}", { status: 404 });
 };
@@ -86,9 +86,9 @@ async function mount(key = false) {
 const frame = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-orbit-composer-frame]")!;
 const button = (root: HTMLElement, label: string) => root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
-async function connect(host: HTMLElement) {
+async function connect(host: HTMLElement, name = "Atlas") {
   const before = fakes.engines.length;
-  await act(async () => button(host, "Call Atlas")!.click());
+  await act(async () => button(host, `Call ${name}`)!.click());
   await vi.waitFor(() => expect(fakes.engines.length).toBe(before + 1));
   const engine = fakes.engines.at(-1)!;
   await act(async () => engine.events.ready());
@@ -119,6 +119,7 @@ afterEach(() => {
   fakes.capture.mockClear();
   fakes.config = undefined;
   fakes.token = undefined;
+  fakes.messages = undefined;
   fakes.key = false;
   fakes.sse = undefined;
   Reflect.deleteProperty(window, "ogb");
@@ -224,6 +225,38 @@ describe("live call in the message box", () => {
       expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘 (거절됨)");
     } finally {
       applyLocale("en");
+      await unmount();
+    }
+  });
+
+  it("never shows a raw English reason in the Korean bar", async () => {
+    fakes.messages = () => Response.json({ error: "the bot switched tasks before it could receive the message" }, { status: 409 });
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "로그인 버그 고쳐 줘" } }]));
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "예")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘"));
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
+
+  it("wraps a long unbroken order and keeps a $ in the bot name", async () => {
+    const name = atlas.name;
+    atlas.name = "Cash$&Bot";
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host, "Cash$&Bot");
+      const path = `C:\Users\${"very-long-folder-name".repeat(6)}\report.docx`;
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: `Open ${path}` } }]));
+      const [ask, order] = host.querySelectorAll<HTMLElement>("[data-live-call-order] p");
+      expect(ask!.textContent).toBe("Ask Cash$&Bot to do this?");
+      expect(order!.className).toContain("break-words");
+    } finally {
+      atlas.name = name;
       await unmount();
     }
   });

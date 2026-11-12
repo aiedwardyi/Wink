@@ -10,6 +10,8 @@
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
 .show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media { min-height: calc(100% - var(--head) - 20px); }
 .show-pane-tabs button:disabled { opacity: .45; }
+/* Show and Check stay mounted behind the other tabs, so the file never reloads and the check keeps streaming. */
+.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media) { display: none; }
 
 .show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
 .show-frame-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }

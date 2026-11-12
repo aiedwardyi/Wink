@@ -17,6 +17,7 @@ import {
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
   roomMessage,
+  roomNoticeText,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -49,6 +50,11 @@ describe("team room shape", () => {
     expect(roomMessage(hostLines(messages)[0]!)).toBe(messages[0]);
   });
 
+  it("keeps a bot's room answer after its bot leaves", () => {
+    const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "On it", at: 3, from: { botId: "wink", name: "Wink", color: "blue" }, roomEntryId: "e3" }];
+    expect(hostLines(messages)).toEqual([{ id: "c", entryId: "e3", at: 3, author: { kind: "bot", id: "wink", name: "Wink" }, text: "On it", files: [], color: "blue", message: messages[0] }]);
+  });
+
   it("keeps joined reply ids on the line and its message adapter", () => {
     const entry = { seq: 2, id: "e2", at: 2, author: { kind: "person" as const, id: "mina", name: "Mina Park" }, text: "reply", replyToId: "e1" };
     const line = joinedLines([entry])[0]!;
@@ -75,6 +81,13 @@ describe("team room shape", () => {
     expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
   });
 
+  it("shows the host's full pinned line when the room has it, else the pin's preview", () => {
+    const notice = { entryId: "e1", by: "host", at: 1, text: "preview…" };
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [], noticeText: "the whole line" } }))).toBe("the whole line");
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [] } }))).toBe("preview…");
+    expect(roomNoticeText(group({ notice, room: { missing: true } }))).toBe("preview…");
+  });
+
   it("selects a joined room by an id no bot or group can have", () => {
     expect(joinedRoomIdOf(joinedSelection("r9"))).toBe("r9");
     expect(joinedRoomIdOf("nova")).toBeNull();
@@ -94,7 +107,9 @@ describe("room codes", () => {
     expect(joinErrorKey(409, "room-full")).toBe("teamRoom.full");
     expect(joinErrorKey(429, "busy")).toBe("teamRoom.busy");
     expect(joinErrorKey(503, "unavailable")).toBe("teamRoom.unreachable");
-    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "removed"], [404, "no-invite"], [409, "name-taken"]] as const) {
+    expect(joinErrorKey(403, "removed")).toBe("teamRoom.removed");
+    expect(joinErrorKey(403, "removed", true)).toBe("teamRoom.removed");
+    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "forbidden"], [404, "no-invite"], [409, "name-taken"]] as const) {
       expect(joinErrorKey(status, error)).toBe("teamRoom.badCode");
     }
     expect(inviteErrorKey(409)).toBe("teamRoom.phoneOff");
@@ -164,7 +179,7 @@ describe("sending to a room", () => {
   it("names what went wrong and never sends after a refused upload", async () => {
     for (const [status, problem] of [
       [413, { key: "teamRoom.tooBig", vars: { name: "a.png" } }],
-      [415, { key: "teamRoom.fileType" }],
+      [415, { key: "teamRoom.fileKinds" }],
       [429, { key: "teamRoom.tooFast" }],
       [500, { key: "teamRoom.sendFailed" }],
     ] as const) {

@@ -727,6 +727,44 @@ describe("summary build after settle", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("runs a native build at the first settle after 30 s of back-to-back turns, so a later send never pays for it", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    build.onSettled("bot", "t");
+    await tick();
+    const turn = async () => {
+      state.busy = true;
+      await vi.advanceTimersByTimeAsync(1_500);
+      state.busy = false;
+      build.onSettled("bot", "t");
+      await tick();
+    };
+    for (let at = 0; at < 19; at++) await turn();
+    expect(calls).toHaveLength(0);
+    await turn();
+    expect(calls).toHaveLength(1);
+    calls[0]!.resolve(digest(calls[0]!.prompt));
+    await build.idle();
+    expect(appended).toHaveLength(1);
+    expect(build.inflight("t")).toBe(false);
+  });
+
+  it("makes no call for a native build whose chat was deleted while it waited", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build, store } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    build.onSettled("bot", "t");
+    await tick();
+    threads.delete("t");
+    store.taskByThread = () => undefined as never;
+    await quiet();
+    expect(calls).toHaveLength(0);
+    expect(build.inflight("t")).toBe(false);
+  });
+
   it("keeps a native build off the turn the engine compacts in, with the settle's prompt", async () => {
     const { calls, generateText } = deferred();
     const { threads, appended, state, build } = setup(generateText);

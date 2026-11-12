@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn";
 
-const SVG = import.meta.glob<string>("../assets/reactions/*.svg", { query: "?raw", import: "default", eager: true });
+// Files, not inline markup: inline copies share gradient ids and draw blank once the first copy is skipped by layout.
+const ICONS = import.meta.glob<string>("../assets/reactions/*.svg", { query: "?no-inline", import: "default", eager: true });
 
 const SLUG: Record<string, string> = {
   "👍": "thumbs-up",
@@ -19,19 +20,11 @@ const SLUG: Record<string, string> = {
   "🎉": "party-popper",
 };
 
-const markup = (emoji: string) => SVG[`../assets/reactions/${SLUG[emoji.replace(/️/g, "")]}.svg`];
+const url = (emoji: string) => ICONS[`../assets/reactions/${SLUG[emoji.replace(/️/g, "")]}.svg`];
 
 /** Color icon for a reaction emoji; older marks with no icon keep the glyph. */
 export function ReactionIcon({ emoji, size, className }: { emoji: string; size: number; className?: string }) {
-  const svg = markup(emoji);
-  if (!svg) return <span data-emoji={emoji} className={className}>{emoji}</span>;
-  return (
-    <span
-      data-emoji={emoji}
-      aria-hidden
-      className={cn("inline-block shrink-0 [&>svg]:size-full", className)}
-      style={{ width: size, height: size }}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
-  );
+  const src = url(emoji);
+  if (!src) return <span data-emoji={emoji} className={className}>{emoji}</span>;
+  return <img data-emoji={emoji} src={src} alt="" aria-hidden draggable={false} className={cn("inline-block shrink-0", className)} style={{ width: size, height: size }} />;
 }

@@ -21,11 +21,11 @@ export function useTeamRoomReply(base: string) {
   return { replyTo, selectReply: (message: Message) => setDraft({ base, message }), clearReply };
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply }: { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void }) {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, offline }: { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean }) {
   return (
     <>
       <CallWidgetSlot className="px-3 pb-2 md:hidden" />
-      <Composer room={{ name, base, draftId, people, bots }} replyTo={replyTo} onClearReply={onClearReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline }} replyTo={replyTo} onClearReply={onClearReply} />
     </>
   );
 }

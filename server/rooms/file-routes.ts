@@ -7,8 +7,8 @@ import { isRelayRequest } from "../phone-relay/via.ts";
 import type { Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { committedRoomText, roomEntry } from "./db.ts";
-import { doorEntry, resetDoorRoom } from "./door-streams.ts";
-import { deleteRoomFile, listRoomFiles, MAX_MESSAGE_FILES, roomFilesState, saveRoomFile, serveRoomFile } from "./files.ts";
+import { broadcastDoorDeleted, doorEntry } from "./door-streams.ts";
+import { deletedRoomFiles, deleteRoomFile, listRoomFiles, MAX_MESSAGE_FILES, roomFilesState, saveRoomFile, serveRoomFile } from "./files.ts";
 import { moveRoomFiles, roomFilesFolder } from "./files-folder.ts";
 import { hostedSend } from "./send.ts";
 
@@ -25,7 +25,7 @@ function reply(res: ServerResponse, status: number, body: unknown, close = false
 }
 
 /** Upload, download or preview for one room member: "host" or a person id. `match` is FILE_PATH's. */
-export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, res: ServerResponse, url: URL, roomId: string, owner: string, still?: () => boolean): Promise<void> {
+export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, res: ServerResponse, url: URL, roomId: string, owner: string, still?: () => boolean, media = true): Promise<void> {
   const action = fileAction(match);
   if (action !== "upload") {
     try {
@@ -34,7 +34,7 @@ export async function fileRoute(match: RegExpExecArray, req: IncomingMessage, re
     return;
   }
   try {
-    const file = await saveRoomFile(req, roomId, { owner, name: url.searchParams.get("name"), uploadId: url.searchParams.get("uploadId"), still });
+    const file = await saveRoomFile(req, roomId, { owner, name: url.searchParams.get("name"), uploadId: url.searchParams.get("uploadId"), still, media });
     reply(res, 200, { file });
   } catch (error) {
     const status = (error as { status?: number }).status;
@@ -93,7 +93,7 @@ export async function hostFileRoute(
             if (!message.roomFiles?.some((each) => each.id === file[2])) continue;
             deps.store.patchMessage(group.threadId, message.id, { roomFiles: message.roomFiles.map((each) => each.id === file[2] ? { ...each, deleted: true } : each) });
           }
-          resetDoorRoom(roomId!);
+          broadcastDoorDeleted(roomId!, [file[2]], deletedRoomFiles(roomId!).count);
           reply(res, 200, { ok: true });
         }
       } catch { reply(res, 503, { error: "room files folder is unavailable" }); }

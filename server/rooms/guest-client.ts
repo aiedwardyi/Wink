@@ -53,6 +53,7 @@ const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
 const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
+const MAX_VIEW_ENTRIES = 10_000;
 const UPLOAD_MS = 10 * 60_000;
 /** About 1 Mbps, the slowest uplink an upload may average before it is cut. */
 const UPLOAD_BYTES_PER_MS = 125;
@@ -117,15 +118,20 @@ export interface JoinedView {
   lastEntry?: JoinedEntry;
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
+  /** The host answered Leave with 404: the room was deleted. */
+  gone?: true;
 }
 
-export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
+/** `groupId` is the room this PC hosts, when its own code was entered. */
+export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string; groupId?: string };
 
 export interface GuestClientDeps {
   /** Relay bases a code's host may sit under: the enrolled one and the baked team one. */
   bases(): ReadonlyArray<string | null>;
   /** This PC as the host sees it: its own name and a steady id a Remove can bar. */
   joiner(): { name: string; device: string };
+  /** The group this PC hosts behind `code`, so the host never joins its own room. */
+  ownRoom?(code: string): string | null;
   onChange?(roomId: string): void;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
@@ -161,6 +167,8 @@ interface Sync {
   stopped: boolean;
   /** Set per live stream by the host's first reactions frame; an older host never sends one. */
   reacts: boolean;
+  /** Set per live stream when a deleted file's copy stays, so the count holds and the next stream sends it again. */
+  undropped: boolean;
 }
 
 export class GuestClient {
@@ -172,6 +180,7 @@ export class GuestClient {
   private readonly alerts = new Map<string, RoomAlert>();
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
+  private readonly gone = new Set<string>();
   private readonly changing = new Set<string>();
   private joining = 0;
   private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
@@ -200,11 +209,34 @@ export class GuestClient {
     return joinedRooms().map((room) => this.view(room));
   }
 
-  room(roomId: string): (JoinedView & { entries: JoinedEntry[]; noticeEntry?: JoinedEntry }) | null {
+  /** Held rows only, contiguous from the oldest held to the newest, so `hasMore` is the oldest seq past 1. */
+  room(roomId: string, limit = VIEW_ENTRIES): (JoinedView & { entries: JoinedEntry[]; hasMore: boolean; noticeEntry?: JoinedEntry }) | null {
     const room = joinedRoom(roomId);
     if (!room) return null;
     const notice = room.state?.notice && joinedEntry(roomId, room.state.notice.entryId);
-    return { ...this.view(room), entries: joinedEntries(roomId, VIEW_ENTRIES), ...(notice ? { noticeEntry: notice } : {}) };
+    const entries = joinedEntries(roomId, Math.min(Math.max(1, Math.trunc(limit) || VIEW_ENTRIES), MAX_VIEW_ENTRIES));
+    return { ...this.view(room), entries, hasMore: entries.length < MAX_VIEW_ENTRIES && (entries[0]?.seq ?? 1) > 1, ...(notice ? { noticeEntry: notice } : {}) };
+  }
+
+  /** Local rows first; else the host's page before `before`. False when nothing older can be had. */
+  async older(roomId: string, before: unknown): Promise<GuestResult<boolean>> {
+    if (!joinedRoom(roomId)) return failed(404, "not found");
+    if (typeof before !== "number" || !Number.isSafeInteger(before) || before < 1) return failed(400, "bad request");
+    if (joinedEntries(roomId, 1, before).length) return { ok: true, value: true };
+    const creds = joinedKey(roomId);
+    if (before === 1 || !creds) return { ok: true, value: false };
+    const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot?with=bots&before=${before}`, creds.key);
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return reply;
+    }
+    const page = snapshotSchema.safeParse(reply.value);
+    if (!page.success) return unavailable();
+    // An older host ignores `before` and sends its newest page.
+    const older = page.data.entries.filter((entry) => entry.seq < before);
+    if (joinedKey(roomId)?.key !== creds.key) return { ok: true, value: false };
+    addJoinedEntries(roomId, older);
+    return { ok: true, value: older.length > 0 };
   }
 
   /** Toggles this PC's mark on a line through the door. */
@@ -247,6 +279,8 @@ export class GuestClient {
   /** The whole join: the pasted code in, a synced room out. */
   async join(code: string): Promise<GuestResult<JoinedView>> {
     if (this.changing.size) return failed(409, "room is busy");
+    const own = this.deps.ownRoom?.(code);
+    if (own) return { ...failed(409, "own-room"), groupId: own };
     this.joining++;
     try {
       return await this.joinNow(code);
@@ -291,6 +325,7 @@ export class GuestClient {
     saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
+    this.gone.delete(roomId);
     this.follow(roomId);
     this.changed(roomId);
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
@@ -339,9 +374,12 @@ export class GuestClient {
     if (!creds) return { ok: true, value: this.view(room) };
     this.leaving.add(creds.key);
     const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/leave`, creds.key, "{}");
-    if (reply.ok || reply.status === 401) this.end(roomId, creds.key, "left");
+    // A deleted room or a host that never answers would otherwise keep a dead room here for good.
+    const done = reply.ok || [401, 404, 503].includes(reply.status);
+    if (done) this.end(roomId, creds.key, "left");
+    if (!reply.ok && reply.status === 404) this.gone.add(roomId);
     this.leaving.delete(creds.key);
-    if (!reply.ok && reply.status !== 401) return reply;
+    if (!done) return reply;
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
@@ -494,7 +532,7 @@ export class GuestClient {
   private async call(
     relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
   ): Promise<GuestResult<unknown>> {
-    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
+    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", "x-orbit-room-media": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) {
       headers.authorization = `Bearer ${key}`;
       headers["x-wink-device"] = this.deps.joiner().device;
@@ -514,7 +552,7 @@ export class GuestClient {
   private view(room: JoinedRoom): JoinedView {
     const link = room.status === "joined" ? (this.syncs.get(room.roomId)?.link ?? "offline") : null;
     const sync = this.syncs.get(room.roomId);
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts) };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
@@ -530,7 +568,7 @@ export class GuestClient {
   }
 
   private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false };
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false, undropped: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }
@@ -609,13 +647,14 @@ export class GuestClient {
       servername: creds.relayHost,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1" },
+      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1", "x-orbit-room-media": "1" },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,
     });
     sync.req = req;
     sync.reacts = false;
+    sync.undropped = false;
     let silence: NodeJS.Timeout | null = null;
     const quiet = () => {
       if (silence) clearTimeout(silence);
@@ -679,9 +718,9 @@ export class GuestClient {
       setJoinedReactions(roomId, parsed.lines, parsed.reset);
       this.changed(roomId);
     } else if (parsed.kind === "deleted") {
-      await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
+      if (!(await dropJoinedFiles(roomId, parsed.ids).then(() => true, () => false))) sync.undropped = true;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
-      if (parsed.count !== undefined) setJoinedDeletedCount(roomId, parsed.count);
+      if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

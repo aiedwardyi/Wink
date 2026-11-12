@@ -397,7 +397,7 @@ export class LiveCall {
     const old = this.engine;
     this.engine = null;
     this.connected = false;
-    this.flushHeard();
+    this.flushHeard(this.quiet);
     this.turnHadAudio = false;
     this.generating = false;
     this.guarded = false;
@@ -584,6 +584,8 @@ export class LiveCall {
       if (sent.data.cancelled) return "not sent: cancelled";
       if (sent.data.dispatchFailed) return `not sent: ${sent.data.error ?? "dispatch failed"}`;
       this.awaiting += 1;
+      // The row and busy can land before this receipt, leaving no busy render with it awaited.
+      if (this.busy) this.ran = true;
       this.set({ notice: undefined });
       this.refresh();
       return sent.data.queued ? "queued" : "sent";
@@ -629,11 +631,13 @@ export class LiveCall {
     this.set({ caption: { id: this.lineIds[who], who, text } });
   }
 
-  private flushHeard() {
+  // Speech cut off mid-line (a reconnect) is kept as a line but never answers a card or an offer.
+  private flushHeard(ended = true) {
     const text = spokenText(this.heardBuf);
     this.heardBuf = "";
     this.lineIds.user = 0;
     if (!text) return;
+    if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
     this.letters.hangul += text.match(HANGUL)?.length ?? 0;
     this.letters.all += text.match(LETTER)?.length ?? 0;
@@ -641,7 +645,7 @@ export class LiveCall {
     const req = this.req = request(text);
     // The first line after the card was read out is its answer, so it goes to the bot as one.
     const card = this.card;
-    if (!this.pending && card?.armed && !asksToRepeat(text)) {
+    if (ended && !this.pending && card?.armed && !asksToRepeat(text)) {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
@@ -663,7 +667,7 @@ export class LiveCall {
       return;
     }
     this.postLines([{ who: "user", text, at: this.now() }]);
-    if (!this.pending) return;
+    if (!this.pending || !ended) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
     if (consent) void this.answer(consent === "yes");
@@ -711,7 +715,7 @@ export class LiveCall {
       let asked: Message | undefined;
       let orders: Message[] = [];
       for (const row of input.messages) {
-        if (isSentByPerson(row) && !isVoiceLine(row) && row.quick?.state !== "asked" && row.text?.trim()) {
+        if (isSentByPerson(row) && !isVoiceLine(row) && row.quick?.state !== "asked" && !row.queued && row.text?.trim()) {
           if (!row.steered || !orders.length) {
             asked = row;
             orders = [];
@@ -761,12 +765,12 @@ export class LiveCall {
     this.refresh();
   }
 
-  /** The bot went idle after running: this call's orders it never answered get no reply, so they are told and can be asked again. A question or need raised since is its reply. */
+  /** The bot went idle after running: this call's orders it never answered get no reply, so they are told and can be asked again. A question or need raised since is its reply; one still queued has not run. */
   private stopped(messages: Message[], askedAt: number | undefined, newNeed: boolean) {
     this.ran = false;
     const lost: string[] = [];
     for (const row of messages) {
-      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || this.settled.has(row.id) || !row.text?.trim()) continue;
+      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || row.queued || this.settled.has(row.id) || !row.text?.trim()) continue;
       this.settled.add(row.id);
       this.awaiting = Math.max(0, this.awaiting - 1);
       if (newNeed || (askedAt !== undefined && askedAt >= row.at)) continue;
