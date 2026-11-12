@@ -67,10 +67,10 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
   },
 };
 
-// Known outcome reasons; anything else (a server error) shows as sent.
+// Known outcome reasons; anything else (a server error) shows as sent in English and is dropped elsewhere.
 const REASONS: Record<LocaleId, Record<string, string>> = {
   en: {},
-  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요" },
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨" },
 };
 
 async function post(path: string, body: object): Promise<Posted> {
@@ -203,7 +203,8 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.busy, bot.threadId, call, messages]);
 
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? `${words[snap.notice.kind]}: ${snap.notice.text}${snap.notice.why ? ` (${REASONS[locale]?.[snap.notice.why] ?? snap.notice.why})` : ""}` : privacy ? words.privacy : "";
+  const why = snap.notice?.why && (REASONS[locale]?.[snap.notice.why] ?? (locale === "en" ? snap.notice.why : ""));
+  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? `${words[snap.notice.kind]}: ${snap.notice.text}${why ? ` (${why})` : ""}` : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
@@ -224,8 +225,8 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
           {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
           <div className="flex items-center gap-2 p-3 max-md:flex-wrap">
             <div className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
-              <p>{words.send.replace("{bot}", bot.name)}</p>
-              <p className="font-medium">{snap.pending?.order}</p>
+              <p>{words.send.replace("{bot}", () => bot.name)}</p>
+              <p className="font-medium break-words">{snap.pending?.order}</p>
             </div>
             <button type="button" onClick={() => void call.answer(true)} className={cn(target, "bg-accent text-accent-ink")}>{words.yes}</button>
             <button type="button" onClick={() => void call.answer(false)} className={cn(target, "bg-control text-ink")}>{words.no}</button>
