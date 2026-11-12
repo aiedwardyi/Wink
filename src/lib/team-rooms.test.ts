@@ -94,7 +94,9 @@ describe("room codes", () => {
     expect(joinErrorKey(409, "room-full")).toBe("teamRoom.full");
     expect(joinErrorKey(429, "busy")).toBe("teamRoom.busy");
     expect(joinErrorKey(503, "unavailable")).toBe("teamRoom.unreachable");
-    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "removed"], [404, "no-invite"], [409, "name-taken"]] as const) {
+    expect(joinErrorKey(403, "removed")).toBe("teamRoom.removed");
+    expect(joinErrorKey(403, "removed", true)).toBe("teamRoom.removed");
+    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "forbidden"], [404, "no-invite"], [409, "name-taken"]] as const) {
       expect(joinErrorKey(status, error)).toBe("teamRoom.badCode");
     }
     expect(inviteErrorKey(409)).toBe("teamRoom.phoneOff");

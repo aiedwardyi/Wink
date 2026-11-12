@@ -49,6 +49,42 @@ describe("Remove", () => {
   });
 });
 
+describe("Let back in", () => {
+  it("lists removed teammates and lets one back in", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST" && !path.endsWith("/invites")) posts.push(path);
+      return new Response(JSON.stringify(path.endsWith("/invites") ? { code: "old-code" } : { ok: true }));
+    }));
+    const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [], joins: [], removed: [{ id: "mina", name: "Mina" }] } } as TeamRoom;
+    root = createRoot(document.body.appendChild(document.createElement("main")));
+    await act(async () => root!.render(createElement(TeamRoomPeople, { group, onClose: () => {}, triggerRef: { current: null } })));
+    expect(document.querySelector("[data-room-removed]")?.textContent).toBe("MinateamRoom.letBack");
+    await act(async () => button("teamRoom.letBackNamed").click());
+    expect(posts).toEqual(["/api/rooms/r1/people/mina/back"]);
+    expect(mock.dispatch).toHaveBeenCalledWith({ type: "groupPatched", group: { id: "g1", room: { ...group.room, removed: [] } } });
+  });
+
+  it("moves a removed teammate to the removed rows, or says the code changed when it was retired", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    for (const codeChanged of [false, true]) {
+      vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => new Response(JSON.stringify(
+        init?.method === "DELETE" ? { ok: true, ...(codeChanged ? { codeChanged } : {}) } : { code: "old-code" },
+      ))));
+      const group = { id: "g1", name: "Team", hosted: { roomId: "r1" }, room: { name: "Team", people: [{ id: "mina", name: "Mina" }], joins: [] } } as TeamRoom;
+      root = createRoot(document.body.appendChild(document.createElement("main")));
+      await act(async () => root!.render(createElement(TeamRoomPeople, { group, onClose: () => {}, triggerRef: { current: null } })));
+      await act(async () => button("teamRoom.removeNamed").click());
+      await confirmRemove();
+      expect(mock.dispatch).toHaveBeenLastCalledWith({ type: "groupPatched", group: { id: "g1", room: { ...group.room, people: [], removed: codeChanged ? [] : [{ id: "mina", name: "Mina" }] } } });
+      expect(document.querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "teamRoom.codeChanged" : undefined);
+      await act(async () => root?.unmount());
+      document.body.innerHTML = "";
+    }
+  });
+});
+
 describe("room code after removal", () => {
   it.each([200, 503])("drops the retired code when refreshing it returns %s", async (status) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

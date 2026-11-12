@@ -12,6 +12,7 @@ import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { closeRoomsDb, createRoom, roomPeople } from "./db.ts";
+import { hostedRoomView } from "./guards.ts";
 import { configureRoomDoor, handleRoomDoor } from "./door.ts";
 import type { DoorFrame } from "./door-streams.ts";
 import { closeInvitesDb, createInvite, roomInvites } from "./invites.ts";
@@ -80,6 +81,7 @@ function call(path: string, init: { method?: string; body?: unknown; relay?: boo
 
 const invite = (roomId: string, authorization?: string) => call(`/api/rooms/${roomId}/invites`, { method: "POST", authorization });
 const remove = (roomId: string, personId: string, authorization?: string) => call(`/api/rooms/${roomId}/people/${personId}`, { method: "DELETE", authorization });
+const letBack = (roomId: string, personId: string, authorization?: string) => call(`/api/rooms/${roomId}/people/${personId}/back`, { method: "POST", authorization });
 const joinAs = (code: unknown, name: string, device?: string) => call("/room/v1/join", { method: "POST", relay: true, body: { code, name, device } });
 const pcOf = (name: string) => `pc-${name.toLowerCase()}-0123456789abcdef`;
 
@@ -289,7 +291,7 @@ describe("remove", () => {
     const mina = await call("/room/v1/join", { method: "POST", relay: true, body: { code: `wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}` } });
     expect(mina.status).toBe(200);
     const { body } = await invite(id);
-    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true, codeChanged: true } });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
     expect(roomPeople(id)).toEqual([]);
     expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: mina.body.key })).status).toBe(401);
@@ -378,6 +380,24 @@ describe("remove", () => {
     expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Joon"]);
   });
 
+  it("lists a removed teammate until the host lets them back in with the same code", async () => {
+    const group = peopleRoom();
+    const id = group.hosted.roomId;
+    const { body } = await invite(id);
+    const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
+    const emitted = vi.spyOn(store, "emit");
+    expect(await remove(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
+    expect(emitted).toHaveBeenLastCalledWith({ type: "group", groupId: group.id });
+    expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], removed: [{ id: mina.body.person.id, name: "Mina" }] });
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect(await letBack(id, mina.body.person.id, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
+    expect(await letBack(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
+    expect(hostedRoomView(group.hosted)).toMatchObject({ removed: [] });
+    expect(await letBack(id, mina.body.person.id)).toEqual({ status: 404, body: { error: "not found" } });
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toMatchObject({ status: 200, body: { person: { name: "Mina" } } });
+    expect(roomPeople(id).map((person) => person.name)).toEqual(["Mina"]);
+  });
+
   it("lets a teammate who left come back, and never lists one PC twice", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
@@ -403,6 +423,7 @@ describe("who reaches them", () => {
     const misses: Array<[string, string]> = [
       ["GET", `/api/rooms/${id}/invites`], ["DELETE", `/api/rooms/${id}/invites`], ["POST", `/api/rooms/${id}/people/${mina.personId}`],
       ["GET", `/api/rooms/${id}/people/${mina.personId}`], ["POST", `/api/rooms/${loose.id}/invites`], ["POST", "/api/rooms/nope/invites"],
+      ["DELETE", `/api/rooms/${id}/people/${mina.personId}/back`], ["POST", `/api/rooms/${id}/people/${mina.personId}/back`],
     ];
     for (const [method, path] of misses) expect([method, path, (await call(path, { method, body: { name: "Joon" } })).status]).toEqual([method, path, 404]);
     expect(roomInvites(id)).toEqual([]);

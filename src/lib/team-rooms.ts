@@ -29,6 +29,8 @@ export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boole
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
 
+export const roomRemoved = (group: Group) => (group.room && "people" in group.room ? group.room.removed ?? [] : []);
+
 const NO_JOINS: RoomJoin[] = [];
 
 // One empty list, so a memoized transcript keeps its props.
@@ -127,6 +129,7 @@ export const looksLikeRoomCode = (text: string) => CODE.test(text.trim());
 
 export function joinErrorKey(status: number, error: string, short = false): MessageKey {
   if (error === "room-full") return "teamRoom.full";
+  if (status === 403 && error === "removed") return "teamRoom.removed";
   if (status === 429) return "teamRoom.busy";
   if (status === 503) return "teamRoom.unreachable";
   return short ? "teamRoom.badShortCode" : "teamRoom.badCode";
@@ -186,8 +189,13 @@ export const typedRoomName = (value: string) => [...value.normalize("NFC").repla
 export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
   error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
-export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
+/** `codeChanged` when Remove retired the room code instead of barring a PC. */
+export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true; codeChanged?: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });
+}
+
+export function letBackIn(roomId: string, personId: string): Promise<{ ok: true }> {
+  return request(`${hostRoomBase(roomId)}/people/${personId}/back`, { method: "POST" });
 }
 
 export async function joinRoom(code: string): Promise<{ room: JoinedView } | Refused> {

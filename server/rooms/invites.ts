@@ -282,12 +282,24 @@ export function inviteRoomId(inviteId: string): string | null {
   return row?.room_id ?? null;
 }
 
-/** Host Remove: that person's PC can't come back with the room code. Leave never calls this. */
-export function barRoomPerson(roomId: string, personId: string): void {
-  transaction((database) => {
+/** Host Remove: that person's PC can't come back with the room code. Leave never calls this. True when the code was retired instead. */
+export function barRoomPerson(roomId: string, personId: string): boolean {
+  return transaction((database) => {
     const barred = database.prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
-    if (!barred.changes) database.prepare("DELETE FROM room_codes WHERE room_id = ?").run(roomId);
+    if (barred.changes) return false;
+    database.prepare("DELETE FROM room_codes WHERE room_id = ?").run(roomId);
+    return true;
   });
+}
+
+/** People the host removed whose PCs are still kept out. */
+export function barredPeople(roomId: string): string[] {
+  return (db().prepare("SELECT DISTINCT person_id FROM room_devices WHERE room_id = ? AND removed = 1").all(roomId) as Array<{ person_id: string }>).map((row) => row.person_id);
+}
+
+/** Host Let back in: that person's PC joins with the room code again, as a new seat. */
+export function unbarRoomPerson(roomId: string, personId: string): boolean {
+  return db().prepare("UPDATE room_devices SET removed = 0 WHERE room_id = ? AND person_id = ? AND removed = 1").run(roomId, personId).changes > 0;
 }
 
 export function revokeGuestKeys(roomId: string, personId: string): boolean {
