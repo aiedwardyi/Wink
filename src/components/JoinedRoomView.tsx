@@ -1,5 +1,5 @@
 // A room joined on someone else's Wink. Only its lines and files reach this screen.
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { request } from "@/lib/api-request";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -17,12 +17,30 @@ import { RoomTitle } from "./RoomTitle";
 import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomTranscript } from "./TeamRoomRow";
 
+const PAGE = 200;
+
 export function JoinedRoomView({ roomId }: { roomId: string }) {
   const { t } = useI18n();
   const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
-  const room = useJoinedRoom(roomId);
+  const [limit, setLimit] = useState(PAGE);
+  const beforeOlder = useRef<(() => void) | null>(null);
+  const paging = useRef<number | null>(null);
+  const room = useJoinedRoom(roomId, limit, beforeOlder);
   const entries = room?.entries;
+  const first = entries?.[0]?.seq;
+  const loadOlder = useCallback((beforeCommit: () => void) => {
+    // Held per oldest row, so a scroll before the bigger page lands asks once; nothing more stops it.
+    if (first === undefined || paging.current === first) return;
+    paging.current = first;
+    void request(`${joinedRoomBase(roomId)}/older`, { method: "POST", body: JSON.stringify({ before: first }) })
+      .then(({ more }) => {
+        if (!more) return;
+        beforeOlder.current = beforeCommit;
+        setLimit((shown) => shown + PAGE);
+      })
+      .catch(() => { paging.current = null; });
+  }, [roomId, first]);
   const bots = room?.state?.bots;
   const meId = room?.me.id;
   const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
@@ -39,7 +57,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     : phase === "connecting" ? t("teamRoom.connecting")
     : phase === "offline" ? t("teamRoom.offline", { host: room?.state?.host ?? "" })
     : phase === "removed" ? t("teamRoom.removed")
-    : phase === "left" ? t("teamRoom.left")
+    : phase === "left" ? t(room?.gone ? "teamRoom.gone" : "teamRoom.left")
     : null;
   const me = room?.me.id;
   const composerPeople = room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined;
@@ -67,6 +85,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       <TeamRoomTranscript
         key={base}
         lines={lines}
+        hasMore={Boolean(room?.hasMore)}
+        loadOlder={loadOlder}
         mine={(line) => line.author.kind === "person" && line.author.id === me}
         base={base}
         label={t("chat.roomAria", { name })}
@@ -83,7 +103,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={room?.state?.bots} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
+        {joined ? (
+          <>
+            {status !== null && <div role="status" className="mb-2 px-5 text-center text-[13px] text-ink-secondary">{status}</div>}
+            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={room?.state?.bots} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
+          </>
+        ) : <TeamRoomStatus text={status ?? ""} />}
       </div>
     </main>
   );

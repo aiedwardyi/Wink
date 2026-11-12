@@ -710,7 +710,7 @@ describe("Team rooms for a teammate", () => {
     const status = () => main().querySelector('[role="status"]')?.textContent;
     await vi.waitFor(() => expect(phase()).toBe("connecting"));
     expect(status()).toBe("Connecting...");
-    expect(main().querySelector("textarea")).toBeNull();
+    expect(main().querySelector("textarea")).not.toBeNull();
 
     view = joinedView("joined", "live");
     await joinedFrame("r9");
@@ -728,7 +728,9 @@ describe("Team rooms for a teammate", () => {
     await joinedFrame("r9");
     await vi.waitFor(() => expect(phase()).toBe("offline"));
     expect(status()).toBe("Unavailable. Edward is offline.");
-    expect(main().querySelector("textarea")).toBeNull();
+    await type(main().querySelector("textarea")!, "held");
+    await enter(main().querySelector("textarea")!);
+    expect(asked("POST", "/api/joined/rooms/r9/send")).toHaveLength(1);
 
     view = joinedView("removed", null);
     await joinedFrame("r9");

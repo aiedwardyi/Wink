@@ -65,6 +65,8 @@ export interface JoinedView {
   lastEntry?: JoinedEntry;
   /** False for an older host: no emoji row and no notice pin. */
   canReact?: boolean;
+  /** The host answered Leave with 404: the room was deleted. */
+  gone?: boolean;
 }
 
 export interface JoinedBot {

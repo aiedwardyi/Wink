@@ -19,7 +19,7 @@ import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGrou
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
-import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
+import { broadcastDoorDeleted, broadcastDoorEntry, ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { deleteRoomFile } from "./files.ts";
 import { hostedRoomView } from "./guards.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, shortRoomCode } from "./invites.ts";
@@ -746,6 +746,27 @@ describe("stream internals", () => {
     goLive(stream, 2);
     expect(res.written.map((chunk) => JSON.parse(chunk.slice(6)).kind + (JSON.parse(chunk.slice(6)).entry?.seq ?? ""))).toEqual(["entry2", "state", "entry3"]);
     res.destroy();
+  });
+
+  it("sends a host file delete live as a deleted frame a 1.0.256 teammate reads, not a reset", () => {
+    const res = new FakeRes();
+    const stream = openDoorStream("r", "p", res as unknown as ServerResponse);
+    goLive(stream, 0);
+    broadcastDoorDeleted("r", ["f".repeat(24)], 3);
+    const frames = res.written.map((chunk) => JSON.parse(chunk.slice(6)));
+    expect(frames).toEqual([{ kind: "deleted", ids: ["f".repeat(24)], count: 3 }]);
+    const older = z.object({ kind: z.literal("deleted"), ids: z.array(z.string().regex(/^[A-Za-z0-9_-]{24}$/)).max(5_000) });
+    expect(older.safeParse(frames[0]).success).toBe(true);
+    res.destroy();
+  });
+
+  it("cuts a reader whose stalled catch-up holds over 1 MB of live frames", () => {
+    const res = new FakeRes();
+    openDoorStream("r", "p", res as unknown as ServerResponse);
+    const entry = (seq: number) => ({ seq, id: `e${seq}`, at: 1, author: { kind: "host" as const, id: "host", name: "E" }, text: "x".repeat(20_000), files: [] });
+    for (let seq = 1; seq <= 60 && !res.destroyed; seq++) broadcastDoorEntry("r", entry(seq) as never);
+    expect(res.destroyed).toBe(true);
+    expect(res.written).toEqual([]);
   });
 
   it("destroys a removed person's stream socket once the ended flush deadline passes", () => {

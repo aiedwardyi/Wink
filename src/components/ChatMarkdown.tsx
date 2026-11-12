@@ -674,12 +674,15 @@ function ChatMarkdownComponent({
   whole = 0,
   baseDir,
   threadId,
+  localLinks = true,
 }: {
   text: string;
   streaming?: boolean;
   whole?: number;
   baseDir?: string | null;
   threadId?: string;
+  /** False for text written on another PC: its file paths mean nothing here. */
+  localLinks?: boolean;
 }) {
   const text = useMemo(() => unwrapUserTags(source), [source]);
   const style = useReplyStyle();
@@ -752,6 +755,7 @@ function ChatMarkdownComponent({
       // a stripped target (javascript:, empty) would open the app origin
       if (!href) return <>{children}</>;
       const localPath = localFilePath(href);
+      if (!localLinks && (localPath || isRelativeHref(href))) return <>{children}</>;
       if (localPath) return <LocalFileLink filePath={localPath} threadId={threadId}>{children}</LocalFileLink>;
       if (isRelativeHref(href)) {
         const resolved = resolveRelativePath(href, baseDir);
@@ -818,7 +822,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId]);
+  }), [baseDir, threadId, localLinks]);
   return (
     <StreamingContext.Provider value={streaming}>
       <div ref={root} className="chat-md min-w-0 [&>*+*]:mt-2">

@@ -1,5 +1,5 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Languages, MessageSquareReply } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -18,6 +18,7 @@ import type { Message } from "@/state/store-types";
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { BotAvatar } from "./Avatar";
 import { CopyButton, TimestampLabel } from "./ChatBubble";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { DaySeparator } from "./DaySeparator";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 import { JumpToLatest } from "./JumpToLatest";
@@ -26,6 +27,7 @@ import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageM
 import { ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
 import { RoomNotice } from "./RoomNotice";
+import { MessageBoundary } from "./TurnPresence";
 
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
   files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
@@ -55,6 +57,45 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
           ))}
         </div>
       )}
+    </>
+  );
+}
+
+const WEB_LINK = /https?:\/\/[^\s<>"]*[^\s<>"'.,;:!?)\]}]/g;
+
+/** A person's line stays plain text; only web links become links. */
+function LinkedText({ text }: { text: string }) {
+  const parts: ReactNode[] = [];
+  let from = 0;
+  for (const match of text.matchAll(WEB_LINK)) {
+    parts.push(text.slice(from, match.index));
+    parts.push(<a key={match.index} href={match[0]} target="_blank" rel="noreferrer" className="break-words text-accent underline decoration-accent/40 hover:decoration-accent">{match[0]}</a>);
+    from = match.index + match[0].length;
+  }
+  parts.push(text.slice(from));
+  return <>{parts}</>;
+}
+
+/** A line in the host's bot room; `entryId` only on a teammate's line, which gets Translate. */
+export function RoomLineText({ base, entryId, text, canTranslate }: { base: string; entryId?: string; text: string; canTranslate: boolean }) {
+  const { t, locale } = useI18n();
+  const translation = useRoomTranslation(base, entryId ?? "", locale);
+  const show = Boolean(entryId) && canTranslate && Boolean(text.trim()) && !alreadyInLanguage(text, locale);
+  return (
+    <>
+      <LinkedText text={text} />
+      {show && <button
+        type="button"
+        data-room-translate
+        aria-pressed={translation.visible}
+        onClick={translation.toggle}
+        className="mt-1 flex items-center gap-1 text-[13px] text-ink-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      ><Languages size={14} aria-hidden />{t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}</button>}
+      {show && translation.visible && <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
+        {translation.pending ? t("teamRoom.translating") : translation.failed
+          ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
+          : translation.text}
+      </div>}
     </>
   );
 }
@@ -156,14 +197,17 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
           </span>}
           <div
             className={cn(
-              "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap",
+              "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words",
+              line.author.kind !== "bot" && "whitespace-pre-wrap",
               mine ? "bg-bubble-user text-ink" : "bg-card text-ink",
             )}
           >
             {quote && <div className="mb-2"><ReplyQuote compact message={roomMessage(quote)} fallbackName={quote.author.name} onJump={() => onJump(quote.id)} /></div>}
             <div data-team-room-content>
               {pictures.length > 0 && <AttachedImageGallery pictures={pictures} className={cn(!mine && "justify-start", !line.text && !files.length && "mb-0")} />}
-              {line.text}
+              {line.author.kind === "bot" && line.text.trim()
+                ? <MessageBoundary fallbackText={line.text}><ChatMarkdown text={line.text} localLinks={false} /></MessageBoundary>
+                : <LinkedText text={line.text} />}
               {translation.visible && <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
                 {translation.pending ? t("teamRoom.translating") : translation.failed
                   ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
