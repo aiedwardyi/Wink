@@ -64,6 +64,7 @@ export function GroupPeople({ group }: { group: Group }) {
     if (!group.hosted) return;
     try {
       await letBackIn(group.hosted.roomId, personId);
+      if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, removed: removed.filter((person) => person.id !== personId) } } });
     } catch {
       setProblem("errors.request");
     }

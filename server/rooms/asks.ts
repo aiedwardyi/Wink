@@ -265,7 +265,10 @@ export function startAsk(id: string, riders: readonly RoomAsk[] = []): boolean {
   if (!moveAsk(id, "queued", "running")) return false;
   const started = riders.filter((rider) => {
     const live = askById(rider.id);
-    if (live?.state !== "queued" || askInvalid(live) || !moveAsk(rider.id, "queued", "running")) return false;
+    if (live?.state !== "queued") return false;
+    const gone = askInvalid(live);
+    if (gone) void endAsk(rider.id, gone.end, gone.line);
+    if (gone || !moveAsk(rider.id, "queued", "running")) return false;
     cancelQueuedAsk(rider.id);
     return true;
   }).map((rider) => rider.id);

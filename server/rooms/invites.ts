@@ -282,7 +282,8 @@ export function inviteRoomId(inviteId: string): string | null {
   return row?.room_id ?? null;
 }
 
-/** Host Remove: that person's PC can't come back with the room code. Leave never calls this. True when the code was retired instead. */
+/** Host Remove: that person's PC can't come back with the room code. Leave never calls this.
+ * True means no device row was barred, so the room code was retired instead. */
 export function barRoomPerson(roomId: string, personId: string): boolean {
   return transaction((database) => {
     const barred = database.prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);

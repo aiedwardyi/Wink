@@ -66,6 +66,7 @@ describe("Let back in", () => {
     expect([...document.querySelectorAll("[data-group-people] li")].map((row) => row.textContent)).toEqual(["MMinaRemove", "JJoonLet back in"]);
     await act(async () => button("Let Joon back in").click());
     expect(rooms.letBack).toHaveBeenCalledExactlyOnceWith("r1", "p2");
+    expect(rooms.dispatch).toHaveBeenCalledWith({ type: "groupPatched", group: { id: "g1", room: { ...barred.room, removed: [] } } });
   });
 
   it("says the room code changed when Remove retired it", async () => {

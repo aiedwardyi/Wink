@@ -134,6 +134,18 @@ describe("a teammate's line in a shared bot group", () => {
     expect([askById(lead.id)!.state, askById(second.id)!.state]).toEqual(["cancelled", "failed"]);
   });
 
+  it("ends a rider whose teammate is gone by the time the turn starts", async () => {
+    const mina = addPerson(group.hosted.roomId, "Mina", "chat", ["Wink"]);
+    const lead = hostedSend(group, said(sora), "one").ask!;
+    const rider = hostedSend(group, said(mina), "two").ask!;
+    const riders = askRiders(lead.id);
+    const raw = new DatabaseSync(join(DATA_DIR, "rooms.db"));
+    raw.prepare("DELETE FROM people WHERE id = ?").run(mina.id);
+    raw.close();
+    expect(startAsk(lead.id, riders)).toBe(true);
+    await vi.waitFor(() => expect(askById(rider.id)!.state).toBe("cancelled"));
+  });
+
   it("never folds asks once the group has two bots", () => {
     const pip = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
     store.patchGroup(group.id, { memberIds: [wink, pip] });
