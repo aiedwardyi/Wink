@@ -52,11 +52,14 @@ export function landInTranscript(scroller: HTMLElement, wrapper: Element, target
     for (const row of near) row.removeAttribute("data-landing");
   };
   scrollElementIntoContainer(scroller, target);
-  frame(() => live && frame(() => {
+  frame(() => {
     if (!live) return;
-    scrollElementIntoContainer(scroller, target);
-    release();
-  }));
+    frame(() => {
+      if (!live) return;
+      scrollElementIntoContainer(scroller, target);
+      release();
+    });
+  });
   return release;
 }
 

@@ -65,8 +65,8 @@ export async function moveRoomFiles(raw: unknown): Promise<ReturnType<typeof roo
   if (inside(old, next) || inside(next, old)) throw failure();
   // An unplugged drive's files can't come along, so only an empty folder may replace it.
   if (error) {
+    if (existsSync(next) && (await readdir(next).catch(() => [""])).length) throw failure();
     try {
-      if (existsSync(next) && (await readdir(next)).length) throw failure();
       await mkdir(next, { recursive: true, mode: 0o700 });
       writeFileAtomic(setting(), JSON.stringify({ path: next }), { mode: 0o600 });
     } catch {

@@ -466,7 +466,7 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
   // A file this PC doesn't have would only fail in the pane; open it the link's way instead.
   const show = async (thread: string) => {
     const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
-    if (res?.status === 404) await open();
+    if (res && !res.ok && res.status !== 416) await open();
     else showItem({ threadId: thread, path: filePath, kind: showKind(filePath)! });
   };
 

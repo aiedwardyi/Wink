@@ -233,7 +233,10 @@ export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]
 export function markJoinedFilesDeleted(roomId: string, ids: readonly string[]): number {
   const gone = new Set(ids);
   return transaction((database) => {
-    const rows = database.prepare("SELECT seq, body FROM entries WHERE room_id = ? AND json_extract(body, '$.files') IS NOT NULL").all(roomId) as Array<{ seq: number; body: string }>;
+    const rows = database.prepare(`
+      SELECT DISTINCT entries.seq, entries.body FROM entries, json_each(entries.body, '$.files') AS file
+      WHERE entries.room_id = ? AND json_extract(file.value, '$.id') IN (SELECT value FROM json_each(?))
+    `).all(roomId, JSON.stringify(ids)) as Array<{ seq: number; body: string }>;
     const update = database.prepare("UPDATE entries SET body = ? WHERE room_id = ? AND seq = ?");
     let changed = 0;
     for (const row of rows) {
