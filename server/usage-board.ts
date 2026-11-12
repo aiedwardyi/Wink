@@ -28,6 +28,7 @@ type Deps = {
   names: { get(id: string): { id: string; engine: UsageBoardEngineId; number: number; nickname: string | null; name: string } | null };
   rateLimits: { get(id: string): RateLimitsReport | undefined; delete(id: string): boolean };
   accountChanged?: (id: string, ready: boolean) => void;
+  codexPromo?(id: string, generation: number): boolean;
   history: History;
   runs(timeoutMs: number): Promise<Runs>;
   bots(): readonly Bot[];
@@ -85,7 +86,8 @@ export function createUsageBoard(deps: Deps) {
   function bump() { revision = Math.max(revision + 1, now()); publish(); }
 
   function accounts() {
-    const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of));
+    const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of))
+      .map((row) => ({ ...row, codexPromo: row.driverKind === "codex" && Boolean(deps.codexPromo?.(row.id, row.generation)) }));
     for (const row of rows) {
       const identity = usageIdentity(row.status ?? {});
       if (identity === undefined) continue;
@@ -99,7 +101,7 @@ export function createUsageBoard(deps: Deps) {
       }
       identities.set(row.id, identity);
     }
-    const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id)]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id), row.codexPromo]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
       const current = new Map(rows.map((row) => [row.id, row.generation]));
       const saved = deps.history.snapshot().accounts;
@@ -237,7 +239,7 @@ export function createUsageBoard(deps: Deps) {
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
-        bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}) });
+        bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
     }
     return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch };
   }

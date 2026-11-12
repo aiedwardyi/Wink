@@ -108,6 +108,8 @@ import {
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { codexCredit, codexCreditRows } from "./codex-credit.ts";
+import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
+import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -470,6 +472,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
 const codexCreditFor = () => codexCredit(DATA_DIR, instanceConfigs(cfg), cfg.imageGen?.key);
+const codexPromoStatus = createCodexPromoStatus(() => instanceConfigs(cfg, accounts.snapshot), codexCreditFor);
 const accountNames = createAccountNames(DATA_DIR);
 accountNames.sync(accounts.list());
 // Before registry.load: a prewarmed engine child would inherit the token.
@@ -2964,6 +2967,7 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
 const boardEngines = new Map([["grokAgent", "grok"], ["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
 const usageBoard = createUsageBoard({
+  codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
       ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
@@ -3891,6 +3895,7 @@ bus.subscribe((event: RuntimeEvent) => {
       });
       break;
     case "runtime.error": {
+      refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
@@ -7481,6 +7486,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body.ok) return json(res, body.status, { error: body.error });
       const parsed = mailboxPostSchema.safeParse(body.value);
       if (!parsed.success) return json(res, 400, { error: "invalid mailbox message" });
+      refreshCodexPromo(parsed.data.text, usageBoard.touch);
       const source = mailboxRecipient(store.bots, scope);
       if (!source) return json(res, 404, { error: "no such bot" });
       let kind = parsed.data.kind;
@@ -8601,6 +8607,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if ((cfg.profile?.name ?? "").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
       memoryPass.onConfigChanged();
       if (patch.imageGen?.key !== undefined) {
+        const credit = codexCreditFor();
+        if (credit) clearCodexPromo(credit.account.home);
         usageBoard.touch();
         if (codexCreditFor()) void enableWorkerAccounts(terminalBridgeAccess).catch(() => console.error("Worker account routing is unavailable"));
       }
