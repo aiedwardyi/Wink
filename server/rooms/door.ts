@@ -447,7 +447,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
-  // A separate header: builds that send only room-files 1 fail on video and audio, and older hosts check that one for exactly "1".
+  // Not a new x-orbit-room-files value: older hosts give large files only when that header is exactly "1".
   const media = req.headers["x-orbit-room-media"] === "1";
   if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null, media);
   const largeFiles = req.headers["x-orbit-room-files"] === "1";

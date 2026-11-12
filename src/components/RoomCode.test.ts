@@ -35,5 +35,8 @@ describe("RoomCode", () => {
     const text = document.querySelector("[data-room-code-text]")!;
     expect(text.textContent).toBe("6LD5N6");
     expect(text.className).toContain("select-all");
+    vi.stubGlobal("navigator", { clipboard: { writeText: async () => {} } });
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-team-room-code] button")!.click());
+    expect(document.querySelector("[data-room-code-text]")).toBeNull();
   });
 });

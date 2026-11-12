@@ -80,7 +80,7 @@ export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   ...(entry.files ? { files: entry.files } : {}),
 });
 
-/** Builds before video and audio fail a whole line or snapshot on any other type. */
+/** The only types builds before video and audio parse; any other fails their whole line or snapshot. */
 const OLDER_FILE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]);
 
 export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean, media = true): DoorEntry {

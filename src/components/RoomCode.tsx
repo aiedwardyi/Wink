@@ -18,6 +18,7 @@ export function RoomCode({ code, short }: { code: string; short?: string }) {
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(short ?? code);
+      setCopyFailed(false);
       setCopied(true);
       if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
       resetTimer.current = window.setTimeout(() => setCopied(false), 1_200);
