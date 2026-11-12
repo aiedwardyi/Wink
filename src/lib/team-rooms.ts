@@ -1,5 +1,5 @@
 // People-only team rooms: one this PC hosts (a hosted group with no bots), or one it joined elsewhere.
-import type { Group, Message } from "@/state/store-types";
+import type { Group, Message, RoomJoin } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
 import type { MessageKey } from "./i18n";
@@ -15,8 +15,12 @@ export interface RoomLine {
   text: string;
   files: RoomFile[];
   replyToId?: string;
+  reactions?: ReactionMark[];
   message?: Message;
+  color?: string;
 }
+
+export type ReactionMark = NonNullable<Message["reactions"]>[number];
 
 export type TeamRoom = Group & { hosted: { roomId: string } };
 
@@ -24,6 +28,11 @@ export type TeamRoom = Group & { hosted: { roomId: string } };
 export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boolean(group?.hosted && group.memberIds.length === 0);
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
+
+const NO_JOINS: RoomJoin[] = [];
+
+// One empty list, so a memoized transcript keeps its props.
+export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
   messages.flatMap((message) => (message.author && message.roomEntryId
@@ -42,19 +51,28 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[]; notice?: { entryId: string; by: string; at: number } } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
+  /** False for an older host: no emoji row and no notice pin. */
+  canReact?: boolean;
+}
+
+export interface JoinedBot {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person"; id: string; name: string };
+  author: RoomAuthor;
   text: string;
   files?: RoomFile[];
   replyToId?: string;
+  reactions?: ReactionMark[];
 }
 
 export type JoinedPhase = "connecting" | "live" | "offline" | "removed" | "left";
@@ -62,12 +80,38 @@ export type JoinedPhase = "connecting" | "live" | "offline" | "removed" | "left"
 export const joinedPhase = (view: JoinedView): JoinedPhase =>
   view.status !== "joined" ? view.status : view.link === "live" ? "live" : view.link === "offline" ? "offline" : "connecting";
 
-export const joinedLines = (entries: readonly JoinedEntry[]): RoomLine[] =>
-  entries.map((entry) => ({ id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId }));
+/** Own marks read as "user", like the bot chat's. */
+export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = [], meId?: string): RoomLine[] =>
+  entries.map((entry) => {
+    const color = entry.author.kind === "bot" ? bots.find((bot) => bot.id === entry.author.id)?.color : undefined;
+    const reactions = entry.reactions?.map((mark) => (mark.by === `person:${meId}` ? { ...mark, by: "user" } : mark));
+    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(reactions?.length ? { reactions } : {}), ...(color ? { color } : {}) };
+  });
+
+/** Reactor names by mark `by`, for chip hovers. */
+export function reactionNames(people: readonly JoinedPerson[], host?: string, bots: readonly JoinedBot[] = []): Map<string, string> {
+  return new Map([
+    ...(host ? [["host", host] as const] : []),
+    ...people.map((person) => [`person:${person.id}`, person.name] as const),
+    ...bots.map((bot) => [`bot:${bot.id}`, bot.name] as const),
+  ]);
+}
+
+export function reactInJoinedRoom(roomId: string, entryId: string, emoji: string): Promise<unknown> {
+  return request(`${joinedRoomBase(roomId)}/entries/${entryId}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) });
+}
+
+export function setJoinedNotice(roomId: string, entryId: string | null): Promise<unknown> {
+  return request(`${joinedRoomBase(roomId)}/notice`, { method: "POST", body: JSON.stringify({ entryId }) });
+}
+
+export function setHostNotice(groupId: string, entryId: string | null): Promise<unknown> {
+  return request(`/api/groups/${groupId}`, { method: "PATCH", body: JSON.stringify({ notice: entryId }) });
+}
 
 export const roomMessage = (line: RoomLine): Message => line.message ?? ({
   id: line.id, at: line.at, role: "user", kind: "text", text: line.text,
-  author: line.author, roomEntryId: line.id, roomFiles: line.files, replyToId: line.replyToId,
+  author: line.author, roomEntryId: line.id, roomFiles: line.files, replyToId: line.replyToId, reactions: line.reactions,
 });
 
 const JOINED = "joined:";
@@ -81,11 +125,11 @@ const CODE = /^wkr1:[a-z0-9.-]{1,253}:[\w-]{1,64}\.wki_[A-Za-z0-9_-]{43}$/;
 
 export const looksLikeRoomCode = (text: string) => CODE.test(text.trim());
 
-export function joinErrorKey(status: number, error: string): MessageKey {
+export function joinErrorKey(status: number, error: string, short = false): MessageKey {
   if (error === "room-full") return "teamRoom.full";
   if (status === 429) return "teamRoom.busy";
   if (status === 503) return "teamRoom.unreachable";
-  return "teamRoom.badCode";
+  return short ? "teamRoom.badShortCode" : "teamRoom.badCode";
 }
 
 export const hostRoomBase = (roomId: string) => `/api/rooms/${roomId}`;
@@ -109,17 +153,36 @@ type Refused = { status: number; error: string };
 
 const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
 
-export async function inviteToRoom(roomId: string): Promise<{ code: string } | Refused> {
+/** `short` is the 6-character code, missing while this PC's relay can't mint one. */
+export type RoomInviteCode = { code: string; short?: string };
+
+const shortOf = (body: any) => (typeof body?.short === "string" ? { short: body.short } : {});
+
+export async function inviteToRoom(roomId: string): Promise<RoomInviteCode | Refused> {
   try {
     const res = await fetchResponse(`${hostRoomBase(roomId)}/invites`, { method: "POST" });
     const body = await responseBody(res);
-    return res.ok && typeof body?.code === "string" ? { code: body.code } : refused(res.status, body);
+    return res.ok && typeof body?.code === "string" ? { code: body.code, ...shortOf(body) } : refused(res.status, body);
   } catch {
     return { status: 0, error: "" };
   }
 }
 
 export const inviteErrorKey = (status: number): MessageKey => (status === 409 ? "teamRoom.phoneOff" : "errors.request");
+
+/** Invite in a group: the first press shares it, later ones hand back the same code. */
+export async function shareGroup(groupId: string): Promise<RoomInviteCode & { group: Group } | Refused> {
+  try {
+    const res = await fetchResponse(`/api/groups/${groupId}/share`, { method: "POST" });
+    const body = await responseBody(res);
+    return res.ok && typeof body?.code === "string" && body.group ? { code: body.code, ...shortOf(body), group: body.group } : refused(res.status, body);
+  } catch {
+    return { status: 0, error: "" };
+  }
+}
+
+export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
+  error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
 export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });

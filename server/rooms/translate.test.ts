@@ -67,7 +67,7 @@ describe("room translation", () => {
     if (joined) {
       joinRoom();
       resetJoined(roomId);
-      setJoinedState(roomId, { version: 1, roomName: "Private title", instructions: "", host: "Host", me: { id: "me", name: "Viewer" }, people: [{ id: "p2", name: "이서연" }, { id: "p3", name: "Unmentioned Person" }] });
+      setJoinedState(roomId, { version: 1, roomName: "Private title", instructions: "", host: "Host", me: { id: "me", name: "Viewer" }, people: [{ id: "p2", name: "이서연" }, { id: "p3", name: "Unmentioned Person" }], bots: [] });
       addJoinedEntries(roomId, [{ seq: 1, id: entryId, at: Date.now(), author: { kind: "host", id: "host", name: "Host" }, text: "이서연님, 준비됐어요." }]);
     }
     (joined ? saveJoinedTranslation : saveRoomTranslation)(roomId, entryId, "en", "Lee Seoyeon, ready.");

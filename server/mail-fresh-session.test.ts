@@ -14,6 +14,7 @@ import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
+import { asksNudge } from "./task-asks.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
@@ -89,7 +90,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,

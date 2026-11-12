@@ -10,8 +10,7 @@ import { newId, type ProviderInstance } from "../contracts.ts";
 import { cancelQueuedAsk } from "../steer-queue.ts";
 import type { GroupRecord, Store } from "../store.ts";
 import type { RoomAlert } from "./alerts.ts";
-import { appendRoomEntry, roomPeople, RoomError, type RoomGrant, type RoomLevel } from "./db.ts";
-import { roomEngineAllowed } from "./guards.ts";
+import { appendRoomEntry, roomPeople, RoomError, type RoomGrant } from "./db.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { PEOPLE_ONLY_LINE, peopleOnlyRoom } from "./people-only.ts";
 
@@ -46,7 +45,6 @@ export type HostedGroup = GroupRecord & { hosted: { roomId: string } };
 export interface RoomAskDeps {
   store: Pick<Store, "group" | "groupByThread" | "bot" | "appendMessage" | "messagesFor" | "patchGroup">;
   hostName(): string;
-  driverKind(botId: string): string | undefined;
   instance(botId: string, threadId: string): ProviderInstance | null;
   /** Queue a work ask on the room's turn queue, carrying its askId. */
   dispatch(ask: RoomAsk): void;
@@ -74,7 +72,7 @@ const LIVE: readonly AskState[] = ["queued", "running"];
 const NEXT: Record<AskState, readonly AskState[]> = {
   held: ["queued", "failed", "cancelled"],
   queued: ["running", "failed", "cancelled"],
-  running: ["stopping"],
+  running: ["stopping", "done", "failed"],
   stopping: ["done", "failed", "cancelled"],
   done: [],
   failed: [],
@@ -216,32 +214,24 @@ export function moveAsk(id: string, from: AskState, to: AskState, reason?: strin
     .run(to, reason ?? null, Date.now(), id, from).changes === 1;
 }
 
-const levelAllows = (level: RoomLevel, ask: RoomAsk) =>
-  ask.grant === "words" || level === "trusted" || (level === "ask" && ask.allowed);
-
-export const engineLine = (name: string) => `${name} can only answer in team rooms on Claude or Codex`;
 const botName = (ask: RoomAsk) => need().store.bot(ask.botId)?.name ?? "The bot";
 
-/** Why a live ask may no longer run: the room, the bot, the asker's level or the engine changed. */
+/** Why a live ask may no longer run: the room, the bot or the asker is gone. */
 function askInvalid(ask: RoomAsk): { end: AskEnd; line?: string } | null {
   if (peopleOnlyRoom(ask.roomId)) return { end: "failed" };
-  const { store, driverKind } = need();
-  const group = store.groupByThread(ask.threadId);
+  const group = need().store.groupByThread(ask.threadId);
   if (group?.hosted?.roomId !== ask.roomId || !group.memberIds.includes(ask.botId)) return { end: "cancelled" };
-  if (ask.asker.kind === "person") {
-    const person = roomPeople(ask.roomId).find((candidate) => candidate.id === ask.asker.id);
-    if (!person || !levelAllows(person.level, ask)) return { end: "cancelled" };
-  }
-  if (!roomEngineAllowed(driverKind(ask.botId))) return { end: "failed", line: engineLine(botName(ask)) };
+  if (ask.asker.kind === "person" && !roomPeople(ask.roomId).some((person) => person.id === ask.asker.id)) return { end: "cancelled" };
   return null;
 }
 
-/** The one gate every room turn on a hosted thread passes: only a live ask for
- * this exact room, thread and bot whose asker still holds its grant. A failed
- * check ends the ask, so nothing runs for it. */
+/** The one gate every room turn on a hosted thread passes: the shared thread
+ * only, and a teammate's request only while its ask for this room, thread and
+ * bot is live. A failed check ends the ask, so nothing runs for it. */
 export function hostedTurnRefused(group: GroupRecord | null | undefined, threadId: string, botId: string, authority?: string): boolean {
   if (!group?.hosted) return false;
-  if (!authority || group.threadId !== threadId) return true;
+  if (group.threadId !== threadId) return true;
+  if (!authority) return false;
   const ask = askById(authority);
   if (!ask || !LIVE.includes(ask.state) || ask.roomId !== group.hosted.roomId || ask.threadId !== threadId || ask.botId !== botId) return true;
   const invalid = askInvalid(ask);
@@ -288,6 +278,14 @@ function writeEnd(ask: RoomAsk, text: string): void {
 }
 
 const endLine = (ask: RoomAsk, end: AskEnd) => (end === "cancelled" ? "Cancelled." : `${botName(ask)} couldn't finish this.`);
+
+/** A running ask whose turn settled on its own: done with an answer, else failed with its line. Null once stopping took it. */
+export function settleAsk(id: string, answered: boolean): RoomAsk | null {
+  const ask = askById(id);
+  if (!ask || !moveAsk(id, "running", answered ? "done" : "failed")) return null;
+  if (!answered) writeEnd(ask, endLine(ask, "failed"));
+  return ask;
+}
 
 /** The synchronous half of ending: held and queued end now, running takes stopping. */
 export function beginEnd(id: string, end: AskEnd, line?: string): "ended" | "stopping" | null {

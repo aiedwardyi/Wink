@@ -2,6 +2,8 @@ import type { ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { AccountError, AccountService, type AccountRecord } from "./accounts.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
+import { baseAccount } from "./worker-resume.ts";
+import { clearCodexPromo, codexPromoBlocked } from "../electron/codex-promo.mjs";
 
 type Hooks = {
   reload(): Promise<void>;
@@ -120,7 +122,8 @@ export class AccountLifecycle {
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
         const blocked = this.registry.accountBlocked(id);
-        const guarded = blocked || this.accounts.snapshot.length > 0 || destinations.length > 0;
+        const home = this.promoHome(id);
+        const guarded = blocked || (home && codexPromoBlocked(home)) || this.accounts.snapshot.length > 0 || destinations.length > 0;
         if (guarded) {
           this.registry.blockAccount(id, true);
           try {
@@ -139,6 +142,7 @@ export class AccountLifecycle {
           const finished = this.registry.logins.wait(id).then(async () => {
             const snapshot = await this.registry.get(id)?.snapshot({ refresh: true });
             if (snapshot?.authenticated !== true) return;
+            if (home && this.registry.logins.state(id) === "complete") clearCodexPromo(home);
             this.registry.blockAccount(id, false);
             this.hooks.changed?.();
           }).catch(() => { console.error("Account sign-in snapshot could not be refreshed"); })
@@ -420,12 +424,18 @@ export class AccountLifecycle {
       return;
     }
     this.clearRetry(account.id);
+    if (force && snapshot.authenticated === true && this.registry.get(account.id)?.driverKind === "codex") clearCodexPromo(account.home);
     if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
     const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
     if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
     if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
     this.registry.blockAccount(account.id, snapshot.authenticated !== true);
     this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
+  }
+
+  private promoHome(id: string) {
+    const live = this.registry.get(id);
+    return live?.driverKind === "codex" ? this.accounts.get(id)?.home ?? baseAccount(id, "codex", live.loginConfig?.().env ?? process.env).home : undefined;
   }
 
   private async discard(id: string) {

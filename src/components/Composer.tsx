@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, Clock, Mic, Paperclip, Square, TerminalSquare, Users, X } from "lucide-react";
+import { ArrowUp, Clock, Mic, Paperclip, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
@@ -10,6 +10,7 @@ import {
   getRoomHolds,
   markDraftEdited,
   recoverFailedComposerSend,
+  restoreComposerDraft,
   rememberFailedComposerSend,
   rememberQueuedDraft,
   returnSendsToComposer,
@@ -42,6 +43,7 @@ import {
   type ComposerThreadNotice,
   type FileAttachment,
   type PasteAttachment,
+  type UploadAttachment,
 } from "@/lib/composer-attachments";
 import {
   dropUpload,
@@ -69,7 +71,9 @@ import { composerIsBusy } from "@/lib/send-accept";
 import { composerEnterIntent, isComposerEnterKey } from "@/lib/composer-enter";
 import { holdToSendAfter } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
-import { composerNeedsTap } from "@/lib/focus-composer";
+import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
+import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
+import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useRainbowBox } from "@/lib/rainbow-box";
@@ -95,9 +99,19 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot };
+type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean };
+
+export type RoomPerson = { id: string; name: string };
+
+/** A people room: same box, but its sends upload through the room route. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[] };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
+
+const roomPicture = (id: string) => {
+  const file = roomFile(id);
+  return file && { file, picture: isRoomPicture(file) };
+};
 
 const fromUpload = (attachment: Attachment) =>
   attachment.kind === "upload" || (attachment.kind === "file" && Boolean(attachment.uploadId));
@@ -192,6 +206,7 @@ function RainbowRing({ theme }: { theme: boolean }) {
 export function Composer({
   bot,
   group,
+  room,
   members,
   onEditLast,
   onSend,
@@ -206,6 +221,7 @@ export function Composer({
 }: {
   bot?: Bot;
   group?: Group;
+  room?: ComposerRoom;
   members?: Bot[];
   onEditLast?: () => void;
   /** Fired on the user's own send (or retry): the view re-anchors to latest. */
@@ -228,7 +244,7 @@ export function Composer({
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
-  const threadId = group?.threadId ?? bot?.threadId ?? "";
+  const threadId = group?.threadId ?? bot?.threadId ?? room?.base ?? "";
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
   const canSteer =
@@ -256,9 +272,13 @@ export function Composer({
     : (bot?.name ?? t("chrome.aBot"));
   // Per-thread draft: switching bots unmounts this component, so both the
   // text and its attachment chips have to outlive it (see lib/drafts).
-  const draftId = group
+  const draftId = room
+    ? room.draftId
+    : group
     ? `group:${group.id}:${group.threadId}`
     : botDraftId(bot?.id ?? "", bot?.threadId ?? "");
+  const peopleRoom = Boolean(room);
+  const roomSending = useRoomSending(peopleRoom ? draftId : "");
   const [text, setText, attachments, setAttachments] = useComposerDraft(
     draftId,
     !group && bot ? `bot:${bot.id}` : undefined,
@@ -314,11 +334,14 @@ export function Composer({
   const removeAttachment = useCallback(
     (id: string) => {
       const removed = attachmentsRef.current.find((a) => a.id === id);
+      if (peopleRoom) {
+        if (roomSending) return;
+        dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
-      if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
-    [editAttachments],
+    [editAttachments, peopleRoom, roomSending],
   );
   // Uploads outlive this component. A finished one becomes a plain file chip;
   // an upload chip with no job is from before a reload.
@@ -344,12 +367,13 @@ export function Composer({
     () =>
       attachments.map((a): Attachment => {
         if (a.kind !== "upload") return a;
+        if (peopleRoom) return roomFile(a.id) ? a : { ...a, state: "repick" };
         const job = jobs.get(a.id);
         if (!job) return { ...a, state: "repick" };
         const state = job.phase === "failed" ? "failed" : job.phase === "resuming" ? "resuming" : "uploading";
         return { ...a, sent: job.sent, state };
       }),
-    [attachments, jobs],
+    [attachments, jobs, peopleRoom],
   );
   const uploadErrors = attachments
     .flatMap((a) => {
@@ -366,6 +390,11 @@ export function Composer({
     const target = attachmentsRef.current.find((a) => a.id === repickTarget.current);
     repickTarget.current = null;
     if (!file || target?.kind !== "upload") return;
+    if (room) {
+      const [next] = holdRoomFiles([file], target.id);
+      editAttachments((prev) => prev.map((a) => (a.id === target.id ? next : a)));
+      return;
+    }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
       queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id));
@@ -465,6 +494,10 @@ export function Composer({
     dispatch({ type: "composerFocused", botId: bot.id });
   }, [bot, dispatch, focusBlocked, locked, approval, requestBotPrewarm, state.composerFocusBotId]);
 
+  useEffect(() => {
+    if (peopleRoom) focusComposerOnActivation({ composer: inputRef.current });
+  }, [peopleRoom]);
+
   // Reply chip alone leaves the cursor wherever it was, so a reply looks
   // picked but the user still has to click the box before typing. A failed
   // send restores replyTo, so this can also fire long after the click, with the
@@ -481,6 +514,7 @@ export function Composer({
   // Image paste is offered unless a known responder refuses it. A missing
   // instance is still hydrating, so keep the image and validate before send.
   const imageTargetsSupport = (message: string, after = false) => {
+    if (room) return "supported";
     const responders = group
       ? roomRespondersForComposer(message, members ?? [], group)
       : bot
@@ -508,7 +542,9 @@ export function Composer({
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const pool: MentionChoice[] = group
+    const pool: MentionChoice[] = room
+      ? (room.people ?? []).map((person) => ({ id: person.id, name: person.name, person: true }))
+      : group
       ? [
           { id: "__everyone__", name: "everyone" },
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
@@ -521,7 +557,7 @@ export function Composer({
     // search: keep the picker closed so Enter sends instead of re-picking
     if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
     return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
 
@@ -592,8 +628,17 @@ export function Composer({
   };
   // a chip on its own is a message: the send control has to appear for it
   const fileInput = useRef<HTMLInputElement>(null);
+  const showRoomProblem = (problem: RoomProblem | null) =>
+    setImageNotice(problem ? { threadId, text: t(problem.key, problem.vars) } : null);
   const pickFiles = async (picked: readonly File[], startedAt = performance.now()) => {
     if (!picked.length) return;
+    if (room) {
+      const kept = attachmentsRef.current.filter((a): a is UploadAttachment => a.kind === "upload");
+      const problem = filesProblem([...kept, ...picked]);
+      showRoomProblem(problem);
+      if (!problem) editAttachments((prev) => [...prev, ...holdRoomFiles(picked)]);
+      return;
+    }
     const { attachments: added, uploads, notice } = await intakeFiles(picked, {
       t,
       allowImages: engineSupportsImages,
@@ -611,7 +656,9 @@ export function Composer({
     if (images.length < pasted.length) showNotice(t("composer.pasteImageFailed"));
     await pickFiles(images, startedAt);
   };
-  const idlePlaceholder = group
+  const idlePlaceholder = room
+    ? t("composer.roomLead", { name: room.name })
+    : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
   const busyChrome = composerBusyChrome(
@@ -619,7 +666,30 @@ export function Composer({
     t,
   );
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
-  const uploading = attachments.some((attachment) => attachment.kind === "upload");
+  const uploading = room
+    ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
+    : attachments.some((attachment) => attachment.kind === "upload");
+  const replyRef = useRef(replyTo);
+  replyRef.current = replyTo;
+  // The draft stays until the room accepts it: uploads can take minutes and fail.
+  const sendRoom = async (target: ComposerRoom) => {
+    const liveText = composerSendSourceText(inputRef.current?.value, text).trim();
+    const sent = attachments.filter((attachment) => attachment.kind === "upload");
+    const files = sent.flatMap((attachment) => roomFile(attachment.id) ?? []);
+    if (!liveText && !files.length) return;
+    const revision = draftRevision(draftId);
+    const sentReply = replyTo ?? null;
+    const request = startRoomSend(draftId, (sendId) => sendToRoom(target.base, liveText, files, sendId, sentReply?.roomEntryId ?? sentReply?.id));
+    if (!request) return;
+    hapticTick();
+    onSend?.();
+    const failed = await request;
+    showRoomProblem(failed);
+    if (failed || draftRevision(draftId) !== revision) return;
+    for (const attachment of sent) dropRoomFile(attachment.id);
+    restoreComposerDraft(draftId, { text: "", attachments: [] });
+    if (replyRef.current === sentReply) onClearReply?.();
+  };
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
   const canSendToTerminal = Boolean(
     bot && !group && terminalBridge?.readBot && terminalBridge?.sendBot,
@@ -666,6 +736,10 @@ export function Composer({
       heldCount: queuedRef.current.length,
     });
     if (action === "block" || uploading) return;
+    if (room) {
+      void sendRoom(room);
+      return;
+    }
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (attachments.some((attachment) => attachment.kind === "image")) {
       const support = imageTargetsSupport(liveText, after);
@@ -859,6 +933,18 @@ export function Composer({
     };
   }, [recording, editText, sendBlocked]);
 
+  const [winTip, setWinTip] = useState(0);
+  useEffect(() => {
+    if (!winTip) return;
+    const timer = setTimeout(() => setWinTip(0), 5000);
+    return () => clearTimeout(timer);
+  }, [winTip]);
+  const winDictate = capabilities.host.platform === "win32";
+  const showWinTip = () => {
+    inputRef.current?.focus();
+    setWinTip((n) => n + 1);
+  };
+
   const toggleMic = () => {
     if (sendBlocked) return;
     if (!capabilities.dictation.available || !window.ogb) {
@@ -873,13 +959,16 @@ export function Composer({
     <div className="pointer-events-none relative px-5 pb-3">
       {/* No fill or hairline on this wrapper — those were the black frame
           in the pill's top corners. The dock overlays the transcript. */}
+      {winTip > 0 && (
+        <p role="status" className="pointer-events-auto mb-2 px-1 text-[12px] text-ink-secondary">{t("composer.winDictateHint")}</p>
+      )}
       {speechError && (
         <div className="pointer-events-auto mb-2 w-full rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
         </div>
       )}
       {shownImageNotice && (
-        <div className="pointer-events-auto mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+        <div role="alert" className="pointer-events-auto mb-2 flex w-full items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
           <span className="min-w-0 flex-1">{shownImageNotice}</span>
           <button
             type="button"
@@ -925,7 +1014,11 @@ export function Composer({
                   i === highlight ? "bg-raised-hover" : "",
                 )}
               >
-                {peer.bot ? (
+                {peer.person ? (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                    <User size={14} aria-hidden="true" />
+                  </span>
+                ) : peer.bot ? (
                   <BotAvatar
                     bot={peer.bot}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
@@ -937,7 +1030,7 @@ export function Composer({
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? t("composer.agent") : t("composer.channel")}</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
           </div>
@@ -1046,7 +1139,7 @@ export function Composer({
           <div className="mb-2 px-1">
             <ReplyQuote
               message={replyTo}
-              fallbackName={bot?.name}
+              fallbackName={room ? replyTo.author?.name : bot?.name}
               onClear={onClearReply}
             />
           </div>
@@ -1066,6 +1159,9 @@ export function Composer({
           allowImages={engineSupportsImages}
           notice={attachmentNotice}
           onNotice={showNotice}
+          localFile={room ? roomPicture : undefined}
+          onDropFiles={room ? (files) => void pickFiles(files) : undefined}
+          dropLabel={room ? t("teamRoom.dropToAttach") : undefined}
         />
         </div>
         </div>
@@ -1141,7 +1237,7 @@ export function Composer({
             setDismissedAt(null);
           }}
           onPaste={(e) => {
-            const imageFiles = Array.from(e.clipboardData.files).filter(isImageFile);
+            const imageFiles = Array.from(e.clipboardData.files).filter((file) => room || isImageFile(file));
             if (imageFiles.length) {
               e.preventDefault();
               // same intake as a pick, so an oversized image takes the big-file route
@@ -1150,7 +1246,8 @@ export function Composer({
             }
             // a wall of text becomes a chip instead of burying the input
             const pasted = e.clipboardData.getData("text/plain");
-            if (!isLongPaste(pasted)) return;
+            // A pasted-text chip reaches people as raw markup.
+            if (room || !isLongPaste(pasted)) return;
             e.preventDefault();
             // Preserve native paste replacement semantics: if text was
             // selected, the attachment replaces that selection.
@@ -1239,7 +1336,7 @@ export function Composer({
               ? t("ask.typeAnswer")
               : busyChrome.placeholder
           }
-          aria-label={t("composer.messageAria", { name: group ? group.name : (bot?.name ?? "") })}
+          aria-label={t("composer.messageAria", { name: group ? group.name : room ? room.name : (bot?.name ?? "") })}
             className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
@@ -1281,6 +1378,16 @@ export function Composer({
                 : "text-ink-secondary hover:bg-raised hover:text-ink",
             )}
             title={recording ? t("composer.stopDictationEsc") : t("composer.dictate")}
+          >
+            <Mic size={18} />
+          </button>
+        )}
+        {!sendBlocked && !busy && !hasContent && !callSlot.mounted && winDictate && !capabilities.dictation.available && (
+          <button
+            onClick={showWinTip}
+            aria-label={t("composer.dictate")}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            title={t("composer.dictate")}
           >
             <Mic size={18} />
           </button>

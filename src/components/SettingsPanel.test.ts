@@ -61,6 +61,12 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
+// a static render runs no effects, so the rows' later commit never comes
+vi.mock("./MemoryMapStage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./MemoryMapStage")>()),
+  useStage: (last: number) => last,
+}));
+
 vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({
     capabilities: {

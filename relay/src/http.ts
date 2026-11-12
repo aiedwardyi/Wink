@@ -1,11 +1,12 @@
 // relay.<base> HTTP API over the outer TLS, ALPN http/1.1 (design sections 4 and 7):
 // GET /v1/healthz, GET /v1/status/<label>, POST /v1/enroll,
 // and, when config.google is set, POST /v1/account and GET /v1/pcs,
-// plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too.
+// plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too,
+// and GET /v1/room-codes/<code>.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { z } from "zod";
-import { LABEL_RE, SNAG_ID_RE, hostFor } from "../../shared/relay-protocol.ts";
+import { LABEL_RE, ROOM_CODE_RE, SNAG_ID_RE, hostFor } from "../../shared/relay-protocol.ts";
 import { BAD_ACCOUNT_REQUEST, accountRequestSchema, type Accounts } from "./accounts.ts";
 import { BAD_REQUEST, enrollRequestSchema, type Enroller } from "./enroll.ts";
 import type { Hub } from "./hub.ts";
@@ -16,6 +17,7 @@ import { SNAG_CLAIM_MAX, type SnagStore } from "./snags.ts";
 import type { TeamLog } from "./team.ts";
 import type { ReportStore } from "./reports.ts";
 import { reportHttp } from "./reports-http.ts";
+import type { RoomCodeStore } from "./room-codes.ts";
 
 export interface ApiOptions {
   base: string;
@@ -31,6 +33,7 @@ export interface ApiOptions {
   /** Set with `team`. */
   snags?: SnagStore;
   reports?: ReportStore;
+  roomCodes?: RoomCodeStore;
   limits: RelayLimits;
   log: Logger;
   now: () => number;
@@ -39,6 +42,7 @@ export interface ApiOptions {
 const ACCOUNT_MAX_BODY = 16 * 1024;
 
 const STATUS_RE = /^\/v1\/status\/([^/?#]{1,64})$/;
+const ROOM_CODE_URL_RE = /^\/v1\/room-codes\/([^/?#]{1,16})$/;
 /** tz: the viewer's UTC offset in minutes, east positive. */
 const TEAM_RE = /^\/v1\/team(?:\?tz=(-?[0-9]{1,4}))?$/;
 const SNAGS_RE = /^\/v1\/team\/snags\/(claim|ack)$/;
@@ -108,6 +112,9 @@ export function createApiServer(opts: ApiOptions): Server {
   const pcsLimit = RateLimiter.perMinute(limits.pcsPerIpPerMin, opts.now);
   const statusLimit = RateLimiter.perMinute(limits.statusPerIpPerMin, opts.now);
   const teamLimit = RateLimiter.perMinute(limits.pcsPerIpPerMin, opts.now);
+  const roomCodeMinute = RateLimiter.perMinute(limits.roomCodeLookupsPerIpPerMin, opts.now);
+  const roomCodeHour = RateLimiter.perHour(limits.roomCodeLookupsPerIpPerHour, opts.now);
+  const roomCodeAll = RateLimiter.perHour(limits.roomCodeLookupsPerHour, opts.now);
   const { accounts, signinOrigin, team, teamOwnerEmail, snags } = opts;
 
   function directoryCors(origin: string | undefined) {
@@ -162,6 +169,14 @@ export function createApiServer(opts: ApiOptions): Server {
       if (origin === `https://${hostFor(label, opts.base)}`) cors["access-control-allow-origin"] = origin;
       const { online, since } = hub.status(label);
       return reply(res, 200, { online, since }, cors);
+    }
+
+    const roomCode = opts.roomCodes && ROOM_CODE_URL_RE.exec(url);
+    if (roomCode) {
+      if (req.method !== "GET") return reply(res, 405, { error: "method" });
+      if (!roomCodeMinute.take(ip) || !roomCodeHour.take(ip) || !roomCodeAll.take("all")) return reply(res, 429, { error: "rate-limited" });
+      const label = ROOM_CODE_RE.test(roomCode[1]) ? opts.roomCodes!.lookup(roomCode[1]) : null;
+      return label ? reply(res, 200, { label }) : reply(res, 404, { error: "not-found" });
     }
 
     if (url === "/v1/enroll") {

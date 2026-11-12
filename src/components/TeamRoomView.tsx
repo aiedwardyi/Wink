@@ -8,7 +8,7 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useOlderMessages } from "@/lib/message-pages";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { hostLines, hostRoomBase, roomPeople, type TeamRoom } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomPeople, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
 import { Presence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 
@@ -31,6 +31,8 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
   const base = hostRoomBase(group.hosted.roomId);
   const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const count = roomPeople(group).length;
+  const names = useMemo(() => reactionNames(roomPeople(group)), [group]);
+  const noticeEntry = group.notice?.entryId;
   const missing = Boolean(group.room && "missing" in group.room);
   return (
     <main data-team-room="host" className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -61,9 +63,13 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         )}
       </div>
       <ReconnectingCue />
-      <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply} />
+      <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply}
+        reactionNames={names}
+        onReact={(message, emoji) => dispatch({ type: "toggleReaction", threadId: group.threadId, messageId: message.id, emoji, message })}
+        notice={{ entryId: noticeEntry, canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
+      />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} replyTo={replyTo} onClearReply={clearReply} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} replyTo={replyTo} onClearReply={clearReply} />}
       </div>
     </main>
   );

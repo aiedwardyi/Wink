@@ -88,6 +88,38 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
 }
 
 describe("account lifecycle", () => {
+  it("clears a base account's promo mark after sign-in completes", async () => {
+    const f = await fixture();
+    const home = join(f.dir, "base-codex");
+    mkdirSync(home, { recursive: true });
+    f.registry.get("codex")!.loginConfig = () => ({ cli: "fake", env: { CODEX_HOME: home } });
+    const file = join(home, ".wink-codex-promo.json");
+    writeFileSync(file, '{"generation":0}');
+    f.state("cancelled");
+    await f.controller.signIn("codex");
+    await f.controller.settled("codex");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ generation: 0 });
+    f.state("complete");
+    await f.controller.signIn("codex");
+    await f.controller.settled("codex");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toBeNull();
+  });
+
+  it("clears a promo mark only after a successful account sign-in", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    const file = join(account.home, ".wink-codex-promo.json");
+    writeFileSync(file, JSON.stringify({ generation: account.generation }));
+    f.state("failed");
+    await f.controller.signIn(account.id);
+    await f.controller.settled(account.id);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ generation: account.generation });
+    f.state("complete");
+    await f.controller.signIn(account.id);
+    await f.controller.settled(account.id);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toBeNull();
+  });
+
   it.each(["identity", "email", "stored identity"])("rejects a new account with an existing %s", async (match) => {
     const f = await fixture();
     const existing = await f.add();
@@ -307,6 +339,7 @@ describe("account lifecycle", () => {
   it("persists the sign-in recovery row before marking and catches a rejected mark", async () => {
     const ts = await import("typescript");
     const { runtimeErrorTool } = await import("./chat-error.ts");
+    const { refreshCodexPromo } = await import("./codex-promo.ts");
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const branch = source.split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0];
     const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error": ${branch} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -314,9 +347,9 @@ describe("account lifecycle", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const signedOut = vi.fn(async () => { order.push("mark"); throw new Error("fixture"); });
     const event = { type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true, providerInstanceId: "account" };
-    const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "runtimeErrorTool", "accounts", "accountRuntime", "INCOMPLETE_LOG_MESSAGE", javascript);
+    const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "runtimeErrorTool", "accounts", "accountRuntime", "INCOMPLETE_LOG_MESSAGE", "refreshCodexPromo", "usageBoard", javascript);
     let row: { tool: ReturnType<typeof runtimeErrorTool> } | undefined;
-    run(event, { start() {} }, { messagesFor: () => [] }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture");
+    run(event, { start() {} }, { messagesFor: () => [] }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture", refreshCodexPromo, { touch() {} });
     await Promise.resolve();
     expect(order).toEqual(["row", "mark"]);
     expect(row?.tool).toMatchObject({ signIn: true, accountId: "account" });

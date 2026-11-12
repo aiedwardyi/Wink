@@ -17,7 +17,7 @@ describe("wire clears", () => {
   });
 
   it("sends every clearable room field as null once cleared", () => {
-    expect(wire(groupClears({}))).toEqual({ pinnedMessageId: null, picture: null, section: null, cwd: null });
+    expect(wire(groupClears({}))).toEqual({ pinnedMessageId: null, picture: null, notice: null, section: null, cwd: null });
   });
 
   it("passes set values through", () => {

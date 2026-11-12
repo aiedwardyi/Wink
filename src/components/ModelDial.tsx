@@ -558,7 +558,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                   data-model-row={model.instance.instanceId}
                   data-model-cell={model.cell.options[0]!.id}
                   aria-pressed={j === index}
-                  style={{ "--k": k, "--ak": ak, "--o": fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
+                  aria-hidden={(ak > 1 && fade !== undefined) || undefined}
+                  style={{ "--k": k, "--ak": ak, "--o": ak === 1 ? `var(--dial-near-fade, ${fade})` : fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
                   onClick={() => (j === index ? commit() : go(j))}
                 >
                   <ProviderMark driverKind={model.instance.driverKind} size={18} className="dial-mark" />

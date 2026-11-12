@@ -57,6 +57,18 @@ afterEach(async () => {
 });
 
 describe("useCoverChat", () => {
+  it("writes nothing to the covered chat until the sweep has covered it, then hides it in one write", async () => {
+    const scan = vi.spyOn(document, "getAnimations");
+    const main = () => host.querySelector("main")!;
+    await render(false);
+    expect(main().inert).toBe(false);
+    expect(main().getAttribute("style")).toBeNull();
+    expect(scan).not.toHaveBeenCalled();
+    await act(async () => { for (const each of passes) each.done(); });
+    expect(main().inert).toBe(false);
+    expect(main().getAttribute("style")).toBe("content-visibility: hidden;");
+  });
+
   it("keeps its own width and its last frame while it closes", async () => {
     await render(false);
     await act(async () => { for (const each of passes) each.done(); });

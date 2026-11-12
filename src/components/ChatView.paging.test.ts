@@ -425,6 +425,60 @@ describe("paged transcripts", () => {
     ]);
   });
 
+  const topObservers = () => {
+    const live: { fire: () => void; disconnected: boolean }[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      disconnected = false;
+      constructor(private callback: (entries: { isIntersecting: boolean }[]) => void) {
+        live.push(this);
+      }
+      observe() {}
+      disconnect() {
+        this.disconnected = true;
+      }
+      fire() {
+        this.callback([{ isIntersecting: true }]);
+      }
+    });
+    return () => act(async () => live.filter((observer) => !observer.disconnected).at(-1)?.fire());
+  };
+  const nearTop = (host: HTMLElement) => {
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 100 });
+    scroller.scrollTop = 0;
+  };
+
+  it.each(["chat", "room"] as const)("loads older %s rows when the reader nears the top, with no click", async (view) => {
+    const reachTop = topObservers();
+    const thread = rows(0, 500);
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const calls = pagedServer(threadId, thread, view === "chat" ? { bots: [bot(thread.slice(-100), true)], groups: [] } : { bots: [], groups: [room(thread.slice(-100), true)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("row 499;"));
+    nearTop(host);
+    await reachTop();
+    await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
+    expect(calls.some((call) => call.includes("before=m400"))).toBe(true);
+  });
+
+  it.each(["chat", "room"] as const)("keeps mounted %s rows under the cap while reading back to the first row", async (view) => {
+    const reachTop = topObservers();
+    const thread = rows(0, 1000);
+    pagedServer(view === "chat" ? "thread-a" : "thread-g", thread, view === "chat" ? { bots: [bot(thread, false)], groups: [] } : { bots: [], groups: [room(thread, false)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("row 999;"));
+    nearTop(host);
+    let most = 0;
+    for (let i = 0; i < 12 && !host.textContent?.includes("row 0;"); i++) {
+      await reachTop();
+      most = Math.max(most, host.querySelectorAll("[data-mid]").length);
+    }
+    expect(host.textContent).toContain("row 0;");
+    expect(host.textContent).not.toContain("row 999;");
+    expect(most).toBeLessThanOrEqual(240);
+  });
+
   it("says Show earlier in Korean", async () => {
     applyLocale("ko");
     const thread = rows(0, 500);
@@ -476,15 +530,17 @@ describe("paged transcripts", () => {
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => mounted() * 10 });
     await act(async () => button(host, "Show earlier messages")!.click());
     await act(async () => button(host, "Show earlier messages")!.click());
-    expect(mounted()).toBe(360);
+    expect(mounted()).toBe(240);
     return { host, scroller, threadId, mounted };
   }
 
   it.each(["chat", "room"] as const)("slides a %s window again once the reader follows the bottom after Show earlier", async (view) => {
     const { host, scroller, threadId, mounted } = await scrolledBack(view);
-    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
-    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true })));
-    expect(mounted()).toBe(120);
+    for (let i = 0; i < 2; i++) {
+      scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+      await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true })));
+    }
+    expect(mounted()).toBe(240);
     expect(host.querySelector('[data-mid="m499"]')).not.toBeNull();
     for (let i = 500; i < 630; i++) {
       await arrive(threadId, chained(i));
@@ -497,7 +553,7 @@ describe("paged transcripts", () => {
     const first = Number(scroller.querySelector("[data-mid]")!.getAttribute("data-mid")!.slice(1));
     const before = mounted();
     await act(async () => button(host, "Show earlier messages")!.click());
-    expect(mounted()).toBe(before + 120);
+    expect(mounted()).toBe(Math.min(before + 120, 240));
     expect(host.querySelector(`[data-mid="m${first - 120}"]`)).not.toBeNull();
   });
 
@@ -505,7 +561,7 @@ describe("paged transcripts", () => {
     const { host, scroller, threadId, mounted } = await scrolledBack(view);
     scroller.scrollTop = 500;
     for (let i = 500; i < 530; i++) await arrive(threadId, chained(i));
-    expect(mounted()).toBe(390);
+    expect(mounted()).toBe(240);
     expect(host.querySelector('[data-mid="m140"]')).not.toBeNull();
     expect(scroller.scrollTop).toBe(500);
   });
@@ -817,12 +873,28 @@ describe("paged transcripts", () => {
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
     scroller.scrollTop = 0;
     await arrive("thread-a2", threads["thread-a2"]![800]!);
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(scroller.scrollTop).toBe(scroller.scrollHeight);
     await snapshot([{ ...task, messages: threads["thread-a2"]!.slice(800) }]);
     await act(async () => vi.advanceTimersByTimeAsync(50));
     expect(host.textContent).toContain("t row 999;");
     expect(button(host, "Show later messages")).toBeUndefined();
     expect(calls.filter((call) => call.includes("around="))).toEqual([]);
+  });
+
+  it("pins a chat to the bottom once per frame however many rows land in it", async () => {
+    const thread = Array.from({ length: 20 }, (_, i) => chained(i));
+    pagedServer("thread-a", thread, { bots: [bot(thread, false)], groups: [] });
+    const host = await mount("chat");
+    await vi.waitFor(() => expect(host.textContent).toContain("row 19;"));
+    const scroller = host.querySelector("[data-orbit-transcript]") as HTMLElement;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    const scrollTo = vi.spyOn(scroller, "scrollTo");
+    for (let i = 20; i < 25; i++) await arrive("thread-a", chained(i));
+    await act(async () => vi.advanceTimersByTimeAsync(16));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scroller.scrollTop).toBe(250);
   });
 
   it("follows a room's new task to the bottom after the reader scrolled up in the old one", async () => {
@@ -1237,6 +1309,7 @@ describe("open window and jump pill", () => {
 
     size.scroll = 1000;
     await arrive(view === "chat" ? "thread-a" : "thread-g", { id: "x3", at: 1, role: "user", kind: "text", text: "x row 3;" });
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(scroller.scrollTop).toBe(1000);
   });
 
@@ -1356,6 +1429,7 @@ describe("open window and jump pill", () => {
     });
     size.scroll = 1000;
     await arrive(threadOf(view), { id: "x3", at: 1, role: "user", kind: "text", text: "x row 3;" });
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(top).toBe(1000);
   });
 
@@ -1701,6 +1775,7 @@ it.each([
   expect(ids()).toEqual(before);
   expect(scroller.querySelector(`[data-mid="${anchorId}"]`)).not.toBeNull();
   expect(anchor.getBoundingClientRect().top).toBe(top);
+  await edge();
   await edge();
   expect(host.querySelector('[data-mid="m380"]')).not.toBeNull();
   expect(attempts).toBe(1);

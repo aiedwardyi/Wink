@@ -11,10 +11,17 @@ export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person"; id: string; name: string };
+  author: { kind: "host" | "person" | "bot"; id: string; name: string };
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
+  /** `by` as the door sends it: "host", "person:<id>" or "bot:<id>". */
+  reactions?: JoinedMark[];
+}
+
+export interface JoinedMark {
+  emoji: string;
+  by: string;
 }
 
 export interface JoinedFile {
@@ -29,11 +36,13 @@ export interface JoinedFile {
 export interface JoinedState {
   version: number;
   picture?: string;
+  notice?: { entryId: string; by: string; at: number };
   roomName: string;
   instructions: string;
   host: string;
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
+  bots: Array<{ id: string; name: string; color: string }>;
 }
 
 /** `removed` and `left` rooms are read-only. */
@@ -108,6 +117,12 @@ function open(): DatabaseSync {
     );
     CREATE TRIGGER IF NOT EXISTS joined_translations_delete AFTER DELETE ON joined
     BEGIN DELETE FROM translations WHERE room_id = OLD.room_id; END;
+    CREATE TABLE IF NOT EXISTS reactions (
+      room_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      marks TEXT NOT NULL,
+      PRIMARY KEY (room_id, entry_id)
+    );
     CREATE TABLE IF NOT EXISTS pictures (
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -156,7 +171,7 @@ const rowToRoom = (row: RoomRow): JoinedRoom => ({
   relayHost: row.relay_host,
   me: { id: row.person_id, name: row.person_name },
   status: row.status,
-  state: row.state ? (JSON.parse(row.state) as JoinedState) : null,
+  state: row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null,
   joinedAt: row.joined_at,
 });
 
@@ -168,6 +183,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -221,10 +237,36 @@ export function resetJoined(roomId: string): void {
   });
 }
 
-/** The newest `limit` entries, oldest first. */
+/** The newest `limit` entries, oldest first, each with its reactions. */
 export function joinedEntries(roomId: string, limit: number): JoinedEntry[] {
-  const rows = db().prepare("SELECT body FROM entries WHERE room_id = ? ORDER BY seq DESC LIMIT ?").all(roomId, limit) as Array<{ body: string }>;
-  return rows.reverse().map((row) => JSON.parse(row.body) as JoinedEntry);
+  const rows = db().prepare(`
+    SELECT entries.body, reactions.marks FROM entries
+    LEFT JOIN reactions ON reactions.room_id = entries.room_id AND reactions.entry_id = json_extract(entries.body, '$.id')
+    WHERE entries.room_id = ? ORDER BY entries.seq DESC LIMIT ?
+  `).all(roomId, limit) as Array<{ body: string; marks: string | null }>;
+  return rows.reverse().map((row) => {
+    const entry = botLine(JSON.parse(row.body) as JoinedEntry);
+    return row.marks ? { ...entry, reactions: JSON.parse(row.marks) as JoinedMark[] } : entry;
+  });
+}
+
+/** A `reset` set replaces every line's marks; otherwise only the lines listed. */
+export function setJoinedReactions(roomId: string, lines: ReadonlyArray<{ id: string; marks: JoinedMark[] }>, reset = false): void {
+  transaction((database) => {
+    if (reset) database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+    const put = database.prepare("INSERT OR REPLACE INTO reactions (room_id, entry_id, marks) VALUES (?, ?, ?)");
+    const drop = database.prepare("DELETE FROM reactions WHERE room_id = ? AND entry_id = ?");
+    for (const line of lines) {
+      if (line.marks.length) put.run(roomId, line.id, JSON.stringify(line.marks));
+      else drop.run(roomId, line.id);
+    }
+  });
+}
+
+// A copy held from before bot lines stored each bot as the host's person alias.
+function botLine(entry: JoinedEntry): JoinedEntry {
+  const { author } = entry;
+  return author.kind === "person" && author.id.startsWith("bot-") ? { ...entry, author: { kind: "bot", id: author.id.slice(4), name: author.name } } : entry;
 }
 
 export function joinedSummary(room: JoinedRoom): { unread: number; lastEntry?: JoinedEntry } {
@@ -286,10 +328,10 @@ export function joinedCursor(roomId: string): number {
   return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
-/** Keeps the highest version; an older state is ignored. */
+/** Keeps the highest version; an older state is ignored, and a held state without bots takes them at its version. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND version < ?")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND json_extract(state, '$.bots') IS NULL))")
+    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */
@@ -309,6 +351,7 @@ export function removeJoined(roomId: string): boolean {
       database.prepare("DELETE FROM room_reads WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM joined_codes WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
     }
     return removed;
   });

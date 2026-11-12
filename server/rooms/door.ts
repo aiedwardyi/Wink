@@ -4,13 +4,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
+import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { RateLimiter, rateKey } from "../phone-auth.ts";
 import { parseSendId } from "../send-idempotency.ts";
-import type { Store } from "../store.ts";
+import type { Message, Store } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { committedRoomText, recentRoomEntries, renameRoomPerson, roomEntriesAfter, roomEntry, roomPeople, type RoomPerson } from "./db.ts";
 import {
   anyDoorStreams,
+  broadcastDoorReactions,
   compatibleDoorEntry,
   doorEntry,
   doorStreamCount,
@@ -21,10 +23,12 @@ import {
   trackDoorSocket,
   writeFrame,
   type DoorEntry,
+  type DoorFrame,
   type DoorState,
+  type LineReactions,
 } from "./door-streams.ts";
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
-import { guestByKey, inviteRoomId, joinRoom, removeGuest, type JoinResult } from "./invites.ts";
+import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
 import { hostedSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
 
@@ -36,9 +40,12 @@ const SNAPSHOT_ENTRIES = 200;
 const SNAPSHOT_BYTES = 3 * 1024 * 1024;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
-const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
+/** Under the 256 KB frame cap guests read. */
+const REACTION_FRAME_BYTES = 192 * 1024;
+const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|asks\/[\w-]{1,64}\/cancel)$/;
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
+const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
 const JOIN_STATUS = {
   busy: 429,
   "no-invite": 404,
@@ -51,7 +58,7 @@ const JOIN_STATUS = {
 } satisfies Record<Extract<JoinResult, { ok: false }>["error"], number>;
 
 export interface RoomDoorDeps {
-  store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot">;
+  store: Pick<Store, "groups" | "messagesFor" | "onChange" | "emit" | "bot" | "toggleReaction" | "patchGroup">;
   hostName(): string;
   onPeopleChanged?(group: HostedGroup): void;
 }
@@ -65,6 +72,8 @@ let door: {
   snapshots: RateLimiter;
   connects: RateLimiter;
   names: RateLimiter;
+  reacts: RateLimiter;
+  notices: RateLimiter;
   versions: Map<string, { version: number; shared: string }>;
   /** Group id to room id, for rooms that had a stream. */
   watched: Map<string, string>;
@@ -83,9 +92,17 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
     snapshots: new RateLimiter(30, MINUTE, now),
     connects: new RateLimiter(10, MINUTE, now),
     names: new RateLimiter(10, MINUTE, now),
+    reacts: new RateLimiter(60, MINUTE, now),
+    notices: new RateLimiter(10, MINUTE, now),
     versions: new Map(),
     watched: new Map(),
     unsubscribe: deps.store.onChange((change) => {
+      if (change.type === "message.patch") {
+        if (!change.message.roomEntryId || !anyDoorStreams()) return;
+        const group = deps.store.groups.find((candidate) => candidate.hosted && candidate.threadId === change.threadId) as HostedGroup | undefined;
+        if (group) broadcastDoorReactions(group.hosted.roomId, [lineReactions(change.message)]);
+        return;
+      }
       const roomId = (change.type === "group" || change.type === "group.deleted") && door?.watched.get(change.groupId);
       if (!roomId || !anyDoorStreams()) return;
       if (doorGroup(roomId)) return pushRoomState(roomId);
@@ -117,7 +134,11 @@ function sharedState(group: HostedGroup) {
     const bot = door!.deps.store.bot(id);
     return bot && !bot.hidden ? [{ id: bot.id, name: bot.name, color: bot.color }] : [];
   });
-  return { roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots, ...(group.picture ? { picture: group.picture } : {}) };
+  return {
+    roomName: group.name, instructions: group.bulletin ?? "", host: door!.deps.hostName(), people, bots,
+    ...(group.picture ? { picture: group.picture } : {}),
+    ...(group.notice ? { notice: group.notice } : {}),
+  };
 }
 
 /** Full state for one viewer. The version moves only when what everyone sees changed. */
@@ -143,6 +164,32 @@ function pushRoomState(roomId: string): void {
   });
 }
 
+/** The store keeps the host's own marks as "user" and a bot's as its id. */
+const wireBy = (by: string) => (by === "user" ? "host" : by.startsWith("person:") ? by : `bot:${by}`);
+
+const lineReactions = (message: Message): LineReactions => ({
+  id: message.roomEntryId!,
+  marks: (message.reactions ?? []).map((mark) => ({ emoji: mark.emoji, by: wireBy(mark.by) })),
+});
+
+/** Every reaction in the room, a reset frame first. */
+function reactionFrames(group: HostedGroup): DoorFrame[] {
+  const frames: Array<{ kind: "reactions"; reset?: true; lines: LineReactions[] }> = [{ kind: "reactions", reset: true, lines: [] }];
+  let bytes = 0;
+  for (const message of door!.deps.store.messagesFor(group.threadId)) {
+    if (!message.roomEntryId || !message.reactions?.length) continue;
+    const line = lineReactions(message);
+    const size = Buffer.byteLength(JSON.stringify(line)) + 1;
+    if (bytes + size > REACTION_FRAME_BYTES && frames.at(-1)!.lines.length) {
+      frames.push({ kind: "reactions", lines: [] });
+      bytes = 0;
+    }
+    frames.at(-1)!.lines.push(line);
+    bytes += size;
+  }
+  return frames;
+}
+
 export function hostNameChanged(): void {
   for (const group of door?.deps.store.groups ?? []) if (group.hosted) pushRoomState(group.hosted.roomId);
 }
@@ -160,6 +207,49 @@ async function rename(req: IncomingMessage, res: ServerResponse, roomId: string,
   pushRoomState(roomId);
   door!.deps.onPeopleChanged?.(group);
   send(res, 200, { name });
+}
+
+/** A react or notice body, once the room and person are checked again after the upload. */
+async function guestFields(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<{ group: HostedGroup; fields: Record<string, unknown> } | null> {
+  const body = await readJson(req, JOIN_BODY_BYTES);
+  const group = doorGroup(roomId);
+  const still = guestByKey(bearerOf(req) ?? "");
+  if (!body.ok) bodyError(res, body.status);
+  else if (!group) notFound(res);
+  else if (still?.roomId !== roomId || still.person.id !== person.id) send(res, 403, { error: "removed" });
+  else return { group, fields: record(body.value) ?? {} };
+  return null;
+}
+
+async function react(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.reacts.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  const { entryId, emoji } = call.fields;
+  if (typeof entryId !== "string" || typeof emoji !== "string" || !(EXTENDED_REACTIONS as readonly string[]).includes(emoji)) return send(res, 400, { error: "bad request" });
+  const message = door!.deps.store.messagesFor(call.group.threadId).find((candidate) => candidate.roomEntryId === entryId);
+  if (!message) return send(res, 404, { error: "no such message in this room" });
+  const patched = door!.deps.store.toggleReaction(call.group.threadId, message.id, emoji, `person:${person.id}`) ?? message;
+  send(res, 200, { marks: lineReactions(patched).marks });
+}
+
+/** Anyone pins and the newest wins; here only the pinner unpins, the host unpins any from its own UI. */
+async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
+  if (!door!.notices.take(person.id)) return send(res, 429, { error: "rate-limited" });
+  const call = await guestFields(req, res, roomId, person);
+  if (!call) return;
+  const { entryId } = call.fields;
+  const by = `person:${person.id}`;
+  if (entryId === null) {
+    if (call.group.notice && call.group.notice.by !== by) return send(res, 403, { error: "forbidden" });
+    door!.deps.store.patchGroup(call.group.id, { notice: undefined });
+    return send(res, 200, { notice: null });
+  }
+  if (typeof entryId !== "string") return send(res, 400, { error: "bad request" });
+  if (!/^[\w-]{1,64}$/.test(entryId) || !roomEntry(roomId, entryId)) return send(res, 404, { error: "no such message in this room" });
+  const notice = { entryId, by, at: Date.now() };
+  door!.deps.store.patchGroup(call.group.id, { notice });
+  send(res, 200, { notice });
 }
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
@@ -207,20 +297,23 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   const body = await readJson(req, JOIN_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
   const fields = record(body.value);
-  const code = fields?.code;
-  const parts = typeof code === "string" ? CODE.exec(code) : null;
-  if (!parts || parts[1] !== relayHost) return send(res, 400, { error: "bad-code" });
+  const text = fields?.code;
+  // An unknown short code becomes an empty one, so joinRoom still spends the join limit on it.
+  const short = typeof text === "string" && SHORT.test(text) ? (shortCodeTarget(text) ?? { id: "", secret: "" }) : null;
+  const parts = short || typeof text !== "string" ? null : CODE.exec(text);
+  if (!short && (!parts || parts[1] !== relayHost)) return send(res, 400, { error: "bad-code" });
+  const [codeId, secret] = short ? [short.id, short.secret] : [parts![2]!, parts![3]!];
   // An unknown invite still goes through joinRoom, so it spends the join limit.
-  const roomId = inviteRoomId(parts[2]!);
+  const roomId = inviteRoomId(codeId);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
   const group = roomId ? doorGroup(roomId) : null;
   if (roomId && !group) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
   tellHost(result.roomId);
-  send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key });
+  send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key, ...(short ? { code: `wkr1:${relayHost}:${codeId}.${secret}` } : {}) });
 }
 
 const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
@@ -266,6 +359,7 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   door!.watched.set(group.id, roomId);
   const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
   writeFrame(open, { kind: "state", state: doorState(group, person) });
+  for (const frame of reactionFrames(group)) writeFrame(open, frame);
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
     writeFrame(open, { kind: "reset" });
@@ -353,6 +447,8 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
+  if (action === "react") return react(req, res, guest.roomId, guest.person);
+  if (action === "notice") return pinNotice(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

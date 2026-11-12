@@ -5,7 +5,7 @@ import { fetchResponse, responseBody } from "./api-request";
 import { openLiveEvents } from "./live-events";
 import type { JoinedEntry, JoinedView } from "./team-rooms";
 
-export type JoinedRoomDetail = JoinedView & { entries: JoinedEntry[] };
+export type JoinedRoomDetail = JoinedView & { entries: JoinedEntry[]; noticeEntry?: JoinedEntry };
 
 type Listener = (roomId: string | null) => void;
 

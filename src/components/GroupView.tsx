@@ -18,6 +18,7 @@ import {
   type GroupDefaultResponder,
   type Message,
 } from "@/state/store";
+import type { RoomJoin } from "@/state/store-types";
 import { BotAvatar } from "./Avatar";
 import { DockedPresence, MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -58,6 +59,11 @@ import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
 import { GroupMemberRoster } from "./GroupMemberRoster";
+import { GroupArchiveBar } from "./GroupArchiveBar";
+import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
+import { useGroupArchive } from "@/lib/group-archive";
+import { placeJoins } from "@/lib/room-joins";
+import { roomJoins } from "@/lib/team-rooms";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -72,6 +78,7 @@ import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { shortPath } from "@/lib/short-path";
+import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
@@ -302,6 +309,8 @@ function RoomReplyQuote({ group, replyToId, transcript }: { group: Group; replyT
   ) : null;
 }
 
+const NO_JOINS: RoomJoin[] = [];
+
 export const Transcript = memo(function Transcript({
   group,
   members,
@@ -312,6 +321,8 @@ export const Transcript = memo(function Transcript({
   onReply,
   onMessageMenu,
   workers,
+  joins = NO_JOINS,
+  readOnly = false,
 }: {
   group: Group;
   members: Bot[];
@@ -324,6 +335,9 @@ export const Transcript = memo(function Transcript({
   onReply: (message: Message) => void;
   onMessageMenu: (menu: MessageMenuRequest) => void;
   workers: ShownRun[];
+  joins?: RoomJoin[];
+  /** An older task: shown, never changed. */
+  readOnly?: boolean;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -347,13 +361,17 @@ export const Transcript = memo(function Transcript({
     () => roomTranscriptRows(items, { showToolCalls, showActivities, workerRows: new Set([...workerAt].filter(([, shown]) => shown).map(([id]) => id)) }),
     [items, showToolCalls, showActivities, workerAt],
   );
+  const joinsAt = useMemo(
+    () => placeJoins(joins, items.map((item, i) => (rows[i].visible ? (item.kind === "message" ? item.message : item.messages[0]).at : null)), messages[0]?.id === transcript[0]?.id),
+    [joins, items, rows, messages, transcript],
+  );
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const findCurrent = useFindCurrentId();
   const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
-    target && messageId === target.messageId
+    target && !readOnly && messageId === target.messageId
       ? (callbacks?: { onError?: () => void }) => {
           const onError = callbacks?.onError;
           dispatch({
@@ -393,6 +411,7 @@ export const Transcript = memo(function Transcript({
                   {dayLabel(first.at)} {formatTime(first.at, localeTag(locale))}
                 </div>
               )}
+              {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
               {first.from && cluster && (
                 <ClusterLabel bot={memberOf(first.from.botId)} name={first.from.name} color={first.from.color} />
               )}
@@ -425,6 +444,8 @@ export const Transcript = memo(function Transcript({
         }
         const m = item.message;
         const user = m.role === "user";
+        const person = user && m.author?.kind === "person" ? m.author : null;
+        const mine = user && !person;
         const streaming = m === streamingMessage;
         // rooms ship every branch, so two replies can share a parent
         const slot = !user && m.kind === "text" ? replySlot(group.threadId, m, transcript) : null;
@@ -433,7 +454,7 @@ export const Transcript = memo(function Transcript({
         const docked = dock && dock.slot === slot && m.id === dockTargetId ? dock : null;
         const attachedImages = user && m.text ? splitAttachedImages(m.text) : null;
         const menuTarget =
-          m.kind === "text" && m.text && !m.placeholder
+          m.kind === "text" && m.text && !m.placeholder && !readOnly
             ? {
               threadId: group.threadId,
               message: m,
@@ -522,7 +543,7 @@ export const Transcript = memo(function Transcript({
           ) : m.kind === "text" && m.text ? (
             <div
               data-orbit-message={user ? "user" : "bot"}
-              className={cn("group flex w-full flex-col outline-none", user ? "items-end" : "items-start")}
+              className={cn("group flex w-full flex-col outline-none", mine ? "items-end" : "items-start")}
               tabIndex={-1}
               {...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget })))}
               onContextMenu={menuTarget ? (e) => {
@@ -554,7 +575,7 @@ export const Transcript = memo(function Transcript({
                 data-strip={m.reactions?.length ? "" : undefined}
                 className={cn("relative w-fit max-w-[min(42rem,78%)]", Boolean(m.reactions?.length) && "pb-3.5")}
               >
-                {user && (
+                {mine && !readOnly && (
                   <div
                     data-message-hover-actions
                     className="pointer-events-none absolute top-1/2 right-full z-20 mr-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
@@ -576,7 +597,7 @@ export const Transcript = memo(function Transcript({
                   data-orbit-message-content
                   className={cn(
                     "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words",
-                    user ? "whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+                    user ? cn("whitespace-pre-wrap text-ink", mine ? "bg-bubble-user" : "bg-card") : "bg-card text-ink",
                   )}
                   title={new Date(m.at).toLocaleString(localeTag(locale))}
                 >
@@ -596,7 +617,7 @@ export const Transcript = memo(function Transcript({
                   ) : null}
                 </div>
                 )}
-                {!user && !streaming && !docked?.live && (
+                {!mine && !streaming && !docked?.live && !readOnly && (
                   <div
                     data-message-hover-actions
                     className="pointer-events-none absolute top-1/2 left-full z-20 ml-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
@@ -618,8 +639,8 @@ export const Transcript = memo(function Transcript({
                   threadId={group.threadId}
                   message={m}
                   members={members}
-                  corner={user ? "left" : "right"}
-                  className="bottom-3.5"
+                  corner={mine ? "left" : "right"}
+                  className={cn("bottom-3.5", readOnly && "pointer-events-none")}
                 />
               </div>
               {optionChoices && (
@@ -627,7 +648,7 @@ export const Transcript = memo(function Transcript({
                   options={optionChoices.options}
                   question={optionChoices.question}
                   answeredText={answeredChoice}
-                  disabled={!answeredChoice && Boolean(group.busyBotId)}
+                  disabled={readOnly || (!answeredChoice && Boolean(group.busyBotId))}
                   onPick={(option) => dispatch({ type: "sendGroup", groupId: group.id, text: option })}
                 />
               )}
@@ -647,13 +668,16 @@ export const Transcript = memo(function Transcript({
                 {dayLabel(m.at)} {formatTime(m.at, localeTag(locale))}
               </div>
             )}
+            {joinsAt.at.get(i)?.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
             {!user && m.from && cluster && (
               <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
             )}
+            {person && cluster && <PersonLabel name={person.name} />}
             {row}
           </div>
         );
       })}
+      {joinsAt.tail.map((join) => <RoomJoinLine key={join.personId} name={join.name} />)}
     </>
   );
 });
@@ -1113,7 +1137,9 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group }: { group: Group }) {
+export function GroupView({ group: live }: { group: Group }) {
+  const archive = useGroupArchive(live.id);
+  const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
@@ -1260,7 +1286,7 @@ export function GroupView({ group }: { group: Group }) {
   const revealOlder = useRef(false);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
-  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+  const earlier = useMemo(() => createEarlierWindow(shown, {
     terminal, workers: rowWorkers, renders: (message) => messageVisible(message, showToolCalls, showActivities),
   }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
@@ -1269,7 +1295,7 @@ export function GroupView({ group }: { group: Group }) {
     if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlier.start(prepended, scrollRef.current) : undefined));
     }
   }
   const {
@@ -1434,7 +1460,7 @@ export function GroupView({ group }: { group: Group }) {
       return;
     }
     preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
-    const start = earlierStart(startIndex, scrollRef.current);
+    const start = earlier.start(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1458,7 +1484,12 @@ export function GroupView({ group }: { group: Group }) {
   const [showEarlier, cancelEarlier] = useEarlierPage({
     key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : group.hasMore),
     scrollRef, previousScrollTop, expand: expandEarlier,
+    settle: () => {
+      const end = earlier.end(startIndex, scrollRef.current);
+      if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
+    },
   });
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1567,6 +1598,7 @@ export function GroupView({ group }: { group: Group }) {
                 setMembersOpen(true);
               }}
             >
+              <GroupPeopleFaces group={group} />
               <button
                 ref={membersTriggerRef}
                 type="button"
@@ -1658,7 +1690,7 @@ export function GroupView({ group }: { group: Group }) {
         const pinned = pinnedMessage?.kind === "text" ? pinnedMessage : undefined;
         const text = pinned ? pinPreview(pinned.role === "user" ? "user" : "bot", pinned.text ?? "") : "";
         if (!pinned || !text) return null;
-        const sender = pinned.role === "user" ? t("room.you") : (pinned.from?.name ?? t("chrome.aBot"));
+        const sender = pinned.role === "user" ? (pinned.author?.kind === "person" ? pinned.author.name : t("room.you")) : (pinned.from?.name ?? t("chrome.aBot"));
         return (
           <div className="w-full px-5">
             <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
@@ -1775,7 +1807,7 @@ export function GroupView({ group }: { group: Group }) {
             </div>
           )}
           {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (
-            <div className="flex justify-center pt-2">
+            <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
@@ -1795,6 +1827,8 @@ export function GroupView({ group }: { group: Group }) {
             onReply={selectReply}
             onMessageMenu={setMenu}
             workers={rowWorkers}
+            joins={archive ? undefined : roomJoins(group)}
+            readOnly={Boolean(archive)}
           />
           {jump.forwardFailed && (
             <div className="flex justify-center">
@@ -1846,27 +1880,33 @@ export function GroupView({ group }: { group: Group }) {
       )}
 
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
-      {recoveryPacket && recoveryBot && (
-        <TaskRecoveryCard
-          key={`${recoveryBot.id}:${group.threadId}`}
-          bot={recoveryBot}
-          packet={recoveryPacket}
-          turns={recoveryPacket?.turnsAtWrite ?? 0}
-          busy={roomRecoveryBusy(group, recoveryBot.busy)}
-        />
+      {archive ? (
+        <GroupArchiveBar />
+      ) : (
+        <>
+          {recoveryPacket && recoveryBot && (
+            <TaskRecoveryCard
+              key={`${recoveryBot.id}:${group.threadId}`}
+              bot={recoveryBot}
+              packet={recoveryPacket}
+              turns={recoveryPacket?.turnsAtWrite ?? 0}
+              busy={roomRecoveryBusy(group, recoveryBot.busy)}
+            />
+          )}
+          <Composer
+            key={group.threadId}
+            group={group}
+            members={members}
+            composerRef={composerInputRef}
+            onSend={jumpToLatest}
+            locked={setupPending}
+            replyTo={replyTo}
+            onClearReply={clearReply}
+            onConsumeReply={consumeReply}
+            onRestoreReply={restoreReply}
+          />
+        </>
       )}
-      <Composer
-        key={group.threadId}
-        group={group}
-        members={members}
-        composerRef={composerInputRef}
-        onSend={jumpToLatest}
-        locked={setupPending}
-        replyTo={replyTo}
-        onClearReply={clearReply}
-        onConsumeReply={consumeReply}
-        onRestoreReply={restoreReply}
-      />
       </div>
       </div>
     </main>

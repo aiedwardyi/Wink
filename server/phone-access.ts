@@ -308,6 +308,10 @@ export class PhoneAccess {
     return this.relay?.sendSnag?.(snag) ?? Promise.resolve(false);
   }
 
+  mintRoomCode(): Promise<{ code: string; exp: number } | null> {
+    return this.relay?.mintRoomCode?.() ?? Promise.resolve(null);
+  }
+
   sendActive(): void {
     this.relay?.sendActive?.();
   }

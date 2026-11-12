@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { pickerInstances } from "@/lib/cross-model-picker";
+import { createTeamRoom } from "@/lib/team-rooms";
 import { BotPickerList } from "./BotPickerList";
 import {
   WIZARD_BOT_NAME_LIMIT,
@@ -96,20 +97,31 @@ export function GroupWizard({
     }
   };
 
+  const saving = rows.some((row) => row.saving);
   const createGroup = () => {
     const memberIds = [...picked];
-    if (memberIds.length < 1 || creating) return;
+    if (creating || saving) return;
     setCreating(true);
     setCreateError(null);
     const title = name.trim() || t("groupWizard.namePrefill");
+    const failed = () => {
+      setCreating(false);
+      setCreateError(t("groupWizard.createFailed"));
+    };
+    // No bots: a people group, hosted from the start.
+    if (!memberIds.length) {
+      createTeamRoom(title).then(({ group }) => {
+        dispatch({ type: "groupPatched", group });
+        dispatch({ type: "select", id: group.id });
+        onClose();
+      }, failed);
+      return;
+    }
     dispatch({
       type: "createGroup",
       ...groupCreatePayload(title, memberIds),
       onSuccess: () => onClose(),
-      onError: () => {
-        setCreating(false);
-        setCreateError(t("groupWizard.createFailed"));
-      },
+      onError: failed,
     });
   };
 
@@ -179,7 +191,7 @@ export function GroupWizard({
           </button>
           <button
             onClick={createGroup}
-            disabled={picked.size < 1 || creating}
+            disabled={creating || saving}
             className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
           >
             {t("groupWizard.create")}

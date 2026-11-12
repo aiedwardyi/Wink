@@ -52,6 +52,8 @@ import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { hostedSend } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
@@ -104,8 +106,11 @@ import {
   NATIVE_DIR,
 } from "./config.ts";
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { sendNow } from "./save-defer.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { codexCredit, codexCreditRows } from "./codex-credit.ts";
+import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
+import { clearCodexPromo } from "../electron/codex-promo.mjs";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -237,6 +242,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
+import { asksNudge, isStatusTurn, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -433,6 +439,9 @@ import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from ".
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { BotTrash, type TrashEntry } from "./bot-trash.ts";
+import { createBotTrashActions } from "./bot-trash-actions.ts";
+import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
 import { isVoiceLine, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -468,6 +477,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
 const codexCreditFor = () => codexCredit(DATA_DIR, instanceConfigs(cfg), cfg.imageGen?.key);
+const codexPromoStatus = createCodexPromoStatus(() => instanceConfigs(cfg, accounts.snapshot), codexCreditFor);
 const accountNames = createAccountNames(DATA_DIR);
 accountNames.sync(accounts.list());
 // Before registry.load: a prewarmed engine child would inherit the token.
@@ -995,7 +1005,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
   return { ok: true, memberIds };
 }
 let bootSelection = { instanceId: "", model: "" };
-const store = startupTiming.measure("store", () => new Store(() => bootSelection));
+const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -1532,6 +1542,7 @@ function publishProfileChanges(): number {
   if (!profileSyncSettings.syncChats || !folder || store.botsFile === "unreadable") return 0;
   ensureProfileSyncWorkspace(folder);
   pruneProfileSyncSectionAliases();
+  const marks = botTrash ? publishTrashMarks(trashSyncHost(), folder) : 0;
   const now = Date.now();
   const baseCheckpoint = profileSyncSettings.seenCheckpoint || undefined;
   const synced = profileSyncSettings.syncedHashes;
@@ -1542,16 +1553,21 @@ function publishProfileChanges(): number {
     ...localSectionChanges(),
     { entity: "order", entityId: profileSyncSettings.workspaceId, changes: localOrderChanges(true) },
   ]);
-  const liveBotIds = new Set(store.bots.map((bot) => bot.id));
+  // a trashed or timer-emptied bot keeps its sync id and is not missing
+  const liveBotIds = new Set([
+    ...store.bots.map((bot) => bot.id),
+    ...store.trash.entries.filter((entry) => entry.step === "trashed").map((entry) => entry.record.id),
+    ...store.trash.emptied.map((note) => note.botId),
+  ]);
   const deletes = botDeletesToPublish(profileSyncSettings.botMap, liveBotIds, profileSyncSettings.pendingBotDeletes);
   if (deletes.missing) console.warn(`bot sync: ${deletes.missing} synced bot(s) missing here without a delete; not publishing deletes`);
   const deleted = deletes.publish;
   const clearsPending = deletes.pendingBotDeletes.length !== profileSyncSettings.pendingBotDeletes.length;
-  if (!changed.length && !deleted.length && !clearsPending) return 0;
+  if (!marks && !changed.length && !deleted.length && !clearsPending) return 0;
   const record = (
     input: Omit<ProfileSyncOperation, "format" | "version" | "operationId" | "deviceId" | "sequence" | "recordedAt">,
   ) => nextProfileSyncOperation(baseCheckpoint ? { ...input, baseCheckpoint } : input, now);
-  let written = 0;
+  let written = marks;
   for (const item of changed.flatMap((unsynced) => ownOpSyncChanges(compatibleSyncChanges(synced, unsynced)))) {
     try {
       writeSyncOperation(folder, record(item));
@@ -1645,6 +1661,7 @@ function importProfileChanges(): void | Promise<void> {
   }
   const sectionNames = new Map(Object.values(state.sections).map((section) => [section.id, String(section.name ?? "")]));
   const synced = profileSyncSettings.syncedHashes;
+  const marks = botTrash ? importTrashMarks(trashSyncHost(), state) : { trashed: [], revive: [] };
   const plan = planProfileImport({
     state,
     deviceId: profileSyncSettings.deviceId,
@@ -1655,6 +1672,7 @@ function importProfileChanges(): void | Promise<void> {
     localOrder: localOrderChanges(false),
     restore: store.botsFile === "missing",
     pendingBotDeletes: profileSyncSettings.pendingBotDeletes,
+    ...marks,
   });
   const chiefs: string[] = [];
   const missingAssets: string[] = [];
@@ -1687,6 +1705,7 @@ function importProfileChanges(): void | Promise<void> {
     }
   }
   const finish = () => {
+    if (botTrash) finishRevive(trashSyncHost(), marks.revive, (botId) => threadSyncV2?.rebuild(botId));
     for (const key of Object.keys(state.tombstones).filter((value) => value.startsWith("bot:"))) {
       const globalId = key.slice("bot:".length);
       for (const [localId, mappedGlobalId] of Object.entries(profileSyncSettings.botMap)) {
@@ -1764,7 +1783,7 @@ async function localVmDeleteRefusal(botId: string): Promise<string | null> {
   return null;
 }
 
-async function deleteBotFully(bot: BotRecord): Promise<void> {
+async function stopBotWork(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
   const instance = botAccounts.instance(bot);
@@ -1786,6 +1805,10 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   const target = perBotLocalVmTarget(bot.id);
   localVmIdles.get(target.key)?.cancel();
   localVmIdles.delete(target.key);
+}
+
+async function deleteBotFully(bot: BotRecord): Promise<void> {
+  await stopBotWork(bot);
   const threadIds = new Set([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)]);
   store.deleteBot(bot.id);
   for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
@@ -2287,6 +2310,8 @@ function syncProfiles(): void | Promise<void> {
     for (const bot of store.bots) {
       if (!botHasActiveTurn(bot.id)) syncMemory(bot.id);
     }
+    profileSyncPassed = true;
+    emptyExpiredTrash();
   };
   if (pending instanceof Promise) {
     return pending.then(after, (error) => {
@@ -2962,6 +2987,7 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
 const boardEngines = new Map([["grokAgent", "grok"], ["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
 const usageBoard = createUsageBoard({
+  codexPromo: codexPromoStatus,
   accounts: {
     list: () => [
       ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
@@ -3299,6 +3325,28 @@ function isUnattended(botId?: string | null): boolean {
   return true;
 }
 let routines: RoutineManager | null = null;
+let botTrash: BotTrash | null = null;
+// the trash timer waits for the first profile sync pass of this run
+let profileSyncPassed = false;
+const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
+const botTrashActions = createBotTrashActions({
+  host: trashSyncHost,
+  queueDeletes: (syncIds) => {
+    for (const syncId of syncIds) if (!profileSyncSettings.pendingBotDeletes.includes(syncId)) profileSyncSettings.pendingBotDeletes.push(syncId);
+    profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
+    scheduleProfilePublish();
+  },
+  awaitingSync: () => Boolean(profileSyncSettings.syncChats && profileSyncSettings.folder) && !profileSyncPassed,
+});
+
+function emptyExpiredTrash(): void {
+  if (!botTrash) return;
+  try {
+    botTrashActions.emptyExpired();
+  } catch (error) {
+    console.warn("bot trash: timer failed", error);
+  }
+}
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
 const localVmLeases = new LocalVmLeasePool(30 * 60_000);
 const localVmLifecycleBusy = new Set<string>();
@@ -3393,6 +3441,8 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
+  // the settle below writes to disk; the reply's last frame must not wait behind it
+  if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -3889,6 +3939,7 @@ bus.subscribe((event: RuntimeEvent) => {
       });
       break;
     case "runtime.error": {
+      refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
@@ -4031,7 +4082,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const routineReportGroup = routineReportThread ? store.groupByThread(routineReportThread) : undefined;
         // Group-origin routines belong to that channel's unread state. Their
         // hidden execution task should not light up the bot's 1:1 sidebar too.
-        if (!routineReportGroup && addedMessage) store.patchBot(bot.id, { unread: true });
+        if (!routineReportGroup && addedMessage) store.patchBot(bot.id, { unread: true }, { soon: true });
         if (routineRun?.status !== "failed") {
           // the frame carries the bot's avatar so every desktop client can
           // show the notification under that bot's own face
@@ -4839,11 +4890,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // A Resume card carries no request of its own, so it falls back to the turn
   // the interruption cut short, unless the unsettled request already names it.
   let recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : latestUser?.text) || "";
+  const statusTurn = commsDepth === 0 && isStatusTurn(text);
   let durableTaskRecordText = taskRecord
     ? taskRecordBlock(
       taskRecord,
       Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-      recovering || unsettled ? { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled } : undefined,
+      { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn },
     )
     : "";
   const catalogWindow = knownCatalogContextWindow(instance.models, model);
@@ -4923,7 +4975,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-            recovering || unsettled ? { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled } : undefined)
+            { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
         : "";
       sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
       reactions.delivered = task.reactionsDelivered;
@@ -5155,6 +5207,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
   });
   const resumeFallback = buildResumeFallback({
     text: turnPrompt,
@@ -5210,7 +5263,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   }
   // a pane note, delegation, routine, or peer ask starting this turn is not
   // the user reading anything - only their own message should clear it
-  if (turnStartedByUser(opts)) store.patchBot(bot.id, { unread: false });
+  if (turnStartedByUser(opts)) store.patchBot(bot.id, { unread: false }, { soon: true });
   turnUsage.delete(threadId);
   turnDispatchedAt.set(threadId, tickTurnClock());
   turnStartedAtMs.set(threadId, Date.now());
@@ -5526,7 +5579,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation."
         : "";
       const taskStatePrompt = integrations.agents
-        ? " Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn."
+        ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
       const showImagePrompt = canMessage ? ` ${slimStaticText(SHOW_IMAGE_GUIDANCE, instance.driverKind)}` : "";
@@ -5970,6 +6023,19 @@ if (recoveryOwners.length > 0) {
     ),
   );
 }
+class ServerBotTrash extends BotTrash {
+  // stopping switches routines off, so it runs after the entry has listed the ones a Restore turns back on
+  override trash(botId: string, opts?: { syncId?: string; deletedAt?: number }): TrashEntry {
+    const bot = store.bot(botId);
+    const entry = super.trash(botId, opts);
+    if (bot) void stopBotWork(bot).catch((error) => console.warn("bot trash: stop failed", error));
+    return entry;
+  }
+}
+botTrash = new ServerBotTrash(store, routines);
+botTrash.start();
+emptyExpiredTrash();
+setInterval(emptyExpiredTrash, 6 * 60 * 60_000).unref?.();
 // One chat per bot: open each idle bot on its newest user chat, never a routine run.
 const routineThreads = routineThreadIds();
 for (const bot of store.bots) {
@@ -6246,7 +6312,6 @@ _loadPending();
 configureRoomAsks({
   store,
   hostName: () => cfg.profile?.name?.trim() || "The host",
-  driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
   instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
@@ -6400,7 +6465,7 @@ async function runClaimedGroupMemberTurn(
     ? taskRecordBlock(
       taskRecord,
       Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-      recovering ? { recovering: true, latestUserText: latestUser?.text ?? "" } : undefined,
+      { recovering, latestUserText: latestUser?.text ?? "", allAsks: isStatusTurn(latestUser?.text ?? "") },
     )
     : "";
   const prepared = await prepareModelContext({
@@ -6459,7 +6524,7 @@ async function runClaimedGroupMemberTurn(
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
-    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : null,
+    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => message.text).join("\n"),
     ...roomMail.map((part) => part.text),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
@@ -6552,6 +6617,7 @@ async function runClaimedGroupMemberTurn(
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
     `Room members: ${roster}, and ${userName} (the human).`,
+    teammatesLine(group),
     group.bulletin.trim() && `Room bulletin (shared instructions for everyone):\n${group.bulletin.trim()}`,
     `Reply as yourself, ${detailedRepliesEnabled(cfg) ? "" : "briefly and "}conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     reactionSystemGuidance(),
@@ -6561,14 +6627,14 @@ async function runClaimedGroupMemberTurn(
     canMessage &&
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
     integrations.agents &&
-      "Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn.",
+      `Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`,
     canMessage && reactionToolGuidance(),
     canMessage && SHOW_IMAGE_GUIDANCE,
   ]
     .filter(Boolean)
     .join("\n");
 
-  const text = `${roomContext}\n\n(Reply to the conversation above as ${bot.name}.)${
+  const text = `${roomContext}\n\n${askNote(authority, bot.name)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
   }`;
 
@@ -6656,7 +6722,8 @@ async function runClaimedGroupMemberTurn(
 
 ${text}` : text,
         system: roomSystem,
-        approval: bot.autoApprove ? "auto" : "ask",
+        // A teammate's request never waits on the host's approval card.
+        approval: authority || bot.autoApprove ? "auto" : "ask",
         attended: !isUnattended(bot.id),
         cwd,
         integrations,
@@ -6697,7 +6764,9 @@ ${text}` : text,
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
+  if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
+  if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
@@ -6718,7 +6787,7 @@ ${text}` : text,
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && !group.hosted && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -6737,7 +6806,6 @@ ${text}` : text,
 }
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
-  if (store.group(groupId)?.hosted) return;
   const key = `${botId}\0${threadId}`;
   if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
@@ -6758,14 +6826,16 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
-  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message;
-  if (roomSetupPending(group)) {
+  // A shared group commits the host's line to the room, then answers it like any group.
+  const shared = group.hosted ? hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message : null;
+  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
+  if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
   // Capture the active thread once. Every queued responder below is bound to
   // this task even if another client asks to switch later.
   const threadId = group.threadId;
-  const message = store.appendMessage(threadId, {
+  const message = shared ?? store.appendMessage(threadId, {
     role: "user",
     kind: "text",
     text,
@@ -7475,6 +7545,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body.ok) return json(res, body.status, { error: body.error });
       const parsed = mailboxPostSchema.safeParse(body.value);
       if (!parsed.success) return json(res, 400, { error: "invalid mailbox message" });
+      refreshCodexPromo(parsed.data.text, usageBoard.touch);
       const source = mailboxRecipient(store.bots, scope);
       if (!source) return json(res, 404, { error: "no such bot" });
       let kind = parsed.data.kind;
@@ -8124,14 +8195,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       const refusal = await localVmDeleteRefusal(bot.id);
       if (refusal) return json(res, 409, { error: refusal });
-      const globalId = profileSyncSettings.botMap[bot.id];
-      if (globalId && !profileSyncSettings.pendingBotDeletes.includes(globalId)) {
-        profileSyncSettings.pendingBotDeletes.push(globalId);
-        profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-      }
-      await deleteBotFully(bot);
+      botTrashActions.trash(bot.id);
       return json(res, 200, { ok: true });
     }
+
+    if (method === "GET" && path === "/api/bot-trash") return json(res, 200, { bots: botTrashActions.list() });
+    m = path.match(/^\/api\/bot-trash\/([\w-]+)\/restore$/);
+    if (m && method === "POST") {
+      try {
+        return json(res, 200, { bot: publicBot(botTrashActions.restore(m[1])) });
+      } catch (error) {
+        return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (method === "POST" && path === "/api/bot-trash/empty") return json(res, 200, { emptied: botTrashActions.emptyNow() });
 
     if (method === "GET" && path === "/api/whats-new") return json(res, 200, whatsNew.pending() ?? { release: null });
     if (method === "POST" && path === "/api/whats-new/seen") {
@@ -8463,8 +8540,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await joinedFileRoute(req, res, method, url, guestClient)) return;
-    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
@@ -8595,6 +8672,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if ((cfg.profile?.name ?? "").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
       memoryPass.onConfigChanged();
       if (patch.imageGen?.key !== undefined) {
+        const credit = codexCreditFor();
+        if (credit) clearCodexPromo(credit.account.home);
         usageBoard.touch();
         if (codexCreditFor()) void enableWorkerAccounts(terminalBridgeAccess).catch(() => console.error("Worker account routing is unavailable"));
       }
@@ -8878,6 +8957,7 @@ hostShutdown = () => {
     const packet = pendingTaskPackets.get(threadId)?.packet;
     if (packet) persistTaskPacket(packet);
   }
+  store.flushSaves();
   for (const idle of localVmIdles.values()) idle.cancel();
   vps.closeAllVpsDesktopTunnels();
   void phoneAccess.stop();
@@ -8887,7 +8967,10 @@ hostShutdown = () => {
   summaryRepair.dispose();
   memoryPass.dispose();
   accountRuntime.dispose();
-  void registry.disposeAll().finally(() => process.exit(0));
+  void registry.disposeAll().finally(() => {
+    store.flushSaves();
+    process.exit(0);
+  });
 };
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, hostShutdown);

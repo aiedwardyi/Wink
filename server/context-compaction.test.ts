@@ -221,6 +221,20 @@ describe("provider-neutral context compaction", () => {
     expect(summarize.mock.calls.map(([text]) => text).join("\n")).not.toContain("Assistant: Scout:");
   });
 
+  it("names a teammate's room line by its author, not the host", async () => {
+    const ready = await prepareModelContext({
+      messages: [
+        message("u1", "@Wink hello"),
+        message("u2", "@Wink 정리해 줘", { origin: "person", author: { kind: "person", id: "p1", name: "Mina" } }),
+      ],
+      contextWindow: 8_192,
+      taskRecordText: "Room: crew",
+      userName: "Edward",
+      includeSpeakers: true,
+    });
+    expect(ready).toMatchObject({ status: "ready", transcript: [{ text: "Edward: @Wink hello" }, { text: "Mina: @Wink 정리해 줘" }] });
+  });
+
   it("tells the summarizer to credit work to whoever did it", async () => {
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary");
     await prepareModelContext({

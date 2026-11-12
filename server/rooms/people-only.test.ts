@@ -81,7 +81,6 @@ beforeEach(() => {
   deps = {
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: vi.fn(() => ({ ...engine, adapter: { sendTurn: engine.sendTurn } }) as never),
     dispatch: vi.fn(),
     stopTurn: vi.fn(async () => {}),
@@ -233,7 +232,7 @@ describe("a send in a people-only room", () => {
 
   it("goes from the host's send route to the log with no runner", () => {
     const spies = { runGroupMemberTurn: vi.fn(), enqueueDrainedRoomTurn: vi.fn(), queueRoomParticipation: vi.fn(), startTurn: vi.fn(), roomSetupPending: vi.fn(() => false) };
-    const start = load("startGroupTurn", { store, hostedSend, ...spies });
+    const start = load("startGroupTurn", { store, hostedSend, peopleOnlyRoom, ...spies });
     expect(start(group.id, "@Wink hi")).toMatchObject({ role: "user", text: "@Wink hi" });
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
     noWork();

@@ -115,6 +115,8 @@ const PLAN_SEED = { botId: "plan-seed-bot", botThreadId: "plan-seed-thread" };
 const PLAN_ONLY = { botId: "plan-only-bot", botThreadId: "plan-only-thread" };
 const GOAL_ONLY = { botId: "goal-only-bot", botThreadId: "goal-only-thread" };
 const PLAN_CLEARED = { botId: "plan-cleared-bot", botThreadId: "plan-cleared-thread" };
+const ASKS_CODEX = { botId: "asks-codex-bot", botThreadId: "asks-codex-thread", name: "Asks codex", selection: { instanceId: "codex", model: "gpt-fake-default" } };
+const ASKS_CLAUDE = { botId: "asks-claude-bot", botThreadId: "asks-claude-thread", name: "Asks claude", selection: { instanceId: "claude", model: "claude-fake" } };
 const SECRET_COLLISION = {
   botId: "secret-collision-bot",
   botThreadId: "secret-collision-direct-thread",
@@ -125,6 +127,7 @@ const SECRET_COLLISION = {
 interface TaskStateFields {
   goal?: string;
   plan?: Array<{ step: string; status: "pending" | "active" | "done" | "skipped" }>;
+  asks?: Array<{ id?: string; ask?: string; status: string }>;
 }
 
 type ApiBody =
@@ -156,9 +159,8 @@ describe("context compaction e2e", () => {
   const botById = async (botId: string) =>
     (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === botId);
   /** Drive update_task_state the way the agents-proxy does, with the token the turn handed it. */
-  const botTaskState = (botId: string, threadId: string, fields: TaskStateFields) => {
-    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
-    const token = dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+  const botTaskState = (botId: string, threadId: string, fields: TaskStateFields, engineToken?: string) => {
+    const token = engineToken ?? JSON.parse(readFileSync(claudeDumpPath, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
     return fetch(`${BASE}/api/internal/task-state`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -519,6 +521,20 @@ describe("context compaction e2e", () => {
         createdAt: 1,
         tasks: [{ threadId: SECRET_COLLISION.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
       },
+      ...[ASKS_CODEX, ASKS_CLAUDE].map((bot) => ({
+        id: bot.botId,
+        threadId: bot.botThreadId,
+        name: bot.name,
+        title: "Release owner",
+        description: "Keep the release moving.",
+        notifications: true,
+        color: "blue",
+        unread: false,
+        modelSelection: bot.selection,
+        resumeCursors: {},
+        createdAt: 1,
+        tasks: [{ threadId: bot.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
+      })),
     ]));
     writeFileSync(join(dataDir, "groups.json"), JSON.stringify([
       {
@@ -589,6 +605,8 @@ describe("context compaction e2e", () => {
       CLEAR_RACE.botThreadId,
       SECRET_COLLISION.botThreadId,
       SECRET_COLLISION.roomThreadId,
+      ASKS_CODEX.botThreadId,
+      ASKS_CLAUDE.botThreadId,
     ]) {
       writeFileSync(join(dataDir, `messages-${threadId}.json`), JSON.stringify({
         activeLeafId: "m120",
@@ -681,6 +699,29 @@ describe("context compaction e2e", () => {
         nextAction: "Run smoke tests",
         updatedAt: 1,
         updatedBy: "harness",
+        flushReason: "progress",
+        turnsAtWrite: 0,
+      }));
+    }
+    for (const bot of [ASKS_CODEX, ASKS_CLAUDE]) {
+      writeFileSync(join(dataDir, "task-state", `${bot.botThreadId}.json`), JSON.stringify({
+        v: 1,
+        threadId: bot.botThreadId,
+        botId: bot.botId,
+        goal: "Ship the release",
+        plan: [],
+        completed: [],
+        evidence: [],
+        artifacts: [],
+        blockers: [],
+        nextAction: "",
+        asks: [
+          { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348", at: 1, changedAt: 1 },
+          { id: "A2", ask: "Drop the old skin", status: "declined", at: 1, changedAt: 1 },
+          { id: "A3", ask: "Fix the login redirect", status: "building", at: Date.now(), changedAt: Date.now() },
+        ],
+        updatedAt: 1,
+        updatedBy: "bot",
         flushReason: "progress",
         turnsAtWrite: 0,
       }));
@@ -1355,4 +1396,65 @@ describe("context compaction e2e", () => {
     expect(packet.instructionAction).toBe("Sign the installers.");
     await waitFor(async () => (await botById(PLAN_CLEARED.botId))?.busy === false);
   }, 30_000);
+
+  it.each([ASKS_CODEX, ASKS_CLAUDE])("keeps $name asks across compaction, flags the stale one and closes into history", async (bot) => {
+    // Null until the engine has run this turn. A warm Claude process logs each later prompt but dumps once.
+    const sent = (text: string) => {
+      try {
+        if (bot.selection.instanceId === "claude") {
+          const logged = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+            .map((line) => JSON.parse(line) as { systemPrompt: string; text: string })
+            .filter((line) => line.text.includes(text)).at(-1);
+          const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+          if (!logged || !dump.mcpConfig) return null;
+          return {
+            prompt: logged.text,
+            system: logged.systemPrompt,
+            tools: JSON.stringify(dump.mcpConfig.mcpServers.agents),
+            token: String(dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN),
+          };
+        }
+        const dump = JSON.parse(readFileSync(dumpPath, "utf8"));
+        const calls: Array<{ method: string; params: any }> = dump.calls;
+        const prompt = calls.filter((call) => call.method === "turn/start" && JSON.stringify(call.params.input).includes(text)).at(-1)?.params.input[0].text;
+        if (!prompt) return null;
+        return {
+          prompt: String(prompt),
+          system: String(calls.find((call) => call.method === "thread/start" && String(call.params.developerInstructions).includes(`You are ${bot.name},`))?.params.developerInstructions),
+          tools: String(dump.argv.find((arg: string) => arg.startsWith("mcp_servers.agents.args="))),
+          token: String(dump.env.WINK_MCP_AGENTS_OMB_COMMS_TOKEN),
+        };
+      } catch {
+        return null;
+      }
+    };
+    const turn = async (text: string) => {
+      expect((await api("POST", `/api/bots/${bot.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => sent(text) !== null && (await botById(bot.botId))?.busy === false);
+      return sent(text)!;
+    };
+
+    rmSync(claudeDumpPath, { force: true });
+    const compacted = await turn(`${bot.name}: continue the release`);
+    expect(compacted.prompt).toContain("history 120");
+    expect(compacted.prompt).toContain("[Wink asks list - 2 open, 1 stale: no change in 6+ hours");
+    expect(compacted.prompt).toContain("- A1 waiting-for-user stale ");
+    expect(compacted.prompt).toContain(": Review the model picker PR (PR #1348)");
+    expect(compacted.prompt).toContain("- A3 building ");
+    expect(compacted.prompt).not.toContain("Drop the old skin");
+    expect(compacted.system).toContain("Add each ask the user makes to update_task_state asks in the same turn");
+    expect(compacted.tools).toContain("agents-proxy");
+
+    const resumed = await turn(`${bot.name}: thanks`);
+    expect(resumed.prompt).toContain("- A1 waiting-for-user stale ");
+
+    const closed = await botTaskState(bot.botId, bot.botThreadId, { asks: [{ id: "A1", status: "done" }] }, resumed.token);
+    expect(closed.status).toBe(200);
+    expect(z.object({ notice: z.string() }).parse(await closed.json()).notice).toBe("Asks saved; 1 open.");
+    expect(storedTaskPacket(bot.botThreadId).asks.map((ask: { id: string; status: string }) => `${ask.id} ${ask.status}`))
+      .toEqual(["A1 done", "A2 declined", "A3 building"]);
+
+    const morning = await turn(`${bot.name}: morning, where are we?`);
+    expect(morning.prompt).toContain("[Wink asks list - 1 open. Build any summary or status from this list.]\n- A3 building ");
+  }, 60_000);
 });

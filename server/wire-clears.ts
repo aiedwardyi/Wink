@@ -13,9 +13,10 @@ export const botClears = (
   projectNotes: bot.projectNotes ?? null,
 });
 
-export const groupClears = (group: Pick<GroupRecord, "pinnedMessageId" | "picture" | "section" | "cwd">) => ({
+export const groupClears = (group: Pick<GroupRecord, "pinnedMessageId" | "picture" | "notice" | "section" | "cwd">) => ({
   pinnedMessageId: group.pinnedMessageId ?? null,
   picture: group.picture ?? null,
+  notice: group.notice ?? null,
   section: group.section ?? null,
   cwd: group.cwd ?? null,
 });
