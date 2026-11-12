@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
+import { ArrowLeftRight, Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
 
 import { leaveFor } from "@/lib/back-navigation";
 import { onThisPc } from "@/lib/devices-setup";
@@ -38,7 +38,7 @@ export function useDevices(enabled: boolean, watching = false) {
         .then((body: { devices: DeviceItem[] }) => {
           if (!live.current || request <= applied.current) return;
           applied.current = request;
-          setDevices(body.devices);
+          setDevices(body.devices ?? []);
         })
         .catch(() => {});
     },
@@ -74,7 +74,14 @@ export function useDevices(enabled: boolean, watching = false) {
 
 type Navigate = (url: string) => void;
 
-/** Phones jump in place from the bot list, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
+/** The sign-in page's PC list, for a relay browser; it also reaches PCs missing from this PC's roster. */
+function choosePcUrl(): string | null {
+  const host = window.location.hostname;
+  const pc = /^[a-z2-7]{16}\.(.+)$/.exec(host);
+  return window.ogb || host.endsWith(".ts.net") || !pc ? null : `https://${pc[1]}/?pick=1`;
+}
+
+/** Browsers jump in place, leaving no Back step to this PC; the desktop app opens the PC in its own window. */
 export function DeviceSwitcher({
   navigate = leaveFor,
   labeled = false,
@@ -92,7 +99,7 @@ export function DeviceSwitcher({
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const deviceWindow = window.ogb?.deviceWindow;
-  const visible = labeled || Boolean(deviceWindow);
+  const visible = labeled || Boolean(deviceWindow) || (!window.ogb && !isPhone());
   const [open, setOpen] = useState(false);
   const [devices, reload] = useDevices(visible, open);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
@@ -109,13 +116,15 @@ export function DeviceSwitcher({
   }, [labeled, drawerOpen]);
 
   const here = devices.find((device) => device.current);
+  const picker = choosePcUrl();
+  const shown = visible && (Boolean(picker) || (devices.length >= 2 && (!labeled || Boolean(here))));
   const tip = iconOnly && here ? `${t("chrome.devices")}: ${here.name}` : undefined;
   const close = () => {
     setOpen(false);
     setRenaming(false);
   };
-  useBackLayer(open && visible && devices.length >= 2 && (!labeled || Boolean(here)), close);
-  if (devices.length < 2 || !visible || (labeled && !here)) return null;
+  useBackLayer(open && shown, close);
+  if (!shown) return null;
 
   const rename = (value: string) => {
     const name = value.trim();
@@ -224,6 +233,12 @@ export function DeviceSwitcher({
                 <Plus size={16} className="shrink-0" />
                 <span>{t("settings.devices.connect")}</span>
               </button>
+            </li>}
+            {picker && <li className={cn(devices.length > 0 && "mt-1 border-t border-hairline/40 pt-1")}>
+              <a href={picker} data-pc-picker className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:bg-raised/70 hover:text-ink">
+                <ArrowLeftRight size={16} className="shrink-0" />
+                <span>{t("chrome.choosePc")}</span>
+              </a>
             </li>}
           </ul>
     </>
