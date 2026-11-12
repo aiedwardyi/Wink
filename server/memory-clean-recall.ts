@@ -63,6 +63,23 @@ const NEGATION = new Set(["no", "not", "never"]);
 
 const OFTEN = new Set(["once", "twice", "always"]);
 
+const CAP = ["cap", "caps", "capped", "max", "maximum", "most", "limit"];
+
+const FLOOR = ["min", "minimum", "least", "floor"];
+
+// the part of a key its question asks for: not the noun "which" or "what" names, one bound of a range, or the place without how often
+function core(key: string, question: string, bare: string, asked: Set<string>): string {
+  const noun = /\b(?:which|what) (\S+)/.exec(normalize(question))?.[1];
+  const full = normalize(key);
+  if (noun && full.endsWith(` ${noun}`)) return full.slice(0, -noun.length - 1);
+  if (noun && full.startsWith(`${noun} `)) return full.slice(noun.length + 1);
+  const range = /^(\d+(?:\.\d+)?) ?(?:-|–|to) ?(\d+(?:\.\d+)?)$/.exec(bare);
+  const cap = CAP.some((word) => asked.has(word)), floor = FLOOR.some((word) => asked.has(word));
+  if (range && cap !== floor) return cap ? range[2]! : range[1]!;
+  const rest = bare.split(" ");
+  return !asked.has("how") && rest.some((word) => OFTEN.has(word)) ? rest.filter((word) => !OFTEN.has(word)).join(" ") : "";
+}
+
 // A quote of one original line cannot carry a merge's swapped value, and a key from a merged line never passes on null.
 export function gradeByCode(key: string | null, answer: string | null, question = "", original: string[] = [], merged: string[] = []): boolean | undefined {
   if (key === null) return answer === null;
@@ -73,9 +90,9 @@ export function gradeByCode(key: string | null, answer: string | null, question 
   const bare = unasked(key);
   if (answer === null) return original.some((line) => within(line, bare)) && !merged.some((line) => within(line, bare));
   const said = words(answer).join(" ");
-  // a key that adds only a negation to the question is its "no"; a where or what key may also say how often
-  const rest = bare.split(" ");
-  if (bare && rest.every((word) => NEGATION.has(word)) && ![...NEGATION].some((word) => asked.has(word)) && ["yes", "no"].includes(said)) return said === "no";
-  if (!asked.has("how") && rest.some((word) => OFTEN.has(word)) && unasked(answer) && rest.filter((word) => !OFTEN.has(word)).join(" ") === unasked(answer)) return true;
+  // a key that adds only a negation to the question is its "no"
+  if (bare && bare.split(" ").every((word) => NEGATION.has(word)) && ![...NEGATION].some((word) => asked.has(word)) && ["yes", "no"].includes(said)) return said === "no";
+  const center = core(key, question, bare, asked);
+  if (center && (center === said || center === unasked(answer))) return true;
   return normalize(key) === normalize(answer) || (!!bare && (bare === said || bare === unasked(answer))) || (within(answer, bare) && original.some((line) => within(line, said))) || undefined;
 }

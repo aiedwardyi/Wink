@@ -134,6 +134,30 @@ describe("recall grading", () => {
     expect(gradeByCode("Opus 5.5", "Opus", "Which model runs QA?")).not.toBe(true);
   });
 
+  it("passes an answer equal to the core of a key wider than its question, grill-e", async () => {
+    const { gradeByCode } = await load();
+    const cap = "How many short lines does the TLDR rule cap at?";
+    expect(gradeByCode("1-3", "3", cap)).toBe(true);
+    expect(gradeByCode("1-3", "3 short lines", cap)).toBe(true);
+    expect(gradeByCode("1-3", "1", cap)).not.toBe(true);
+    expect(gradeByCode("1-3", "4", cap)).not.toBe(true);
+    expect(gradeByCode("1-3", "1", "What is the minimum number of short lines in a TLDR?")).toBe(true);
+    expect(gradeByCode("1-3", "3", "How many short lines does a TLDR have?")).not.toBe(true);
+    const bot = "Which bot does Eddie report Wink app harness friction to?";
+    expect(gradeByCode("Wink bot", "Wink", bot)).toBe(true);
+    expect(gradeByCode("Wink bot", "Kite", bot)).not.toBe(true);
+    expect(gradeByCode("Wink bot", null, bot, ["- Wink app harness friction goes to the Wink bot"])).toBe(false);
+    expect(gradeByCode("Tern, version", "Tern", "Which version is Tern on?")).not.toBe(true);
+    expect(gradeByCode("Edward Yi", "Edward", "What English name is on record for him?")).not.toBe(true);
+    expect(gradeByCode("November 16", "November", "What is the user's birthday?")).not.toBe(true);
+  });
+
+  it("asks for keys that answer exactly what their question asks", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] });
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("questions")[0]).toContain("the shortest span that answers exactly what its question asks");
+  });
+
   it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
     const { gradeByCode } = await load();
     const source = [
