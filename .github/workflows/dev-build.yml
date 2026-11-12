@@ -73,6 +73,7 @@ jobs:
       - name: Bake the error report destination
         env:
           ERROR_REPORT_DSN: ${{ vars.ERROR_REPORT_DSN }}
+          WINK_STATS_URL: ${{ vars.WINK_STATS_URL }}
         run: node scripts/write-error-report-config.mjs
       - name: Set the dev version
         env:

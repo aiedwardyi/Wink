@@ -16,7 +16,6 @@ import {
   showTouchPickerLegend,
   showTerminalAlerts,
   showTerminalColors,
-  showUsageStats,
 } from "./friends-chrome";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,7 +46,6 @@ describe("friends chrome flags", () => {
     expect(showTouchPickerLegend()).toBe(false);
     expect(showTerminalAlerts()).toBe(false);
     expect(showTerminalColors()).toBe(false);
-    expect(showUsageStats()).toBe(false);
   });
 });
 

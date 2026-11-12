@@ -11,6 +11,7 @@ import type { SearchHit } from "@/lib/search-hit";
 import { landOnSearchHit } from "@/lib/focus-message";
 import { useI18n } from "@/lib/i18n";
 import { usePresence } from "@/lib/use-presence";
+import { switchVia, trackFeature, trackScreen } from "@/lib/usage-stats";
 
 type PaletteCommand = {
   kind: "command";
@@ -29,6 +30,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (open) trackScreen("palette"); }, [open]);
   const presence = usePresence(open);
   const [query, setQuery] = useState("");
   const [messageHits, setMessageHits] = useState<SearchHit[]>([]);
@@ -130,6 +132,8 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
   const selected = entries.length ? Math.min(cursor, entries.length - 1) : 0;
 
   const activate = async (entry: PaletteEntry) => {
+    trackFeature("palette.run", { kind: entry.kind === "command" ? "inspector" : entry.kind });
+    switchVia("palette");
     if (entry.kind === "command") {
       dispatch({ type: "toggleInspector", open: true });
     } else if (entry.kind === "message") {

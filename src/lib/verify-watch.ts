@@ -3,6 +3,7 @@ import { VERIFY_ROUTES, verifyCardStale, type VerifyCardData, type VerifyCounts,
 import { request } from "@/lib/api-request";
 import { checkThread, closeShow, showCheck } from "@/lib/show-pane";
 import type { Message } from "@/state/store";
+import { trackFeature, trackScreen } from "./usage-stats";
 
 export interface VerifyWatchOpen {
   threadId: string;
@@ -17,6 +18,8 @@ const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
 
 export function openVerifyWatch(next: VerifyWatchOpen) {
+  trackScreen("watch");
+  trackFeature("watch.open");
   open = next;
   showCheck(next.threadId);
   emit();

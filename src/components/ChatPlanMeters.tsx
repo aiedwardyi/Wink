@@ -12,6 +12,7 @@ import { engineName, windowFacts } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 import { barSlots, WindowBar } from "./UsageBars";
 import "./UsageDesk.css";
+import { trackScreen } from "@/lib/usage-stats";
 
 type ChatPlanMetersProps = {
   windows: RateLimitWindow[] | undefined;
@@ -120,7 +121,7 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
   if (shown.length === 0 && !signedOut) return null;
   return (
     <div className="px-5 pb-1">
-      <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => setOpen(!open) : onOpen}
+      <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => { if (!open) trackScreen("usage-quick"); setOpen(!open); } : onOpen}
         aria-expanded={quick ? open : undefined} aria-haspopup={quick ? "dialog" : undefined}
         aria-label={quick && target ? t("usage.chat.openAria", { name: engineName(target.engine.engine) }) : t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
         {signedOut && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">

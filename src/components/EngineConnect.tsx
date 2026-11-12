@@ -9,6 +9,7 @@ import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
+import { trackOnboard } from "@/lib/usage-stats";
 
 const ORDER = ["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent"];
 const ACCOUNTS = { codex: "engineConnect.chatgpt", antigravityAgent: "engineConnect.google", grokAgent: "engineConnect.grok", museAgent: "engineConnect.meta" } as const;
@@ -43,7 +44,8 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     const id = instance.instanceId;
     if (busy[id]) return;
     const command = installCommandFor(instance.install);
-    if (!canInstall || !command) { setCommands(true); return; }
+    if (!canInstall || !command) { trackOnboard("commands"); setCommands(true); return; }
+    trackOnboard("installing", instance.driverKind);
     begin(id);
     setOpened((current) => ({ ...current, [id]: false }));
     setBusy((current) => ({ ...current, [id]: true }));

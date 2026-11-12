@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { trackSetting } from "./usage-stats";
 
 export type ModelPickerView = "dial" | "list";
 
@@ -14,7 +15,8 @@ export function loadModelPickerView(): ModelPickerView {
   }
 }
 
-export function saveModelPickerView(view: ModelPickerView): void {
+export function saveModelPickerView(view: ModelPickerView, via?: "picker"): void {
+  trackSetting("pickerView", loadModelPickerView(), view, via, KEY);
   kept = view;
   try {
     localStorage.setItem(KEY, view);

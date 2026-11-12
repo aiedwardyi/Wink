@@ -86,7 +86,7 @@ it("delivers a pending note on a room-member turn", async () => {
     providerReload: { started: () => ({ adapter: { sendTurn: async (input: { text: string }) => { sent.push(input.text); return { turnId: "room-turn" }; } } }) },
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),
-    store: {}, liveTurnIdByThread: new Map(), reply: { claim: () => false }, finish: vi.fn(),
+    store: {}, liveTurnIdByThread: new Map(), reply: { claim: () => false }, finish: vi.fn(), usageStats: { capturing: () => false },
   };
   await runRoom(scope);
   await settle();

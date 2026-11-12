@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { trackSetting } from "./usage-stats";
 
 export type ReplyStyle = "paragraphs" | "live";
 export const REPLY_STYLE_KEY = "omb-reply-style";
@@ -19,6 +20,7 @@ export function loadReplyStyle(): ReplyStyle {
 }
 
 export function saveReplyStyle(style: ReplyStyle): void {
+  trackSetting("replyStyle", loadReplyStyle(), style, "settings", REPLY_STYLE_KEY);
   fallback = style;
   sessionFallback = style;
   try {

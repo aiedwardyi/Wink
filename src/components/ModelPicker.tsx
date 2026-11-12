@@ -23,6 +23,7 @@ import { pickerLookSkin, usePickerLook } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
 import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import "./ModelPicker.css";
+import { switchVia, trackScreen } from "@/lib/usage-stats";
 
 const EFFORT_EDGE_CLEARANCE = 130 / 2 + 38; // Half the horizontal step plus chevron clearance.
 
@@ -128,6 +129,7 @@ export function ModelPickerControl({
   const runCost = dialRunCost(draft.model, draft.effort);
 
   const show = (switching = false) => {
+    trackScreen(loadModelPickerView() === "list" ? "model-picker" : "model-dial");
     setDraft(selection);
     setCustomOpen(false);
     setListView(loadModelPickerView() === "list");
@@ -162,7 +164,10 @@ export function ModelPickerControl({
     if (saveTimerRef.current || !canCommit(candidate)) return false;
     focusComposerAfterCloseRef.current = !contained && (fromKeyboard || !switchingRef.current);
     if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
-    else dispatch({ type: "setModel", botId: bot.id, selection: candidate });
+    else {
+      if (!listView) switchVia("dial");
+      dispatch({ type: "setModel", botId: bot.id, selection: candidate });
+    }
     if (closeDelay) saveTimerRef.current = window.setTimeout(finishSave, closeDelay);
     else finishSave();
     return true;
@@ -370,7 +375,7 @@ export function ModelPickerControl({
           <h2 className="sr-only">{t("model.choose")}</h2>
           {dial && dialFits && <button type="button" className="model-dial-view" onClick={() => {
             setListView(!listView);
-            saveModelPickerView(listView ? "dial" : "list");
+            saveModelPickerView(listView ? "dial" : "list", "picker");
             dialogRef.current?.focus();
           }}>{t(listView ? "model.dial.dial" : "model.dial.list")}</button>}
           <button data-picker-action type="button" onClick={close} aria-label={t("createBot.cancel")}><X size={18} /></button>

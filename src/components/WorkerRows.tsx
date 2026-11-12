@@ -13,6 +13,7 @@ import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
+import { trackScreen } from "@/lib/usage-stats";
 
 export const WORKER_STATUS = {
   working: { key: "workers.working", text: "text-accent", dot: "bg-accent" },
@@ -291,6 +292,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
 export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf, className }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (open) trackScreen("workers"); }, [open]);
   const [right, setRight] = useState(0);
   const [width, setWidth] = useState(440);
   const rootRef = useRef<HTMLDivElement>(null);

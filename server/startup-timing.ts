@@ -17,6 +17,7 @@ export function createStartupTiming(options: {
   let logged = false;
   let closed = false;
   let errors = 0;
+  let done: ((values: Record<string, number>) => void) | undefined;
 
   const finish = (force = false) => {
     if ((!serving && !force) || !released || (!force && pending) || logged) return;
@@ -25,6 +26,7 @@ export function createStartupTiming(options: {
       .filter(([, value]) => Number.isFinite(value))
       .map(([key, value]) => [key, Math.round(value)]));
     write(`startup ${JSON.stringify(values)}`);
+    done?.(values);
   };
   const mark = (name: string) => { spans[name] = now(); };
   const measure = <T>(name: string, work: () => T): T => {
@@ -52,6 +54,8 @@ export function createStartupTiming(options: {
     queueMicrotask(() => finish());
   };
   return {
+    /** Runs once with the spans the startup line logs. */
+    onDone(listener: (values: Record<string, number>) => void): void { done = listener; },
     mark,
     measure,
     track,

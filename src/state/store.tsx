@@ -40,6 +40,8 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
+import { trackReplyText, trackStream } from "@/lib/usage-stats";
+import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -1344,6 +1346,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       // A queued message is still real until the server confirms deletion.
       // All other actions keep their existing optimistic behavior.
+      trackAction(action, stateRef.current);
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
         case "olderMessages": {
@@ -2300,6 +2303,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const next: PendingDeltas = { ...applyStreamDelta(base, event.streamKind, event.delta), tail };
               // Only a live turn's reply types out; text after the turn ended lands whole.
               if (event.streamKind === "assistant_text") {
+                trackReplyText(event.threadId);
                 next.ramps = loadReplyStyle() === "live" && event.threadId in liveTurns.current
                   ? [...(base.ramps ?? []), [event.delta.length, performance.now()]]
                   : undefined;
@@ -2387,12 +2391,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
+        trackStream(true);
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
-      onError: () => rawDispatch({ type: "connected", value: false }),
+      onError: () => {
+        trackStream(false);
+        rawDispatch({ type: "connected", value: false });
+      },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);
         // Frames buffered before this non-resumable stream belong to an

@@ -20,6 +20,7 @@ import { ProviderMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
+import { trackFeature } from "@/lib/usage-stats";
 
 const HOUR = 3_600_000;
 const GAP = 6;
@@ -103,6 +104,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const [museAuthFailed, setMuseAuthFailed] = useState(false);
 
   const refresh = async () => {
+    trackFeature("usage.refresh");
     setRefreshFailed(false);
     setMuseAuthFailed(false);
     const outcome = await refreshUsage(store.instances, board, dispatch, shown);

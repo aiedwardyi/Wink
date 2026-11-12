@@ -48,6 +48,7 @@ import "./bot-profile.ts";
 import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
+import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -61,7 +62,7 @@ import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { myRoomBotThreads } from "./rooms/joined.ts";
+import { joinedRooms, myRoomBotThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -438,7 +439,7 @@ import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./ver
 import { createVerifyAuto } from "./verify-auto.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
-import { reportServerFailure } from "./error-reports.ts";
+import { reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
@@ -450,7 +451,7 @@ import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from 
 import { isVoiceLine, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
-import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart, turnMarksFor } from "./turn-timing.ts";
 import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
@@ -3414,6 +3415,49 @@ const busyResumeThreads = new Set<string>();
 const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
 const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
 
+const statsTurns = new Map<string, TurnFacts>();
+const takeTurnMarks = turnMarksFor(() => usageStats.capturing());
+const usageStats = createUsageStats({
+  dataDir: DATA_DIR, url: process.env.WINK_STATS_URL?.trim() ?? "", app: process.env.OMB_APP_VERSION ?? "", internal: process.env.ORBIT_STATS_INTERNAL === "1",
+  display: { scale: Number(process.env.OMB_DISPLAY_SCALE) || 100, screens: Number(process.env.OMB_DISPLAY_COUNT) || 1 },
+  busy: () => store.bots.some((bot) => bot.busy),
+  state: () => {
+    const rows = registry.describeSaved();
+    return {
+      engines: [...new Set(rows.map((row) => row.driverKind))].map((kind) => {
+        const same = rows.filter((row) => row.driverKind === kind);
+        return { kind, accounts: same.length, signedIn: same.some((row) => row.snapshot.authenticated === true), cli: same.find((row) => row.snapshot.version)?.snapshot.version ?? undefined };
+      }),
+      counts: {
+        bots: store.bots.filter((bot) => !bot.hidden).length, rooms: store.groups.length, joinedRooms: joinedRooms().length,
+        archived: store.bots.filter((bot) => bot.hidden).length, routines: routines?.listRoutines().length ?? 0, skills: availableSkills().length,
+        // Wink has no list of user-added MCP servers to count.
+        mcp: 0, phones: phoneVisits.list().length,
+        pcs: profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now()).length : 1,
+      },
+      on: {
+        tailscale: REMOTE_HOST !== undefined, relay: phoneAccess.base() !== null, push: loadPushSubscriptions(DATA_DIR).length > 0,
+        sync: Boolean(profileSyncSettings.folder), syncChats: profileSyncSettings.syncChats, team: Boolean(googleEnv.teamOwner && googleAccount.owner()),
+        chief: store.bots.some((bot) => bot.chiefOfStaff),
+      },
+      keys: [
+        composio.configured(cfg) && "composio", cfg.tts?.key && "elevenlabs", cfg.xai?.key && "xai", cfg.box?.token && "box",
+        cfg.imageGen?.key && "openai-images", cfg.openaiCompat?.key && "custom-provider",
+      ].filter((key): key is string => typeof key === "string"),
+    };
+  },
+  turn: (event) => {
+    const facts = statsTurns.get(event.threadId);
+    if (!facts || event.type !== "turn.completed") return facts ?? null;
+    statsTurns.delete(event.threadId);
+    const end = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+    return { ...facts, ...takeTurnMarks(event.threadId), stop: end.superseded ? "superseded" : end.interrupted ? "interrupted" : undefined };
+  },
+});
+// Before the handler below, which settles the state a finished turn is read from.
+bus.subscribe(usageStats.runtime);
+startupTiming.onDone((spans) => { if (!spans.closed) usageStats.launched(spans); });
+
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
   const localVmTarget = localVmThreadTargets.get(event.threadId);
@@ -5277,6 +5321,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   turnUsage.delete(threadId);
   turnDispatchedAt.set(threadId, tickTurnClock());
   turnStartedAtMs.set(threadId, Date.now());
+  if (usageStats.capturing()) statsTurns.set(threadId, {
+    ...(opts?.call ? { c: "voice" } : turnStartedByUser(opts) ? { chars: (opts?.transcriptText ?? text).length } : { c: "system" }),
+    surface: opts?.automationSource ? "routine" : "chat", model, effort, startedAt: Date.now(),
+  });
   if (routineTurn) routineTurnThreads.add(threadId);
   else routineTurnThreads.delete(threadId);
   if (opts?.paneNoteWake === true && folded.length === 0) paneNoteTurnThreads.add(threadId);
@@ -6746,6 +6794,7 @@ async function runClaimedGroupMemberTurn(
     keepRoomTurnInstruction = true;
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
+    if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now() });
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -7597,6 +7646,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const note = mailboxNoteText(scope.pane, source.name || source.id, source.id, parsed.data.text, label);
       if (!note) return json(res, 400, { error: "empty message" });
       if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
+      if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
       const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
       if (source.notifications !== false) phonePing(source.id, pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId });
       if (kind !== "report") void raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
@@ -7708,7 +7758,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "POST" && path === "/api/internal/worker-launch") {
         await startupTiming.waitFor("accounts");
-        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], await readBody(req), workerLaunch);
+        const launch = await readBody(req);
+        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], launch, workerLaunch);
+        if ("launch" in result.body) usageStats.workerStarted(launch?.environment?.ORBIT_PANE, result.body.launch);
         return json(res, result.status, result.body);
       }
       // The show_image tool: a copy of a local image lands as a settled
@@ -7922,12 +7974,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/analytics") {
-      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR) });
+      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR), capture: usageStats.capturing() });
     }
     if (method === "PUT" && path === "/api/analytics") {
       const body = await readBody(req);
       if (typeof body?.enabled !== "boolean") return json(res, 400, { error: "enabled must be a boolean" });
-      return json(res, 200, { enabled: saveAnalyticsConsent(DATA_DIR, body.enabled) });
+      const enabled = saveAnalyticsConsent(DATA_DIR, body.enabled);
+      usageStats.setEnabled(enabled);
+      // One switch: off on any screen turns crash reports off on this PC too.
+      if (!enabled) void turnOffErrorReports(terminalBridgeAccess);
+      return json(res, 200, { enabled, capture: usageStats.capturing() });
+    }
+    if (method === "POST" && path === "/api/stats") {
+      if (Number(req.headers["content-length"]) > 64 * 1024) return json(res, 413, { error: "too large" });
+      return usageStats.ingest(await readBody(req)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });
     }
 
     // ── phone access from anywhere: pairing, phones and relay status (PC only) ──
@@ -8194,6 +8254,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
+      usageStats.sent(`group:${m[1]}`, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await groupRoutes.postMessage(req, res, m);
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
@@ -8350,6 +8411,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
+      usageStats.sent(store.bot(m[1]!)?.threadId, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
@@ -8967,6 +9029,7 @@ phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")
@@ -8988,6 +9051,7 @@ hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
   startupTiming.close();
+  usageStats.stop();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};
   for (const bot of store.bots) {

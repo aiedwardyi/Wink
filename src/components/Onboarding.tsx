@@ -7,6 +7,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
 import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
+import { trackOnboard } from "@/lib/usage-stats";
 
 function engineReady(instance: InstanceInfo): boolean {
   return (
@@ -25,6 +26,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const browser = !window.ogb;
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => trackOnboard("welcome"), []);
 
   useEffect(() => {
     let active = true;
@@ -112,7 +114,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return refreshInstancesRef.current();
   };
 
-  const finish = () => hasReadyEngine ? setStep(2) : onDone();
+  const finish = () => {
+    if (!hasReadyEngine) return onDone();
+    trackOnboard("ready");
+    setStep(2);
+  };
 
   const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
   const hasReadyEngine = live.some(engineReady);
@@ -169,6 +175,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 if (instancesError) return retryInstances();
                 if (hasReadyEngine) return finish();
                 setConnectSession(emptyConnect);
+                trackOnboard("engine");
                 setStep(1);
               }}
               className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40`}

@@ -1,4 +1,5 @@
 import { SIDEBAR_INLINE_BREAKPOINT, type SidebarSide } from "./sidebar-preferences";
+import { trackSetting } from "./usage-stats";
 
 export const SWIPE_SLOP = 10;
 export const SWIPE_EDGE = 24;
@@ -111,6 +112,7 @@ export function vibrationEnabled(storage?: Pick<Storage, "getItem"> | null): boo
 }
 
 export function saveVibration(on: boolean, storage?: Pick<Storage, "setItem"> | null): void {
+  trackSetting("vibration", vibrationEnabled() ? "on" : "off", on ? "on" : "off", "settings", VIBRATION_KEY);
   sessionVibration = on;
   try {
     const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;

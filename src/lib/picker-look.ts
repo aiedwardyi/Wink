@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { DEFAULT_SKIN, HUD_SKIN_IDS, LIGHT_SKIN_IDS, type SkinId } from "./skins";
+import { trackSetting } from "./usage-stats";
 
 export type PickerLook = "dark" | "light" | "atelier";
 export const PICKER_LOOK_KEY = "omb-picker-look";
@@ -29,6 +30,7 @@ export function pickerLookSkin(skin: SkinId, look: PickerLook): SkinId | undefin
 }
 
 export function savePickerLook(value: PickerLook): void {
+  trackSetting("pickerLook", picked ?? "follow", value, "settings", PICKER_LOOK_KEY);
   picked = value;
   try {
     localStorage.setItem(PICKER_LOOK_KEY, value);

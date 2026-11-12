@@ -603,6 +603,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         }
         const turnId = newId();
   const turnTimer = startTurnTimer({
+    threadId,
     engine: support.driverKind ?? "msp",
     model: turn.model,
     effort: turn.effort ?? null,

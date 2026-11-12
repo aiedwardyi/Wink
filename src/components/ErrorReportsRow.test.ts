@@ -3,10 +3,12 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { usageStatsSwitched } from "@/lib/usage-stats";
 import { ErrorReportsRow } from "./ErrorReportsRow";
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/state/store", () => ({ api: request }));
+vi.mock("@/lib/usage-stats", async (original) => ({ ...(await original<typeof import("@/lib/usage-stats")>()), usageStatsSwitched: vi.fn() }));
 beforeEach(() => request.mockReset().mockResolvedValue({ enabled: false }));
 afterEach(() => { delete window.ogb; localStorage.setItem("omb-locale", "en"); vi.useRealTimers(); });
 
@@ -38,6 +40,7 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
   let resolve: (value: boolean) => void = () => {};
   const errorReportConsent = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
   const setErrorReportConsent = vi.fn(async (value: boolean) => value);
+  request.mockImplementation(async (_path: string, init?: RequestInit) => (init ? { enabled: init.body === '{"enabled":true}', capture: init.body === '{"enabled":true}' } : { enabled: false }));
   Object.defineProperty(window, "ogb", { value: { errorReportConsent, setErrorReportConsent }, configurable: true });
   const host = document.createElement("div");
   document.body.append(host);
@@ -50,14 +53,16 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
     expect(setErrorReportConsent).not.toHaveBeenCalled();
     await act(async () => resolve(false));
     expect(toggle.disabled).toBe(false);
-    expect(host.textContent).toContain("Anonymous. No chats or files.");
+    expect(host.textContent).toContain("Anonymous speed, crash and feature stats. Never chats, files or names.");
     await act(async () => toggle.click());
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(true);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: '{"enabled":true}' });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(true);
     await act(async () => toggle.click());
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(false);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: '{"enabled":false}' });
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(false);
   } finally {
     await act(async () => root.unmount());
     host.remove();

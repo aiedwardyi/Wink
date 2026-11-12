@@ -14,6 +14,7 @@ import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { trackFeature } from "@/lib/usage-stats";
 
 type Sheet = "join" | "rejoin" | "leave" | "remove" | "delete" | null;
 
@@ -196,6 +197,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     const result = rejoin ? await rejoinRoom(rejoin.roomId, value) : await joinRoom(value);
     if ("room" in result) {
       noteJoinedRoom(result.room);
+      trackFeature("room.join");
       dispatch({ type: "select", id: joinedSelection(result.room.roomId) });
       onClose();
       return;
@@ -295,6 +297,7 @@ export function TeamRoomDialogs() {
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
   const leave = async () => {
     if (!joinedId || leaving) return;
+    trackFeature("room.leave");
     setLeaving(true);
     setLeaveFailed(false);
     try {

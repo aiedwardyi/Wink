@@ -9,6 +9,7 @@ import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeviceRow, DevicesSection } from "./DeviceRows";
 import { ROW_BUTTON } from "./SettingsPrimitives";
+import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
 type RelayState = "off" | "enrolling" | "certifying" | "connected" | "reconnecting" | "rejected" | "cert-error";
 type RelayProblem = "superseded" | "revoked" | "ticket-expired" | "unknown-certificate";
@@ -190,7 +191,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
 
   const save = (on: boolean) =>
     run(
-      async () => setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) })),
+      async () => {
+        setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) }));
+        trackSetting("phoneAccess", on ? "off" : "on", on ? "on" : "off");
+      },
       () => t("settings.phoneAccess.saveError"),
     );
   const setupError = (cause: unknown) => {
@@ -220,6 +224,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       async () => {
         await request(`/api/phone/devices/${encodeURIComponent(phone.id)}`, { method: "DELETE" });
         setPhones((list) => list.filter((candidate) => candidate.id !== phone.id));
+        trackFeature("phone.unpair");
       },
       () => t("settings.phoneAccess.removeError"),
     );
