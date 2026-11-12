@@ -377,7 +377,7 @@ describe("Team rooms for the host", () => {
 
   it("keeps the room picture, bell, side pane and notice after a bot joins", async () => {
     const original = line("original", { kind: "person", id: "p-mina", name: "Mina Park" }, "Standup at 10");
-    const room = { ...teamRoom([], [original]), memberIds: ["nova"], picture: "P".repeat(24), notice: { entryId: "e-original", by: "host", at: 1, text: "Standup at 10" } } as Group;
+    const room = { ...teamRoom([], [original]), memberIds: ["nova"], picture: "P".repeat(24), notice: { entryId: "e-original", by: "host", at: 1, text: "Standup at 10" } };
     await boot({ groups: [room], route: (call) => call.method === "PATCH" ? reply({ group: room }) : undefined });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     const main = await found(() => $("main [data-room-notice]")?.closest("main"));
