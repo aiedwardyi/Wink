@@ -61,7 +61,7 @@ export function JoinedBots({ room }: { room: JoinedView }) {
   return (
     <>
       <ul className={DETAILS_BOX} aria-label={t("chrome.bots")}>
-        {room.state?.bots.map((bot) => <BotRow key={bot.id} bot={bot} label={bot.name} />)}
+        {room.state?.bots?.map((bot) => <BotRow key={bot.id} bot={bot} label={bot.name} />)}
         {room.state?.teamBots?.map((bot) => (
           <BotRow key={bot.id} bot={bot} label={ownerLabel(bot, people, t)} onRemove={mine.some((own) => own.id === bot.id) ? () => void removeMyBot(room.roomId, bot.id).catch(onProblem) : undefined} />
         ))}

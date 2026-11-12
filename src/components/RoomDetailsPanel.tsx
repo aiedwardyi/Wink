@@ -102,7 +102,7 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
           <>
             {section("room", t("room.section"), <JoinedRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} picture={roomPictureUrl(joinedRoomBase(joined.roomId), joined.state?.picture)} retry={joined.link} canLeave={joined.status === "joined"} />, false)}
             {joined.state && section("people", `${t("teamRoom.people")} (${1 + joined.state.people.length})`, <JoinedPeople room={joined} />)}
-            {joined.state?.teamBots && section("bots", `${t("chrome.bots")} (${joined.state.bots.length + joined.state.teamBots.length})`, <JoinedBots room={joined} />)}
+            {joined.state?.teamBots && section("bots", `${t("chrome.bots")} (${(joined.state.bots?.length ?? 0) + joined.state.teamBots.length})`, <JoinedBots room={joined} />)}
             {joined.status === "joined" && section("leave", t("teamRoom.leave"), <LeaveRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} />, false)}
           </>
         )}

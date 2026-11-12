@@ -278,6 +278,16 @@ describe("People", () => {
     expect(section("people").querySelector("[data-team-room-code]")!.textContent).toContain(CODE);
   });
 
+  it("lists teammates' bots with their owner in the host's Bots, and Remove takes one out", async () => {
+    mock.state.bots = [bot("b1", "Wink")];
+    const room = { ...shared([{ id: "p1", name: "Peter" }]), room: { name: "Channel", people: [{ id: "p1", name: "Peter" }], joins: [], teamBots: [{ id: "tb-A", name: "Pete-Coder", color: "teal", owner: "p1" }] } };
+    await open({ group: room }, () => json({ code: "old-code" }));
+    expect(headings()).toContain("Bots (2)");
+    expect(section("bots").querySelector("[data-room-team-bot]")!.textContent).toContain("Pete-Coder · Peter's");
+    await act(async () => button("Remove Pete-Coder").click());
+    expect(calls).toContainEqual({ method: "DELETE", path: "/api/rooms/r1/bots/tb-A" });
+  });
+
   it("scrolls 40 people and 15 bots in one panel", async () => {
     mock.state.bots = Array.from({ length: 15 }, (_, i) => bot(`b${i}`, `Bot ${i}`));
     const crowd = shared(Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, name: `Teammate ${i}` })), mock.state.bots.map((each) => each.id));
@@ -309,5 +319,24 @@ describe("a joined room", () => {
     expect(calls).toEqual([]);
     await confirm("Leave");
     expect(calls).toEqual([{ method: "POST", path: "/api/joined/rooms/j1/leave" }]);
+  });
+  it("lists the room's bots once the host takes teammates' bots, and Add bot and Remove act on this PC's own", async () => {
+    mock.state.bots = [bot("b1", "Scout"), bot("b2", "Ada")];
+    mock.joined = [{
+      ...joined,
+      state: { ...joined.state!, bots: [{ id: "h1", name: "EdBot", color: "blue" }], teamBots: [{ id: "tb-A", name: "Scout", color: "teal", owner: "me" }, { id: "tb-B", name: "Mini", color: "", owner: "p2" }] },
+      myBots: [{ id: "tb-A", botId: "b1" }],
+    }];
+    await open({ joinedId: "j1" });
+    expect(order()).toEqual(["room", "people", "bots", "leave"]);
+    expect(headings()).toEqual(["People (3)", "Bots (3)"]);
+    expect([...section("bots").querySelectorAll("[data-room-team-bot]")].map((row) => row.textContent)).toEqual(["EdBot", "Scout · Mina'sRemove", "Mini · Seo-yeon Park's"]);
+    await act(async () => button("Remove Scout").click());
+    expect(calls).toContainEqual({ method: "DELETE", path: "/api/joined/rooms/j1/bots/tb-A" });
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-add-my-bot]")!.click());
+    const picks = [...section("bots").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
+    expect(picks.map((each) => each.textContent)).toEqual(["Ada"]);
+    await act(async () => picks[0]!.click());
+    expect(calls).toContainEqual({ method: "POST", path: "/api/joined/rooms/j1/bots" });
   });
 });
