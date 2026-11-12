@@ -35,9 +35,14 @@ const NO_JOINS: RoomJoin[] = [];
 export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
-  messages.flatMap((message) => (message.author && message.roomEntryId
-    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, message }]
-    : []));
+  messages.flatMap((message) => {
+    // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
+    const bot = !message.author && message.from;
+    const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
+    return author && message.roomEntryId
+      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), message }]
+      : [];
+  });
 
 export type JoinedLink = "connecting" | "live" | "offline";
 

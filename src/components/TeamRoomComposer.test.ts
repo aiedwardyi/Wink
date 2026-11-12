@@ -389,6 +389,22 @@ describe("room mentions", () => {
   });
 });
 
+describe("room bots", () => {
+  it("gives the host the dashed + on a room with no bots, opening the members picker", async () => {
+    await render();
+    const add = host.querySelector<HTMLButtonElement>('button[title="Manage members"]')!;
+    expect(add.querySelector(".border-dashed")).not.toBeNull();
+    await act(async () => add.click());
+    expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("Manage members of Design team");
+  });
+
+  it("gives a teammate no + even once the room has bots", async () => {
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: [], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
+    await render("joined");
+    expect(host.querySelector('button[title="Manage members"]')).toBeNull();
+  });
+});
+
 describe("room focus", () => {
   it("lets the sidebar refocus an already open room through the shared rule", async () => {
     await render();
