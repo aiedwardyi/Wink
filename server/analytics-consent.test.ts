@@ -24,6 +24,12 @@ describe("analytics consent", () => {
     expect(loadAnalyticsConsent(root)).toBe(false);
   });
 
+  it("follows the given default with no saved choice, and a saved choice wins", () => {
+    expect(loadAnalyticsConsent(root, true)).toBe(true);
+    saveAnalyticsConsent(root, false);
+    expect(loadAnalyticsConsent(root, true)).toBe(false);
+  });
+
   it("writes its own file and reads it back", () => {
     expect(saveAnalyticsConsent(root, true)).toBe(true);
     expect(JSON.parse(readFileSync(join(root, "analytics.json"), "utf8"))).toEqual({ enabled: true });

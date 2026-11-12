@@ -3446,6 +3446,7 @@ const usageStats = createUsageStats({
       ].filter((key): key is string => typeof key === "string" && key !== ""),
     };
   },
+  crashReports: () => snagUserData !== undefined && readErrorReportConsent(snagUserData),
   off: () => {
     for (const threadId of statsTurns.keys()) takeTurnMarks(threadId);
     statsTurns.clear();
@@ -7980,7 +7981,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/analytics") {
-      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR), capture: usageStats.capturing(), period: usageStats.period() });
+      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR, snagUserData !== undefined && readErrorReportConsent(snagUserData)), capture: usageStats.capturing(), period: usageStats.period() });
     }
     if (method === "PUT" && path === "/api/analytics") {
       const body = await readBody(req);

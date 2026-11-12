@@ -62,6 +62,8 @@ export interface UsageStatsOptions {
   busy(): boolean;
   /** Stats went off: drop whatever the caller holds for them. */
   off?(): void;
+  /** With no saved choice, stats follow this PC's crash reports switch. */
+  crashReports?(): boolean;
   fetch?: typeof fetch;
 }
 
@@ -405,7 +407,7 @@ export function createUsageStats(options: UsageStatsOptions) {
     start() {
       if (!available || started) return;
       started = true;
-      if (loadAnalyticsConsent(options.dataDir)) { on = true; begin(); } else purge();
+      if (loadAnalyticsConsent(options.dataDir, options.crashReports?.() === true)) { on = true; begin(); } else purge();
     },
     /** The switch moved, on any client. Off deletes the queue, the install id and the marker. */
     setEnabled(enabled: boolean) {

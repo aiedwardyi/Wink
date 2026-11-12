@@ -111,6 +111,17 @@ describe("off", () => {
     expect(["stats-queue.ndjson", "stats-id", "stats-active"].filter((name) => existsSync(file(name)))).toEqual([]);
   });
 
+  it("keeps a saved no when crash reports are on", async () => {
+    consent(false);
+    const off = stats({ crashReports: () => true });
+    off.start();
+    off.capture(SAMPLES[0]!);
+    await off.flush();
+    await off.upload();
+    expect(off.capturing()).toBe(false);
+    expect(sent).not.toHaveBeenCalled();
+  });
+
   it("deletes the queue, the install id and the marker, and stops the upload in flight", async () => {
     consent(true);
     const on = stats();
@@ -173,6 +184,16 @@ describe("off", () => {
 });
 
 describe("on", () => {
+  it("follows crash reports with no saved choice", async () => {
+    const on = stats({ crashReports: () => true });
+    on.start();
+    on.capture(SAMPLES[8]!);
+    await on.flush();
+    await on.upload();
+    expect(on.capturing()).toBe(true);
+    expect(posts).toHaveLength(1);
+  });
+
   it("queues every event the schema knows and sends one gzipped batch", async () => {
     consent(true);
     const on = stats({ internal: true, display: { scale: 150, screens: 2 } });

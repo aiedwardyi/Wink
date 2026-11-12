@@ -26,7 +26,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const browser = !window.ogb;
   const refreshInstancesRef = useRef<() => Promise<void>>(async () => {});
   const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => trackOnboard("welcome"), []);
+  const welcomed = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -103,7 +103,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return () => dialog.removeEventListener("keydown", onKey);
   }, [step, instances, instancesError, signedOut]);
 
-  if (browser && instances === null && !signedOut && !instancesError) return null;
+  const hidden = browser && instances === null && !signedOut && !instancesError;
+  // A browser on a PC that already has bots closes setup before showing it.
+  useEffect(() => {
+    if (hidden || welcomed.current) return;
+    welcomed.current = true;
+    trackOnboard("welcome");
+  }, [hidden]);
+
+  if (hidden) return null;
 
   const emptyConnect = connectSession || instances !== null && isEmptyEngineLaunch(instances);
 
