@@ -101,11 +101,13 @@ export const ROOM_FILE_TYPES = [
   "video/mp4", "video/quicktime", "video/x-m4v", "video/webm", "audio/mp4", "audio/mpeg", "audio/wav", "text/plain",
 ] as const;
 
+/** Still pictures share the ftyp box with video; they stay refused. */
+const STILL_BRAND = /^(hei[cxms]|hev[cms]|mif1|msf1|avi[fs])$/;
 const FTYP = { "qt  ": "video/quicktime", "M4V ": "video/x-m4v", "M4VH": "video/x-m4v", "M4A ": "audio/mp4" } as const;
 
 function sniffMedia(head: Buffer): string | null {
   const latin = head.toString("latin1");
-  if (latin.startsWith("ftyp", 4)) return FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
+  if (latin.startsWith("ftyp", 4)) return STILL_BRAND.test(latin.slice(8, 12)) ? null : FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
   if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
   if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
   if (latin.startsWith("RIFF") && latin.startsWith("WAVE", 8)) return "audio/wav";
