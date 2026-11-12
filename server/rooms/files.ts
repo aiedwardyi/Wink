@@ -138,10 +138,16 @@ export function roomFilesState(roomId: string) {
 /** Newest first, past the `seen` count a teammate holds (a higher one gets all), capped so the frame stays under a teammate's frame limit. */
 export function deletedRoomFiles(roomId: string, seen = 0): { ids: string[]; count: number } {
   return withDb((db) => {
-    const { count } = db.prepare("SELECT COUNT(*) AS count FROM room_file_deletions WHERE room_id = ?").get(roomId) as { count: number };
-    const fresh = Math.min(5000, seen > count ? count : count - seen);
-    const ids = fresh ? db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT ?").all(roomId, fresh) as Array<{ id: string }> : [];
-    return { ids: ids.map((file) => file.id), count };
+    // One snapshot, so a delete between the two reads can't push an unseen id out of the limit.
+    db.exec("BEGIN");
+    try {
+      const { count } = db.prepare("SELECT COUNT(*) AS count FROM room_file_deletions WHERE room_id = ?").get(roomId) as { count: number };
+      const fresh = Math.min(5000, seen > count ? count : count - seen);
+      const ids = fresh ? db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT ?").all(roomId, fresh) as Array<{ id: string }> : [];
+      return { ids: ids.map((file) => file.id), count };
+    } finally {
+      db.exec("COMMIT");
+    }
   });
 }
 
