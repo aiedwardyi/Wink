@@ -164,6 +164,8 @@ interface Sync {
   stopped: boolean;
   /** Set per live stream by the host's first reactions frame; an older host never sends one. */
   reacts: boolean;
+  /** Set per live stream when a deleted file's copy stays, so the count holds and the next stream sends it again. */
+  undropped: boolean;
 }
 
 export class GuestClient {
@@ -535,7 +537,7 @@ export class GuestClient {
   }
 
   private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false };
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false, undropped: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }
@@ -621,6 +623,7 @@ export class GuestClient {
     });
     sync.req = req;
     sync.reacts = false;
+    sync.undropped = false;
     let silence: NodeJS.Timeout | null = null;
     const quiet = () => {
       if (silence) clearTimeout(silence);
@@ -684,9 +687,9 @@ export class GuestClient {
       setJoinedReactions(roomId, parsed.lines, parsed.reset);
       this.changed(roomId);
     } else if (parsed.kind === "deleted") {
-      await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
+      if (!(await dropJoinedFiles(roomId, parsed.ids).then(() => true, () => false))) sync.undropped = true;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
-      if (parsed.count !== undefined) setJoinedDeletedCount(roomId, parsed.count);
+      if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

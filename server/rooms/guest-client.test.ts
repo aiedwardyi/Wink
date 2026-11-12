@@ -530,6 +530,27 @@ describe("deleted files", () => {
     await until(() => asked.length >= 4);
     expect(asked.slice(0, 4)).toEqual(["0", "3", "3", "3"]);
   });
+
+  it("holds the count while a deleted file's copy can't be dropped, so the next stream sends it again", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    const copy = join(DATA_DIR, "joined-files", "r1", "a".repeat(24));
+    mkdirSync(join(copy, "held"), { recursive: true });
+    const asked: string[] = [];
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (!req.url?.includes("/stream")) return;
+      asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["a".repeat(24)], count: 3 })}\n\n`);
+      setTimeout(() => res.destroy(), 50);
+    };
+    guest({ timing: { retryMs: 10 } }).start();
+    await until(() => asked.length >= 2);
+    expect(asked.slice(0, 2)).toEqual(["0", "0"]);
+    rmSync(copy, { recursive: true });
+    await until(() => asked.includes("3"));
+    expect(existsSync(copy)).toBe(false);
+  });
 });
 
 describe("teammate media files", () => {
