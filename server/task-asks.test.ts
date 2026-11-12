@@ -68,7 +68,7 @@ describe("task asks", () => {
     expect(asks.map((item) => item.id)).toEqual([...Array.from({ length: 38 }, (_, index) => `A${index + 3}`), "A41", "A42"]);
     const open = Array.from({ length: 40 }, (_, index) => ask(index + 1));
     expect(mergeTaskAsks(open, [{ ask: "One too many", status: "open" }], NOW)).toEqual({
-      error: "40 asks are open, the most Wink keeps. Close finished ones as done or declined first.",
+      error: "That would leave 41 asks open; Wink keeps 40. Close finished ones as done or declined first.",
     });
   });
 

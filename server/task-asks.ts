@@ -67,7 +67,7 @@ export function mergeTaskAsks(
   while (asks.length > ASK_LIMITS.kept) {
     const closed = asks.findIndex((ask) => !isOpenAsk(ask));
     if (closed < 0) {
-      return { error: `${ASK_LIMITS.kept} asks are open, the most Wink keeps. Close finished ones as done or declined first.` };
+      return { error: `That would leave ${asks.length} asks open; Wink keeps ${ASK_LIMITS.kept}. Close finished ones as done or declined first.` };
     }
     asks.splice(closed, 1);
   }
