@@ -38,7 +38,7 @@ export function useDevices(enabled: boolean, watching = false) {
         .then((body: { devices: DeviceItem[] }) => {
           if (!live.current || request <= applied.current) return;
           applied.current = request;
-          setDevices(body.devices);
+          setDevices(body.devices ?? []);
         })
         .catch(() => {});
     },
