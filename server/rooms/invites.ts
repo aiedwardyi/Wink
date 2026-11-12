@@ -160,10 +160,11 @@ export function cancelInvite(roomId: string, inviteId: string): boolean {
   return db().prepare("DELETE FROM invites WHERE room_id = ? AND id = ?").run(roomId, inviteId).changes > 0;
 }
 
-/** The room's one code: it joins anyone, any number of times, while the room is served. */
+/** The room's one code: it joins anyone, any number of times, while the room is served. A new code lets removed PCs back. */
 export function roomCode(roomId: string): { id: string; secret: string } {
   const database = db();
-  database.prepare("INSERT OR IGNORE INTO room_codes (room_id, id, secret) VALUES (?, ?, ?)").run(roomId, newId(), newCredential(SECRET_PREFIX));
+  const minted = database.prepare("INSERT OR IGNORE INTO room_codes (room_id, id, secret) VALUES (?, ?, ?)").run(roomId, newId(), newCredential(SECRET_PREFIX)).changes > 0;
+  if (minted) database.prepare("UPDATE room_devices SET removed = 0 WHERE room_id = ?").run(roomId);
   const row = database.prepare("SELECT id, secret FROM room_codes WHERE room_id = ?").get(roomId) as { id: string; secret: string };
   return { id: row.id, secret: row.secret };
 }
@@ -282,11 +283,11 @@ export function inviteRoomId(inviteId: string): string | null {
   return row?.room_id ?? null;
 }
 
-/** Host Remove: that person's PC can't come back with the room code. Leave never calls this. */
+/** Host Remove: that person's PC stays out until the next code, so this one retires. Leave never calls this. */
 export function barRoomPerson(roomId: string, personId: string): void {
   transaction((database) => {
-    const barred = database.prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
-    if (!barred.changes) database.prepare("DELETE FROM room_codes WHERE room_id = ?").run(roomId);
+    database.prepare("UPDATE room_devices SET removed = 1 WHERE room_id = ? AND person_id = ?").run(roomId, personId);
+    database.prepare("DELETE FROM room_codes WHERE room_id = ?").run(roomId);
   });
 }
 

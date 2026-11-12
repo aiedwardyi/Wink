@@ -2,10 +2,11 @@
 // a person's through the door. The host's line is only committed here: the
 // normal group turn answers it. A person's wakes one bot, at most, with an ask.
 import { roomResponder } from "../../shared/room-routing.ts";
+import type { Message } from "../store.ts";
 import { alertWhenUnread, roomLineText } from "./alerts.ts";
 import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry } from "./db.ts";
 import { ownRoomFiles } from "./files.ts";
-import { writeRoomEntry } from "./mirror.ts";
+import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, createAsk, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
 
@@ -13,7 +14,7 @@ export type RoomSender = { kind: "host" } | { kind: "person"; id: string };
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
-export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
+export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = [], local?: LocalRow) {
   const { store, hostName, alert } = roomAskDeps();
   const roomId = group.hosted.roomId;
   const people = roomPeople(roomId);
@@ -27,12 +28,18 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const bot = store.bot(id);
     return bot && !bot.hidden ? [bot] : [];
   });
-  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
+  const route = (soloWakes = true) => roomResponder(committedRoomText(author.kind, text), bots, [hostName(), ...people.map((candidate) => candidate.name)], quote?.author.kind === "bot" ? quote.author.id : undefined, soloWakes);
+  let bot = !person || peopleOnlyRoom(roomId) ? null : route();
   if (person) {
-    const refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
+    let refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
+    // An untagged line to the only bot is still chat when that bot can't take it.
+    if (refusal && bot && !route(false)) {
+      bot = null;
+      refusal = sendRefusal(roomId, person.id, null);
+    }
     if (refusal) throw statusError(429, refusal);
   }
-  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
+  const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   if (person) {
     spend(roomId, person.id, "message");
     store.patchGroup(group.id, { unread: true });
@@ -52,6 +59,17 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   });
   runAsk(ask);
   return { entry, message, ask: askById(ask.id) };
+}
+
+/** The host's local file tags as words teammates can read. */
+const roomCopy = (text: string) => text
+  .replace(/<attached-image\s[^>]*>/g, "[image]")
+  .replace(/<attached-file\s[^>]*>/g, (tag) => `[file: ${/\sname="([^"]*)"/.exec(tag)?.[1] ?? "file"}]`);
+
+/** The host's line from the group box. In a bot group the thread row keeps the full text for the bots; the room gets a capped copy. */
+export function hostSend(group: HostedGroup, text: string, replyTo?: Pick<Message, "id" | "roomEntryId">, sendId?: string) {
+  const full = !peopleOnlyRoom(group.hosted.roomId);
+  return hostedSend(group, { kind: "host" }, full ? roomCopy(text) : text, replyTo?.roomEntryId, sendId, [], { ...(full ? { text } : {}), ...(replyTo ? { replyToId: replyTo.id } : {}) });
 }
 
 /** A quote is clean when the host, a Trusted person or a clean bot answer wrote it. */

@@ -5,7 +5,7 @@ import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, ROOM_LIMITS, spend, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, type RoomPerson } from "./db.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, hostSend } from "./send.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -117,6 +117,26 @@ describe("hostedSend", () => {
     expect(sent.entry.text).toBe("a".repeat(PERSON_TEXT_MAX));
     expect(sent.ask).toBeNull();
     expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the host's full text on the thread row and caps a tag-free copy for the room", () => {
+    const text = `see <attached-image path="C:\\a.png" />\n<attached-file path="C:\\b.log" name="b.log" size="9" />\n${"x".repeat(PERSON_TEXT_MAX)}`;
+    const { entry, message } = hostSend(group, text);
+    expect(message.text).toBe(text);
+    expect(entry.text).toMatch(/^see \[image\]\n\[file: b\.log\]\nx+$/);
+    expect(entry.text).toHaveLength(PERSON_TEXT_MAX);
+    expect(hostSend(group, '<attached-image path="C:\\a.png" />').entry.text).toBe("[image]");
+  });
+
+  it("keeps the host's reply to a row the room log never got as a local reply", () => {
+    const bot = { botId: wink, name: "Wink", color: "" };
+    const unlinked = store.appendMessage(group.threadId, { role: "bot", kind: "text", text: "part one", from: bot });
+    const sent = hostSend(group, "this bit?", unlinked);
+    expect(sent.entry.replyToId).toBeUndefined();
+    expect(sent.message.replyToId).toBe(unlinked.id);
+    const linked = hostSend(group, "and this", sent.message);
+    expect(linked.entry.replyToId).toBe(sent.entry.id);
+    expect(linked.message.replyToId).toBe(sent.message.id);
   });
 
   it("refuses someone who isn't in the room", () => {

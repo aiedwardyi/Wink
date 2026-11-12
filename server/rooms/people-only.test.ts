@@ -13,7 +13,7 @@ import { admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, cr
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedRoomView } from "./guards.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
-import { hostedSend } from "./send.ts";
+import { hostedSend, hostSend } from "./send.ts";
 import { saveRoomFile } from "./files.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
@@ -232,7 +232,7 @@ describe("a send in a people-only room", () => {
 
   it("goes from the host's send route to the log with no runner", () => {
     const spies = { runGroupMemberTurn: vi.fn(), enqueueDrainedRoomTurn: vi.fn(), queueRoomParticipation: vi.fn(), startTurn: vi.fn(), roomSetupPending: vi.fn(() => false) };
-    const start = load("startGroupTurn", { store, hostedSend, peopleOnlyRoom, ...spies });
+    const start = load("startGroupTurn", { store, hostSend, peopleOnlyRoom, ...spies });
     expect(start(group.id, "@Wink hi")).toMatchObject({ role: "user", text: "@Wink hi" });
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
     noWork();

@@ -160,17 +160,17 @@ describe("every room runner caller on a hosted thread", () => {
     expect((runGroupMemberTurn.mock.calls[0] as unknown[]).at(-1)).toBe(live.id);
   });
 
-  it("commits the host's own room line with hostedSend, then wakes the group's responders", () => {
-    const hostedSend = vi.fn(() => ({ message: { id: "m1" } }));
+  it("commits the host's own room line with hostSend, then wakes the group's responders", () => {
+    const hostSend = vi.fn(() => ({ message: { id: "m1" } }));
     const roomResponders = vi.fn(() => []);
     const appendMessage = vi.spyOn(store, "appendMessage");
     const start = load("startGroupTurn", {
-      store, hostedSend, roomResponders, peopleOnlyRoom: () => false, roomSetupPending: () => false, rootForStart: vi.fn(), noteTalked: vi.fn(), mentionedBots: () => [],
+      store, hostSend, roomResponders, peopleOnlyRoom: () => false, roomSetupPending: () => false, rootForStart: vi.fn(), noteTalked: vi.fn(), mentionedBots: () => [],
     });
     let sent: unknown;
     expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"); }).not.toThrow();
     expect(sent).toEqual({ id: "m1" });
-    expect(hostedSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), { kind: "host" }, "@Wink hi", "e1", "send-0000000001"]);
+    expect(hostSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"]);
     expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder);
     expect(appendMessage).not.toHaveBeenCalled();
   });

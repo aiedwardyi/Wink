@@ -252,8 +252,8 @@ describe("remove", () => {
     expect(roomPeople(id)).toHaveLength(1);
     await stream.closed;
     expect((await remove(id, mina.body.person.id)).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
-    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
+    expect((await joinAs((await invite(id)).body.code, "Joon", pcOf("Joon"))).status).toBe(200);
   });
 
   it("never replaces an existing seat or removal ban when binding an authenticated guest", async () => {
@@ -268,7 +268,7 @@ describe("remove", () => {
     expect((await joinAs(body.code, "Mina", pcOf("Mina"))).body.person.id).toBe(mina.personId);
     expect((await remove(id, mina.personId)).status).toBe(200);
     expect((await snapshot()).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
   });
 
   it("does not bind a device without a live guest key", async () => {
@@ -311,15 +311,16 @@ describe("remove", () => {
     expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: first.body.key })).status).toBe(401);
   });
 
-  it("bars a legacy invite joiner's PC from the room code after Remove", async () => {
+  it("keeps a legacy invite joiner's PC out until the next code after Remove", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
     const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
     expect(mina.status).toBe(200);
-    expect((await remove(id, mina.body.person.id)).status).toBe(200);
     const { body } = await invite(id);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
+    expect((await remove(id, mina.body.person.id)).status).toBe(200);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
+    expect((await joinAs((await invite(id)).body.code, "Mina", pcOf("Mina"))).status).toBe(200);
   });
 
   it("ends old streams on rejoin and leaves room for the replacement stream", async () => {
@@ -367,15 +368,18 @@ describe("remove", () => {
     expect(await remove(group.hosted.roomId, mina.personId)).toEqual({ status: 404, body: { error: "not found" } });
   });
 
-  it("keeps a removed teammate's PC out of the room code while others still join", async () => {
+  it("retires the code on Remove, and lets that PC back with the next one", async () => {
     const group = peopleRoom();
     const { body } = await invite(group.hosted.roomId);
     const mina = await joinAs(body.code, "Mina", pcOf("Mina"));
     expect(mina.status).toBe(200);
     expect((await remove(group.hosted.roomId, mina.body.person.id)).status).toBe(200);
-    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
-    expect((await joinAs(body.code, "Joon", pcOf("Joon"))).status).toBe(200);
-    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Joon"]);
+    expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 404, body: { error: "no-invite" } });
+    const next = await invite(group.hosted.roomId);
+    expect(next.body.code).not.toBe(body.code);
+    expect((await joinAs(next.body.code, "Joon", pcOf("Joon"))).status).toBe(200);
+    expect((await joinAs(next.body.code, "Mina", pcOf("Mina"))).status).toBe(200);
+    expect(roomPeople(group.hosted.roomId).map((person) => person.name).sort()).toEqual(["Joon", "Mina"]);
   });
 
   it("lets a teammate who left come back, and never lists one PC twice", async () => {

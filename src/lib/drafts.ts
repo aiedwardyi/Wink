@@ -314,6 +314,16 @@ export function returnSendsToComposer(id: string, sends: readonly DraftRestore[]
   });
 }
 
+/** A room send's text left the box at send. Success drops its chips; failure puts the text back ahead of anything typed since. */
+export function settleRoomSend(id: string, text: string, chipIds: ReadonlySet<string>, failed: boolean): void {
+  const store = getStore();
+  const typed = getDraft(store, id);
+  const attachments = getDraftAttachments(store, id);
+  restoreComposerDraft(id, failed
+    ? { text: [text, typed].filter((part) => part.trim()).join("\n\n"), attachments }
+    : { text: typed, attachments: attachments.filter((attachment) => !chipIds.has(attachment.id)) });
+}
+
 function subscribeToDraftRestores(id: string, listener: DraftRestoreListener): () => void {
   const listeners = restoreListeners.get(id) ?? new Set<DraftRestoreListener>();
   listeners.add(listener);

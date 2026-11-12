@@ -10,6 +10,7 @@ export function roomResponder<T extends { id: string; name: string }>(
   bots: readonly T[],
   people: readonly string[],
   replyToBotId?: string,
+  soloWakes = true,
 ): T | null {
   // People and "everyone" are candidates too, so "@Mina Kim" never half-matches a bot called Mina.
   const names = [
@@ -26,5 +27,5 @@ export function roomResponder<T extends { id: string; name: string }>(
     if (hit?.bot) return hit.bot;
     if (hit) tagged = true;
   }
-  return bots.find((bot) => bot.id === replyToBotId) ?? (!tagged && bots.length === 1 ? bots[0]! : null);
+  return bots.find((bot) => bot.id === replyToBotId) ?? (soloWakes && !tagged && bots.length === 1 ? bots[0]! : null);
 }

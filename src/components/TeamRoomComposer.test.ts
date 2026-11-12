@@ -239,12 +239,13 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!;
-    expect(button.disabled).toBe(true);
+    expect(box().value).toBe("");
+    await type("Next");
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
     await act(async () => finish(reply({ ok: true })));
-    expect(box().value).toBe("");
+    expect(box().value).toBe("Next");
   });
 
   it("blocks duplicate Enter events before React renders the pending state", async () => {
@@ -310,6 +311,28 @@ describe("room drafts", () => {
     expect(getDraft(localStorage, "g1")).toBe(edited ? "New draft" : "");
   });
 
+  it.each(["host", "joined"])("clears the %s box at send and puts it back only on failure", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render(side);
+    await type("hello");
+    await send();
+    expect(box().value).toBe("");
+    await act(async () => finish(reply({ error: "offline" }, 500)));
+    expect(box().value).toBe("hello");
+  });
+
+  it("puts a failed send back ahead of what was typed since", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    await render("joined");
+    await type("hello");
+    await send();
+    await type("more");
+    await act(async () => finish(reply({ error: "offline" }, 500)));
+    expect(box().value).toBe("hello\n\nmore");
+  });
+
   it("keeps a reply picked while an earlier send is pending", async () => {
     let finish!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
@@ -350,6 +373,19 @@ describe("room drafts", () => {
     expect(host.textContent).not.toContain("draft.txt");
     await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, id: "g2", hosted: { roomId: "r2" } } })));
     expect(box().value).toBe("Room B draft");
+  });
+});
+
+describe("room mentions", () => {
+  it("offers a teammate the room's bots and people", async () => {
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: [{ id: "p2", name: "Sora" }], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
+    await render("joined");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "@");
+      box().setSelectionRange(1, 1);
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect([...host.querySelectorAll('[role="option"]')].map((option) => option.textContent)).toEqual(["WinkAgent", "EdwardPerson", "SoraPerson"]);
   });
 });
 

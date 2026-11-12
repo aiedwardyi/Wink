@@ -54,7 +54,7 @@ import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guard
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostedSend } from "./rooms/send.ts";
+import { hostSend } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -6827,7 +6827,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
-  const shared = group.hosted ? hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message : null;
+  const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });

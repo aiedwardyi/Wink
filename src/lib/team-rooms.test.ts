@@ -177,6 +177,13 @@ describe("sending to a room", () => {
     expect(await sendToRoom("/api/rooms/r1", "hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
   });
 
+  it("names a refused bot request", async () => {
+    for (const [error, key] of [["wait for your last request to finish", "teamRoom.askBusy"], ["you've asked the bot the most it takes in an hour", "teamRoom.askLimit"]]) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error }), { status: 429 })));
+      expect(await sendToRoom("/api/joined/rooms/r9", "@Wink hi", [], "send-0123456789abcdef")).toEqual({ key });
+    }
+  });
+
   it("uploads only the files a failed send didn't finish when it is retried", async () => {
     const files = [file("a.png", "image/png"), file("b.pdf", "application/pdf")];
     const uploads: string[] = [];
