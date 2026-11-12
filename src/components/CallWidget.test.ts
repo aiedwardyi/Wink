@@ -255,6 +255,14 @@ describe("call voice in Settings", () => {
     }
   });
 
+  it("previews in the call language, not the app's", async () => {
+    await mount(atlas);
+    await act(async () => pills("Call language")[2]!.click());
+    await vi.waitFor(() => expect(pills("Call language")[2]!.getAttribute("aria-checked")).toBe("true"));
+    await act(async () => preview("Jenn")!.click());
+    expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
+  });
+
   it("previews without selecting, one clip at a time, loading none until asked", async () => {
     await mount(atlas);
     expect(fakes.clips).toHaveLength(0);
