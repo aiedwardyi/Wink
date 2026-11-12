@@ -65,6 +65,16 @@ describe("team room shape", () => {
     expect(joinedPhase(view("left", null))).toBe("left");
   });
 
+  it("gives a joined bot line its bot's color, and none to a bot no longer listed", () => {
+    const bot = { kind: "bot", id: "b1", name: "Wink" } as const;
+    const lines = joinedLines([
+      { seq: 1, id: "e1", at: 1, author: bot, text: "on it" },
+      { seq: 2, id: "e2", at: 2, author: { ...bot, id: "gone" }, text: "old" },
+      { seq: 3, id: "e3", at: 3, author: { kind: "person", id: "p", name: "Mina" }, text: "thanks" },
+    ], [{ id: "b1", name: "Wink", color: "blue" }]);
+    expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
+  });
+
   it("selects a joined room by an id no bot or group can have", () => {
     expect(joinedRoomIdOf(joinedSelection("r9"))).toBe("r9");
     expect(joinedRoomIdOf("nova")).toBeNull();

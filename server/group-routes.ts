@@ -69,10 +69,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     closeOpenApprovals,
     releaseInterruptedBot,
   } = deps;
-  const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => {
-    const bot = store.bot(id)!;
-    return { name: bot.name, driverKind: (deps.instanceForBot ? deps.instanceForBot(bot) : registry.get(bot.modelSelection.instanceId))?.driverKind };
-  }), people);
+  const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => store.bot(id)!), people);
   /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
   const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
     const busy = store.bot(botId);

@@ -1,5 +1,5 @@
 // People-only team rooms: one this PC hosts (a hosted group with no bots), or one it joined elsewhere.
-import type { Group, Message } from "@/state/store-types";
+import type { Group, Message, RoomJoin } from "@/state/store-types";
 
 import { fetchResponse, request, responseBody } from "./api-request";
 import type { MessageKey } from "./i18n";
@@ -16,6 +16,7 @@ export interface RoomLine {
   files: RoomFile[];
   replyToId?: string;
   message?: Message;
+  color?: string;
 }
 
 export type TeamRoom = Group & { hosted: { roomId: string } };
@@ -24,6 +25,11 @@ export type TeamRoom = Group & { hosted: { roomId: string } };
 export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boolean(group?.hosted && group.memberIds.length === 0);
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
+
+const NO_JOINS: RoomJoin[] = [];
+
+// One empty list, so a memoized transcript keeps its props.
+export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
   messages.flatMap((message) => (message.author && message.roomEntryId
@@ -42,16 +48,22 @@ export interface JoinedView {
   status: "joined" | "removed" | "left";
   link: JoinedLink | null;
   me: JoinedPerson;
-  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string } | null;
+  state: { roomName: string; host: string; people: JoinedPerson[]; picture?: string; bots?: JoinedBot[] } | null;
   unread?: number;
   lastEntry?: JoinedEntry;
+}
+
+export interface JoinedBot {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person"; id: string; name: string };
+  author: RoomAuthor;
   text: string;
   files?: RoomFile[];
   replyToId?: string;
@@ -62,8 +74,11 @@ export type JoinedPhase = "connecting" | "live" | "offline" | "removed" | "left"
 export const joinedPhase = (view: JoinedView): JoinedPhase =>
   view.status !== "joined" ? view.status : view.link === "live" ? "live" : view.link === "offline" ? "offline" : "connecting";
 
-export const joinedLines = (entries: readonly JoinedEntry[]): RoomLine[] =>
-  entries.map((entry) => ({ id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId }));
+export const joinedLines = (entries: readonly JoinedEntry[], bots: readonly JoinedBot[] = []): RoomLine[] =>
+  entries.map((entry) => {
+    const color = entry.author.kind === "bot" ? bots.find((bot) => bot.id === entry.author.id)?.color : undefined;
+    return { id: entry.id, at: entry.at, author: entry.author, text: entry.text, files: entry.files ?? [], replyToId: entry.replyToId, ...(color ? { color } : {}) };
+  });
 
 export const roomMessage = (line: RoomLine): Message => line.message ?? ({
   id: line.id, at: line.at, role: "user", kind: "text", text: line.text,
@@ -120,6 +135,20 @@ export async function inviteToRoom(roomId: string): Promise<{ code: string } | R
 }
 
 export const inviteErrorKey = (status: number): MessageKey => (status === 409 ? "teamRoom.phoneOff" : "errors.request");
+
+/** Invite in a group: the first press shares it, later ones hand back the same code. */
+export async function shareGroup(groupId: string): Promise<{ code: string; group: Group } | Refused> {
+  try {
+    const res = await fetchResponse(`/api/groups/${groupId}/share`, { method: "POST" });
+    const body = await responseBody(res);
+    return res.ok && typeof body?.code === "string" && body.group ? { code: body.code, group: body.group } : refused(res.status, body);
+  } catch {
+    return { status: 0, error: "" };
+  }
+}
+
+export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
+  error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
 export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });
