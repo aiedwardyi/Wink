@@ -2,6 +2,35 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.255] - 2026-11-12
+
+### Added
+- Groups for your team: one New group, people and bots together, invite code in Members; teammates can @ your bots.
+- Short 6-character room codes to share and join a room; long codes still work.
+- Team room lines get emoji reactions, and a line can be pinned as the room notice.
+- Deleted bots go to Recently deleted, under Archived bots: restore one or empty now; it empties itself after 30 days.
+- An Asks box on the Memory page shows what you asked a bot and where each ask stands.
+- Older messages load by themselves as you scroll up a chat.
+- A show pane opens the pictures, PDFs and web pages your bots make.
+- Three new themes: Bronze, Precision Dimmed and Dim Sand. Moss moves under More themes.
+- Pick the model picker look (Dark, Light, Atelier) in Theme settings, plus Dial or List where the dial fits.
+- Rooms get names, files, translate, a picture and a right-click menu with Reply and Copy.
+- A soft ring while a voice call connects, and a short tone when it ends.
+- On Windows, the mic by Send shows the Win+H dictate hint.
+
+### Changed
+- The team room chat box works like the 1:1 box.
+- Wink opens faster: Account, Usage and Devices show real data in 10-14 seconds, and pasted pictures appear at once.
+- Replies show up as soon as the bot finishes.
+- Bot Details and Memory open faster.
+- Checker cursors in both Watch views move faster.
+- The "sent mid-turn" hover hint is shorter.
+
+### Fixed
+- Typing no longer stutters in long chats while a bot replies.
+- Long member lists scroll inside their panel.
+- An account hit by an API credit promo restriction says why and stops launching workers until you sign in or update the key.
+
 ## [1.0.254] - 2026-11-12
 
 ### Added
