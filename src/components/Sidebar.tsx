@@ -915,7 +915,10 @@ export function Sidebar({
     return () => {
       const progress = motions[0]?.effect?.getComputedTiming().progress;
       if (progress != null) shownSidebarWidth.current = from + (sidebarDisplayWidth - from) * progress;
-      for (const motion of motions) motion.cancel();
+      for (const motion of motions) {
+        motion.finished.catch(() => undefined);
+        motion.cancel();
+      }
       ghost.style.width = "";
       if (raised) raised.style.zIndex = "";
     };

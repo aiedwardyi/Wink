@@ -571,7 +571,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     );
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const cancel = vi.fn();
-    const halfway = () => ({ cancel, effect: { getComputedTiming: () => ({ progress: 0.5 }) } }) as unknown as Animation;
+    const halfway = () => ({ cancel, finished: new Promise<Animation>(() => {}), effect: { getComputedTiming: () => ({ progress: 0.5 }) } }) as unknown as Animation;
     const animate = vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(halfway);
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
