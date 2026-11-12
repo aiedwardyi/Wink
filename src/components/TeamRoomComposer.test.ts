@@ -212,6 +212,25 @@ describe("room drafts", () => {
     expect(host.textContent).not.toContain("pending.txt");
   });
 
+  it.each(["host", "joined"])("sends a %s photo once when Send is tapped after switching chats mid-upload", async (side) => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((path: string) => path.includes("/files?")
+      ? new Promise<Response>((resolve) => { finish = resolve; })
+      : Promise.resolve(reply({ ok: true }))));
+    await render(side);
+    await drag("drop", [file("photo.png", "image/png")]);
+    const tap = () => act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click());
+    await tap();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render(side);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
+    await tap();
+    await act(async () => finish(reply({ file: { id: "uploaded" } })));
+    expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path).split("?")[0]).filter((path) => path.endsWith("/send"))).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain("photo.png");
+  });
+
   it.each(["host", "joined"])("keeps a pending %s send blocked across navigation", async (side) => {
     let finish!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
