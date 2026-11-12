@@ -255,7 +255,7 @@ export function ReactionChips({
           type="button"
           onClick={() => onToggle ? onToggle(emoji) : dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
           title={bys.map(nameOf).join(", ")}
-          aria-label={emoji}
+          aria-label={onToggle || bys.length > 1 ? `${emoji} ${bys.length}` : emoji}
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-1 text-[17px] leading-none",
             bys.includes("user")

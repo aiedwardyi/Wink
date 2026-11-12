@@ -53,6 +53,12 @@ describe("reaction icons", () => {
     expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual(["👍", "🎉"]);
   });
 
+  it("puts a shown count in the pill name", () => {
+    const message = { ...withMarks(["👍"]), reactions: [{ emoji: "👍", by: "user" }, { emoji: "👍", by: "helper" }] };
+    act(() => root.render(createElement(ReactionChips, { threadId: "t", message, corner: "left" })));
+    expect(host.querySelector("[data-message-reactions] button")?.getAttribute("aria-label")).toBe("👍 2");
+  });
+
   it("keeps the text glyph for an older emoji with no icon", () => {
     const [chip] = renderChips(["💯"]);
     expect(chip!.querySelector("svg")).toBeNull();
