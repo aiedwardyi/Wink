@@ -54,7 +54,7 @@ const fileOf = (host: TrashSyncHost) => join(host.dataDir, "bot-trash-sync.json"
 const validMark = (mark: Partial<Mark> | null) =>
   typeof mark?.botId === "string" && typeof mark.syncId === "string" && typeof mark.trashed === "boolean" && Number.isFinite(mark.at);
 
-const sameMark = (file: TrashSyncFile, syncId: string, at: number) =>
+const samePendingTrash = (file: TrashSyncFile, syncId: string, at: number) =>
   file.pending.some((mark) => mark.syncId === syncId && mark.trashed && mark.at === at);
 
 function load(host: TrashSyncHost): TrashSyncFile {
@@ -109,7 +109,7 @@ export function restoreBot(host: TrashSyncHost, botId: string): BotRecord {
   const bot = host.trash.restore(botId);
   if (!entry?.syncId) return bot;
   // a Delete not sent yet still goes out, so other PCs see both taps in order
-  if (!entry.told && !sameMark(file, entry.syncId, entry.deletedAt)) file.pending.push({ botId, syncId: entry.syncId, trashed: true, at: entry.deletedAt });
+  if (!entry.told && !samePendingTrash(file, entry.syncId, entry.deletedAt)) file.pending.push({ botId, syncId: entry.syncId, trashed: true, at: entry.deletedAt });
   file.pending.push({ botId, syncId: entry.syncId, trashed: false, at });
   save(host, file);
   return bot;
@@ -121,7 +121,7 @@ export function publishTrashMarks(host: TrashSyncHost, folder: string): number {
   const untold = host.store.trash.entries.filter((entry) => !entry.told && entry.step === "trashed");
   const marks = [
     ...file.pending,
-    ...untold.flatMap((entry) => entry.syncId && !sameMark(file, entry.syncId, entry.deletedAt) ? [{ botId: entry.record.id, syncId: entry.syncId, trashed: true, at: entry.deletedAt }] : []),
+    ...untold.flatMap((entry) => entry.syncId && !samePendingTrash(file, entry.syncId, entry.deletedAt) ? [{ botId: entry.record.id, syncId: entry.syncId, trashed: true, at: entry.deletedAt }] : []),
   ].sort((left, right) => left.at - right.at);
   if (!marks.length) return 0;
   const settings = host.settings();
