@@ -96,6 +96,24 @@ export function ownRoomFiles(roomId: string, owner: string, ids: readonly string
   });
 }
 
+export const ROOM_FILE_TYPES = [
+  "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage",
+  "video/mp4", "video/quicktime", "video/x-m4v", "video/webm", "audio/mp4", "audio/mpeg", "audio/wav", "text/plain",
+] as const;
+
+/** Still pictures share the ftyp box with video; they stay refused. */
+const STILL_BRAND = /^(hei[cxms]|hev[cms]|mif1|msf1|avi[fs])$/;
+const FTYP = { "qt  ": "video/quicktime", "M4V ": "video/x-m4v", "M4VH": "video/x-m4v", "M4A ": "audio/mp4" } as const;
+
+function sniffMedia(head: Buffer): string | null {
+  const latin = head.toString("latin1");
+  if (latin.startsWith("ftyp", 4)) return STILL_BRAND.test(latin.slice(8, 12)) ? null : FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
+  if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
+  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && ((head[1] ?? 0) & 0x06) !== 0)) return "audio/mpeg";
+  if (latin.startsWith("RIFF") && latin.startsWith("WAVE", 8)) return "audio/wav";
+  return null;
+}
+
 /** Text files are UTF-8 with no control characters beyond tab, line ends and form feed. */
 function sniff(head: Buffer): { type: string; max: number } {
   const image = sniffImageMime(head);
@@ -104,6 +122,8 @@ function sniff(head: Buffer): { type: string; max: number } {
   if (latin.startsWith("%PDF-")) return { type: "application/pdf", max: DOCUMENT_MAX_BYTES };
   if (latin.startsWith("PK\x03\x04")) return { type: "application/zip", max: DOCUMENT_MAX_BYTES };
   if (head.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) return { type: "application/x-ole-storage", max: DOCUMENT_MAX_BYTES };
+  const media = sniffMedia(head);
+  if (media) return { type: media, max: DOCUMENT_MAX_BYTES };
   return { type: "text/plain", max: DOCUMENT_MAX_BYTES };
 }
 
