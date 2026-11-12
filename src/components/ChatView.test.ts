@@ -1878,6 +1878,54 @@ describe("phone header name floor", () => {
     }
   });
 
+  it("measures nothing on desktop and measures once the window turns phone", async () => {
+    let phone = false;
+    let clones = 0;
+    let rootStyles = 0;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.stubGlobal("matchMedia", () => ({ matches: phone }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      if (el === document.documentElement) rootStyles += 1;
+      return computed(el, pseudo);
+    });
+    installRects(false);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.style.left === "-9999px") clones += 1;
+      return rect.call(this);
+    };
+    const bot: Bot = { ...botB, name: "Bounty-Watch", modelSelection: { instanceId: "inst", model: MODEL, effort: "max", mode: "pinned" } };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot, onOpenTerminal: () => undefined }))));
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { window.dispatchEvent(new Event("resize")); });
+      expect(clones).toBe(0);
+      expect(rootStyles).toBe(0);
+      const nameButton = [...host.querySelectorAll("button")].find((el) => el.textContent === "Bounty-Watch" && el.className.includes("md:hidden"));
+      expect(nameButton?.style.minWidth).toBe("");
+      phone = true;
+      await act(async () => { window.dispatchEvent(new Event("resize")); });
+      expect(clones).toBe(1);
+      expect(nameButton?.style.minWidth).not.toBe("");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      Reflect.deleteProperty(document, "fonts");
+    }
+  });
+
   it("pads the phone header by the menu reserve when the menu is right", async () => {
     localStorage.setItem(SIDEBAR_SIDE_KEY, "right");
     const view = await mount(false);
