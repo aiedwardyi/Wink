@@ -5,6 +5,7 @@ import { Languages } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
@@ -189,6 +190,10 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
           if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) atEnd.current = false;
         }}
         tabIndex={0}
+        onClick={(e) => {
+          if (!shouldFocusComposerOnTranscriptClick(e.target, e, window.getSelection()?.isCollapsed ?? true, e.currentTarget)) return;
+          focusComposerOnActivation();
+        }}
         onScroll={(e) => {
           const el = e.currentTarget;
           const size = { height: el.scrollHeight, viewport: el.clientHeight };

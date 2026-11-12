@@ -84,7 +84,7 @@ describe("room file drop", () => {
     const files = [file("plan.txt"), file("board.png", "image/png")];
     await drag("drop", files);
     expect(host.textContent).toContain("plan.txt");
-    expect(host.textContent).toContain("board.png");
+    expect(host.querySelector("img[alt='board.png']")).not.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
     await send();
     const calls = vi.mocked(fetch).mock.calls;
@@ -167,7 +167,7 @@ describe("room file drop", () => {
     Object.defineProperty(event, "clipboardData", { value: { files: [file("clipboard.png", "image/png")] } });
     await act(async () => { box().dispatchEvent(event); });
     expect(event.defaultPrevented).toBe(true);
-    expect(host.textContent).toContain("clipboard.png");
+    expect(host.querySelector("img[alt='clipboard.png']")).not.toBeNull();
     await send();
     expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/files?name=clipboard.png");
   });
@@ -354,5 +354,98 @@ describe("room focus", () => {
     joined.view!.status = "left";
     await render("joined");
     expect(host.querySelector("textarea")).toBeNull();
+  });
+});
+
+describe("room click to type", () => {
+  const settle = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  const click = async (target: Element) => {
+    await act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); });
+    await settle();
+  };
+  const away = async () => {
+    await settle();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).not.toBe(box());
+  };
+
+  it.each(["host", "joined"])("focuses the %s composer on an empty transcript click", async (side) => {
+    await render(side);
+    await away();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("focuses from the gap between messages", async () => {
+    await render();
+    await away();
+    await click(host.querySelector('[role="log"]')!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("leaves buttons and links alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    const button = log.appendChild(document.createElement("button"));
+    const link = log.appendChild(document.createElement("a"));
+    link.setAttribute("href", "https://example.com");
+    await click(button);
+    await click(link);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it("leaves a text selection alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    log.textContent = "picked words";
+    const range = document.createRange();
+    range.selectNodeContents(log);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    await click(log);
+    expect(document.activeElement).not.toBe(box());
+    window.getSelection()!.removeAllRanges();
+  });
+
+  it("stays out of the way on a phone", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    await render();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it.each(["host", "joined"])("gives the %s box the skin frame", async (side) => {
+    await render(side);
+    expect(box().closest("[data-orbit-composer-frame]")).not.toBeNull();
+  });
+});
+
+describe("room image preview", () => {
+  const urls = { made: [] as Blob[], revoked: [] as string[] };
+  beforeEach(() => {
+    urls.made = [];
+    urls.revoked = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => { urls.made.push(blob as Blob); return `blob:thumb-${urls.made.length}`; });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => { urls.revoked.push(url); });
+  });
+
+  it.each(["host", "joined"])("shows an attached image as a %s thumbnail with a remove button", async (side) => {
+    await render(side);
+    await drag("drop", [file("board.png", "image/png")]);
+    const thumb = host.querySelector<HTMLImageElement>("img[alt='board.png']");
+    expect(thumb?.getAttribute("src")).toBe("blob:thumb-1");
+    expect(thumb?.closest("[title='board.png']")?.className).toContain("w-[172px]");
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Remove image']")!.click());
+    expect(host.querySelector("img[alt='board.png']")).toBeNull();
+    expect(urls.revoked).toContain("blob:thumb-1");
+  });
+
+  it("keeps a plain row for a file that is not a picture", async () => {
+    await render();
+    await drag("drop", [file("plan.txt")]);
+    expect(host.querySelector("img")).toBeNull();
+    expect(host.textContent).toContain("plan.txt");
   });
 });

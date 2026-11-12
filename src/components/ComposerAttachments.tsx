@@ -200,7 +200,7 @@ function UploadBody({ upload, onRetry, onRepick }: { upload: UploadAttachment; o
   );
 }
 
-function Chip({
+export function Chip({
   children,
   kind,
   title,

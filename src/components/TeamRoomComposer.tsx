@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, File as FileIcon, Image as ImageIcon, Paperclip, X } from "lucide-react";
 
 import { formatSize } from "@/lib/composer-attachments";
@@ -13,6 +13,7 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useFileDrop } from "@/lib/use-file-drop";
 import type { Message } from "@/state/store-types";
 
+import { Chip } from "./ComposerAttachments";
 import { FileDropOverlay } from "./FileDropOverlay";
 import { ReplyQuote } from "./ReplyQuote";
 
@@ -29,6 +30,19 @@ export function useTeamRoomReply(base: string) {
     return () => window.removeEventListener("keydown", onKey);
   }, [setDraft]);
   return { replyTo, selectReply: (message: Message) => setDraft({ base, message }), clearReply };
+}
+
+function PictureChip({ name, size, blob, onRemove }: { name: string; size: number; blob: File; onRemove: () => void }) {
+  const url = useMemo(() => URL.createObjectURL(blob), [blob]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  return (
+    <Chip kind="IMAGE" title={name} onRemove={onRemove}>
+      <div className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset">
+        <img src={url} alt={name} className="max-h-[76px] max-w-full object-contain" />
+      </div>
+      <div className="mt-1 truncate text-[10.5px] text-ink-secondary/70">{formatSize(size)}</div>
+    </Chip>
+  );
 }
 
 export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }: { name: string; base: string; draftId: string; replyTo: Message | null; onClearReply: () => void }) {
@@ -102,7 +116,9 @@ export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }:
       )}
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
-          {files.map((file) => (
+          {files.map((file) => file.file && isRoomPicture(file) ? (
+            <PictureChip key={file.id} name={file.name} size={file.size} blob={file.file} onRemove={() => { if (!sending) removeFile(file.id); }} />
+          ) : (
             <div key={file.id} className="flex max-w-[220px] items-center gap-2 rounded-xl border border-hairline/40 bg-raised px-2.5 py-1.5">
               {isRoomPicture(file) ? <ImageIcon size={14} className="shrink-0 text-ink-secondary" /> : <FileIcon size={14} className="shrink-0 text-ink-secondary" />}
               <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{file.name}</span>
@@ -130,7 +146,7 @@ export function TeamRoomComposer({ name, base, draftId, replyTo, onClearReply }:
           ))}
         </div>
       )}
-      <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl bg-raised px-3 pb-2 pt-1">
+      <div data-orbit-composer-frame className="relative grid grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl bg-raised px-3 pb-2 pt-1">
         <input
           ref={fileInput}
           type="file"
