@@ -42,7 +42,7 @@ function rig(target: "bot" | "group") {
   const tracker = parsed.statements.find((node) => ts.isVariableStatement(node)
     && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "unreadTurns"));
   const botUnread = find(completed, (node) => ts.isIfStatement(node)
-    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true });')!;
+    && node.thenStatement.getText(parsed) === 'store.patchBot(bot.id, { unread: true }, { soon: true });')!;
   const groupUnread = find(completed, (node) => ts.isExpressionStatement(node)
     && node.getText(parsed).startsWith("store.patchGroup(group.id, { busyBotId: null,"))!;
   const decision = find(completed, (node) => ts.isVariableStatement(node)

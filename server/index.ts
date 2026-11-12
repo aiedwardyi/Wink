@@ -106,6 +106,7 @@ import {
   NATIVE_DIR,
 } from "./config.ts";
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { sendNow } from "./save-defer.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { codexCredit, codexCreditRows } from "./codex-credit.ts";
 import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
@@ -1004,7 +1005,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
   return { ok: true, memberIds };
 }
 let bootSelection = { instanceId: "", model: "" };
-const store = startupTiming.measure("store", () => new Store(() => bootSelection));
+const store = startupTiming.measure("store", () => new Store(() => bootSelection, { coalesceSaves: true }));
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -3440,6 +3441,8 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
+  // the settle below writes to disk; the reply's last frame must not wait behind it
+  if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -4079,7 +4082,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const routineReportGroup = routineReportThread ? store.groupByThread(routineReportThread) : undefined;
         // Group-origin routines belong to that channel's unread state. Their
         // hidden execution task should not light up the bot's 1:1 sidebar too.
-        if (!routineReportGroup && addedMessage) store.patchBot(bot.id, { unread: true });
+        if (!routineReportGroup && addedMessage) store.patchBot(bot.id, { unread: true }, { soon: true });
         if (routineRun?.status !== "failed") {
           // the frame carries the bot's avatar so every desktop client can
           // show the notification under that bot's own face
@@ -5260,7 +5263,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   }
   // a pane note, delegation, routine, or peer ask starting this turn is not
   // the user reading anything - only their own message should clear it
-  if (turnStartedByUser(opts)) store.patchBot(bot.id, { unread: false });
+  if (turnStartedByUser(opts)) store.patchBot(bot.id, { unread: false }, { soon: true });
   turnUsage.delete(threadId);
   turnDispatchedAt.set(threadId, tickTurnClock());
   turnStartedAtMs.set(threadId, Date.now());
@@ -8954,6 +8957,7 @@ hostShutdown = () => {
     const packet = pendingTaskPackets.get(threadId)?.packet;
     if (packet) persistTaskPacket(packet);
   }
+  store.flushSaves();
   for (const idle of localVmIdles.values()) idle.cancel();
   vps.closeAllVpsDesktopTunnels();
   void phoneAccess.stop();
@@ -8963,7 +8967,10 @@ hostShutdown = () => {
   summaryRepair.dispose();
   memoryPass.dispose();
   accountRuntime.dispose();
-  void registry.disposeAll().finally(() => process.exit(0));
+  void registry.disposeAll().finally(() => {
+    store.flushSaves();
+    process.exit(0);
+  });
 };
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, hostShutdown);
