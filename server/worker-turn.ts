@@ -24,6 +24,7 @@ export function createWorkerTurns() {
       const threadId = active.get(botId);
       return threadId ? turns.get(threadId)?.turn : undefined;
     },
+    activeThread: (botId: string) => active.get(botId),
     settled(threadId: string) {
       const entry = turns.get(threadId);
       if (entry && active.get(entry.botId) === threadId) active.delete(entry.botId);

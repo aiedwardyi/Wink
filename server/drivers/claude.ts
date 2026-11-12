@@ -1106,7 +1106,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       if (turn.integrations?.terminal) {
         mcpServers.terminal = { ...turn.integrations.terminal, ...orbitOwned };
-        allowed.push("mcp__terminal__terminal_read");
+        allowed.push("mcp__terminal__terminal_read", "mcp__terminal__terminal_playbook");
       }
       // dweb network daemon (status / repo / opencode model access) via
       // server/drivers/dweb-proxy.ts — points at the configured dweb instance

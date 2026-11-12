@@ -1193,6 +1193,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const allowed: string[] = seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",");
     expect(allowed).toContain("mcp__terminal__terminal_read");
+    expect(allowed).toContain("mcp__terminal__terminal_playbook");
     expect(allowed).not.toContain("mcp__terminal");
     expect(seen.mcpConfig.mcpServers.terminal.alwaysLoad).toBe(true);
     expect(allowed).not.toContain("mcp__terminal__terminal_send");

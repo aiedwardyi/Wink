@@ -37,8 +37,35 @@ export function loadHarnessPlaybook(
 }
 
 const HARNESS_PLAYBOOK = loadHarnessPlaybook();
+const ON_DEMAND = "<!-- on demand -->";
+const CLOSE = "\n</harness_playbook>";
 
-/** Only a bot with the shared terminal mounted gets the worker playbook. */
+/** Only a bot with the shared terminal mounted gets the worker playbook, and only the part above the on-demand line. */
 export function harnessPlaybookPrompt(terminalShared: boolean, playbook = HARNESS_PLAYBOOK): string {
-  return terminalShared ? playbook : "";
+  if (!terminalShared || !playbook.includes(ON_DEMAND)) return terminalShared ? playbook : "";
+  return `${playbook.slice(0, playbook.indexOf(ON_DEMAND)).trimEnd()}${CLOSE}`;
+}
+
+export function harnessPlaybookBody(playbook = HARNESS_PLAYBOOK): string {
+  const at = playbook.indexOf(ON_DEMAND);
+  return at < 0 ? "" : playbook.slice(at + ON_DEMAND.length, playbook.length - CLOSE.length).trim();
+}
+
+// Loose on purpose: a wrongly held shell command costs one read, a missed launch skips the rules.
+const WORKER_COMMAND = /(?:^|[\s;&|\\/"'(])(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=$|[\s"')])/i;
+
+/** Provider sessions that were handed the on-demand part; a worker launch waits for it. */
+export function createPlaybookGate(body = harnessPlaybookBody()) {
+  const read = new Set<string>();
+  return {
+    read(session: string): string {
+      read.add(session);
+      return body;
+    },
+    // Never marks the session: spawns sent side by side must all be held.
+    hold(session: string, command: string): string | undefined {
+      if (!body || read.has(session) || !WORKER_COMMAND.test(command)) return undefined;
+      return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
+    },
+  };
 }
