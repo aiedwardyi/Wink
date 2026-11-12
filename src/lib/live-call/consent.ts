@@ -1,7 +1,9 @@
 // Spoken consent, shared by the live call and the Mac call. Only a clear yes counts:
 // a sentence that merely contains "sure" is a reply, not consent.
 
-const YES_EN = /^(yes|yeah|yep|yup|sure|ok|okay|alright|all right|go ahead|go for it|do it|let'?s do it|sounds good|absolutely|of course|allow|approve|approved|fine|please do|send it|confirm|confirmed)\b/i;
+const YES_WORDS_EN = "yes|yeah|yep|yup|sure|ok|okay|alright|all right|go ahead|go for it|do it|let'?s do it|sounds good|absolutely|of course|allow|approve|approved|fine|please do|send it|confirm|confirmed";
+const YES_EN = new RegExp(`^(${YES_WORDS_EN})\\b`, "i");
+const YES_LEAD_EN = new RegExp(`^(${YES_WORDS_EN}|right|correct|please|uh-huh|mm-hmm|thanks|thank you)\\b[\\s,.!]*`, "i");
 // Only a yes on their own: "Right now?" and "Please make it blue" are not.
 const YES_ALONE_EN = /^(right|correct|please|uh-huh|mm-hmm)[.!]*$/i;
 // "Yes, don't send it", "Yes, but make it blue", or the voice's own offer echoed back: keeps waiting.
@@ -34,6 +36,14 @@ export function consentOf(said: string): "yes" | "no" | null {
   if (first === "어") return YES_KO.includes(second) || (!second && !/\.\.|…/.test(text)) ? "yes" : null;
   if (YES_KO.includes(first) || STRONG_YES_KO.includes(second)) return "yes";
   return null;
+}
+
+/** A yes and nothing more: "Okay, delete the logs" asks, it does not answer. */
+export function bareYes(said: string): boolean {
+  if (consentOf(said) !== "yes") return false;
+  let rest = said.trim().replace(FILLER, "");
+  while (YES_LEAD_EN.test(rest)) rest = rest.replace(YES_LEAD_EN, "");
+  return rest.split(/[\s,.!~…]+/).filter(Boolean).every((word) => ["어", "은", "음", ...YES_KO].includes(koWords(word)[0]!));
 }
 
 const DONE_EN = /\b(it'?s|is|all|i'?m|i'?ve|we'?re) (done|finished|fixed|complete|merged|pushed|live)\b/i;
