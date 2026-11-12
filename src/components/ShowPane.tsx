@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { ChevronRight, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
@@ -34,6 +34,11 @@ export function ShowPane({ item, watch, media = false, source, hidden, closing =
   const expanded = maximized && !phone;
   const close = watch ? closeVerifyWatch : closeShow;
   const again = source && lastShown(source.threadId);
+  const ref = useRef<HTMLElement>(null);
+  const dock = useRef<number | undefined>(undefined);
+  // The sidebar unfolds as this closes; its open width keeps the content from reflowing mid-exit.
+  if (!closing) dock.current = undefined;
+  else dock.current ??= ref.current?.getBoundingClientRect().width;
 
   useEffect(() => {
     if (closing) return;
@@ -47,8 +52,9 @@ export function ShowPane({ item, watch, media = false, source, hidden, closing =
   }, [close, closing, expanded]);
 
   const pane = (
-    <aside className="verify-watch show-pane animate-panel-in" data-verify-watch data-side-panel="" data-wide={item || media ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
+    <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className="verify-watch show-pane animate-panel-in" data-verify-watch data-side-panel="" data-wide={item || media ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
+        {!phone && <button type="button" onClick={close} aria-label={t("show.collapse")} title={t("show.collapse")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><ChevronRight size={18} /></button>}
         <div role="tablist" className="show-pane-tabs">
           <button type="button" role="tab" aria-selected={!media} disabled={media && !again} onClick={() => media && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={media} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
