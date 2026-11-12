@@ -23,7 +23,7 @@ describe("AskUserRecord", () => {
     const markup = render(question, [question]);
     expect(markup).toContain("Ada asks");
     expect(markup).toContain("Prod or staging?");
-    expect(markup).toContain("Waiting for your answer below");
+    expect(markup).toContain("Waiting for your answer<");
     expect(markup).not.toContain("<button");
   });
 
@@ -40,7 +40,7 @@ describe("AskUserRecord", () => {
     const older = ask("q1", { staysOpen: true });
     const newer = ask("q2", { staysOpen: true, subtitle: "Which branch?" });
     const markup = renderToStaticMarkup(createElement(AskUserRecord, { message: older, transcript: [older, newer], askerName: "Ada", onPick: () => {} }));
-    expect(markup).toContain("Waiting for your answer below");
+    expect(markup).toContain("Waiting for your answer<");
     expect(markup).toContain(">Staging</button>");
     expect(render(older, [older, ask("q3", { staysOpen: true })])).toContain("Asked again below");
   });

@@ -49,7 +49,10 @@ export function routesQuick(gate: QuickGate): boolean {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  if (scanQuestion(gate.messages) || gate.messages.some(isOpenRequest)) return false;
+  // typing answers a pinned card without choices, or a tapped choice's text
+  const question = scanQuestion(gate.messages)?.card;
+  if (question && (!question.staysOpen || !question.options.length || question.options.includes(gate.text.trim()))) return false;
+  if (gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
 
