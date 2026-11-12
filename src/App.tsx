@@ -60,6 +60,7 @@ import { useMonoHud } from "@/lib/use-mono-hud";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const RoomDetailsPanel = lazyView(() => import("@/components/RoomDetailsPanel").then((m) => ({ default: m.RoomDetailsPanel })));
 const PluginsPanel = lazyView(() => import("@/components/PluginsPanel").then((m) => ({ default: m.PluginsPanel })));
 const InspectorPanel = lazyView(() => import("@/components/InspectorPanel").then((m) => ({ default: m.InspectorPanel })));
 const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
@@ -271,7 +272,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useRightSlot(slotPanels, closeSlot);
   useEffect(() => { closePane(); }, [state.selectedId]);
   useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && !watch && slotPanels.every((panel) => panel === "show"));
-  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
+  const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || state.settingsOpen && Boolean(bot || group || joinedId) || bot && state.inspectorOpen);
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
       <ShowPane {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
@@ -551,7 +552,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.appSettingsOpen ||
     state.pluginsOpen ||
     createBotSheetOpen ||
-    Boolean(bot && (state.settingsOpen || state.inspectorOpen));
+    state.settingsOpen && Boolean(bot || group || joinedId) ||
+    Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
   const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
@@ -803,6 +805,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         {(closing) => bot && (
           <LazyView overlay>
             <SettingsPanel key={bot.id} bot={bot} closing={closing} />
+          </LazyView>
+        )}
+      </Presence>
+      <Presence open={Boolean(state.settingsOpen && !bot && (group || joinedId))}>
+        {(closing) => (
+          <LazyView overlay>
+            <RoomDetailsPanel key={group?.id ?? joinedId} group={group} joinedId={joinedId ?? undefined} closing={closing} />
           </LazyView>
         )}
       </Presence>

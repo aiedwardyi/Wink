@@ -47,7 +47,7 @@ const modelPicker = readFileSync(join(here, "../components/ModelPicker.tsx"), "u
 const renameTitle = readFileSync(join(here, "../components/RenameTitle.tsx"), "utf8");
 const enginesSettings = readFileSync(join(here, "../components/EnginesSettings.tsx"), "utf8");
 const searchResults = readFileSync(join(here, "../components/SearchResults.tsx"), "utf8");
-const manageMembers = readFileSync(join(here, "../components/ManageMembersPanel.tsx"), "utf8");
+const roomDetails = readFileSync(join(here, "../components/RoomDetailsPanel.tsx"), "utf8");
 const pluginsPanel = readFileSync(join(here, "../components/PluginsPanel.tsx"), "utf8");
 const usageSection = readFileSync(join(here, "../components/UsageSection.tsx"), "utf8");
 const usageDesk = readFileSync(join(here, "../components/UsageDesk.tsx"), "utf8");
@@ -418,9 +418,8 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(ko["connectedApps.unavailable"]).not.toMatch(/temporarily unavailable/);
     expect("room.manageMembersTitle" in en).toBe(false);
     expect("room.manageMembersTitle" in ko).toBe(false);
-    expect(en["room.manageMembersOf"]).toBe("Manage members of {name}");
-    expect(ko["room.manageMembersOf"]).toBe("{name}의 구성원 관리");
-    expect(ko["room.manageMembersOf"]).not.toMatch(/Manage members of/);
+    expect(en["room.details"]).toBe("Room Details");
+    expect(ko["room.details"]).toBe("채팅방 세부 정보");
     expect(en["bot.details"]).toBe("Bot Details");
     expect(ko["bot.details"]).toBe("봇 세부 정보");
     expect(en["bot.collapseDetails"]).toBe("Collapse Bot Details");
@@ -436,11 +435,8 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(pluginsPanel).not.toMatch(/>Connected apps</);
     expect(pluginsPanel).not.toMatch(/aria-label="Connected apps view"/);
     expect(pluginsPanel).not.toMatch(/temporarily unavailable\. You can retry/);
-    expect(manageMembers).toContain('t("room.manageMembers")');
-    expect(manageMembers).toContain('t("room.manageMembersOf"');
-    expect(manageMembers).not.toContain("room.manageMembersTitle");
-    expect(manageMembers).not.toMatch(/>Manage Members</);
-    expect(manageMembers).not.toMatch(/Manage members of \$\{group\.name\}/);
+    expect(roomDetails).toContain('t("room.details")');
+    expect(roomDetails).not.toMatch(/>Room details</);
     expect(settingsPanel).not.toContain('t("chrome.connectedApps")');
     expect(settingsPanel).not.toContain("connectedAppsEnabled");
     expect(settingsPanel).toContain('t("bot.details")');
@@ -807,7 +803,7 @@ describe("sidebar empty message search", () => {
     expect(Object.hasOwn(catalogs.en, "keep this query")).toBe(false);
   });
 
-  it("wires those phrases into SearchResults and Manage Members without t(query)", () => {
+  it("wires those phrases into SearchResults without t(query)", () => {
     expect(searchResults).toContain('t("palette.messages")');
     expect(searchResults).toContain('t("search.messagesCount"');
     expect(searchResults).toContain('t("search.noMatch"');
@@ -816,10 +812,6 @@ describe("sidebar empty message search", () => {
     expect(searchResults).not.toMatch(/Messages\{hits/);
     expect(searchResults).toContain('t("search.noMatch", { query: q })');
     expect(searchResults).not.toMatch(/\bt\(\s*(q|query)\s*\)/);
-    expect(manageMembers).toContain('t("createBot.cancel")');
-    expect(manageMembers).toContain('t("room.save")');
-    expect(manageMembers).not.toMatch(/>Cancel</);
-    expect(manageMembers).not.toMatch(/Save\{memberIds/);
   });
 });
 

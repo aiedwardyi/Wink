@@ -7,6 +7,7 @@ import { nextBulletin } from "./room-bulletin";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const groupView = readFileSync(join(here, "../components/GroupView.tsx"), "utf8");
+const roomDetails = readFileSync(join(here, "../components/RoomDetailsPanel.tsx"), "utf8");
 
 describe("nextBulletin", () => {
   it("skips an unchanged draft", () => {
@@ -24,8 +25,8 @@ describe("nextBulletin", () => {
 });
 
 describe("channel bulletin editor", () => {
-  it("does not commit on blur", () => {
-    expect(groupView).toContain("saveBulletin");
-    expect(groupView).not.toMatch(/onBlur=\{[^}]*saveBulletin/);
+  it("lives in Room details and saves as you leave it, like Bot details fields", () => {
+    expect(groupView).not.toContain("saveBulletin");
+    expect(roomDetails).toContain("onBlur={saveBulletin}");
   });
 });
