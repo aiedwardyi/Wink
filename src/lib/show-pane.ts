@@ -12,6 +12,16 @@ export interface ShowItem {
   src?: string;
 }
 
+/** The desktop app copies a bot's file through its save dialog; elsewhere the browser downloads it. */
+export function saveFile(src: string, name: string, path?: string) {
+  const save = path ? window.ogb?.saveFile : undefined;
+  if (save) return void save(path!).catch(() => {});
+  const link = document.createElement("a");
+  link.href = src;
+  link.download = name;
+  link.click();
+}
+
 let showing: ShowItem | null = null;
 let media: string | null = null;
 const last = new Map<string, ShowItem>();

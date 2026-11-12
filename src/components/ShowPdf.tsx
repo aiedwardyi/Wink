@@ -5,7 +5,8 @@ import worker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 import { useI18n } from "@/lib/i18n";
 
-GlobalWorkerOptions.workerSrc = worker;
+// Older builds served this file with a type a module worker refuses, cached for a year.
+GlobalWorkerOptions.workerSrc = `${worker}?v=2`;
 
 /** One page at a time, drawn sharp and scaled down to fit. */
 export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady(): void; onFail(): void }) {

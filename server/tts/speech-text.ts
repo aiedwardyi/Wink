@@ -45,6 +45,14 @@ function shortenPaths(text: string): string {
   return text.replace(/(?:[\w.@-]+\/){1,}([\w.-]+\.\w{1,6})\b/g, "$1");
 }
 
+/** A full path, an id or a long number is for the eye: the voice points to the chat. */
+function pointToChat(text: string): string {
+  const ko = /[가-힣]/.test(text);
+  return text
+    .replace(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|]*[^\s"'`<>|.,;:!?)]/g, ko ? "채팅의 경로" : "the path in the chat")
+    .replace(/\b(?=[\da-f-]*\d)(?=[\da-f-]*[a-f])[\da-f]{7,}(?:-[\da-f]{4,})*\b|\b\d{7,}\b/gi, ko ? "채팅에 있는 값" : "the one in the chat");
+}
+
 /** Trailing punctuation that already ends a sentence. */
 const ENDS_SENTENCE = /[.!?:;]\s*$/;
 
@@ -102,6 +110,7 @@ export function speakable(input: string): string {
   // checkboxes read as literal brackets otherwise
   text = text.replace(/\[[ xX]\]\s*/g, "");
 
+  text = pointToChat(text);
   text = shortenPaths(text);
 
   // emoji and the pictographic ranges: a voice either ignores them or,

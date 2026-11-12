@@ -1,4 +1,5 @@
 // Gemini Live over a WebSocket opened with the PC's 1-use token; the setup is locked in the token.
+import { LIVE_GENERATION } from "../../../shared/live-call";
 import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
 
 export function toBase64(bytes: Uint8Array): string {
@@ -63,12 +64,14 @@ export function route(msg: ServerMessage, events: LiveEvents, turn: { answering:
 
 export class GeminiLive implements LiveEngine {
   private ws: WebSocket | null = null;
+  private context: string[] = [];
 
   connect(session: LiveSession, events: LiveEvents) {
     const ws = new WebSocket(`${session.url}?access_token=${encodeURIComponent(session.token)}`);
     const turn = { answering: false };
     this.ws = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ setup: { model: `models/${session.model}`, ...(session.handle ? { sessionResumption: { handle: session.handle } } : {}) } }));
+    // The token lock alone let turns open in a default voice, so every setup names it too.
+    ws.onopen = () => ws.send(JSON.stringify({ setup: { model: `models/${session.model}`, generationConfig: LIVE_GENERATION, ...(session.handle ? { sessionResumption: { handle: session.handle } } : {}) } }));
     ws.onmessage = async (event) => {
       const text = typeof event.data === "string" ? event.data : await (event.data as Blob).text();
       if (this.ws !== ws) return;
@@ -97,12 +100,12 @@ export class GeminiLive implements LiveEngine {
   }
 
   sendText(text: string) {
-    this.send({ realtimeInput: { text } });
+    this.send({ realtimeInput: { text: [...this.context.splice(0), text].join("\n\n") } });
   }
 
-  // Appended to history with no reply; send only while quiet, since it can cut off audio still playing.
+  // A lone clientContent mid-call leaves the turn open and the voice stops answering speech, so context rides the next text.
   sendContext(text: string) {
-    this.send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: false } });
+    this.context.push(text);
   }
 
   sendToolResult(id: string, name: string, result: unknown) {

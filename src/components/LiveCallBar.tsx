@@ -150,7 +150,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   const configured = Boolean(state.config?.gemini?.configured);
   const [fresh, setFresh] = useState(() => !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
-  const intro = (fresh && configured) || (snap.status === "needsKey" && configured);
+  const intro = (fresh && configured && !state.config?.gemini?.introSeen) || (snap.status === "needsKey" && configured);
   const introShown = usePresence(intro);
   const messages = visibleMessages(bot);
 
