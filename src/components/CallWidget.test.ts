@@ -242,6 +242,19 @@ describe("call voice in Settings", () => {
     }
   });
 
+  it("labels the header call button in Korean", async () => {
+    await mount(atlas);
+    applyLocale("ko");
+    try {
+      await render(atlas);
+      await act(async () => button(host, "Atlas 통화 시작")!.click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      expect(button(host, "Atlas 통화 끊기")).not.toBeNull();
+    } finally {
+      applyLocale("en");
+    }
+  });
+
   it("previews without selecting, one clip at a time, loading none until asked", async () => {
     await mount(atlas);
     expect(fakes.clips).toHaveLength(0);

@@ -962,7 +962,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
-  const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
+  const liveCallLabel = t(onLiveCall ? "chat.hangUpBot" : "chat.callBot", { name: bot.name });
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
