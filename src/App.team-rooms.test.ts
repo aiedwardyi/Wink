@@ -385,8 +385,21 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "People", "Attach a file"]);
+    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "Show and media", "People", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
+  });
+
+  it("opens the room's Media from its header and shuts it again", async () => {
+    const id = "F".repeat(24);
+    // the sidebar folds for the pane, and happy-dom reports a canceled fold as unhandled
+    const matchMedia = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : matchMedia(query));
+    await boot({ groups: [teamRoom()], route: (call) => call.path === "/api/rooms/r1/files" ? Response.json({ files: [{ id, name: "map.png", type: "image/png", bytes: 2048, at: 1, sender: "Edward" }], used: 0, capacity: 1, error: null }) : undefined });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    await click(button("Show and media"));
+    await vi.waitFor(() => expect($("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id}/preview`));
+    await click(button("Show and media"));
+    await vi.waitFor(() => expect($("[data-show-media]")).toBeNull());
   });
 
   it("shows the room's one code to copy with no name step, lists who joined, and removes them", async () => {

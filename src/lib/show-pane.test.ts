@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, showableLinks, showItem, showKind, useAutoShow, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, showableLinks, showItem, showKind, showMedia, togglePane, useAutoShow, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -59,10 +59,12 @@ it("does not open again after a close in the same turn, and does on the next tur
 let host: HTMLElement;
 let root: Root;
 let shown: ShowItem | null = null;
+let media: string | null = null;
 
 function Probe({ thread, messages, free }: { thread: string; messages: Message[]; free: boolean }) {
   useAutoShow(thread, messages, free);
   shown = useShowItem();
+  media = useMediaThread();
   return null;
 }
 
@@ -72,6 +74,7 @@ beforeEach(() => {
   host = document.createElement("div");
   root = createRoot(host);
   shown = null;
+  media = null;
 });
 afterEach(() => { act(() => root.unmount()); act(() => closeShow()); });
 
@@ -97,4 +100,39 @@ it("a card tap shows a file again after a close", async () => {
   await act(async () => closeShow());
   await act(async () => showItem({ threadId: "t1", path: "C:\\work\\launch-deck.pdf", kind: "pdf" }));
   expect(shown?.path).toBe("C:\\work\\launch-deck.pdf");
+});
+
+const pdf: ShowItem = { threadId: "t1", path: "C:\\work\\launch-deck.pdf", kind: "pdf" };
+const fresh: ShowItem = { ...pdf, threadId: "t5" };
+
+it("the header button opens Media with nothing shown, the last file after one, and closes again", async () => {
+  await render("t5", []);
+  await act(async () => togglePane("t5"));
+  expect([shown, media]).toEqual([null, "t5"]);
+  await act(async () => togglePane("t5"));
+  expect([shown, media]).toEqual([null, null]);
+  await act(async () => showItem(fresh));
+  await act(async () => closeShow());
+  await act(async () => togglePane("t5"));
+  expect([shown, media]).toEqual([fresh, null]);
+  await act(async () => togglePane("t5"));
+  expect([shown, media]).toEqual([null, null]);
+  await act(async () => togglePane("t6"));
+  expect([shown, media]).toEqual([null, "t6"]);
+});
+
+it("switching tabs keeps the shown file for Show", async () => {
+  await render("t1", []);
+  await act(async () => showItem(pdf));
+  await act(async () => showMedia("t1"));
+  expect([shown, media]).toEqual([pdf, "t1"]);
+  await act(async () => showItem(pdf));
+  expect([shown, media]).toEqual([pdf, null]);
+});
+
+it("does not open on its own over the Media tab", async () => {
+  await render("t1", [user("u1")]);
+  await act(async () => showMedia("t1"));
+  await render("t1", [user("u1"), deck]);
+  expect([shown, media]).toEqual([null, "t1"]);
 });

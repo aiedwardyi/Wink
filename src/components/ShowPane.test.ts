@@ -127,5 +127,5 @@ it("shares one spot with the checker", async () => {
   expect(seen.at(-1)).toEqual([true, false]);
   const app = readFileSync("src/App.tsx", "utf8");
   expect(app).toContain('panel === "show" ? closeShow()');
-  expect(app).toContain('...(show ? ["show" as const] : [])');
+  expect(app).toContain('...(show || media ? ["show" as const] : [])');
 });
