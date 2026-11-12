@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { landOnSearchHit, restoreChatChrome, scrollElementIntoContainer } from "./focus-message";
+import { landInTranscript, landOnSearchHit, restoreChatChrome, scrollElementIntoContainer } from "./focus-message";
 import type { SearchHit } from "./search-hit";
 
 function box(top: number, height: number, scrollTop = 0) {
@@ -46,6 +46,48 @@ describe("scrollElementIntoContainer", () => {
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: previous });
     }
+  });
+});
+
+describe("landInTranscript", () => {
+  function rows(count: number) {
+    const all = Array.from({ length: count }, () => {
+      const marks = new Set<string>();
+      return {
+        marks,
+        previousElementSibling: null as unknown,
+        nextElementSibling: null as unknown,
+        setAttribute: (name: string) => marks.add(name),
+        removeAttribute: (name: string) => marks.delete(name),
+      };
+    });
+    all.forEach((row, i) => {
+      row.previousElementSibling = all[i - 1] ?? null;
+      row.nextElementSibling = all[i + 1] ?? null;
+    });
+    return all;
+  }
+
+  it("draws the target's neighbors before measuring, then re-aligns once rows that came into view have drawn", () => {
+    const all = rows(40);
+    const wrapper = all[20]!;
+    const scroller = box(0, 600);
+    let top = 900;
+    const drawn: number[][] = [];
+    const target = {
+      getBoundingClientRect: () => {
+        drawn.push(all.flatMap((row, i) => (row.marks.has("data-landing") ? [i] : [])));
+        return { top: top - scroller.scrollTop, height: 40 };
+      },
+    };
+    const frames: Array<() => void> = [];
+    landInTranscript(scroller as unknown as HTMLElement, wrapper as unknown as Element, target as unknown as Element, (run) => frames.push(run));
+    expect(drawn[0]).toEqual(Array.from({ length: 25 }, (_, i) => i + 8));
+    expect(scroller.scrollTop).toBe(620);
+    top = 1000;
+    while (frames.length) frames.shift()!();
+    expect(scroller.scrollTop).toBe(720);
+    expect(all.some((row) => row.marks.size)).toBe(false);
   });
 });
 

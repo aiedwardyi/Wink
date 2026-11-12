@@ -54,7 +54,7 @@ async function digest(path: string): Promise<string> {
 
 export async function moveRoomFiles(raw: unknown): Promise<ReturnType<typeof roomFilesFolder>> {
   if (typeof raw !== "string" || !isAbsolute(raw) || roomFilesBusy()) throw failure();
-  const old = roomFilesRoot();
+  const { path: old, error } = roomFilesFolder();
   // A picked folder holds the user's own files; room files live in a folder of their own inside it.
   const next = basename(resolve(raw)) === NESTED ? resolve(raw) : join(resolve(raw), NESTED);
   if (next === old) return roomFilesFolder();
@@ -63,6 +63,17 @@ export async function moveRoomFiles(raw: unknown): Promise<ReturnType<typeof roo
     return path === "" || (!path.startsWith("..") && !isAbsolute(path));
   };
   if (inside(old, next) || inside(next, old)) throw failure();
+  // An unplugged drive's files can't come along, so only an empty folder may replace it.
+  if (error) {
+    if (existsSync(next) && (await readdir(next).catch(() => [""])).length) throw failure();
+    try {
+      await mkdir(next, { recursive: true, mode: 0o700 });
+      writeFileAtomic(setting(), JSON.stringify({ path: next }), { mode: 0o600 });
+    } catch {
+      throw failure();
+    }
+    return roomFilesFolder();
+  }
   const copied: Array<{ source: string; target: string }> = [];
   const removed: typeof copied = [];
   const previous = existsSync(setting()) ? readFileSync(setting(), "utf8") : null;

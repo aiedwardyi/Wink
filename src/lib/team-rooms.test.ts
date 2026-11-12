@@ -165,6 +165,7 @@ describe("sending to a room", () => {
     for (const [status, problem] of [
       [413, { key: "teamRoom.tooBig", vars: { name: "a.png" } }],
       [415, { key: "teamRoom.fileType" }],
+      [429, { key: "teamRoom.tooFast" }],
       [500, { key: "teamRoom.sendFailed" }],
     ] as const) {
       const fetch = vi.fn(async () => new Response(JSON.stringify({ error: "no" }), { status }));
@@ -174,5 +175,39 @@ describe("sending to a room", () => {
     }
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     expect(await sendToRoom("/api/rooms/r1", "hi", [], "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
+  });
+
+  it("uploads only the files a failed send didn't finish when it is retried", async () => {
+    const files = [file("a.png", "image/png"), file("b.pdf", "application/pdf")];
+    const uploads: string[] = [];
+    let failB = true;
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (!path.includes("/files?")) return Response.json({ ok: true });
+      const query = new URLSearchParams(path.split("?")[1]);
+      uploads.push(`${query.get("name")} ${query.get("uploadId")}`);
+      if (query.get("name") === "b.pdf" && failB) return Response.json({ error: "no" }, { status: 500 });
+      return Response.json({ file: { id: `id-${query.get("name")}` } });
+    }));
+    expect(await sendToRoom("/api/rooms/r1", "look", files, "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
+    failB = false;
+    expect(await sendToRoom("/api/rooms/r1", "look", files, "send-0123456789abcdef")).toBeNull();
+    expect(uploads.map((line) => line.split(" ")[0])).toEqual(["a.png", "b.pdf", "b.pdf"]);
+    expect(uploads[2]!.split(" ")[1]).toBe(uploads[1]!.split(" ")[1]);
+  });
+
+  it("uploads again once the room no longer has a file it took", async () => {
+    const files = [file("a.png", "image/png")];
+    let uploads = 0;
+    let gone = false;
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path.includes("/files?")) return Response.json({ file: { id: `id-${++uploads}` } });
+      return gone ? Response.json({ error: "no such file in this room" }, { status: 404 }) : Response.json({ ok: true });
+    }));
+    expect(await sendToRoom("/api/rooms/r1", "", files, "send-0123456789abcdef")).toBeNull();
+    gone = true;
+    expect(await sendToRoom("/api/rooms/r1", "", files, "send-0123456789abcdef")).toEqual({ key: "teamRoom.sendFailed" });
+    gone = false;
+    expect(await sendToRoom("/api/rooms/r1", "", files, "send-0123456789abcdef")).toBeNull();
+    expect(uploads).toBe(2);
   });
 });
