@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRooms, useLoadedJoinedRooms } from "@/lib/joined-rooms";
 import { loadJoinedRoomLayout, ROOM_LAYOUT_EVENT, saveJoinedRoomLayout, type JoinedRoomLayout } from "@/lib/sidebar-order";
-import { joinedPhase, joinedRoomIdOf, joinedSelection } from "@/lib/team-rooms";
+import { joinedPhase, joinedRoomBase, joinedRoomIdOf, joinedSelection, roomPictureUrl } from "@/lib/team-rooms";
 import { useStore, type Group } from "@/state/store";
 
 import { GroupListItem } from "./SidebarConversations";
@@ -47,5 +47,5 @@ export function SidebarGroupListItem(props: ComponentProps<typeof GroupListItem>
   const roomId = joinedRoomIdOf(props.group.id);
   const room = useLoadedJoinedRooms().find((each) => each.roomId === roomId);
   if (roomId === null) return <GroupListItem {...props} />;
-  return <GroupListItem {...props} joined preview={props.group.bulletin} unread={room?.unread ?? 0} at={room?.lastEntry?.at} />;
+  return <GroupListItem {...props} joined picture={roomPictureUrl(joinedRoomBase(roomId), room?.state?.picture)} preview={props.group.bulletin} unread={room?.unread ?? 0} at={room?.lastEntry?.at} />;
 }

@@ -707,6 +707,12 @@ describe("Team rooms for a teammate", () => {
     expect(store.selectedId).not.toBe("joined:r9");
   });
 
+  it("shows the host's room picture on a joined room's sidebar row", async () => {
+    const view = joinedView("joined", "live");
+    await boot({ route: (call) => call.path === "/api/joined/rooms" ? reply({ rooms: [{ ...view, state: { ...view.state, picture: "P".repeat(24) } }] }) : undefined });
+    await vi.waitFor(() => expect($("aside [data-joined-room-row] [data-room-picture] img")?.getAttribute("src")).toBe(`/api/joined/rooms/r9/picture?id=${"P".repeat(24)}`));
+  });
+
   it("keeps a wrong short code in its boxes, so one typo is one fix", async () => {
     await boot({
       route: (call) => {
