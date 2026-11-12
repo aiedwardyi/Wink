@@ -11,7 +11,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
-import { createRoom, roomPeople } from "./rooms/db.ts";
+import { createRoom, roomEntry, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { roomFile } from "./rooms/files.ts";
 import { createPeopleOnlyRoom, PEOPLE_ONLY_LINE, peopleOnlyRoom, peopleOnlyRoster } from "./rooms/people-only.ts";
@@ -332,6 +332,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         const file = typeof body.picture === "string" ? roomFile(existing.hosted.roomId, body.picture) : null;
         if (body.picture !== null && !file?.type.startsWith("image/")) return json(res, 400, { error: "picture must be a room image id" });
         patch.picture = file?.id;
+      }
+      if (body.notice !== undefined) {
+        if (!existing.hosted) return json(res, 400, { error: "not a team room" });
+        const entry = typeof body.notice === "string" && /^[\w-]{1,64}$/.test(body.notice) ? roomEntry(existing.hosted.roomId, body.notice) : null;
+        if (body.notice !== null && !entry) return json(res, 400, { error: "notice must be a room line id" });
+        patch.notice = entry ? { entryId: entry.id, by: "host", at: Date.now() } : undefined;
       }
       // one pinned message per room; null/"" clears. The id is not
       // validated against the transcript here - a pin whose message was

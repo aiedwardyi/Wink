@@ -180,7 +180,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await openRoom();
     for (const id of ["original", "own"]) {
       await menu(id);
-      expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["Reply", "Copy"]);
+      expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["Pin as notice"] : []), "Reply", "Copy"]);
       await click($("[data-menu-copy]"));
     }
     expect(writeText.mock.calls).toEqual([["PR #1304 머지했어요"], ["Ready"]]);
@@ -232,7 +232,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await act(async () => vi.advanceTimersByTime(499));
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => vi.advanceTimersByTime(1));
-    expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["답장", "복사", "텍스트 선택"]);
+    expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["공지로 등록"] : []), "답장", "복사", "텍스트 선택"]);
     await act(async () => { window.dispatchEvent(new Event("orbit:close-message-menu")); });
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => { row.dispatchEvent(event); vi.advanceTimersByTime(500); });

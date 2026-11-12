@@ -249,8 +249,16 @@ export interface GroupTaskRecord {
  * messages follow `defaultResponder`; explicit @mentions always override it.
  * The bulletin is the room's shared instructions — every member's turn gets
  * it as part of its system prompt. */
+/** A team room's pinned line; `by` is "host" or "person:<id>". */
+export interface RoomNotice {
+  entryId: string;
+  by: string;
+  at: number;
+}
+
 export interface GroupRecord {
   picture?: string;
+  notice?: RoomNotice;
   id: string;
   /** The active task's thread. Direct-message channels remain single-threaded. */
   threadId: ThreadId;
@@ -1095,7 +1103,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();
