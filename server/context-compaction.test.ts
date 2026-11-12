@@ -2437,6 +2437,18 @@ describe("summary grace context", () => {
     expect(result.estimatedTokens).toBeLessThanOrEqual(result.budgetTokens);
   });
 
+  it("prepares from the plan a send hands in, the same as planning again", async () => {
+    const messages = [...history(), message("current", "current request")];
+    const input = { messages, contextWindow: 200_000, taskRecordText: "Goal: preserve context", excludeIds: new Set(["current"]), summaryGrace };
+    const planned = await prepareModelContext(input);
+    expect(await prepareModelContext({ ...input, plan: planCompaction(input) })).toEqual(planned);
+
+    const earlier = planCompaction({ ...input, messages: messages.slice(0, 20) });
+    const handed = await prepareModelContext({ ...input, plan: earlier });
+    if (handed.status !== "ready") throw new Error(handed.status);
+    expect(handed.transcript).toHaveLength(20);
+  });
+
   it("keeps unknown, small, local, fresh, rewound, unseeded and recycle paths unchanged", async () => {
     const messages = history();
     const input = { messages, contextWindow: 200_000, taskRecordText: "Goal: preserve context" };

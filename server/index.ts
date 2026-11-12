@@ -4990,6 +4990,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       nativeAt,
       ...native,
       summaryGrace: grace,
+      plan: grace ? planBeforeSummary : undefined,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),

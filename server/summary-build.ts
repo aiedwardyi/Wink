@@ -1,4 +1,4 @@
-import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction, planSummaryGrace, repairTarget, type NativePromptSize } from "./context-compaction.ts";
+import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction, planSummaryGrace, repairTarget, type CompactionNeeded, type NativePromptSize } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import type { Message, Store } from "./store.ts";
 import { abortable, logSummaryCall, type SummaryCallContext } from "./summary-repair.ts";
@@ -11,6 +11,8 @@ const BUILD_CALL_TIMEOUT_MS = 240_000;
 const BUILD_RUN_TIMEOUT_MS = 8 * 60_000;
 // Good summaries take 23-81 s, so a shorter call only delays the fallback the repair replaces later.
 const INLINE_FLOOR_MS = 60_000;
+// The engine's own compaction runs slower beside a build call, and a native engine never reads the row back.
+const NATIVE_QUIET_MS = 2_000;
 const prefixKey = (messages: Message[]) => JSON.stringify(messages.map((message) => message.kind === "screen" ? { ...message, png: undefined } : message));
 
 type BuildInstance = Pick<ProviderInstance, "driverKind" | "generateText" | "textModel" | "textTimeoutMs">;
@@ -57,7 +59,7 @@ export interface SummaryBuild {
     summarizes: () => boolean,
     options?: { sendId?: string; grace?: Parameters<typeof planSummaryGrace>[0]; onWait?: (wait: SummaryWait) => void },
   ): Promise<number>;
-  /** Resolves once the queue is empty. */
+  /** Resolves once no build is running; a parked one stays queued. */
   idle(): Promise<void>;
   dispose(): void;
 }
@@ -75,6 +77,14 @@ interface Built {
   nativeLast?: number;
 }
 
+/** What a build sends, read when its turn settled: a wait changes when the call runs, never the summary. */
+interface Ready {
+  instance: BuildInstance;
+  taskRecordText: string;
+  plan: CompactionNeeded;
+  nativeLast?: number;
+}
+
 interface BuildJob {
   botId: string;
   threadId: string;
@@ -82,6 +92,10 @@ interface BuildJob {
   leafId: string | null;
   /** read with `messages`: a queued job can outlast the engine's compaction, and a later size would cancel it */
   settledPrompt: NativePrompt | undefined;
+  /** a native build waiting for a chat with no turn; `rests` voids the quiet timers a later settle replaced */
+  ready?: Ready;
+  parked?: boolean;
+  rests?: number;
 }
 
 interface ActiveRun {
@@ -169,22 +183,43 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     return place(built, true);
   };
 
-  const retryLater = (botId: string, threadId: string) => {
+  const later = (ms: number, then: () => void) => {
     const timer = setTimeout(() => {
       retries.delete(timer);
-      onSettled(botId, threadId);
-    }, BUILD_RETRY_MS);
+      then();
+    }, ms);
     timer.unref?.();
     retries.add(timer);
   };
 
-  const run = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController) => {
-    if (deps.busy(botId, threadId) && !graceThreads.has(threadId)) return;
+  const retryLater = (botId: string, threadId: string) => later(BUILD_RETRY_MS, () => onSettled(botId, threadId));
+
+  const unpark = (job: BuildJob) => {
+    job.rests = (job.rests ?? 0) + 1;
+    job.parked = false;
+    pump();
+  };
+
+  /** Runs a parked build once its chat has stayed quiet; a turn that starts first keeps it parked. */
+  const rest = (job: BuildJob) => {
+    const rests = job.rests = (job.rests ?? 0) + 1;
+    later(NATIVE_QUIET_MS, () => {
+      if (job.rests === rests) unpark(job);
+    });
+  };
+
+  const park = (job: BuildJob) => {
+    job.parked = true;
+    queue.push(job);
+    if (!deps.busy(job.botId, job.threadId)) rest(job);
+  };
+
+  const prepare = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController): Promise<Ready | null> => {
+    if (deps.busy(botId, threadId) && !graceThreads.has(threadId)) return null;
     // a build would chain from the fallback and void its repair
-    if (!leafId || !eligible(leafId) || repairTarget(messages)) return;
+    if (!leafId || !eligible(leafId) || repairTarget(messages)) return null;
     const inputs = await deps.sendInputs(botId, threadId, messages);
-    if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return;
-    const { instance } = inputs;
+    if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return null;
     const nativePrompt = inputs.nativeAt && settledPrompt?.cursor === inputs.cursor ? settledPrompt : undefined;
     const plan = planCompaction({
       messages,
@@ -197,7 +232,20 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       userName: deps.userName(),
       referenceMessages: deps.store.messagesFor(threadId),
     });
-    if (!plan.needed) return;
+    return plan.needed ? { instance: inputs.instance, taskRecordText: inputs.taskRecordText, plan, nativeLast: nativePrompt?.last } : null;
+  };
+
+  const run = async (job: BuildJob, controller: AbortController) => {
+    const { botId, threadId, messages, leafId } = job;
+    const ready = job.ready ?? await prepare(job, controller);
+    if (!ready || !leafId) return;
+    if (ready.nativeLast !== undefined && (!job.ready || deps.busy(botId, threadId))) return park(Object.assign(job, { ready }));
+    const { instance, plan } = ready;
+    // a send that summarized for itself while this build waited: the row would be dropped after a wasted call
+    if (job.ready && (applicableCompaction(deps.store.activePath(threadId))?.messageId ?? null) !== (plan.previous?.messageId ?? null)) {
+      graceThreads.delete(threadId);
+      return;
+    }
     const coveredIndex = messages.findIndex((message) => message.id === plan.coveredThrough.id);
     const prefix = prefixKey(messages.slice(0, coveredIndex + 1));
     const previousValue = JSON.stringify(plan.previous?.value ?? null);
@@ -216,7 +264,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     const result = await buildCompaction({
       plan,
       messages,
-      taskRecordText: inputs.taskRecordText,
+      taskRecordText: ready.taskRecordText,
       signal: controller.signal,
       summarize: (prompt) =>
         abortable(instance.generateText!(prompt, { timeoutMs: BUILD_CALL_TIMEOUT_MS, signal: controller.signal }), controller.signal),
@@ -224,7 +272,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     }).finally(() => clearTimeout(timer));
     if (disposed) return;
     if (result.status === "ready") {
-      land({ botId, threadId, leafId, leafIndex: messages.length - 1, previousId: plan.previous?.messageId ?? null, previousValue, prefix, coveredIndex, compaction: result.compaction, nativeLast: nativePrompt?.last });
+      land({ botId, threadId, leafId, leafIndex: messages.length - 1, previousId: plan.previous?.messageId ?? null, previousValue, prefix, coveredIndex, compaction: result.compaction, nativeLast: ready.nativeLast });
       return;
     }
     graceThreads.delete(threadId);
@@ -235,8 +283,9 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
 
   const pump = () => {
     if (active || disposed) return;
-    const next = queue.shift();
-    if (!next) return;
+    const at = queue.findIndex((job) => !job.parked);
+    if (at < 0) return;
+    const next = queue.splice(at, 1)[0]!;
     const current: ActiveRun = { threadId: next.threadId, done: Promise.resolve(), controller: new AbortController() };
     active = current;
     current.done = run(next, current.controller)
@@ -253,6 +302,14 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     if (disposed) return;
     const pending = held.get(threadId);
     if (pending && land(pending)) return;
+    const parked = queue.find((item) => item.threadId === threadId && item.parked);
+    if (parked) {
+      const last = deps.store.taskByThread(botId, threadId)?.nativePrompt?.last ?? Number.POSITIVE_INFINITY;
+      // a smaller prompt means the engine has compacted, so the build stops waiting for quiet
+      if (last < (parked.ready?.nativeLast ?? 0)) unpark(parked);
+      else rest(parked);
+      return;
+    }
     if (active?.threadId === threadId || queue.some((item) => item.threadId === threadId)) return;
     if (deps.busy(botId, threadId)) return;
     if (!eligible(deps.store.activeLeaf(threadId))) return;

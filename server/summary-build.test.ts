@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
+import { buildCompaction, isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
 import { TYPED_VALUES_HEADER } from "./typed-values.ts";
@@ -36,7 +37,7 @@ const requestBlock = valuesBlock(Array.from({ length: 36 }, (_, index) => `reque
 function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>) {
   const threads = new Map<string, Message[]>();
   const appended: Array<{ threadId: string; id: string; compaction: ContextCompactionV1 }> = [];
-  const state = { busy: false, generateText, window: WINDOW, nativeAt: undefined as number | null | undefined, nativePrompt: undefined as { last: number; growth: number } | undefined, cursor: "session" };
+  const state = { busy: false, generateText, window: WINDOW, nativeAt: undefined as number | null | undefined, nativePrompt: undefined as { last: number; growth: number } | undefined, cursor: "session", record: "Goal: build" };
   const store = {
     taskByThread: () => ({ nativePrompt: state.nativePrompt && { cursor: "session", first: 1_000, ...state.nativePrompt } }) as never,
     activePath: (threadId: string) => [...(threads.get(threadId) ?? [])],
@@ -54,7 +55,7 @@ function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) 
     sendInputs: async () => ({
       instance: { driverKind: "claude", generateText: state.generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 },
       contextWindow: state.window,
-      taskRecordText: "Goal: build",
+      taskRecordText: state.record,
       nativeAt: state.nativeAt,
       cursor: state.cursor,
     }),
@@ -85,6 +86,7 @@ function deferred() {
 }
 
 const tick = () => vi.advanceTimersByTimeAsync(0);
+const quiet = () => vi.advanceTimersByTimeAsync(2_000);
 const claudeSend = { generateText: async () => "SUMMARY\ninline", textTimeoutMs: 90_000 };
 const grace = {
   knownWindow: WINDOW,
@@ -108,6 +110,19 @@ const graceInputs = (messages: Message[]) => ({
 const nativeTurn = (id: string, text: string) => [message(`${id}-u`, text), message(`${id}-b`, "noted", { role: "bot" })];
 const harbor = (tokens: number) => "the harbor lights came on early and the tide was calm.\n".repeat(Math.ceil((tokens * 3) / 55));
 const gate = { window: 100_000, nativeAt: 67_000 };
+const nearPrompt = { last: 58_114, growth: 24_373 };
+const nearThread = () => [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))];
+const digest = (prompt: string) => `SUMMARY
+kept ${createHash("sha256").update(prompt).digest("hex")}`;
+// What a build that runs the moment the turn settles sends and lands, from the pure planner.
+async function settledBuild(messages: Message[]) {
+  let prompt = "";
+  const plan = planCompaction({ messages, contextWindow: gate.window, nativeAt: gate.nativeAt, nativePrompt: nearPrompt, userName: "User" });
+  if (!plan.needed) throw new Error("the fixture is not near the engine's point");
+  const built = await buildCompaction({ plan, messages, taskRecordText: "Goal: build", summarize: async (text) => digest(prompt = text) });
+  if (built.status !== "ready") throw new Error("the fixture did not build");
+  return { prompt, summary: built.compaction.summary };
+}
 
 describe("summary build after settle", () => {
   beforeEach(() => {
@@ -668,7 +683,7 @@ describe("summary build after settle", () => {
     threads.get("t")!.push(...nativeTurn("fill1", harbor(22_800)));
     state.nativePrompt = { last: 58_114, growth: 24_373 };
     build.onSettled("bot", "t");
-    await tick();
+    await quiet();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.prompt).toContain("BISON-5861");
     expect(calls[0]!.prompt).not.toContain("harbor lights");
@@ -681,6 +696,105 @@ describe("summary build after settle", () => {
     expect(appended).toHaveLength(1);
     expect(appended[0]!.compaction).toMatchObject({ summary: `BISON-5861 kept\n\n${valuesBlock(["remember BISON-5861"])}`, coveredThroughId: "plant-b", firstKeptId: "fill1-u" });
     expect(threads.get("t")!.map((row) => row.id)).toEqual(["plant-u", "plant-b", "fill1-u", "fill1-b", "fill2-u", "build-0"]);
+  });
+
+  it("sends the settle's prompt and lands its summary whenever the build runs", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    const settled = await settledBuild(nearThread());
+
+    build.onSettled("bot", "t");
+    await quiet();
+    expect(calls.map((call) => call.prompt)).toEqual([settled.prompt]);
+    calls[0]!.resolve(digest(calls[0]!.prompt));
+    await build.idle();
+    expect(appended.map((row) => row.compaction.summary)).toEqual([settled.summary]);
+  });
+
+  it("starts a native build once its chat has stayed quiet", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+
+    build.onSettled("bot", "t");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(calls).toHaveLength(0);
+    expect(build.inflight("t")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps a native build off the turn the engine compacts in, with the settle's prompt", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    const settled = await settledBuild(nearThread());
+    build.onSettled("bot", "t");
+    await tick();
+
+    state.busy = true;
+    threads.get("t")!.push(message("c-u", "next request"));
+    const inputs = { plan: planCompaction({ messages: threads.get("t")!, contextWindow: gate.window, nativeAt: gate.nativeAt }), taskRecordText: "Goal: build" };
+    expect(await build.settle("t", claudeSend, 90_000, () => false, { grace: { ...inputs, grace: { ...grace, nativeAt: gate.nativeAt } } })).toBe(0);
+    await quiet();
+    expect(calls).toHaveLength(0);
+    expect(build.inflight("t")).toBe(true);
+
+    threads.get("t")!.push(message("c-b", "noted", { role: "bot" }));
+    Object.assign(state, { busy: false, nativePrompt: { last: 12_000, growth: -46_114 }, record: "Goal: moved on" });
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls.map((call) => call.prompt)).toEqual([settled.prompt]);
+    calls[0]!.resolve(digest(calls[0]!.prompt));
+    await build.idle();
+    expect(appended.map((row) => row.compaction.summary)).toEqual([settled.summary]);
+    expect(threads.get("t")!.map((row) => row.id)).toEqual(["a-u", "a-b", "b-u", "b-b", "c-u", "c-b", "build-0"]);
+  });
+
+  it("waits out a turn the engine did not compact in, then builds once the chat is quiet", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    build.onSettled("bot", "t");
+    await tick();
+
+    state.busy = true;
+    await quiet();
+    threads.get("t")!.push(...nativeTurn("c", "short"));
+    Object.assign(state, { busy: false, nativePrompt: { last: 59_500, growth: 1_386 } });
+    build.onSettled("bot", "t");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.prompt).not.toContain("short");
+  });
+
+  it("makes no call for a native build that waited while the send summarized for itself", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, appended, state, build } = setup(generateText);
+    Object.assign(state, gate, { nativePrompt: nearPrompt });
+    threads.set("t", nearThread());
+    build.onSettled("bot", "t");
+    // the send claims its turn before the build has read its inputs
+    state.busy = true;
+    const inputs = { plan: planCompaction({ messages: threads.get("t")!, contextWindow: gate.window, nativeAt: gate.nativeAt }), taskRecordText: "Goal: build" };
+    await build.settle("t", claudeSend, 90_000, () => true, { grace: { ...inputs, grace: { ...grace, fresh: true, nativeAt: gate.nativeAt } } });
+    threads.get("t")!.push(message("inline", "", { role: "bot", kind: "compaction", compaction: {
+      v: 1, summary: "the send's own summary", coveredThroughId: "a-b", firstKeptId: "b-u",
+      contextWindow: gate.window, estimatedTokensBefore: 1_000, sourceMessageCount: 2,
+    } }), ...nativeTurn("c", "short"));
+    state.busy = false;
+    build.onSettled("bot", "t");
+    await quiet();
+    expect(calls).toHaveLength(0);
+    expect(appended).toEqual([]);
+    expect(build.inflight("t")).toBe(false);
   });
 
   it.each([
@@ -701,6 +815,7 @@ describe("summary build after settle", () => {
     threads.set("t", messages);
 
     build.onSettled("bot", "t");
+    await quiet();
     await build.idle();
 
     expect(state.busy).toBe(true);
@@ -716,6 +831,7 @@ describe("summary build after settle", () => {
       threads.get("t")!.push(...nativeTurn(id, harbor(9_000)));
       state.nativePrompt = { last, growth };
       build.onSettled("bot", "t");
+      await quiet();
       await build.idle();
       return appended.length;
     };
@@ -740,6 +856,7 @@ describe("summary build after settle", () => {
 
     threads.get("t")!.push(...nativeTurn("b", harbor(9_000)));
     build.onSettled("bot", "t");
+    await quiet();
     await build.idle();
     expect(appended).toHaveLength(1);
     expect(appended[0]!.compaction).toMatchObject({ coveredThroughId: "a-b", firstKeptId: "b-u" });
@@ -747,9 +864,11 @@ describe("summary build after settle", () => {
     generateText.mockClear();
     state.nativePrompt = { last: 20_245, growth: -37_869 };
     build.onSettled("bot", "t");
+    await quiet();
     await build.idle();
     state.nativePrompt = { last: 59_000, growth: 38_755 };
     build.onSettled("bot", "t");
+    await quiet();
     await build.idle();
     expect(generateText).not.toHaveBeenCalled();
     expect(appended).toHaveLength(1);
@@ -780,7 +899,7 @@ describe("summary build after settle", () => {
     it("still builds its checkpoint after the engine compacts", async () => {
       const { calls, appended, build } = await queuedThenCompacted(near());
       calls[0]!.resolve("SUMMARY\nother");
-      await tick();
+      await quiet();
       expect(calls).toHaveLength(2);
       calls[1]!.resolve("SUMMARY\nkept");
       await build.idle();
@@ -816,10 +935,12 @@ describe("summary build after settle", () => {
     threads.set("t", [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))]);
 
     build.onSettled("bot", "t");
+    await quiet();
     await build.idle();
     expect(generateText).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    await quiet();
     await build.idle();
     expect(generateText).toHaveBeenCalledTimes(2);
 
@@ -836,7 +957,7 @@ describe("summary build after settle", () => {
     Object.assign(state, gate, { nativePrompt: { last: 58_114, growth: 24_373 } });
     threads.set("t", [...nativeTurn("a", harbor(9_000)), ...nativeTurn("b", harbor(9_000))]);
     build.onSettled("bot", "t");
-    await tick();
+    await quiet();
     expect(calls).toHaveLength(1);
 
     state.busy = true;
@@ -984,6 +1105,7 @@ describe("summary build wiring", () => {
   it("builds first in the main fold, settles before prepare, and disposes on shutdown", () => {
     expect(index).toMatch(/summaryBuild\.onSettled\(bot\.id, event\.threadId\);\s*summaryRepair\.onSettled\(bot\.id, event\.threadId\);/);
     expect(index).toContain("const sessionResumes = planSummaryGrace(graceInputs).safe;");
+    expect(index).toContain("plan: grace ? planBeforeSummary : undefined,");
     expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
     expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
