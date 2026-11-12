@@ -2,6 +2,13 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.258] - 2026-11-13
+
+### Changed
+- Views, panels and call screens open faster the first time you press them.
+- Opening a chat on desktop skips a phone-only measure, so it opens a little quicker.
+- Pairing a browser for the first time no longer shows the onboarding cover or blank frames; the desktop app keeps the cover.
+
 ## [1.0.257] - 2026-11-13
 
 ### Added
