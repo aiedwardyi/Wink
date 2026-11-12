@@ -71,6 +71,9 @@ export const SKIN_IDS = [
   "inkwell",
   "graphite",
   "moss",
+  "precision-dimmed",
+  "bronze",
+  "dim-sand",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -144,6 +147,9 @@ export const SKINS: readonly Skin[] = [
   { id: "inkwell", name: "Inkwell" },
   { id: "graphite", name: "Graphite" },
   { id: "moss", name: "Moss" },
+  { id: "precision-dimmed", name: "Precision Dimmed" },
+  { id: "bronze", name: "Bronze" },
+  { id: "dim-sand", name: "Dim Sand" },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
@@ -158,6 +164,7 @@ export const LIGHT_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>([
   "blueprint",
   "wink-day",
   "paper-tape",
+  "dim-sand",
 ]);
 
 const TERMINAL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal"]);

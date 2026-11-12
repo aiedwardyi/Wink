@@ -99,7 +99,8 @@ describe("MemoryMap", () => {
     for (const { id } of SKINS) {
       expect(light.slice(0, light.indexOf(" .mm {")).includes(`[data-skin="${id}"]`), id).toBe(LIGHT_SKIN_IDS.has(id));
       const panel = hex(card(id)).map((c, i) => c * 0.92 + indigo[i] * 0.08);
-      const [hi, lo] = [lum(LIGHT_SKIN_IDS.has(id) ? lightInk : cyan), lum(panel)].sort((a, b) => b - a);
+      const own = css.match(new RegExp(`\\[data-skin="${id}"\\] \\.mm \\{ --mm-live-ink: (\\d+ \\d+ \\d+); \\}`))?.[1].split(" ").map(Number);
+      const [hi, lo] = [lum(own ?? (LIGHT_SKIN_IDS.has(id) ? lightInk : cyan)), lum(panel)].sort((a, b) => b - a);
       expect((hi + 0.05) / (lo + 0.05), id).toBeGreaterThanOrEqual(4.5);
     }
   });
