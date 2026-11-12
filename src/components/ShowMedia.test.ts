@@ -10,6 +10,11 @@ import type { Message } from "@/state/store";
 import { ShowPane } from "./ShowPane";
 
 vi.mock("./ShowPdf", () => ({ default: () => null }));
+const built = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/show-media", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/show-media")>();
+  return { ...real, chatMedia: (...args: Parameters<typeof real.chatMedia>) => { built.count++; return real.chatMedia(...args); } };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,7 +47,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); act(() => closeShow()); applyLocale("en"); delete window.ogb; vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); act(() => closeShow()); applyLocale("en"); delete window.ogb; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function Pane({ source, closing }: { source: MediaSource; closing?: boolean }) {
   const item = useShowItem();
@@ -109,6 +114,58 @@ it("loads older pages only once Media opens", async () => {
   await settle();
   expect(calls.filter((url) => url.includes("/messages?"))).toEqual(["/api/threads/t1/messages?limit=200&before=u1&pages=5"]);
   expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
+});
+
+function endlessHistory() {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    calls.push(url);
+    const before = new URL(url, "http://x").searchParams.get("before")!;
+    return Response.json({ messages: Array.from({ length: 1000 }, (_, n): Message => ({ id: `${before}-${n}`, role: "bot", kind: "text", at: 0, text: "old" })), hasMore: true });
+  }));
+}
+
+it("pages older history in on scroll, one batch at a time, up to a cap", async () => {
+  endlessHistory();
+  const box = { scrollHeight: 2000, clientHeight: 500 };
+  for (const [name, value] of Object.entries(box)) vi.spyOn(HTMLElement.prototype, name as keyof typeof box, "get").mockReturnValue(value);
+  const { showMedia } = await import("@/lib/show-media").then(() => import("@/lib/show-pane"));
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, hasMore: true });
+  await settle();
+  const older = () => calls.filter((url) => url.includes("/messages?"));
+  expect(older()).toEqual(["/api/threads/t1/messages?limit=200&before=u1&pages=5"]);
+  const frame = host.querySelector<HTMLElement>("[data-show-media]")!;
+  for (let i = 0; i < 8; i++) {
+    frame.scrollTop = 1500;
+    await act(async () => frame.dispatchEvent(new Event("scroll")));
+    await settle();
+  }
+  expect(older()).toHaveLength(5);
+  expect(older()[1]).toBe("/api/threads/t1/messages?limit=200&before=u1-0&pages=5");
+});
+
+it("fills a short list without scrolling, still only up to the cap", async () => {
+  endlessHistory();
+  const { showMedia } = await import("@/lib/show-pane");
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, hasMore: true });
+  for (let i = 0; i < 4; i++) await settle();
+  expect(calls.filter((url) => url.includes("/messages?"))).toHaveLength(5);
+});
+
+it("rebuilds a chat's list only when a message with files lands", async () => {
+  const { showMedia } = await import("@/lib/show-pane");
+  await act(async () => showMedia("t1"));
+  await render(chat);
+  await settle();
+  const before = built.count;
+  const plain: Message = { id: "b2", role: "bot", kind: "text", at: 3, text: "thinking" };
+  await render({ ...chat, messages: [upload, reply, plain] });
+  await render({ ...chat, messages: [upload, reply, { ...plain, text: "thinking more" }] });
+  expect(built.count).toBe(before);
+  await render({ ...chat, messages: [upload, reply, { ...plain, text: "done: [new.png](C:\\w\\new.png)" }] });
+  expect(built.count).toBe(before + 1);
+  expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toContain("new.png");
 });
 
 it("lists a room's files from the room, and shows its PDFs", async () => {

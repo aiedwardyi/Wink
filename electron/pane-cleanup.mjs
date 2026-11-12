@@ -117,6 +117,17 @@ async function statEntry(file) {
   }
 }
 
+// Status can't see ignored files, so a long run writing under one only shows in mtimes.
+async function writtenSince(file, since, stats) {
+  const stat = await statEntry(file);
+  if (!stat) return false;
+  if (stat.mtimeMs > since) return true;
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+  stats.dirs++;
+  for (const name of await fsp.readdir(file)) if (await writtenSince(path.join(file, name), since, stats)) return true;
+  return false;
+}
+
 async function resolvePin(file) {
   try { return await fsp.realpath(file); } catch (error) {
     if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
@@ -679,7 +690,14 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     for (const head of [path.join(gitdir, "HEAD"), path.join(gitdir, "logs", "HEAD")]) {
       try { changed = Math.max(changed, (await fsp.lstat(head)).mtimeMs); } catch (error) { if (error.code !== "ENOENT") throw error; }
     }
-    if (now() - changed < DAY_MS || await busy(false)) return hold();
+    const written = async () => {
+      if (now() - changed < DAY_MS) return true;
+      for (const file of (await git(target, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory"])).split("\0").filter(Boolean)) {
+        if (await writtenSince(path.join(target, file), now() - DAY_MS, context.stats)) return true;
+      }
+      return false;
+    };
+    if (await written() || await busy(false)) return hold();
     if (await isPinned(false)) return keep("pinned");
     const linked = await linkedInto(target, context);
     if (linked) return keep(linked);

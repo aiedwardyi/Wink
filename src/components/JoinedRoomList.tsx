@@ -38,7 +38,7 @@ function JoinedRoomRow({ room, density }: { room: JoinedView; density: SidebarDe
         aria-current={selected || undefined}
       >
         <span className={cn("relative flex shrink-0 items-center justify-center", density === "compact" ? "size-8" : "size-12")}>
-          <RoomPicture src={roomPictureUrl(joinedRoomBase(room.roomId), room.state?.picture)} size={density === "compact" ? 32 : 48} />
+          <RoomPicture src={roomPictureUrl(joinedRoomBase(room.roomId), room.state?.picture)} size={density === "compact" ? 32 : 48} retry={room.link} />
           <UnreadCountBadge count={room.unread ?? 0} selected={selected} />
         </span>
         <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
