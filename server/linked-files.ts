@@ -210,7 +210,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
   return roots.some((root) => {
     if (/^[\\/]{2}/.test(root)) return false;
     try {
-      const from = relative(realpathSync(root), real);
+      const from = relative(realpathSync.native(root), real);
       return from !== "" && !from.startsWith("..") && !isAbsolute(from);
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) console.warn("linked file: root check failed", root, error);
@@ -235,7 +235,7 @@ function systemFolder(real: string): boolean {
   return system.some((root) => {
     if (!root) return false;
     let canonical = root;
-    try { canonical = realpathSync(root); } catch { /* folder may not exist */ }
+    try { canonical = realpathSync.native(root); } catch { /* folder may not exist */ }
     const prefix = canonical.replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
     return normalized === prefix || normalized.startsWith(`${prefix}/`);
   });
@@ -252,7 +252,7 @@ function folderGrant(folder: string, roots: readonly string[]): string | null {
     const root = roots.find((root) => insideRoot(real, [root]));
     if (!root || !statSync(real).isDirectory() || systemFolder(real)) return null;
     // A root may be a whole home folder, whose dot folders and AppData stay private.
-    const from = relative(realpathSync(root), real).split(/[\\/]/);
+    const from = relative(realpathSync.native(root), real).split(/[\\/]/);
     return from.some((part) => part.startsWith(".") || part.toLowerCase() === "appdata") ? null : real;
   } catch {
     return null;

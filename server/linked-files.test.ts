@@ -107,7 +107,7 @@ describe("linked files", () => {
     try {
       const page = await site.open("index.html");
       expect(page.status).toBe(200);
-      const canonical = realpathSync(site.root);
+      const canonical = realpathSync.native(site.root);
       for (const [target, status, body] of [[".secrets.json", 404, null], [".hidden/data.json", 404, null], ["normal.json", 200, "public"], ["node_modules/.pnpm/pkg/index.js", 200, "package"]] as const) {
         const alias = target.endsWith(".js") ? "public.js" : "public.json";
         vi.mocked(realpathSync.native).mockImplementation(((path, ...args) => path === join(canonical, alias) ? join(canonical, target) : Reflect.apply(actual.realpathSync.native, actual, [path, ...args])) as typeof realpathSync.native);
