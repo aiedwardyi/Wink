@@ -357,7 +357,7 @@ export type TerminalAttentionMap = Record<string, TerminalAttention>;
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  gemini?: { configured: boolean };
+  gemini?: { configured: boolean; introSeen?: boolean };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };

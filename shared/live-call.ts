@@ -3,6 +3,7 @@
 export const LIVE_MODEL = "gemini-3.8-live";
 /** One voice for every bot. */
 export const LIVE_VOICE = "Kore";
+export const LIVE_GENERATION = { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: LIVE_VOICE } } } };
 export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 export const CALL_ID = /^c-[0-9a-f]{12}$/;

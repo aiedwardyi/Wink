@@ -4018,7 +4018,7 @@ describe("harness HTTP API", () => {
     });
     expect(saved.status).toBe(200);
     expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
-    expect(saved.body.gemini).toEqual({ configured: true });
+    expect(saved.body.gemini).toEqual({ configured: true, introSeen: false });
     expect(saved.body.openaiCompat).toEqual({ configured: true });
     expect(saved.body.profile).toEqual({ name: "External Store", email: "", avatarUrl: "", googlePhoto: false });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
@@ -4039,7 +4039,7 @@ describe("harness HTTP API", () => {
     expect((await api("PUT", "/api/config", { profile: { name: "Grace" } })).status).toBe(200);
     const afterReload = await api("GET", "/api/config");
     expect(afterReload.body.composio).toEqual({ configured: true, mode: "self-hosted" });
-    expect(afterReload.body.gemini).toEqual({ configured: true });
+    expect(afterReload.body.gemini).toEqual({ configured: true, introSeen: false });
     expect(afterReload.body.openaiCompat).toEqual({ configured: true });
   });
 
@@ -4060,11 +4060,11 @@ describe("harness HTTP API", () => {
     try {
       const put = await api("PUT", "/api/config", { gemini: { apiKey: "gemini-secret" } });
       expect(put.status).toBe(200);
-      expect(put.body.gemini).toEqual({ configured: true });
+      expect(put.body.gemini).toEqual({ configured: true, introSeen: false });
       expect(JSON.stringify(put.body)).not.toContain("gemini-secret");
 
       const after = await api("GET", "/api/config");
-      expect(after.body.gemini).toEqual({ configured: true });
+      expect(after.body.gemini).toEqual({ configured: true, introSeen: false });
       expect(JSON.stringify(after.body)).not.toContain("gemini-secret");
     } finally {
       await api("PUT", "/api/config", { gemini: { apiKey: "" } });
@@ -4101,7 +4101,7 @@ describe("harness HTTP API", () => {
       expect(put.status).toBe(200);
       expect(put.body.opencodeGo).toBeUndefined();
       expect(JSON.stringify(put.body)).not.toContain("legacy-secret");
-      expect(put.body.gemini).toEqual({ configured: true });
+      expect(put.body.gemini).toEqual({ configured: true, introSeen: false });
 
       const after = await api("GET", "/api/config");
       expect(after.body.opencodeGo).toBeUndefined();

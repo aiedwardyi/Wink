@@ -49,6 +49,7 @@ import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
+import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
@@ -457,6 +458,7 @@ const MIME = EARLY_MIME;
 
 ensureDirs();
 const whatsNew = openWhatsNew(DATA_DIR, process.env.OMB_APP_VERSION ?? "");
+const callIntro = openCallIntro(DATA_DIR);
 // One-shot upgrade cleanup: drop the removed engine's plaintext key from the
 // stored file before anything reads it. Idempotent — a file without the
 // legacy section is left untouched. A failed sweep is loud: the secret would
@@ -7249,7 +7251,7 @@ async function perBotLocalVmCountForModeChange(): Promise<number | null> {
 function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
-    gemini: { configured: Boolean(cfg.gemini?.apiKey) },
+    gemini: { configured: Boolean(cfg.gemini?.apiKey), introSeen: callIntro.seen() },
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key) },
     composio: {
       configured: composio.configured(cfg),
@@ -8210,6 +8212,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/whats-new") return json(res, 200, whatsNew.pending() ?? { release: null });
     if (method === "POST" && path === "/api/whats-new/seen") {
       whatsNew.markSeen((await readBody(req))?.release);
+      return json(res, 200, { ok: true });
+    }
+    if (method === "POST" && path === "/api/call-intro/seen") {
+      callIntro.markSeen();
       return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/whats-new/anchor") {

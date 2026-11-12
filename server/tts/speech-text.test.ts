@@ -39,6 +39,15 @@ describe("speakable", () => {
     expect(speakable("I changed server/drivers/acp/core.ts today")).toBe("I changed core.ts today");
   });
 
+  it("points to the chat for a Windows path, an id or a long number", () => {
+    expect(speakable("The file path for the Vertia certificate is C:\\Users\\me\\.orbit\\workspaces\\a4af829d-8c06-4604-a014-f32cb94c1604\\UN-Certificate_Vertia.pdf")).toBe("The file path for the Vertia certificate is the path in the chat");
+    expect(speakable("I saved it to D:\\out\\report.pdf.")).toBe("I saved it to the path in the chat.");
+    expect(speakable("Run a4af829d-8c06-4604-a014-f32cb94c1604 again, then merge f66cc5dab.")).toBe("Run the one in the chat again, then merge the one in the chat.");
+    expect(speakable("Your order number is 20261112093 today")).toBe("Your order number is the one in the chat today");
+    expect(speakable("경로는 C:\\x\\y.pdf 입니다")).toBe("경로는 채팅의 경로 입니다");
+    expect(speakable("It costs 1,500 won in 2026, call at 3pm")).toBe("It costs 1,500 won in 2026, call at 3pm");
+  });
+
   it("keeps short inline code but not long snippets", () => {
     expect(speakable("Run `pnpm test` first")).toBe("Run pnpm test first");
     const long = speakable(`Use \`${"x".repeat(60)}\` here`);
