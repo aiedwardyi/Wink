@@ -80,6 +80,8 @@ const NEXT: Record<AskState, readonly AskState[]> = {
 };
 
 let deps: RoomAskDeps | null = null;
+/** A running ask's riders: queued asks to the same only bot that its one turn answers too. */
+const riding = new Map<string, string[]>();
 
 export function configureRoomAsks(next: RoomAskDeps | null): void {
   deps = next;
@@ -239,8 +241,20 @@ export function hostedTurnRefused(group: GroupRecord | null | undefined, threadI
   return Boolean(invalid);
 }
 
-/** Queued > running, right before the engine is called. */
-export function startAsk(id: string): boolean {
+/** The queued asks that wait behind `id` for a group's only bot, oldest first. */
+export function askRiders(id: string): RoomAsk[] {
+  const { store } = need();
+  const ask = askById(id);
+  const bots = ask ? store.groupByThread(ask.threadId)?.memberIds.filter((botId) => {
+    const bot = store.bot(botId);
+    return bot && !bot.hidden;
+  }) : [];
+  if (!ask || bots?.length !== 1) return [];
+  return roomAsks(ask.roomId, ["queued"]).filter((row) => row.id !== id && row.threadId === ask.threadId && row.botId === ask.botId && row.grant === "work");
+}
+
+/** Queued > running, right before the engine is called. `riders` from askRiders start with it, off the queue. */
+export function startAsk(id: string, riders: readonly RoomAsk[] = []): boolean {
   const ask = askById(id);
   if (ask?.state !== "queued") return false;
   const invalid = askInvalid(ask);
@@ -248,7 +262,25 @@ export function startAsk(id: string): boolean {
     void endAsk(id, invalid.end, invalid.line);
     return false;
   }
-  return moveAsk(id, "queued", "running");
+  if (!moveAsk(id, "queued", "running")) return false;
+  const started = riders.filter((rider) => {
+    const live = askById(rider.id);
+    if (live?.state !== "queued") return false;
+    const gone = askInvalid(live);
+    if (gone) void endAsk(rider.id, gone.end, gone.line);
+    if (gone || !moveAsk(rider.id, "queued", "running")) return false;
+    cancelQueuedAsk(rider.id);
+    return true;
+  }).map((rider) => rider.id);
+  if (started.length) riding.set(id, started);
+  return true;
+}
+
+/** The riders' own moves once their lead ask is over. */
+function endRiders(id: string, answered: boolean): void {
+  const riders = riding.get(id);
+  riding.delete(id);
+  for (const rider of riders ?? []) settleAsk(rider, answered);
 }
 
 /** A native step may run only inside a running ask; stopping denies. */
@@ -284,6 +316,7 @@ export function settleAsk(id: string, answered: boolean): RoomAsk | null {
   const ask = askById(id);
   if (!ask || !moveAsk(id, "running", answered ? "done" : "failed")) return null;
   if (!answered) writeEnd(ask, endLine(ask, "failed"));
+  endRiders(id, answered);
   return ask;
 }
 
@@ -298,7 +331,12 @@ export function beginEnd(id: string, end: AskEnd, line?: string): "ended" | "sto
     return "ended";
   }
   if (ask.state !== "running" || !moveAsk(id, "running", "stopping", line ? `${end}:${line}` : end)) return null;
-  return "stopping";
+  // A rider ends alone; the turn goes on for its lead ask.
+  const lead = [...riding].find(([, riders]) => riders.includes(id));
+  if (!lead) return "stopping";
+  riding.set(lead[0], lead[1].filter((rider) => rider !== id));
+  if (moveAsk(id, "stopping", end)) writeEnd(ask, line ?? endLine(ask, end));
+  return "ended";
 }
 
 /** Waits for the native session to end, then makes the terminal move and writes its entry. */
@@ -309,6 +347,7 @@ export async function finishEnd(id: string): Promise<boolean> {
   const [end, ...line] = (ask.reason ?? "failed").split(":") as [AskEnd, ...string[]];
   if (!moveAsk(id, "stopping", end)) return false;
   writeEnd(ask, line.length ? line.join(":") : endLine(ask, end));
+  endRiders(id, false);
   return true;
 }
 

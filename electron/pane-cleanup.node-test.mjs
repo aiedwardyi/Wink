@@ -7,7 +7,7 @@ import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import test from "node:test";
 import { removeTempDir } from "../server/testing/cleanup.ts";
-import { createPaneCleanup, createPaneCleanupWorker, readCleanupPins } from "./pane-cleanup.mjs";
+import { SWEEP_BUDGET, createPaneCleanup, createPaneCleanupWorker, readCleanupPins } from "./pane-cleanup.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 
 const DAY_MS = 86_400_000;
@@ -2094,6 +2094,20 @@ test("a fresh reflog keeps an otherwise idle worktree", async (t) => {
   fs.utimesSync(path.join(git(target, "rev-parse", "--absolute-git-dir"), "logs", "HEAD"), future, future);
   await f.cleanup.sweep();
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(f.warnings, []);
+});
+
+test("an ignored-file walk past its cap keeps the worktree", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  for (let index = 0; index < 5; index++) fs.mkdirSync(path.join(target, "node_modules", `pkg-${index}`), { recursive: true });
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, budget: { ...SWEEP_BUDGET, walk: 3 } });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["walk cap"]);
   assert.deepEqual(f.warnings, []);
 });
 

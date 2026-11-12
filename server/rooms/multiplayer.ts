@@ -1,15 +1,17 @@
 // A shared bot group's runtime: what the answering bot is told about who
 // asked, and the one room entry each finished turn leaves for every viewer.
 import type { Message, Store } from "../store.ts";
-import { askById, settleAsk, type HostedGroup } from "./asks.ts";
+import { askById, settleAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, committedRoomText, roomEntry, roomPeople } from "./db.ts";
 import { broadcastDoorEntry } from "./door-streams.ts";
 
-/** The turn's last line to the bot: the teammate and words it answers, so a delayed turn never answers the host's task instead. */
-export function askNote(askId: string | undefined, botName: string): string {
+/** The turn's last line to the bot: the teammates and words it answers, in order, so a delayed turn never answers the host's task instead. */
+export function askNote(askId: string | undefined, botName: string, riders: readonly RoomAsk[] = []): string {
   const ask = askId ? askById(askId) : null;
-  const asked = ask ? roomEntry(ask.roomId, ask.entryId) : null;
-  return asked ? `(${JSON.stringify(asked.author.name)} asked you: ${JSON.stringify(asked.text)}. Reply to them as ${JSON.stringify(botName)}.)` : `(Reply to the conversation above as ${JSON.stringify(botName)}.)`;
+  const asked = (ask ? [ask, ...riders] : []).flatMap((row) => roomEntry(row.roomId, row.entryId) ?? []);
+  if (!asked.length) return `(Reply to the conversation above as ${JSON.stringify(botName)}.)`;
+  const lines = asked.map((entry) => `${JSON.stringify(entry.author.name)} asked you: ${JSON.stringify(entry.text)}`).join(". Then ");
+  return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {

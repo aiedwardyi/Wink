@@ -12,6 +12,7 @@ import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { admitAsk, askAllowsRequest, askById, closeAsksDb, configureRoomAsks, createAsk, hostedTurnRefused, roomAskHooks, roomAsks, runAsk, startAsk, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedRoomView } from "./guards.ts";
+import { closeInvitesDb } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend, hostSend } from "./send.ts";
 import { saveRoomFile } from "./files.ts";
@@ -69,6 +70,7 @@ function forgedAsk(group: HostedGroup, state: "held" | "queued" | "running", ent
 const close = () => {
   configureRoomAsks(null);
   closeAsksDb();
+  closeInvitesDb();
   closeRoomsDb();
 };
 
