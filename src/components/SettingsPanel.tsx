@@ -38,6 +38,7 @@ import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { useMemoryClean } from "@/lib/memory-clean";
 import { memoryTargetLine } from "@/lib/memory-recent";
+import { botAsks } from "@/lib/asks";
 import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
@@ -314,7 +315,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     focusFile.current = false;
   }, [editing]);
   const MapView = loadedMap ?? MemoryMap;
-  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
+  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
     api(`/api/bots/${botId}/memory`);
