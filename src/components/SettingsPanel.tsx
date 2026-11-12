@@ -735,7 +735,7 @@ export function SettingsPanel({
                     onChange={(e) => patch({ title: e.target.value })}
                   />
                 </Field>
-                <Field label={t("bot.description")} hint={t("bot.descriptionHelp")} status={<SaveStatus botId={bot.id} />}>
+                <Field label={t("bot.description")} hint={t("bot.descriptionHelp")} status={<SaveStatus id={bot.id} />}>
                   <FitTextarea
                     watchMetrics
                     aria-label={t("bot.description")}

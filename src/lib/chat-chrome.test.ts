@@ -208,7 +208,8 @@ describe("room header on a phone", () => {
   const tokensAfter = (source: string, marker: string) => classTokens(source.slice(source.indexOf(marker)));
 
   it("ends the closed label in an ellipsis", () => {
-    expect(header).toMatch(/<span className="truncate text-\[15px\] font-semibold text-ink">\{group\.name\}<\/span>/);
+    expect(header).toContain("<RoomTitle name={group.name} />");
+    expect(readFileSync(join(components, "RoomTitle.tsx"), "utf8")).toMatch(/<span className="min-w-0 truncate text-\[15px\] font-semibold text-ink">\{name\}<\/span>/);
     expect(chip).toMatch(/<span className="truncate font-mono max-md:hidden">\{name\}<\/span>/);
   });
 

@@ -30,6 +30,7 @@ import { loadReplyStyle } from "@/lib/reply-style";
 import { nextTurnOrigins, turnOriginRow } from "@/lib/turn-origin";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
+import { setSaveStatus } from "./description-save-status";
 import { createViewedReplies } from "./viewed-replies";
 import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstChatPeripherals, reconcileCoveredChatFrame, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
@@ -275,8 +276,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "groupDeleted": {
       const groups = state.groups.filter((g) => g.id !== action.groupId);
-      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
-      return { ...state, groups, selectedId };
+      if (state.selectedId !== action.groupId) return { ...state, groups };
+      return { ...reducer(state, { type: "toggleSettings", open: false }), groups, selectedId: state.bots[0]?.id ?? "" };
     }
     case "instances":
       return {
@@ -1786,6 +1787,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }
             const generation = (groupPatchGeneration.current.get(action.groupId) ?? 0) + 1;
             groupPatchGeneration.current.set(action.groupId, generation);
+            const bulletin = "bulletin" in action.patch;
+            if (bulletin) setSaveStatus(action.groupId, "saving");
             api(`/api/groups/${action.groupId}`, {
               method: "PATCH",
               body: JSON.stringify(action.patch),
@@ -1797,6 +1800,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 groupPatchSettledGeneration.current.set(action.groupId, generation);
                 groupPatchFallback.current.delete(action.groupId);
                 groupPatchLatestSuccess.current.delete(action.groupId);
+                if (bulletin) setSaveStatus(action.groupId, "saved");
                 if (body.group) rawDispatch({ type: "groupPatched", group: body.group });
               })
               .catch((error) => {
@@ -1806,6 +1810,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 groupPatchFallback.current.delete(action.groupId);
                 groupPatchLatestSuccess.current.delete(action.groupId);
                 if (fallback) rawDispatch({ type: "groupPatched", group: fallback });
+                setSaveStatus(action.groupId, "idle");
                 showError(error);
               });
           }

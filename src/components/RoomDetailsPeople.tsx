@@ -27,6 +27,7 @@ export function HostPeople({ group }: { group: Group }) {
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const confirm = usePresence(removing);
   const alive = useRef(true);
+  const sharedHere = useRef(false);
   const people = roomPeople(group);
   const removed = roomRemoved(group);
 
@@ -37,6 +38,7 @@ export function HostPeople({ group }: { group: Group }) {
     }
     const result = await shareGroup(group.id);
     if (!("code" in result)) return { problem: shareErrorKey(result) };
+    sharedHere.current = !shared;
     dispatch({ type: "groupPatched", group: result.group });
     return { code: result.code, short: result.short };
   };
@@ -54,8 +56,12 @@ export function HostPeople({ group }: { group: Group }) {
 
   useEffect(() => {
     alive.current = true;
-    setCode(null);
-    if (shared) void invite(false);
+    // the tap that shared this group already holds its code
+    if (!sharedHere.current) {
+      setCode(null);
+      if (shared) void invite(false);
+    }
+    sharedHere.current = false;
     return () => {
       alive.current = false;
     };
