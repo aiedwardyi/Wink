@@ -21,7 +21,7 @@ class FakeEngine implements LiveEngine {
   close() { this.closed = true; }
 }
 
-function fakeAudio(): CallAudioPort & { flushed: number } {
+function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
   return {
     flushed: 0,
     playing: false,
@@ -29,6 +29,10 @@ function fakeAudio(): CallAudioPort & { flushed: number } {
     play() {},
     flush() { this.flushed += 1; },
     close() {},
+    ring() { this.cues.push("ring"); },
+    stopRing() { this.cues.push("stopRing"); },
+    boop() { this.cues.push("boop"); },
+    cues: [] as string[],
     heardShare: () => 0.5,
     onIdle: () => {},
     onStart: () => {},
@@ -77,6 +81,70 @@ describe("spokenText", () => {
     expect(spokenText("<no speech>{pause}")).toBe("");
     expect(spokenText("...")).toBe("");
     expect(spokenText(" Hi {pause} there ")).toBe("Hi there");
+  });
+});
+
+describe("LiveCall cues", () => {
+  it("rings while connecting, stops the ring on connect, and boops on a user hang-up", async () => {
+    const audio = fakeAudio();
+    const { call, engine } = setup({}, audio);
+    await call.start();
+    expect(audio.cues).toEqual(["ring"]);
+    engine().events.ready();
+    expect(audio.cues).toEqual(["ring", "stopRing"]);
+    call.end();
+    expect(audio.cues).toEqual(["ring", "stopRing", "boop"]);
+    call.end();
+    expect(audio.cues.filter((cue) => cue === "boop")).toHaveLength(1);
+  });
+
+  it("plays no boop when the call never connects", async () => {
+    const hungUp = fakeAudio();
+    const early = setup({}, hungUp);
+    await early.call.start();
+    early.call.end();
+    expect(hungUp.cues).toEqual(["ring"]);
+
+    const denied = fakeAudio();
+    denied.capture = async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); };
+    const blocked = setup({}, denied);
+    await blocked.call.start();
+    blocked.call.end();
+    expect(denied.cues).toEqual([]);
+
+    const noKey = fakeAudio();
+    const keyless = setup({ "/call/token": { status: 409, data: {} } }, noKey);
+    await keyless.call.start();
+    keyless.call.end();
+    expect(noKey.cues).toEqual([]);
+  });
+
+  it("plays no boop after the call failed", async () => {
+    const audio = fakeAudio();
+    const { call, engine } = setup({}, audio);
+    await call.start();
+    engine().events.ready();
+    (call as unknown as { fail(error: string): void }).fail("boom");
+    call.end();
+    expect(audio.cues).not.toContain("boop");
+  });
+
+  it("stays silent while muted", async () => {
+    const audio = fakeAudio();
+    const { call, engine } = setup({}, audio);
+    call.mute(true);
+    await call.start();
+    engine().events.ready();
+    call.end();
+    expect(audio.cues.filter((cue) => cue === "ring" || cue === "boop")).toEqual([]);
+  });
+
+  it("cuts a ring in progress when the call is muted", async () => {
+    const audio = fakeAudio();
+    const { call } = setup({}, audio);
+    await call.start();
+    call.mute(true);
+    expect(audio.cues).toEqual(["ring", "stopRing"]);
   });
 });
 

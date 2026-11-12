@@ -30,6 +30,9 @@ export type CallAudioPort = {
   play(pcm: Int16Array): void;
   flush(): void;
   close(): void;
+  ring(): void;
+  stopRing(): void;
+  boop(): void;
   heardShare(): number;
   readonly playing: boolean;
   onIdle: () => void;
@@ -120,6 +123,7 @@ export class LiveCall {
   private sends = new Set<Promise<unknown>>();
   private handle?: string;
   private connected = false;
+  private wasLive = false;
   private reconnecting = 0;
   private heardBuf = "";
   private saidBuf = "";
@@ -220,6 +224,7 @@ export class LiveCall {
     }
     if (this.ended) return;
     this.set({ startedAt: this.now() });
+    if (!this.snapshot.muted) this.deps.audio.ring();
     this.connect(session);
   }
 
@@ -251,6 +256,8 @@ export class LiveCall {
       ready: () => {
         if (!mine()) return;
         this.connected = true;
+        this.wasLive = true;
+        this.deps.audio.stopRing();
         const resumed = Boolean(session.handle);
         this.reconnecting = 0;
         this.refresh();
@@ -766,7 +773,10 @@ export class LiveCall {
 
   mute(muted: boolean) {
     this.set({ muted });
-    if (muted) this.engine?.audioPaused();
+    if (muted) {
+      this.deps.audio.stopRing();
+      this.engine?.audioPaused();
+    }
   }
 
   hidden(isHidden: boolean) {
@@ -786,7 +796,10 @@ export class LiveCall {
 
   end() {
     if (this.snapshot.status === "ended") return;
-    if (this.snapshot.status !== "failed") this.teardown();
+    if (this.snapshot.status !== "failed") {
+      if (this.wasLive && !this.snapshot.muted) this.deps.audio.boop();
+      this.teardown();
+    }
     this.set({ status: "ended" });
   }
 

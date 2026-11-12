@@ -316,6 +316,22 @@ describe("createUsageBoardClient", () => {
     }
   });
 
+  it("stays loading through a slow first read and asks again", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = make();
+      client.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(client.snapshot().status).toBe("loading");
+      expect(reads).toHaveLength(2);
+      reads[1]!.resolve(fresh());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.snapshot()).toMatchObject({ status: "ready", board: { revision: 42 } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows a pane change from an equal-revision read", async () => {
     const client = make();
     client.subscribe(() => {});

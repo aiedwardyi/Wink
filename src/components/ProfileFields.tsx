@@ -1,5 +1,5 @@
 import { fallbackError } from "@/lib/error-text";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -12,14 +12,20 @@ export function ProfileFields() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState(state.config?.profile?.name ?? "");
+  const savedName = state.config?.profile?.name ?? "";
+  const [name, setName] = useState(savedName);
+  const [shownName, setShownName] = useState(savedName);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [rejected, setRejected] = useState(false);
   const avatarUrl = state.config?.profile?.avatarUrl;
-  useEffect(() => {
-    setName(state.config?.profile?.name ?? "");
-  }, [state.config?.profile?.name]);
+  // Null until the first config answer: a placeholder, never an empty name or a "?" photo.
+  const loaded = state.config !== null;
+  // Synced during render, not in an effect, so the frame the profile arrives already has the name.
+  if (shownName !== savedName) {
+    setShownName(savedName);
+    setName(savedName);
+  }
 
   const send = async (request: () => Promise<ConfigStatus>, fallback: MessageKey) => {
     if (saving) return;
@@ -91,7 +97,7 @@ export function ProfileFields() {
         onChange={(event) => void changePhoto(event.target.files?.[0])}
       />
       <div className="flex items-center gap-4 max-md:flex-col max-md:gap-3">
-        <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={avatarUrl} size={56} />
+        <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={avatarUrl} size={56} pending={!loaded} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 max-md:w-full max-md:flex-col-reverse max-md:gap-3">
           <div className="flex items-center gap-2">
             <label htmlFor="settings-profile-name" className="sr-only">{t("settings.profile.nameLabel")}</label>
@@ -99,14 +105,14 @@ export function ProfileFields() {
               id="settings-profile-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={t("settings.profile.namePlaceholder")}
-              disabled={saving}
-              className={`min-w-0 flex-1 ${inputClass}`}
+              placeholder={loaded ? t("settings.profile.namePlaceholder") : undefined}
+              disabled={saving || !loaded}
+              className={`min-w-0 flex-1 ${inputClass} ${loaded ? "" : "animate-pulse motion-reduce:animate-none"}`}
             />
             <button
               type="button"
               onClick={() => void save()}
-              disabled={saving}
+              disabled={saving || !loaded}
               aria-label={t("settings.profile.saveAria")}
               className={`self-start ${buttonClass}`}
             >
@@ -114,7 +120,7 @@ export function ProfileFields() {
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-1 max-md:justify-center">
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={saving} className={buttonClass}>
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={saving || !loaded} className={buttonClass}>
               {t("settings.profile.changePhoto")}
             </button>
             {state.config?.profile?.googlePhoto ? (

@@ -102,7 +102,7 @@ export function createUsageBoardClient(
     const ticket = ++started;
     const epoch = identityEpoch;
     const controller = new AbortController();
-    // A stalled read frees the gate after 10 s and counts as failed; whatever it returns later is ignored.
+    // A stalled read frees the gate after 10 s; whatever it returns later is ignored. With no board yet it asks again: a slow boot is not a failure.
     let settled = false;
     const settle = () => {
       if (settled) return false;
@@ -112,7 +112,7 @@ export function createUsageBoardClient(
       return true;
     };
     const next = () => { if (dirty) { dirty = false; load(); } };
-    const limit = setTimeout(() => { if (!settle()) return; controller.abort(); set({ status: "error" }); next(); }, READ_LIMIT_MS);
+    const limit = setTimeout(() => { if (!settle()) return; controller.abort(); if (state.board) set({ status: "error" }); else dirty = true; next(); }, READ_LIMIT_MS);
     read(state.board?.cursor ?? null, controller.signal).then((reply) => {
       if (settled || epoch !== identityEpoch) return;
       // Anything that is not a board (an old host's fallback page, a stray body) is a failed read.

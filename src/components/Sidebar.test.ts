@@ -860,6 +860,33 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     }
   });
 
+  it("holds a quiet placeholder in the footer, never a ? photo, until the profile loads", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [], groups: [] });
+      if (path === "/api/config") return new Promise<Response>((resolve) => { answer = resolve; });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SidebarSettingsProbe))));
+      await act(async () => FakeEventSource.current!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "" }));
+      const row = host.querySelector("[data-sidebar-profile-row]")!;
+      await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+      expect(row.textContent).not.toContain("?");
+      expect(row.textContent).not.toContain("You");
+      await act(async () => answer(Response.json({ composio: { configured: false }, profile: { name: "Ada Lovelace", email: "" } })));
+      await vi.waitFor(() => expect(row.textContent).toContain("Ada Lovelace"));
+      expect(row.textContent).toContain("AL");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("falls back to initials in the footer after Remove Photo", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const profile = { name: "Ada Lovelace", email: "", avatarUrl: "/api/attachments/ada.png" };
