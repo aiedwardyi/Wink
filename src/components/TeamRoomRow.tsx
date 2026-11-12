@@ -80,7 +80,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
   const rowRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
-  useBubbleSwipe({ row: rowRef, bubble: bubbleRef, canReply: true, canTranslate: showTranslate, onReply: () => onReply(roomMessage(line)), onTranslate: translation.toggle });
+  const swiping = useBubbleSwipe({ row: rowRef, bubble: bubbleRef, canReply: true, canTranslate: showTranslate, onReply: () => onReply(roomMessage(line)), onTranslate: translation.toggle });
   const entryId = line.entryId ?? line.id;
   const pinned = notice?.entryId === entryId;
   const message = roomMessage(line);
@@ -125,8 +125,8 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
           onMenu({ kind: "message", x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, opener: event.currentTarget, target });
         }}
       >
-        <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />
-        {!mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
+        {swiping && <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />}
+        {swiping && !mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
         <div ref={bubbleRef} className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
           <div
             data-message-hover-actions
@@ -297,7 +297,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
           if (el.scrollTop < 80) loadPage();
         }}
       >
-        <div ref={logRef} role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
+        <div ref={logRef} data-swipe-list role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
           {fileState.error && <div role="alert" className="text-[13px] text-danger">{t("teamRoom.folderError")}</div>}
           {lines.map((line, index) => {
             const own = mine(line);

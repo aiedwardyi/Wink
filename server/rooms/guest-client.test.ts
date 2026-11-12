@@ -235,7 +235,7 @@ describe("join", () => {
     expect(JSON.parse(seen[0]!.body)).toEqual({ code: CODE, name: "Mina Park", device: PC });
     expect(seen[0]!.headers.authorization).toBeUndefined();
     await until(() => seen.some((row) => row.url.includes("/stream")));
-    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=0&with=bots"]);
+    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=0&with=bots&deleted=0"]);
     expect(seen[1]!.headers).toMatchObject({ authorization: `Bearer ${KEY}` });
     expect(seen.every((row) => row.headers.cookie === undefined)).toBe(true);
   });
@@ -366,7 +366,7 @@ describe("races and floods", () => {
     await guest({ timing: { retryMs: 20 } }).join(CODE);
     await until(() => urls("/stream").length >= 2);
     expect(snapshots).toBe(3);
-    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0&with=bots");
+    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0&with=bots&deleted=0");
   });
 
   it("a late 401 or leave from before a rejoin leaves the new key alone", async () => {
@@ -501,6 +501,25 @@ describe("deleted files", () => {
     await until(() => !existsSync(cached));
     expect(joinedEntries("r1", 5)[0]!.files).toEqual([{ ...file, deleted: true }]);
   });
+
+  it("asks only for deletions past the count it holds, and keeps the host's new count", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    const asked: string[] = [];
+    let count: number | undefined = 3;
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (!req.url?.includes("/stream")) return;
+      asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["a".repeat(24)], ...(count === undefined ? {} : { count }) })}\n\n`);
+      setTimeout(() => res.destroy(), 50);
+    };
+    guest({ timing: { retryMs: 10 } }).start();
+    await until(() => asked.length >= 2);
+    count = undefined;
+    await until(() => asked.length >= 4);
+    expect(asked.slice(0, 4)).toEqual(["0", "3", "3", "3"]);
+  });
 });
 
 describe("upload deadline", () => {
@@ -627,7 +646,7 @@ describe("bot lines", () => {
     const c = guest();
     expect((await c.join(CODE)).ok).toBe(true);
     await until(() => (c.room("r1")?.entries.length ?? 0) === 2);
-    expect(seen.map((row) => row.url).slice(1)).toEqual(["/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=1&with=bots"]);
+    expect(seen.map((row) => row.url).slice(1)).toEqual(["/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=1&with=bots&deleted=0"]);
     expect(c.room("r1")!.entries.map((entry) => entry.author)).toEqual([bot, bot]);
     expect(c.room("r1")!.state!.bots).toEqual([WINK]);
     expect(c.room("r1")!.unread).toBe(2);

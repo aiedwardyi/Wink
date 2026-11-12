@@ -102,4 +102,12 @@ describe("hosted group routes", () => {
     expect((await call(routes().patch, { notice: entry.id }, [group.id])).status).toBe(200);
     expect(store.group(group.id)!.notice).toMatchObject({ entryId: entry.id, by: "host", text: "금요일 점심 12시" });
   });
+
+  it("keeps only a 300-character preview of a long pinned line", async () => {
+    const created = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex")], hosted: true });
+    const group = store.group(created.body.group.id)! as GroupRecord & { hosted: { roomId: string } };
+    const { entry } = writeRoomEntry(store, group, { author: { kind: "host", id: "host", name: "Edward" }, text: "a".repeat(20_000) });
+    expect((await call(routes().patch, { notice: entry.id }, [group.id])).status).toBe(200);
+    expect(store.group(group.id)!.notice!.text).toBe(`${"a".repeat(300)}…`);
+  });
 });

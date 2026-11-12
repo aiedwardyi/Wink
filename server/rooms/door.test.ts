@@ -932,8 +932,29 @@ describe("files", () => {
     await deleteRoomFile(roomId, up.body.file.id);
     const stream = await openStream(roomId, mina.key, 0);
     const frames = await stream.until((all) => all.some((frame) => frame.kind === "deleted"));
-    expect(frames.find((frame) => frame.kind === "deleted")).toEqual({ kind: "deleted", ids: [up.body.file.id] });
+    expect(frames.find((frame) => frame.kind === "deleted")).toEqual({ kind: "deleted", ids: [up.body.file.id], count: 1 });
     await shut(stream);
+  });
+
+  it("send a returning teammate only the deletions past the count it holds", async () => {
+    const group = peopleRoom();
+    const roomId = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const first = await upload(roomId, mina.key, "old notes");
+    const second = await upload(roomId, mina.key, "new notes");
+    await deleteRoomFile(roomId, first.body.file.id);
+    await deleteRoomFile(roomId, second.body.file.id);
+    const deletedAfter = async (seen: number) => {
+      const stream = await openStream(roomId, mina.key, `999&deleted=${seen}`);
+      const frames = await stream.until((all) => all.some((frame) => frame.kind === "reset"));
+      await shut(stream);
+      return frames.find((frame) => frame.kind === "deleted");
+    };
+    expect(await deletedAfter(1)).toEqual({ kind: "deleted", ids: [second.body.file.id], count: 2 });
+    expect(await deletedAfter(2)).toBeUndefined();
+    expect(await deletedAfter(9)).toEqual({ kind: "deleted", ids: [second.body.file.id, first.body.file.id], count: 2 });
+    const older = z.object({ kind: z.literal("deleted"), ids: z.array(z.string()).max(5_000) });
+    expect(older.parse({ kind: "deleted", ids: ["a"], count: 2 })).toEqual({ kind: "deleted", ids: ["a"] });
   });
 
   it("ride on a send to every reader; someone else's file, an empty line and a reused sendId are refused", async () => {
@@ -1235,5 +1256,14 @@ describe("notice", () => {
     } finally {
       await shut(stream);
     }
+  });
+
+  it("sends a long pinned line's text as a 300-character preview", async () => {
+    const group = peopleRoom();
+    const long = line(group, "가".repeat(20_000));
+    const mina = await joined(group, "Mina Park");
+    expect((await pin(group, mina.key, long.id)).status).toBe(200);
+    const text = (await call(`/room/v1/rooms/${group.hosted.roomId}/snapshot`, { key: mina.key })).body.state.notice.text as string;
+    expect(text).toBe(`${"가".repeat(300)}…`);
   });
 });

@@ -231,6 +231,12 @@ export function roomEntry(roomId: string, id: string): RoomEntry | null {
   return row ? rowToEntry(row) : null;
 }
 
+const NOTICE_CHARS = 300;
+
+/** A pinned line's text rides in every state push, so only a preview; the line itself has the rest. */
+export const noticeText = (text: string): string =>
+  text.length > NOTICE_CHARS ? `${text.slice(0, NOTICE_CHARS).replace(/[\uD800-\uDBFF]$/, "")}…` : text;
+
 export function roomTranslation(roomId: string, entryId: string, lang: string): string | undefined {
   return (db().prepare("SELECT text FROM translations WHERE room_id = ? AND entry_id = ? AND lang = ?")
     .get(roomId, entryId, lang) as { text: string } | undefined)?.text;
