@@ -21,7 +21,11 @@ vi.mock("@/lib/room-translate", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/room-translate")>(),
   useTranslationAvailable: () => false,
 }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
+vi.mock("@/state/store", async (original) => ({
+  ...await original<typeof import("@/state/store")>(),
+  useStore: () => ({ state: { connected: true, bots: [], acceptedSends: {}, instances: [], pendingQueued: {} }, dispatch: () => {} }),
+  formatTime: () => "",
+}));
 
 const group = {
   id: "g1", threadId: "t1", name: "Design team", memberIds: [], messages: [],
@@ -200,7 +204,7 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
     await act(async () => finish(reply({ file: { id: "uploaded" } })));
@@ -216,7 +220,7 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!;
     expect(button.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
@@ -263,7 +267,7 @@ describe("room drafts", () => {
     await send();
     expect(fetch).not.toHaveBeenCalled();
     await act(async () => repick!.click());
-    const picker = host.querySelector('input[type="file"]:not([data-room-picture-input])')!;
+    const picker = host.querySelector('input[type="file"]:not([multiple]):not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("reload.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
@@ -447,5 +451,46 @@ describe("room image preview", () => {
     await drag("drop", [file("plan.txt")]);
     expect(host.querySelector("img")).toBeNull();
     expect(host.textContent).toContain("plan.txt");
+  });
+});
+
+describe("room box is the 1:1 box", () => {
+  it.each(["host", "joined"])("renders the shared %s composer", async (side) => {
+    await render(side);
+    expect(host.querySelector("[data-team-room] textarea[data-orbit-composer]")).toBe(box());
+    expect(host.querySelector("[data-orbit-composer-host]")).not.toBeNull();
+  });
+
+  it("types from a press on the frame padding", async () => {
+    await render();
+    (document.activeElement as HTMLElement | null)?.blur();
+    const frame = box().closest<HTMLElement>("[data-orbit-composer-frame]")!;
+    await act(async () => {
+      frame.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    });
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("opens the attached image preview", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    await render();
+    await drag("drop", [file("board.png", "image/png")]);
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Preview board.png']")!.click());
+    expect(document.querySelector("[role='dialog'] img[src='blob:thumb']")).not.toBeNull();
+  });
+
+  it("offers room people in the @ list", async () => {
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, room: { name: "Design team", people: [{ id: "p1", name: "Mina" }] } } as unknown as TeamRoom })));
+    await type("hi @Mi");
+    expect(host.querySelector("[role='listbox'] [role='option']")?.textContent).toContain("Mina");
+  });
+
+  it("sends with the 1:1 send button", async () => {
+    await render();
+    await type("hello");
+    await act(async () => host.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!.click());
+    expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/send");
   });
 });
