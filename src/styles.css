@@ -178,6 +178,11 @@
   contain-intrinsic-block-size: auto 80px;
 }
 
+/* A jump measures the rows around its target at their real height. */
+[data-orbit-transcript] [data-settled][data-landing] > * {
+  content-visibility: visible;
+}
+
 /* These skins zero the bot padding the chips pull up into. */
 :is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
   padding-bottom: 0.875rem;
