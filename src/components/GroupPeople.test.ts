@@ -5,15 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Group } from "@/state/store";
 
-const rooms = vi.hoisted(() => ({ remove: vi.fn(async () => ({ ok: true as const })) }));
+const rooms = vi.hoisted(() => ({ remove: vi.fn(async () => ({ ok: true as const })), share: vi.fn(async () => ({ status: 0, error: "" })), dispatch: vi.fn() }));
 vi.mock("@/lib/team-rooms", async (original) => ({
   ...await original<typeof import("@/lib/team-rooms")>(),
   removeFromRoom: rooms.remove,
-  shareGroup: vi.fn(async () => ({ status: 0, error: "" })),
+  shareGroup: rooms.share,
 }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ state: {}, dispatch: () => undefined }),
+  useStore: () => ({ state: {}, dispatch: rooms.dispatch }),
 }));
 
 import { GroupPeople } from "./GroupPeople";
@@ -26,6 +26,7 @@ let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   rooms.remove.mockClear();
+  rooms.dispatch.mockClear();
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
 });
@@ -49,5 +50,14 @@ describe("Remove", () => {
     await act(async () => button("Remove Mina").click());
     await act(async () => [...document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button')].find((candidate) => candidate.textContent === "Remove")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(rooms.remove).toHaveBeenCalledExactlyOnceWith("r1", "p1");
+  });
+});
+
+describe("Invite", () => {
+  it("opens Phone Access when it is off", async () => {
+    rooms.share.mockResolvedValueOnce({ status: 409, error: "phone access is off" });
+    await act(async () => root.render(createElement(GroupPeople, { group })));
+    await act(async () => button("Open Phone Access").click());
+    expect(rooms.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "companion" });
   });
 });
