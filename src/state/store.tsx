@@ -274,8 +274,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "groupDeleted": {
       const groups = state.groups.filter((g) => g.id !== action.groupId);
-      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
-      return { ...state, groups, selectedId };
+      if (state.selectedId !== action.groupId) return { ...state, groups };
+      return { ...reducer(state, { type: "toggleSettings", open: false }), groups, selectedId: state.bots[0]?.id ?? "" };
     }
     case "instances":
       return {
