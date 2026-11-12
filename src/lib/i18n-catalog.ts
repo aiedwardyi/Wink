@@ -151,6 +151,9 @@ export const en = {
   "settings.pickerLook.dark": "Dark",
   "settings.pickerLook.light": "Light",
   "settings.pickerLook.atelier": "Atelier",
+  "settings.pickerStyle.title": "Model Picker Style",
+  "settings.pickerStyle.dial": "Dial",
+  "settings.pickerStyle.list": "List",
 
   "settings.title": "Settings",
   "settings.close": "Close Settings",
@@ -1852,6 +1855,9 @@ export const ko = {
   "settings.pickerLook.dark": "다크",
   "settings.pickerLook.light": "라이트",
   "settings.pickerLook.atelier": "Atelier",
+  "settings.pickerStyle.title": "모델 선택 방식",
+  "settings.pickerStyle.dial": "다이얼",
+  "settings.pickerStyle.list": "목록",
 
   "settings.title": "설정",
   "settings.close": "설정 닫기",
