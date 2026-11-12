@@ -1,27 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { File, X } from "lucide-react";
+import { ChevronRight, Images, X } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { formatSize } from "@/lib/composer-attachments";
-import { localeTag, useI18n } from "@/lib/i18n";
-import { hostRoomBase, roomFileUrl, type RoomFile } from "@/lib/team-rooms";
+import { useI18n } from "@/lib/i18n";
+import { showMedia } from "@/lib/show-pane";
+import { hostRoomBase, type RoomFile } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { Presence } from "@/lib/use-presence";
 
-import { ConfirmDialog } from "./ConfirmDialog";
-
-type ListedFile = RoomFile & { sender: string; at: number };
-type FileList = { files: ListedFile[]; used: number; capacity: number; error: string | null };
+type FileList = { files: RoomFile[]; used: number; capacity: number; error: string | null };
 
 const size = (bytes: number) => bytes >= 1024 ** 3 ? `${Number((bytes / 1024 ** 3).toFixed(2))} GB` : formatSize(bytes);
 
-export function TeamRoomFiles({ roomId, closing, onClose }: { roomId: string; closing: boolean; onClose: () => void }) {
-  const { t, locale } = useI18n();
+export function TeamRoomFiles({ roomId, threadId, closing, onClose }: { roomId: string; threadId: string; closing: boolean; onClose: () => void }) {
+  const { t } = useI18n();
   const [list, setList] = useState<FileList | null>(null);
   const [failed, setFailed] = useState(false);
-  const [deleting, setDeleting] = useState<ListedFile | null>(null);
-  const [busy, setBusy] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const base = hostRoomBase(roomId);
@@ -41,17 +36,6 @@ export function TeamRoomFiles({ roomId, closing, onClose }: { roomId: string; cl
     closeRef.current?.focus();
     return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
-  const remove = async () => {
-    if (!deleting || busy) return;
-    setBusy(true);
-    try {
-      await request(`${base}/files/${deleting.id}`, { method: "DELETE" });
-      setList(await request(`${base}/files`));
-      setDeleting(null);
-      setFailed(false);
-    } catch { setFailed(true); setDeleting(null); }
-    finally { setBusy(false); }
-  };
   return createPortal(
     <div data-closing={closing || undefined} inert={closing} className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3" onMouseDown={(event) => event.target === event.currentTarget && onClose()}
       onKeyDown={(event) => {
@@ -73,25 +57,13 @@ export function TeamRoomFiles({ roomId, closing, onClose }: { roomId: string; cl
         </div>
         <div className="mb-3 text-[12px] tabular-nums text-ink-secondary">{list ? t("teamRoom.filesUsed", { used: size(list.used), total: size(list.capacity) }) : t("teamRoom.loadingFiles")}</div>
         {(failed || list?.error) && <div role="alert" className="mb-2 text-[12px] text-danger">{t("teamRoom.folderError")}</div>}
-        <div className="min-h-0 overflow-y-auto">
-          {list?.files.length === 0 && <p className="py-6 text-center text-[13px] text-ink-secondary">{t("teamRoom.noFiles")}</p>}
-          {list?.files.map((file) => (
-            <div key={file.id} data-room-file className="flex min-w-0 items-center gap-2 border-t border-hairline/40 py-3">
-              <File size={18} className="shrink-0 text-ink-secondary" />
-              <div className="min-w-0 flex-1">
-                <a href={roomFileUrl(base, file, false)} download={file.name} className="block break-all text-[13px] text-ink hover:underline">{file.name}</a>
-                <div className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-ink-secondary">
-                  <span>{size(file.bytes)}</span><span className="max-w-full break-all">{file.sender}</span><time dateTime={new Date(file.at).toISOString()}>{new Date(file.at).toLocaleString(localeTag(locale))}</time>
-                </div>
-              </div>
-              <button type="button" disabled={busy || Boolean(list.error)} onClick={() => setDeleting(file)} className="shrink-0 rounded-md px-2 py-2 text-[12px] text-danger hover:bg-danger/10">{t("teamRoom.deleteFile")}</button>
-            </div>
-          ))}
-        </div>
+        <button type="button" data-room-media-row onClick={() => { onClose(); showMedia(threadId); }} className="flex min-h-11 w-full min-w-0 items-center gap-3 rounded-lg border-t border-hairline/40 px-2 text-left text-[14px] text-ink hover:bg-raised">
+          <Images size={18} className="shrink-0 text-ink-secondary" />
+          <span className="min-w-0 flex-1 truncate">{t("teamRoom.mediaAndFiles")}</span>
+          <span className="tabular-nums text-ink-secondary">{list?.files.length}</span>
+          <ChevronRight size={16} className="shrink-0 text-ink-secondary" />
+        </button>
       </div>
-      <Presence open={deleting !== null}>
-        {(leaving) => <ConfirmDialog closing={leaving} title={t("teamRoom.deleteFileTitle")} body={deleting?.name} confirmLabel={t("teamRoom.deleteFile")} confirmDisabled={busy} onConfirm={() => void remove()} onCancel={() => setDeleting(null)} />}
-      </Presence>
     </div>, document.body,
   );
 }

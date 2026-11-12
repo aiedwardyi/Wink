@@ -9,8 +9,9 @@ import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
 import { TeamRoomFiles } from "./TeamRoomFiles";
 import { TeamRoomRow } from "./TeamRoomRow";
 
-const mock = vi.hoisted(() => ({ request: vi.fn(), phone: false }));
+const mock = vi.hoisted(() => ({ request: vi.fn(), showMedia: vi.fn(), phone: false }));
 vi.mock("@/lib/api-request", () => ({ request: mock.request }));
+vi.mock("@/lib/show-pane", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/show-pane")>(), showMedia: mock.showMedia }));
 vi.mock("@/lib/use-phone-swipe", () => ({ useIsPhone: () => mock.phone }));
 
 let root: Root;
@@ -26,6 +27,7 @@ beforeEach(() => {
   root = createRoot(host);
   mock.phone = false;
   mock.request.mockReset();
+  mock.showMedia.mockReset();
 });
 
 afterEach(async () => {
@@ -60,19 +62,26 @@ describe("room files", () => {
     expect(mock.request).not.toHaveBeenCalled();
   });
 
-  it("confirms before deleting and refreshes the used space", async () => {
-    const file = { id: "a".repeat(24), name: "계획.pdf", bytes: 1024 ** 3, type: "application/pdf", sender: "Mina", at: Date.now() };
-    mock.request.mockResolvedValue({ files: [file], used: file.bytes, capacity: 100 * 1024 ** 3, error: null });
-    await render(createElement(TeamRoomFiles, { roomId: "room1", closing: false, onClose: vi.fn() }));
-    expect(document.body.textContent).toContain("1 GB used / 100 GB");
-    await act(async () => document.querySelector<HTMLButtonElement>("[data-room-file] button")!.click());
-    expect(mock.request).toHaveBeenCalledTimes(1);
-    expect(document.body.textContent).toContain("Delete this file for everyone?");
-    mock.request.mockResolvedValue({ files: [], used: 0, capacity: 100 * 1024 ** 3, error: null });
-    const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Delete" && button.closest('[aria-modal="true"]')?.getAttribute("data-room-files") === null)!;
-    await act(async () => confirm.click());
-    expect(mock.request).toHaveBeenCalledWith(`/api/rooms/room1/files/${file.id}`, { method: "DELETE" });
-    expect(document.body.textContent).toContain("0 B used / 100 GB");
+  it("lists the room's files as one row that opens Media", async () => {
+    const onClose = vi.fn();
+    const file = (name: string, type: string) => ({ id: name.padStart(24, "a"), name, bytes: 1024 ** 3, type, sender: "Mina", at: Date.now() });
+    mock.request.mockResolvedValue({ files: [file("a.png", "image/png"), file("b.png", "image/png"), file("plan.pdf", "application/pdf")], used: 3 * 1024 ** 3, capacity: 100 * 1024 ** 3, error: null });
+    await render(createElement(TeamRoomFiles, { roomId: "room1", threadId: "r-thread", closing: false, onClose }));
+    expect(document.body.textContent).toContain("3 GB used / 100 GB");
+    expect(document.querySelectorAll("[data-room-file]")).toHaveLength(0);
+    const row = document.querySelector<HTMLButtonElement>("[data-room-media-row]")!;
+    expect(row.textContent).toBe("Media and files3");
+    await act(async () => row.click());
+    expect(mock.showMedia).toHaveBeenCalledWith("r-thread");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows an empty room's row at 0 and keeps the read-only notice, in Korean too", async () => {
+    localStorage.setItem("omb-locale", "ko");
+    mock.request.mockResolvedValue({ files: [], used: 0, capacity: 100 * 1024 ** 3, error: "unavailable" });
+    await render(createElement(TeamRoomFiles, { roomId: "room1", threadId: "r-thread", closing: false, onClose: vi.fn() }));
+    expect(document.querySelector("[data-room-media-row]")!.textContent).toBe("미디어와 파일0");
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain("읽기 전용");
   });
 
   it("renders a deleted file without a download or preview in both languages", () => {

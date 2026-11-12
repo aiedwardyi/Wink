@@ -48,7 +48,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         {!missing && (
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
-            <TeamRoomFilesMenu roomId={group.hosted.roomId} />
+            <TeamRoomFilesMenu roomId={group.hosted.roomId} threadId={group.threadId} />
             <ShowPaneButton threadId={group.threadId} />
             <button
               ref={peopleButton}

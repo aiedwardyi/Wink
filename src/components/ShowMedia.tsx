@@ -9,6 +9,7 @@ import { showItem } from "@/lib/show-pane";
 import { hostRoomBase, type RoomFile } from "@/lib/team-rooms";
 import type { Message } from "@/state/store";
 import { MediaViewer } from "./MediaViewer";
+import { RoomFileMenu, useRoomFilesRemoved } from "./RoomFileMenu";
 
 const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 
@@ -21,6 +22,7 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, fra
   const [room, setRoom] = useState<RoomFile[] | null>(null);
   const paging = useRef({ before: messages[0]?.id, more: !!hasMore, busy: false, batches: 0, alive: true });
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
+  const removed = useRoomFilesRemoved();
 
   const loadOlder = useCallback(() => {
     const page = paging.current;
@@ -53,7 +55,7 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource, fra
     let alive = true;
     request(`${hostRoomBase(roomId)}/files`).then((list: { files: RoomFile[] }) => { if (alive) setRoom(list.files); }, () => { if (alive) setRoom((was) => was ?? []); });
     return () => { alive = false; };
-  }, [roomId, latest]);
+  }, [roomId, latest, removed]);
 
   // A streamed chunk without a new file keeps the same list.
   const keys = roomId ? "" : messages.flatMap((message) => messageMedia(threadId, message).map((file) => file.key)).join("\n");
@@ -97,6 +99,7 @@ export function ShowMedia({ source, maximized }: { source: MediaSource; maximize
         <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpen(null)} previous={at > 0} next={at < images.length - 1}
           onNavigate={(step) => setOpen(images[at + step] ?? open)} />
       )}
+      {source.roomId && <RoomFileMenu roomId={source.roomId} files={files} frame={frame} />}
     </div>
   );
 }

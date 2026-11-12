@@ -16,12 +16,12 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { TeamRoomFiles } from "./TeamRoomFiles";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 
-export function TeamRoomFilesMenu({ roomId }: { roomId: string }) {
+export function TeamRoomFilesMenu({ roomId, threadId }: { roomId: string; threadId: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   return <>
     <button type="button" onClick={() => setOpen(true)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>
-    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
+    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} threadId={threadId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
   </>;
 }
 
