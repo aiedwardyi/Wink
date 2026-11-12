@@ -4,16 +4,18 @@ export type ModelPickerView = "dial" | "list";
 
 const KEY = "omb-model-picker-view";
 const watchers = new Set<() => void>();
+let kept: ModelPickerView = "dial";
 
 export function loadModelPickerView(): ModelPickerView {
   try {
     return localStorage.getItem(KEY) === "list" ? "list" : "dial";
   } catch {
-    return "dial";
+    return kept;
   }
 }
 
 export function saveModelPickerView(view: ModelPickerView): void {
+  kept = view;
   try {
     localStorage.setItem(KEY, view);
   } catch {
