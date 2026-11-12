@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
+import type { AppConfig } from "./config.ts";
 import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
@@ -17,14 +18,15 @@ const KEY = "AIzaTEST-not-a-real-key-0123456789";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
   store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "fix the login page" });
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
-  const routes = createLiveCallRoutes({ cfg: { gemini: { apiKey: "key" in opts ? opts.key : KEY } }, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
+  const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
+  const routes = createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch });
   async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id) {
     let status = 0;
     let raw = "";
@@ -33,29 +35,60 @@ function harness(opts: { key?: string; reply?: () => Response } = {}) {
     return { status, raw, data: JSON.parse(raw) as Record<string, any> };
   }
   const sent = (call = 0) => JSON.parse(String(fetch.mock.calls[call]![1].body));
-  return { dir, store, bot, fetch, post, sent };
+  return { dir, cfg, store, bot, fetch, post, sent };
 }
 
 describe("call token", () => {
-  it.each(["en", "ko", "unknown", undefined])("hints input transcription with the call language: %s", async (locale) => {
+  it.each(["en", "ko", "unknown", undefined])("hints input transcription with both languages, app first, on Auto: %s", async (locale) => {
     const h = harness();
     await h.post("token", { locale });
-    expect(h.sent().bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: [locale === "ko" ? "ko" : "en"] });
+    expect(h.sent().bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: locale === "ko" ? ["ko", "en"] : ["en", "ko"] });
   });
 
   it("keeps transcription language with the brief on reconnect", async () => {
     const h = harness();
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
-    expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Speak Korean");
+    expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet in Korean.");
+  });
+
+  it("sends the saved voice and language in the Live setup", async () => {
+    const h = harness({ liveCall: { voice: "Charon", language: "ko" } });
+    const { data } = await h.post("token", { locale: "en" });
+    expect(data.voice).toBe("Charon");
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Charon");
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
+    expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean.");
+  });
+
+  it("defaults to Kore and Auto: English or Korean as spoken, else the app language", async () => {
+    const h = harness();
+    await h.post("token", { locale: "ko" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
+    const brief = setup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(brief).not.toContain("Switch only when");
+  });
+
+  it("a voice picked mid-call waits for the next call", async () => {
+    const h = harness();
+    const first = await h.post("token");
+    h.cfg.liveCall = { voice: "Puck" };
+    await h.post("token", { callId: first.data.callId, resume: true });
+    await h.post("token");
+    const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
+    expect([voice(1), voice(2)]).toEqual(["Kore", "Puck"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number) });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Kore" });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");
@@ -133,10 +166,11 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
   });
 
-  it("brief pins the app language", async () => {
-    const h = harness();
+  it("brief pins a picked language", async () => {
+    const h = harness({ liveCall: { language: "ko" } });
+    await h.post("token", { locale: "en" });
+    h.cfg.liveCall = { language: "en" };
     await h.post("token", { locale: "ko" });
-    await h.post("token");
     const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief(0)).toContain("Speak Korean");
     expect(brief(0)).toContain("ask again in Korean");

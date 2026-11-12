@@ -281,7 +281,7 @@ function useMenuPlacement(
   return box;
 }
 
-function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void): void {
+export function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void): void {
   useLayoutEffect(() => {
     const onDown = (e: Event) => {
       if (e.target instanceof Element && ref.current?.contains(e.target)) return;
@@ -321,7 +321,7 @@ function closeMenu(opener: HTMLElement, menu: HTMLElement | null, onClose: () =>
 }
 
 /** Arrow keys walk the menu's buttons; Enter clicks the focused one. */
-function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
+export function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
   const buttons = ref.current ? Array.from(ref.current.querySelectorAll("button")) : [];
   if (!buttons.length) return;
   const at = buttons.findIndex((entry) => entry === document.activeElement);

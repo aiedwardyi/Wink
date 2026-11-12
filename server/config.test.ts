@@ -41,6 +41,13 @@ describe("configuration boundaries", () => {
     expect(() => parseConfigPatch({ features: { liveVerifyAuto: "yes" } })).toThrow("features.liveVerifyAuto");
   });
 
+  it("keeps the call voice and language across other updates and drops a retired voice", () => {
+    saveConfig(parseConfigPatch({ liveCall: { voice: "Charon" } }));
+    saveConfig(parseConfigPatch({ liveCall: { language: "ko" } }));
+    expect(loadConfig().liveCall).toEqual({ voice: "Charon", language: "ko" });
+    expect(parseStoredConfig({ liveCall: { voice: "Gone", language: "ko" } }).liveCall).toEqual({ language: "ko" });
+  });
+
   it("drops retired browser settings on read and patch", () => {
     const legacy = {
       browserProfiles: [{ id: "work", name: "Work" }],

@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
+import { LIVE_LANGUAGES, LIVE_VOICES, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
 import {
   CREDENTIAL_BROKER,
   credentialValue,
@@ -110,6 +111,8 @@ const phoneRelayConfigSchema = z.object({
 const appConfigSchema = z.object({
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   gemini: z.object({ apiKey: optionalText }).optional(),
+  // A voice dropped from the list later falls back to the default, not a config that fails to load.
+  liveCall: z.object({ voice: z.enum(LIVE_VOICES).optional().catch(undefined), language: z.enum(LIVE_LANGUAGES).optional().catch(undefined) }).optional(),
   /** `model` seeds the default selection; `provider` pins an OpenRouter
    * upstream (e.g. "fireworks"). Both are non-secret and optional. */
   openaiCompat: z
@@ -171,6 +174,7 @@ const jsonObjectSchema = z.record(z.string(), z.json());
 export interface AppConfig {
   xai?: { key?: string; url?: string };
   gemini?: { apiKey?: string };
+  liveCall?: { voice?: LiveVoice; language?: LiveLanguage };
   openaiCompat?: { key?: string; url?: string; model?: string; provider?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
@@ -489,7 +493,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     damaged = !(error instanceof Error && "code" in error && error.code === "ENOENT");
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "gemini", "openaiCompat", "composio", "box", "tts", "imageGen", "anthropic", "vertex", "profile", "rooms", "localVm", "features", "phoneRelay"] as const) {
+  for (const key of ["xai", "gemini", "liveCall", "openaiCompat", "composio", "box", "tts", "imageGen", "anthropic", "vertex", "profile", "rooms", "localVm", "features", "phoneRelay"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

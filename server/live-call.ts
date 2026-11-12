@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_GENERATION, LIVE_URL, LIVE_VAD, type CallLine, type CallTag } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -23,7 +23,7 @@ export const CHAT_TAIL_TOKENS = 2_000;
 const TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 const TOKEN_MS = 30 * 60_000;
 const NEW_SESSION_MS = 60_000;
-// A dropped call resumes within this window with the same brief.
+// A dropped call resumes within this window with the same brief, voice and language.
 const BRIEF_TTL_MS = 2 * 60 * 60_000;
 const BRIEFS_KEPT = 16;
 const LINES_MAX = 50;
@@ -113,17 +113,21 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, language: LiveLanguage = "auto"): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
-  const speak = locale === "ko" ? "Korean" : "English";
+  const app = locale === "ko" ? "Korean" : "English";
+  const speak = language === "auto" ? app : language === "ko" ? "Korean" : "English";
+  const tongue = language === "auto"
+    ? `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`
+    : `Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}.`;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return plainNames([
     `WHO: You are ${who}. Speak as I. Never mention Gemini, a helper or a voice model.`,
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A vague order gets one short question first (which file?). Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will check, look into or add something unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
     "FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines. Anything else: call ask.",
-    `STYLE: 1-2 short sentences. Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}. No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
+    `STYLE: 1-2 short sentences. ${tongue} No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Greet in ${speak}. When a [Wink] line says ${bot.name} replied, say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
@@ -177,13 +181,14 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
-export function liveSetup(brief: string, locale = "en") {
+export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE, language: LiveLanguage = "auto") {
+  const app = locale === "ko" ? "ko" : "en";
   return {
     model: `models/${LIVE_MODEL}`,
-    generationConfig: LIVE_GENERATION,
+    generationConfig: liveGeneration(voice),
     systemInstruction: { parts: [{ text: brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
-    inputAudioTranscription: { languageCodes: [locale === "ko" ? "ko" : "en"] },
+    inputAudioTranscription: { languageCodes: language === "auto" ? [app, app === "ko" ? "en" : "ko"] : [language] },
     outputAudioTranscription: {},
     realtimeInputConfig: { automaticActivityDetection: LIVE_VAD },
     contextWindowCompression: { triggerTokens: LIVE_COMPRESSION.triggerTokens, slidingWindow: { targetTokens: LIVE_COMPRESSION.targetTokens } },
@@ -200,14 +205,15 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const briefs = new Map<string, { botId: string; brief: string; locale: string; at: number }>();
+  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; language: LiveLanguage; at: number }>();
 
   const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
-    const language = locale === "ko" ? "ko" : "en";
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), language);
-    const entry = { botId: bot.id, brief, locale: language, at: now() };
+    const app = locale === "ko" ? "ko" : "en";
+    const language = cfg.liveCall?.language ?? "auto";
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, language);
+    const entry = { botId: bot.id, brief, locale: app, voice: cfg.liveCall?.voice ?? LIVE_VOICE, language, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -237,7 +243,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const { brief, locale } = await briefFor(bot, callId, body.locale);
+    const { brief, locale, voice, language } = await briefFor(bot, callId, body.locale);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -250,7 +256,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(brief, locale),
+          bidiGenerateContentSetup: liveSetup(brief, locale, voice, language),
         }),
         signal: AbortSignal.timeout(15_000),
       });
@@ -261,7 +267,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!response.ok) return json(res, 502, { error: googleError(response.status, data) });
     const minted = (data as { name?: unknown } | null)?.name;
     if (typeof minted !== "string" || !minted) return json(res, 502, { error: "Google returned no call token" });
-    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt });
+    return json(res, 200, { callId, engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: minted, expiresAt, voice });
   };
 
   const lines = async (req: IncomingMessage, res: ServerResponse, bot: BotRecord) => {

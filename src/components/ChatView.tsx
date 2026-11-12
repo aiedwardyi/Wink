@@ -114,6 +114,9 @@ import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from ".
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
 import { endCall } from "@/lib/call";
+import { dropCall, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { CallMenu, useCallMenuPress } from "./CallMenu";
+import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
@@ -946,13 +949,13 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
-  const [liveCall, setLiveCall] = useState<{ botId: string; ctx: AudioContext } | null>(null);
-  const [callNote, setCallNote] = useState<{ botId: string; text: string } | null>(null);
-  const endLiveCall = useCallback((note?: string) => {
-    setLiveCall(null);
-    if (note) setCallNote({ botId: bot.id, text: note });
-  }, [bot.id]);
+  const liveCall = useActiveCall();
+  const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
+  const [callMenu, setCallMenu] = useState<HTMLElement | null>(null);
+  const callButtonRef = useRef<HTMLButtonElement>(null);
+  const callPress = useCallMenuPress(() => setCallMenu(callButtonRef.current));
+  useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
   const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
@@ -1573,26 +1576,29 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
           {/* Before the chip: the phone header fits the chip as its last control. */}
           <button
+            ref={callButtonRef}
             type="button"
             aria-pressed={onLiveCall}
             aria-label={liveCallLabel}
             title={liveCallLabel}
+            {...callPress.props}
             // The audio context is born in the tap: phones only let it play from one.
             onClick={() => {
+              if (callPress.held()) return;
               if (onLiveCall) {
                 // Release the call first, or the desktop's old call overlay mounts for a render.
                 endCall(bot.id);
-                return setLiveCall(null);
+                return dropCall(liveCall);
               }
               const ctx = new AudioContext();
               void ctx.resume();
-              setCallNote(null);
-              setLiveCall({ botId: bot.id, ctx });
+              placeCall(bot, ctx);
             }}
             className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
           >
             <Phone size={18} />
           </button>
+          {callMenu && <CallMenu opener={callMenu} onCall={Boolean(liveCall)} onClose={() => setCallMenu(null)} />}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
@@ -1888,8 +1894,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {onLiveCall
-          ? <Suspense fallback={null}><LiveCallBar bot={bot} ctx={liveCall.ctx} onEnd={endLiveCall} /></Suspense>
+          ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
           : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
+        <CallWidgetSlot className="px-3 pb-2 md:hidden" />
         {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
           <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}

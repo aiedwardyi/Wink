@@ -44,6 +44,7 @@ import {
 } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
+import { CallWidgetSlot } from "./CallSlots";
 import { updaterActions, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
@@ -1867,6 +1868,7 @@ export function Sidebar({
             onOpen={() => dispatch(phoneSettingsAction())}
           />
         )}
+        <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}

@@ -30,6 +30,7 @@ import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
+import { CallHostSlot } from "@/components/CallSlots";
 import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
@@ -685,6 +686,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       ) : null}
       {/* the one tip layer for every title in the app */}
       <GlobalTooltip />
+      <CallHostSlot />
       {/* fixed-position popup, bottom-left — outside the layout flow */}
       <UpdateBanner />
       {themeToast && (
