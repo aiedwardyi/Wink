@@ -338,7 +338,7 @@ describe("This PC", () => {
     serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": signedIn });
     const { host, root } = await renderView();
     expect(host.querySelector("[data-this-pc]")?.textContent).toContain("Connect from my devices");
-    expect(host.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
+    expect(host.querySelector('[role="switch"][aria-checked="false"]')).toBeNull();
     expect(host.textContent).not.toContain("Not available on this PC yet.");
     await act(async () => root.unmount());
   });

@@ -15,6 +15,7 @@
 // `alwaysAllow`, so the two sides never disagree about what was granted.
 
 import { newId } from "./contracts.ts";
+import { peerCardRows } from "./message-db.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
@@ -187,20 +188,17 @@ export function cancelPeerApprovalsForThread(threadId: string): void {
  * crashed run doesn't leave a thread with a permanently blocked composer. */
 export function dismissStalePeerCards(bus: ApprovalBus): number {
   let dismissed = 0;
-  for (const conversation of [...bus.store.bots, ...bus.store.groups]) {
-    const threadIds = new Set([conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]);
-    for (const threadId of threadIds) {
-      for (const message of bus.store.messagesFor(threadId)) {
-        const card = message.card;
-        if (!card?.requestId || card.answered || card.dismissed) continue;
-        if (card.tool !== "ask_bot" && card.tool !== "delegate_bot") continue;
-        if (pendingComms.has(card.requestId)) continue;
-        const patched = bus.store.patchMessage(threadId, message.id, {
-          card: { ...card, answered: "deny", dismissed: true },
-        });
-        if (patched) dismissed += 1;
-      }
-    }
+  const threadIds = new Set([...bus.store.bots, ...bus.store.groups].flatMap((conversation) => [conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]));
+  for (const row of peerCardRows()) {
+    if (!threadIds.has(row.threadId)) continue;
+    const card = bus.store.messagesFor(row.threadId).find((message) => message.id === row.id)?.card;
+    if (!card?.requestId || card.answered || card.dismissed) continue;
+    if (card.tool !== "ask_bot" && card.tool !== "delegate_bot") continue;
+    if (pendingComms.has(card.requestId)) continue;
+    const patched = bus.store.patchMessage(row.threadId, row.id, {
+      card: { ...card, answered: "deny", dismissed: true },
+    });
+    if (patched) dismissed += 1;
   }
   return dismissed;
 }

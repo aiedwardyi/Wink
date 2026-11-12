@@ -433,23 +433,16 @@ describe("wiring", () => {
   });
 
   it("pins the 1:1 viewport on turn-stage transitions, not just deltas", () => {
-    // turnPhase/activityLabel derive from stream.signal[threadId]; a
-    // started/retrying signal changes stage content (Preparing -> Waiting
-    // for the model -> Reconnecting) while messages.length, streaming,
-    // reasoning and busy stay put. Sparse-delta engines strand the viewport
-    // below the thinking block until the next delta unless the pin effect
-    // also watches the per-thread stage signal. `follow` itself stays out
-    // of the deps (re-pinning only arms future content, never yanks).
-    const pinDeps =
-      chatView.match(
-        /el\.scrollTo\(\{\s*top:\s*el\.scrollHeight\s*\}\);\s*previousScrollTop\.current\s*=\s*el\.scrollTop;\s*\},\s*\[([^\]]*)\]\)/,
-      )?.[1] ?? "";
+    // A started/retrying signal swaps stage content (Preparing -> Waiting
+    // for the model -> Reconnecting) while messages.length and busy stay put.
+    // Those swaps and deltas change content height, so the resize observer
+    // pins them; commits pin once per frame. `follow` itself stays out of the
+    // deps (re-pinning only arms future content, never yanks).
+    const pinDeps = chatView.match(/requestAnimationFrame\(pinBottom\);\s*\},\s*\[([^\]]*)\]\)/)?.[1] ?? "";
     expect(pinDeps).toContain("messages.length");
-    expect(pinDeps).toContain("streaming");
-    expect(pinDeps).toContain("reasoning");
     expect(pinDeps).toContain("bot.busy");
-    expect(pinDeps).toMatch(/signal/i);
     expect(pinDeps).not.toMatch(/\bfollow\b/);
+    expect(chatView).toMatch(/new ResizeObserver\(\(\) => \{\s*pinBottom\(\);/);
   });
 
   it("never yanks a viewport the user scrolled up, in 1:1 or rooms", () => {

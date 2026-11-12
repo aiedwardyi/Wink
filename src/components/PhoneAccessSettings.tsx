@@ -172,7 +172,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     return () => window.clearInterval(tick);
   }, [retrying]);
 
-  // Unknown until the first answer: the row paints at once, its switch held off.
+  // Unknown until the first answer: the row paints at once, a placeholder where the switch goes, never a false Off.
   const known = status !== null || refused;
 
   const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
@@ -284,7 +284,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       role="switch"
       aria-checked={enabled}
       aria-label={t("settings.devices.reach")}
-      disabled={busy || !known || (!enabled && unavailable)}
+      disabled={busy || (!enabled && unavailable)}
       onClick={() => {
         if (enabled) return void save(false);
         // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
@@ -302,7 +302,9 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     </button>
   ) : null;
   // Already on: keep the switch so turning it off never needs a sign-in.
-  const control = enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
+  const control = !known
+    ? <span data-switch-pending="" aria-hidden="true" className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-control motion-reduce:animate-none" />
+    : enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
   const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t("settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);

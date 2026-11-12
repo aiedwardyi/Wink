@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { catalogs } from "@/lib/i18n-catalog";
+import { saveModelPickerView } from "@/lib/model-picker-view";
 import { savePickerLook } from "@/lib/picker-look";
 import { saveRainbowBox } from "@/lib/rainbow-box";
 import { SKINS } from "@/lib/skins";
@@ -15,6 +16,7 @@ import type { AppSettingsSection } from "@/state/store";
 const mock = vi.hoisted(() => ({
   section: "general" as AppSettingsSection,
   updaterState: null as unknown,
+  dial: false,
 }));
 
 // keep the real useManualCheck: SettingsModal imports it from here too, and
@@ -50,7 +52,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           rooms: { turnTimeoutMinutes: 5 },
           localVm: { mode: "shared", maxInstances: 1 },
           profile: { name: "", email: "" },
-          features: { showToolCalls: false },
+          features: { showToolCalls: false, modelDial: mock.dial },
         },
       },
       dispatch: () => undefined,
@@ -288,6 +290,33 @@ describe("SettingsModal friends chrome", () => {
     }
     expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={savePickerLook}");
     expect([catalogs.ko["settings.pickerLook.title"], catalogs.ko["settings.pickerLook.dark"], catalogs.ko["settings.pickerLook.light"]]).toEqual(["모델 선택", "다크", "라이트"]);
+  });
+
+  it("picks the model picker style from Dial and List under the look row, wherever the dial can show", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+    const style = 'aria-label="Model Picker Style"';
+    try {
+      expect(markup("themes")).not.toContain(style);
+      mock.dial = true;
+      expect(markup("themes")).not.toContain(style);
+      window.matchMedia = ((media: string) => ({ media, matches: true })) as typeof window.matchMedia;
+      const html = markup("themes");
+      expect(html.indexOf(style)).toBeGreaterThan(html.indexOf('aria-label="Model Picker"'));
+      const group = () => markup("themes").match(/<div role="radiogroup" aria-label="Model Picker Style"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
+      const checked = () => group().match(/aria-checked="true"[^>]*>([^<]+)</)?.[1];
+      expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dial", "List"]);
+      expect(checked()).toBe("Dial");
+      saveModelPickerView("list");
+      expect(values.get("omb-model-picker-view")).toBe("list");
+      expect(checked()).toBe("List");
+    } finally {
+      mock.dial = false;
+      Reflect.deleteProperty(window, "matchMedia");
+      vi.unstubAllGlobals();
+    }
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={saveModelPickerView}");
+    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"]]).toEqual(["모델 선택 방식", "다이얼", "목록"]);
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
