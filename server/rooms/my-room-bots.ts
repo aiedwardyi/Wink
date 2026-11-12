@@ -82,6 +82,7 @@ export class MyRoomBotTurns {
     const room = joinedRoom(roomId);
     if (!local || !room?.state) return this.set(roomId, bot.id, { error: "failed" });
     this.set(roomId, bot.id, { working: true });
+    let mine: Running | undefined;
     try {
       let threadId = bot.threadId && this.deps.hasTask(local.id, bot.threadId) ? bot.threadId : null;
       if (!threadId) {
@@ -98,10 +99,11 @@ export class MyRoomBotTurns {
         ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
         `${JSON.stringify(room.me.name)} asked you: ${entry.text}`,
       ].join("\n");
-      this.running.set(threadId, { roomId, id: bot.id, entry, since: this.deps.messagesFor(threadId).length });
+      // A live entry is the turn whose answer is still owed; this ask fails BOT_BUSY.
+      if (!this.running.has(threadId)) this.running.set(threadId, (mine = { roomId, id: bot.id, entry, since: this.deps.messagesFor(threadId).length }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text);
     } catch (error) {
-      for (const [threadId, run] of this.running) if (run.entry === entry) this.running.delete(threadId);
+      for (const [threadId, run] of this.running) if (run === mine) this.running.delete(threadId);
       this.set(roomId, bot.id, { error: (error as { code?: unknown } | null)?.code === "BOT_BUSY" ? "busy" : "failed" });
     }
   }

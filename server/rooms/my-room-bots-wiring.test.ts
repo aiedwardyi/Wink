@@ -6,6 +6,14 @@ const between = (from: string, to: string) => source.slice(source.indexOf(from),
 
 it("keeps a joined room's task out of chat sync", () => {
   expect(between("function threadSyncTarget(", "\n}\n")).toContain("myRoomBotThreads().has(threadId)");
+  expect(between("function sideThreadIds(", "\n}\n")).toContain("...myRoomBotThreads()");
+  expect(between("createThreadSyncV2Store({", "maintenance:")).toMatch(/target: \(threadId\) => \{[^}]*sideThreadIds\(\)\.has\(threadId\)\) return null;/);
+});
+
+it("never follows a joined room's task as the user chat", () => {
+  const follows = source.match(/followNewestTask\([^\n;]*?\);/g) ?? [];
+  expect(follows.length).toBeGreaterThanOrEqual(4);
+  for (const call of follows) expect(call).toMatch(/, side(ThreadIds\(\)|Threads)\);$/);
 });
 
 it("lets the memory pass save from a joined room's task like any other task", () => {

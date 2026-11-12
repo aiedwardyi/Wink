@@ -97,6 +97,28 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.client.botSend).not.toHaveBeenCalled();
   });
 
+  it("still posts the first answer when the owner asks again mid-turn", async () => {
+    let busy = false;
+    deps.startTurn.mockImplementation(async (_botId: string, _threadId: string, _prompt: string, typed: string) => {
+      if (busy) throw Object.assign(new Error("busy"), { code: "BOT_BUSY" });
+      busy = true;
+      thread.push({ id: "u", at: 0, role: "user", kind: "text", text: typed });
+    });
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    const ask = line(peter, "@Pete-Coder make the chart");
+    turns.sent(ROOM, ask);
+    await settle();
+    turns.sent(ROOM, line(peter, "@Pete-Coder also add totals"));
+    turns.sent(ROOM, ask);
+    await settle();
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ error: "busy" });
+    thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's done." });
+    await turns.settled("task-1", true);
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Chart's done.", ask.id);
+  });
+
   it("does nothing for a host that never sent teammates' bots", async () => {
     setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME], bots: [] });
     const turns = new MyRoomBotTurns(deps);

@@ -2001,6 +2001,10 @@ function routineThreadIds(): Set<string> {
   return new Set(routines?.listRuns().flatMap((run) => (run.threadId ? [run.threadId] : [])));
 }
 
+function sideThreadIds(): Set<string> {
+  return new Set([...routineThreadIds(), ...myRoomBotThreads()]);
+}
+
 const pendingSyncFollows = new Set<string>();
 
 /** An import that landed mid-turn is followed once its bot settles. */
@@ -2008,8 +2012,8 @@ function followPendingSyncImports(): void {
   for (const botId of pendingSyncFollows) {
     if (botHasActiveTurn(botId)) continue;
     pendingSyncFollows.delete(botId);
-    if (threadSyncGate.enabled) store.applySyncImport(() => { store.followNewestTask(botId, routineThreadIds()); });
-    else store.followNewestTask(botId, routineThreadIds());
+    if (threadSyncGate.enabled) store.applySyncImport(() => { store.followNewestTask(botId, sideThreadIds()); });
+    else store.followNewestTask(botId, sideThreadIds());
   }
 }
 
@@ -2127,7 +2131,7 @@ function initializeThreadSyncV2() {
     enabled: () => profileSyncSettings.syncChats,
     target: (threadId) => {
       const bot = store.botByThread(threadId);
-      if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId) || routineThreadIds().has(threadId)) return null;
+      if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId) || sideThreadIds().has(threadId)) return null;
       const botSyncId = profileSyncSettings.botMap[bot.id];
       return botSyncId ? { botId: bot.id, botSyncId } : null;
     },
@@ -2140,7 +2144,7 @@ function initializeThreadSyncV2() {
     project: clientMessage,
     imported: (botId) => {
       if (botHasActiveTurn(botId)) pendingSyncFollows.add(botId);
-      else store.followNewestTask(botId, routineThreadIds());
+      else store.followNewestTask(botId, sideThreadIds());
     },
     maintenance: () => {
       const pending = syncProfiles();
@@ -6044,10 +6048,10 @@ botTrash = new ServerBotTrash(store, routines);
 botTrash.start();
 emptyExpiredTrash();
 setInterval(emptyExpiredTrash, 6 * 60 * 60_000).unref?.();
-// One chat per bot: open each idle bot on its newest user chat, never a routine run.
-const routineThreads = routineThreadIds();
+// One chat per bot: open each idle bot on its newest user chat, never a routine run or room task.
+const sideThreads = sideThreadIds();
 for (const bot of store.bots) {
-  if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, routineThreads);
+  if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, sideThreads);
 }
 routines.start();
 

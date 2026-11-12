@@ -208,7 +208,9 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
-    database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
+    // The host keeps a returning person's bots, so this PC keeps its record of them.
+    const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
+    if (before?.person_id !== me.id) database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
