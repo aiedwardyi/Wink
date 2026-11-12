@@ -121,7 +121,8 @@ export function ShownImage({ name, caption }: { name: string; caption?: string }
           onClick={(event) => { if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setOpen(true); } }}
           aria-label={`Open image ${image.name}`}
           title={`Open ${image.name}`}
-          className={cn("block w-fit cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50", CHAT_IMAGE)}
+          style={CHAT_IMAGE}
+          className="block w-fit cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <img
             src={retry.src}
@@ -130,7 +131,7 @@ export function ShownImage({ name, caption }: { name: string; caption?: string }
             onLoad={rememberChatImage}
             onError={retry.onError}
             style={chatImageBox(retry.src)}
-            className={cn("block rounded-2xl border border-hairline/40", CHAT_IMAGE)}
+            className="block rounded-2xl border border-hairline/40"
           />
         </button>
       ) : image ? (

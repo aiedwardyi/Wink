@@ -16,7 +16,6 @@ import { PhoneVideo } from "./PhoneVideo";
 import { ShowCard } from "./ShowCard";
 import { z } from "zod";
 
-import { CHAT_IMAGE } from "@/lib/chat-image";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { linkedFileSrc, showItem, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
@@ -597,7 +596,7 @@ function PhoneFile({
     );
   }
   if (kind === "image") {
-    return <ReadableImage src={src} alt="" data-phone-media="image" className={`${CHAT_IMAGE} rounded-lg border border-hairline/30`} />;
+    return <ReadableImage src={src} alt="" data-phone-media="image" className="rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
   if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} />;
@@ -743,7 +742,7 @@ function ChatMarkdownComponent({
           src={src}
           alt={alt ?? ""}
           loading="lazy"
-          className={`${CHAT_IMAGE} rounded-lg border border-hairline/30`}
+          className="rounded-lg border border-hairline/30"
         />
       );
     },

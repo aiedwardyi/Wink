@@ -345,7 +345,8 @@ function ScreenFrame({ src, caption }: { src: string; caption?: string }) {
       <img
         src={src}
         alt={caption || "Bot's screen"}
-        className={cn("rounded-2xl border border-hairline/40", CHAT_IMAGE)}
+        style={CHAT_IMAGE}
+        className="rounded-2xl border border-hairline/40"
       />
       {caption && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{caption}</p>}
     </div>

@@ -100,8 +100,9 @@ describe("ShownImage", () => {
     const { host, root } = await renderShownImage("/a/b/cap.png");
     try {
       const img = host.querySelector("img")!;
-      expect(img.className).toContain("max-h-96");
-      expect(img.className).toContain("max-w-[min(32rem,100%)]");
+      expect(img.style.maxHeight).toBe("384px");
+      expect(img.style.maxWidth).toBe("min(512px, 100%)");
+      expect(img.parentElement!.style.maxWidth).toBe("min(512px, 100%)");
       expect(img.className).not.toContain("w-full");
     } finally {
       await act(async () => root.unmount());

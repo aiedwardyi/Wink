@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CHAT_IMAGE, chatImageBox, rememberChatImage } from "@/lib/chat-image";
-import { cn } from "@/lib/cn";
 import { adjacentMedia, markdownImage, mediaList, type MediaMessage, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
 import { useI18n } from "@/lib/i18n";
 import { MediaViewer } from "./MediaViewer";
@@ -80,12 +79,12 @@ export function ReadableImage({ src, alt = "", ...props }: { src?: string; alt?:
     if (!viewer || !image || !messageId || linked) return;
     return viewer.register({ ...image, messageId, id: `${messageId}:${image.src}` });
   }, [viewer, image, linked]);
-  if (!image || linked) return <img src={src} alt={alt} style={chatImageBox(src)} onLoad={rememberChatImage} {...props} />;
+  if (!image || linked) return <img src={src} alt={alt} {...props} style={chatImageBox(src)} onLoad={rememberChatImage} />;
   return <>
-    <button ref={ref} type="button" className={cn("inline-block rounded-lg text-left focus-visible:outline-2 focus-visible:outline-accent", CHAT_IMAGE)}
+    <button ref={ref} type="button" style={CHAT_IMAGE} className="inline-block rounded-lg text-left focus-visible:outline-2 focus-visible:outline-accent"
       aria-label={t("viewer.open", { name: image.name })}
       onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setSelected(true); } }}>
-      <img src={src} alt={alt} style={chatImageBox(src)} onLoad={rememberChatImage} {...props} />
+      <img src={src} alt={alt} {...props} style={chatImageBox(src)} onLoad={rememberChatImage} />
     </button>
     {selected && <MediaViewer image={image} onClose={() => setSelected(false)} />}
   </>;
