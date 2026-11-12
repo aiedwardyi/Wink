@@ -21,7 +21,11 @@ vi.mock("@/lib/room-translate", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/room-translate")>(),
   useTranslationAvailable: () => false,
 }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { connected: true } }), formatTime: () => "" }));
+vi.mock("@/state/store", async (original) => ({
+  ...await original<typeof import("@/state/store")>(),
+  useStore: () => ({ state: { connected: true, bots: [], acceptedSends: {}, instances: [], pendingQueued: {} }, dispatch: () => {} }),
+  formatTime: () => "",
+}));
 
 const group = {
   id: "g1", threadId: "t1", name: "Design team", memberIds: [], messages: [],
@@ -84,7 +88,7 @@ describe("room file drop", () => {
     const files = [file("plan.txt"), file("board.png", "image/png")];
     await drag("drop", files);
     expect(host.textContent).toContain("plan.txt");
-    expect(host.textContent).toContain("board.png");
+    expect(host.querySelector("img[alt='board.png']")).not.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
     await send();
     const calls = vi.mocked(fetch).mock.calls;
@@ -167,7 +171,7 @@ describe("room file drop", () => {
     Object.defineProperty(event, "clipboardData", { value: { files: [file("clipboard.png", "image/png")] } });
     await act(async () => { box().dispatchEvent(event); });
     expect(event.defaultPrevented).toBe(true);
-    expect(host.textContent).toContain("clipboard.png");
+    expect(host.querySelector("img[alt='clipboard.png']")).not.toBeNull();
     await send();
     expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/files?name=clipboard.png");
   });
@@ -200,7 +204,7 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
     await act(async () => finish(reply({ file: { id: "uploaded" } })));
@@ -216,7 +220,7 @@ describe("room drafts", () => {
     await send();
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render(side);
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!;
     expect(button.disabled).toBe(true);
     await send();
     expect(fetch).toHaveBeenCalledOnce();
@@ -263,7 +267,7 @@ describe("room drafts", () => {
     await send();
     expect(fetch).not.toHaveBeenCalled();
     await act(async () => repick!.click());
-    const picker = host.querySelector('input[type="file"]:not([data-room-picture-input])')!;
+    const picker = host.querySelector('input[type="file"]:not([multiple]):not([data-room-picture-input])')!;
     await act(async () => {
       Object.defineProperty(picker, "files", { value: [file("reload.txt")], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
@@ -354,5 +358,139 @@ describe("room focus", () => {
     joined.view!.status = "left";
     await render("joined");
     expect(host.querySelector("textarea")).toBeNull();
+  });
+});
+
+describe("room click to type", () => {
+  const settle = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  const click = async (target: Element) => {
+    await act(async () => { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); });
+    await settle();
+  };
+  const away = async () => {
+    await settle();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).not.toBe(box());
+  };
+
+  it.each(["host", "joined"])("focuses the %s composer on an empty transcript click", async (side) => {
+    await render(side);
+    await away();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("focuses from the gap between messages", async () => {
+    await render();
+    await away();
+    await click(host.querySelector('[role="log"]')!);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("leaves buttons and links alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    const button = log.appendChild(document.createElement("button"));
+    const link = log.appendChild(document.createElement("a"));
+    link.setAttribute("href", "https://example.com");
+    await click(button);
+    await click(link);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it("leaves a text selection alone", async () => {
+    await render();
+    await away();
+    const log = host.querySelector('[role="log"]')!;
+    log.textContent = "picked words";
+    const range = document.createRange();
+    range.selectNodeContents(log);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    await click(log);
+    expect(document.activeElement).not.toBe(box());
+    window.getSelection()!.removeAllRanges();
+  });
+
+  it("stays out of the way on a phone", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    await render();
+    await click(host.querySelector("[data-team-room-transcript]")!);
+    expect(document.activeElement).not.toBe(box());
+  });
+
+  it.each(["host", "joined"])("gives the %s box the skin frame", async (side) => {
+    await render(side);
+    expect(box().closest("[data-orbit-composer-frame]")).not.toBeNull();
+  });
+});
+
+describe("room image preview", () => {
+  const urls = { made: [] as Blob[], revoked: [] as string[] };
+  beforeEach(() => {
+    urls.made = [];
+    urls.revoked = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => { urls.made.push(blob as Blob); return `blob:thumb-${urls.made.length}`; });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => { urls.revoked.push(url); });
+  });
+
+  it.each(["host", "joined"])("shows an attached image as a %s thumbnail with a remove button", async (side) => {
+    await render(side);
+    await drag("drop", [file("board.png", "image/png")]);
+    const thumb = host.querySelector<HTMLImageElement>("img[alt='board.png']");
+    expect(thumb?.getAttribute("src")).toBe("blob:thumb-1");
+    expect(thumb?.closest("[title='board.png']")?.className).toContain("w-[172px]");
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Remove image']")!.click());
+    expect(host.querySelector("img[alt='board.png']")).toBeNull();
+    expect(urls.revoked).toContain("blob:thumb-1");
+  });
+
+  it("keeps a plain row for a file that is not a picture", async () => {
+    await render();
+    await drag("drop", [file("plan.txt")]);
+    expect(host.querySelector("img")).toBeNull();
+    expect(host.textContent).toContain("plan.txt");
+  });
+});
+
+describe("room box is the 1:1 box", () => {
+  it.each(["host", "joined"])("renders the shared %s composer", async (side) => {
+    await render(side);
+    expect(host.querySelector("[data-team-room] textarea[data-orbit-composer]")).toBe(box());
+    expect(host.querySelector("[data-orbit-composer-host]")).not.toBeNull();
+  });
+
+  it("types from a press on the frame padding", async () => {
+    await render();
+    (document.activeElement as HTMLElement | null)?.blur();
+    const frame = box().closest<HTMLElement>("[data-orbit-composer-frame]")!;
+    await act(async () => {
+      frame.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    });
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("opens the attached image preview", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    await render();
+    await drag("drop", [file("board.png", "image/png")]);
+    await act(async () => host.querySelector<HTMLElement>("[aria-label='Preview board.png']")!.click());
+    expect(document.querySelector("[role='dialog'] img[src='blob:thumb']")).not.toBeNull();
+  });
+
+  it("offers room people in the @ list", async () => {
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, room: { name: "Design team", people: [{ id: "p1", name: "Mina" }] } } as unknown as TeamRoom })));
+    await type("hi @Mi");
+    expect(host.querySelector("[role='listbox'] [role='option']")?.textContent).toContain("Mina");
+  });
+
+  it("sends with the 1:1 send button", async () => {
+    await render();
+    await type("hello");
+    await act(async () => host.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!.click());
+    expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/send");
   });
 });
