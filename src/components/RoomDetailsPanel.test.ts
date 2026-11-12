@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JoinedView } from "@/lib/team-rooms";
+import { setSaveStatus } from "@/state/description-save-status";
 import type { Action, Bot, Group, InstanceInfo } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
@@ -42,6 +43,11 @@ const button = (label: string) => [...document.querySelectorAll("button")].find(
 const order = () => [...host.querySelectorAll("[data-room-details-section]")].map((each) => each.getAttribute("data-room-details-section"));
 const headings = () => [...host.querySelectorAll("h3")].map((each) => each.textContent);
 const removeButtons = () => [...section("bots").querySelectorAll<HTMLButtonElement>("[data-room-bot] button")];
+const bulletins = () => mock.dispatched.flatMap((action) => action.type === "patchGroup" && "bulletin" in action.patch ? [action.patch.bulletin] : []);
+const type = (box: HTMLTextAreaElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+});
 const confirm = (label: string) => act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button, [role="alertdialog"] button')].filter((each) => each.textContent === label).at(-1)!.click());
 
 async function open(props: { group?: Group; joinedId?: string }, answer: (path: string, method: string) => Response = () => json({}), locale: "en" | "ko" = "en") {
@@ -94,6 +100,37 @@ describe("Room details", () => {
     await open({ group: { ...group, dm: true, memberIds: ["b1", "b2"] } });
     expect(order()).toEqual(["room"]);
     expect(section("room").querySelector("textarea")).not.toBeNull();
+  });
+
+  it("saves instructions as you type, with Bot details' Saved cue", async () => {
+    await open({ group });
+    const box = section("room").querySelector("textarea")!;
+    await act(async () => box.focus());
+    await type(box, "Cite sources.");
+    expect(bulletins()).toEqual([]);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
+    expect(bulletins()).toEqual(["Cite sources."]);
+    expect(section("room").textContent).not.toContain("Saved");
+    await act(async () => setSaveStatus("group-1", "saved"));
+    expect(section("room").textContent).toContain("Saved");
+    await act(async () => box.blur());
+    expect(bulletins()).toEqual(["Cite sources."]);
+  });
+
+  it("keeps instructions typed just before the panel closes", async () => {
+    await open({ group });
+    await type(section("room").querySelector("textarea")!, "Cite sources.");
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    expect(bulletins()).toEqual(["Cite sources."]);
+  });
+
+  it("sends nothing when the instructions are only focused and left", async () => {
+    await open({ group: { ...group, bulletin: "Old" } });
+    const box = section("room").querySelector("textarea")!;
+    await act(async () => box.focus());
+    await act(async () => box.blur());
+    expect(bulletins()).toEqual([]);
   });
 
   it("renames the room in place from the pencil, and saves on Enter", async () => {

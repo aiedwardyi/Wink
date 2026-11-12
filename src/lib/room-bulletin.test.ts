@@ -25,9 +25,9 @@ describe("nextBulletin", () => {
 });
 
 describe("channel bulletin editor", () => {
-  it("lives in Room details and saves as you leave it, like Bot details fields", () => {
+  it("lives in Room details and shows Bot details' Saved cue", () => {
     expect(groupView).not.toContain("saveBulletin");
-    expect(roomDetails).toContain("onBlur={saveBulletin}");
+    expect(roomDetails).toContain("<SaveStatus id={group.id} />");
   });
 
   it("opens from a bot-to-bot channel's name too", () => {

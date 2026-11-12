@@ -22,6 +22,7 @@ import { useRoomAlerts } from "./RoomAlertsBell";
 import { RoomDetailsBots } from "./RoomDetailsBots";
 import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
 import { RoomPicture, TeamRoomPicture } from "./RoomPicture";
+import { SaveStatus } from "./SaveStatus";
 import { JoinedBots } from "./RoomTeamBots";
 
 const hostedRoom = (group: Group): group is TeamRoom => Boolean(group.hosted);
@@ -117,17 +118,32 @@ function HostRoom({ group }: { group: Group }) {
   const [name, setName] = useState<string | null>(null);
   const [bulletin, setBulletin] = useState(group.bulletin);
   const editing = useRef(false);
+  const unsaved = useRef<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // an open draft outranks an incoming patch: resyncing under the cursor loses the edit
   useEffect(() => void (!editing.current && setBulletin(group.bulletin)), [group.bulletin]);
+  // a close can unmount without a blur, so the last keystrokes go out here
+  useEffect(() => () => saveBulletin(), []);
   const saveName = () => {
     const next = name === null ? null : nextRename(group.name, name);
     if (next) dispatch({ type: "patchGroup", groupId: group.id, patch: { name: next } });
     setName(null);
   };
   const saveBulletin = () => {
+    clearTimeout(timer.current);
+    if (unsaved.current !== null) dispatch({ type: "patchGroup", groupId: group.id, patch: { bulletin: unsaved.current } });
+    unsaved.current = null;
+  };
+  const editBulletin = (text: string) => {
+    setBulletin(text);
+    unsaved.current = nextBulletin(group.bulletin, text);
+    clearTimeout(timer.current);
+    if (unsaved.current !== null) timer.current = setTimeout(saveBulletin, 400);
+  };
+  const leaveBulletin = () => {
     editing.current = false;
-    const next = nextBulletin(group.bulletin, bulletin);
-    if (next !== null) dispatch({ type: "patchGroup", groupId: group.id, patch: { bulletin: next } });
+    if (unsaved.current !== null) saveBulletin();
+    else setBulletin(group.bulletin);
   };
   return (
     <>
@@ -161,6 +177,10 @@ function HostRoom({ group }: { group: Group }) {
       </div>
       <div className={cn(DETAILS_BOX, "mt-4")}>
         <div className={DETAILS_ROW}>
+          <div className="relative mb-1.5 text-[14px] font-medium text-ink">
+            {t("room.bulletinTitle")}
+            <SaveStatus id={group.id} />
+          </div>
           <FitTextarea
             rows={1}
             aria-label={t("room.bulletinTitle")}
@@ -168,8 +188,8 @@ function HostRoom({ group }: { group: Group }) {
             placeholder={t("room.instructionsHint")}
             value={bulletin}
             onFocus={() => (editing.current = true)}
-            onChange={(event) => setBulletin(event.target.value)}
-            onBlur={saveBulletin}
+            onChange={(event) => editBulletin(event.target.value)}
+            onBlur={leaveBulletin}
           />
         </div>
         {group.hosted && <AlertsRow chat={group.id} />}
