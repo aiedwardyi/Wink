@@ -242,10 +242,6 @@ export class GuestClient {
     return { ok: true, value: this.view(room) };
   }
 
-  name(): string {
-    return this.deps.joiner().name;
-  }
-
   /** The whole join: the pasted code in, a synced room out. */
   async join(code: string): Promise<GuestResult<JoinedView>> {
     if (this.changing.size) return failed(409, "room is busy");

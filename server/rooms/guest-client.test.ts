@@ -101,13 +101,6 @@ describe("room codes", () => {
     expect(c.room("r1")?.entries).toHaveLength(200);
   });
 
-  it("answers the name a join would send, for the join screen to prefill", async () => {
-    const c = guest({ joiner: () => ({ name: "DESKTOP-4F2K", device: PC }) });
-    vi.spyOn(c, "start").mockImplementation(() => {});
-    expect(await joinedRoute("GET", "/api/joined/name", c, async () => null)).toEqual({ status: 200, body: { name: "DESKTOP-4F2K" } });
-    expect((await joinedRoute("POST", "/api/joined/name", c, async () => null))?.status).toBe(404);
-  });
-
   it("clears only observed entries through the local read route and broadcasts", async () => {
     saveJoined("r1", HOST, STATE.me, KEY);
     const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });

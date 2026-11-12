@@ -170,7 +170,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const { state, dispatch } = useStore();
   const [askName] = useState(() => !rejoin && !state.config?.profile?.name?.trim());
   const [name, setName] = useState("");
-  const [guessed, setGuessed] = useState(!askName);
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
@@ -181,7 +180,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const join = async (value: string) => {
     if (busy.current) return;
     waiting.current = value;
-    if (!guessed) return;
     const typed = askName ? typedRoomName(name) : "";
     if (askName && !typed) return setProblem("teamRoom.nameRequired");
     waiting.current = null;
@@ -220,12 +218,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   };
 
   useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>(askName ? "[data-join-name]" : "[data-join-boxes] input"))?.focus(), []);
-  useEffect(() => {
-    if (askName) void request("/api/joined/name").then((body) => setName((typed) => typed || String(body?.name ?? ""))).catch(() => {}).finally(() => setGuessed(true));
-  }, []);
-  useEffect(() => {
-    if (guessed && waiting.current) void join(waiting.current);
-  }, [guessed]);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
