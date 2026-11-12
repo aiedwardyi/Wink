@@ -1918,6 +1918,7 @@ describe("phone header name floor", () => {
       phone = true;
       await act(async () => { window.dispatchEvent(new Event("resize")); });
       expect(clones).toBe(1);
+      expect(rootStyles).toBe(1);
       expect(nameButton?.style.minWidth).not.toBe("");
     } finally {
       await act(async () => root.unmount());
