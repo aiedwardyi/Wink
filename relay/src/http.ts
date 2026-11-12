@@ -2,11 +2,16 @@
 // GET /v1/healthz, GET /v1/status/<label>, POST /v1/enroll,
 // and, when config.google is set, POST /v1/account and GET /v1/pcs,
 // plus GET /v1/team and POST /v1/team/snags/{claim,ack} when teamOwnerEmail is set too,
-// and GET /v1/room-codes/<code>.
+// GET /v1/room-codes/<code>,
+// and, when config.stats is set, POST /v1/stats and GET /v1/stats/day/<date>.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
+import { gunzip } from "node:zlib";
 import { z } from "zod";
 import { LABEL_RE, ROOM_CODE_RE, SNAG_ID_RE, hostFor } from "../../shared/relay-protocol.ts";
+import { STATS_MAX_BYTES, STATS_MAX_INFLATED } from "../../shared/usage-stats.ts";
 import { BAD_ACCOUNT_REQUEST, accountRequestSchema, type Accounts } from "./accounts.ts";
 import { BAD_REQUEST, enrollRequestSchema, type Enroller } from "./enroll.ts";
 import type { Hub } from "./hub.ts";
@@ -18,6 +23,7 @@ import type { TeamLog } from "./team.ts";
 import type { ReportStore } from "./reports.ts";
 import { reportHttp } from "./reports-http.ts";
 import type { RoomCodeStore } from "./room-codes.ts";
+import type { StatsStore } from "./stats.ts";
 
 export interface ApiOptions {
   base: string;
@@ -34,6 +40,8 @@ export interface ApiOptions {
   snags?: SnagStore;
   reports?: ReportStore;
   roomCodes?: RoomCodeStore;
+  /** Without it, /v1/stats is 404. */
+  stats?: StatsStore;
   limits: RelayLimits;
   log: Logger;
   now: () => number;
@@ -47,6 +55,8 @@ const ROOM_CODE_URL_RE = /^\/v1\/room-codes\/([^/?#]{1,16})$/;
 const TEAM_RE = /^\/v1\/team(?:\?tz=(-?[0-9]{1,4}))?$/;
 const SNAGS_RE = /^\/v1\/team\/snags\/(claim|ack)$/;
 const SNAG_ACK_MAX_BODY = 16 * 1024;
+const STATS_DAY_RE = /^\/v1\/stats\/day\/(\d{4}-\d{2}-\d{2})$/;
+const inflate = promisify(gunzip);
 const snagAckSchema = z.object({ ids: z.array(z.string().regex(SNAG_ID_RE)).max(SNAG_CLAIM_MAX) });
 
 type ReplyBody = Record<string, string | number | boolean | null>;
@@ -105,6 +115,14 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
   });
 }
 
+/** Reads a refused body out: closing on unread bytes resets the socket before the sender sees the reply. */
+function drain(req: IncomingMessage): Promise<void> {
+  return new Promise((done) => {
+    if (req.destroyed) done();
+    else req.once("end", done).once("close", done).resume();
+  });
+}
+
 export function createApiServer(opts: ApiOptions): Server {
   const { hub, limits, log } = opts;
   const enrollLimit = RateLimiter.perHour(limits.enrollPerIpPerHour, opts.now);
@@ -115,7 +133,9 @@ export function createApiServer(opts: ApiOptions): Server {
   const roomCodeMinute = RateLimiter.perMinute(limits.roomCodeLookupsPerIpPerMin, opts.now);
   const roomCodeHour = RateLimiter.perHour(limits.roomCodeLookupsPerIpPerHour, opts.now);
   const roomCodeAll = RateLimiter.perHour(limits.roomCodeLookupsPerHour, opts.now);
-  const { accounts, signinOrigin, team, teamOwnerEmail, snags } = opts;
+  const statsLimit = RateLimiter.perHour(limits.statsPerIpPerHour, opts.now);
+  const statsReadLimit = RateLimiter.perMinute(limits.statsReadsPerIpPerMin, opts.now);
+  const { accounts, signinOrigin, team, teamOwnerEmail, snags, stats } = opts;
 
   function directoryCors(origin: string | undefined) {
     const headers: Record<string, string> = {};
@@ -204,6 +224,54 @@ export function createApiServer(opts: ApiOptions): Server {
       }
       log.log("enrolled", { label: result.label, peer: peerPrefix(req.socket.remoteAddress) });
       return reply(res, 200, { ticket: result.ticket });
+    }
+
+    if (stats && url === "/v1/stats") {
+      if (req.method !== "POST") return reply(res, 405, { error: "method" });
+      if (!statsLimit.take(ip)) return reply(res, 429, { error: "rate-limited" });
+      if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) return reply(res, 415, { error: "content-type" });
+      const sent = await readBody(req, STATS_MAX_BYTES);
+      if (!sent) {
+        await drain(req);
+        return reply(res, 413, { error: "too-large" });
+      }
+      let parsed: unknown;
+      try {
+        const zipped = headerOne(req.headers["content-encoding"])?.toLowerCase() === "gzip";
+        const body = zipped ? await inflate(sent, { maxOutputLength: STATS_MAX_INFLATED }) : sent;
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch (error) {
+        // SAFETY: zlib rejects with Node errno errors; a SyntaxError has no code.
+        const large = (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE";
+        return reply(res, large ? 413 : 400, { error: large ? "too-large" : "bad-request" });
+      }
+      const result = await stats.submit(parsed);
+      return reply(res, result.status, result.body);
+    }
+
+    const statsDay = stats && STATS_DAY_RE.exec(url);
+    if (stats && statsDay) {
+      if (req.method !== "GET") return reply(res, 405, { error: "method" });
+      const peer = peerPrefix(req.socket.remoteAddress);
+      if (!statsReadLimit.take(ip)) {
+        log.log("stats-read-rejected", { peer, reason: "rate-limited" });
+        return reply(res, 429, { error: "rate-limited" });
+      }
+      const key = /^Bearer ([A-Za-z0-9_-]{1,128})$/.exec(headerOne(req.headers.authorization) ?? "")?.[1];
+      if (!key || !stats.allows(key)) {
+        log.log("stats-read-rejected", { peer, reason: "bad-key" });
+        return reply(res, 401, { error: "bad-key" });
+      }
+      const day = await stats.read(statsDay[1]);
+      if (!day) return reply(res, 404, { error: "not-found" });
+      res.writeHead(200, { "content-type": "application/x-ndjson", "content-encoding": "gzip", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+      try {
+        await pipeline(day, res);
+      } catch (error) {
+        // SAFETY: streams fail with Node errno errors. A reader that hangs up is not a failure.
+        if ((error as NodeJS.ErrnoException).code !== "ERR_STREAM_PREMATURE_CLOSE") log.log("stats-read-failed", { peer });
+      }
+      return;
     }
 
     if (accounts && signinOrigin && url === "/v1/account") {
