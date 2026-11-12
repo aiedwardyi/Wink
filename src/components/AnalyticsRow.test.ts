@@ -13,7 +13,7 @@ it("starts off, reads the saved choice and writes only on a click", async () => 
   let saved = false;
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.method === "PUT") saved = JSON.parse(String(init.body)).enabled;
-    return new Response(JSON.stringify({ enabled: saved, capture: saved }));
+    return new Response(JSON.stringify({ enabled: saved, capture: saved, period: 7 }));
   });
   vi.stubGlobal("fetch", fetchMock);
   const host = document.createElement("div");
@@ -30,11 +30,11 @@ it("starts off, reads the saved choice and writes only on a click", async () => 
     await act(async () => toggle.click());
     expect(saved).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(usageStatsSwitched).toHaveBeenLastCalledWith(true);
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(true, 7);
     await act(async () => toggle.click());
     expect(saved).toBe(false);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(usageStatsSwitched).toHaveBeenLastCalledWith(false);
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(false, 7);
   } finally {
     await act(async () => root.unmount());
   }

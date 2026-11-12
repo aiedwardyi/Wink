@@ -439,7 +439,7 @@ import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./ver
 import { createVerifyAuto } from "./verify-auto.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
-import { reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
+import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
@@ -3415,7 +3415,7 @@ const busyResumeThreads = new Set<string>();
 const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
 const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
 
-const statsTurns = new Map<string, TurnFacts>();
+const statsTurns = new Map<string, TurnFacts & { after?: string }>();
 const takeTurnMarks = turnMarksFor(() => usageStats.capturing());
 const usageStats = createUsageStats({
   dataDir: DATA_DIR, url: process.env.WINK_STATS_URL?.trim() ?? "", app: process.env.OMB_APP_VERSION ?? "", internal: process.env.ORBIT_STATS_INTERNAL === "1",
@@ -3443,7 +3443,7 @@ const usageStats = createUsageStats({
       keys: [
         composio.configured(cfg) && "composio", cfg.tts?.key && "elevenlabs", cfg.xai?.key && "xai", cfg.box?.token && "box",
         cfg.imageGen?.key && "openai-images", cfg.openaiCompat?.key && "custom-provider",
-      ].filter((key): key is string => typeof key === "string"),
+      ].filter((key): key is string => typeof key === "string" && key !== ""),
     };
   },
   off: () => {
@@ -3453,9 +3453,11 @@ const usageStats = createUsageStats({
   turn: (event) => {
     const facts = statsTurns.get(event.threadId);
     if (!facts || event.type !== "turn.completed") return facts ?? null;
-    statsTurns.delete(event.threadId);
     const end = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
-    return { ...facts, ...takeTurnMarks(event.threadId), stop: end.superseded ? "superseded" : end.interrupted ? "interrupted" : undefined };
+    // A replaced turn finishing late leaves the live turn its facts and marks.
+    if (end.superseded || (event.turnId && event.turnId === facts.after)) return { ...facts, stop: "superseded" };
+    statsTurns.delete(event.threadId);
+    return { ...facts, ...takeTurnMarks(event.threadId), stop: end.interrupted ? "interrupted" : undefined };
   },
 });
 // Before the handler below, which settles the state a finished turn is read from.
@@ -5327,7 +5329,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   turnStartedAtMs.set(threadId, Date.now());
   if (usageStats.capturing()) statsTurns.set(threadId, {
     ...(opts?.call ? { c: "voice" } : turnStartedByUser(opts) ? { chars: (opts?.transcriptText ?? text).length } : { c: "system" }),
-    surface: opts?.automationSource ? "routine" : "chat", model, effort, startedAt: Date.now(),
+    surface: opts?.automationSource ? "routine" : "chat", model, effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId),
   });
   if (routineTurn) routineTurnThreads.add(threadId);
   else routineTurnThreads.delete(threadId);
@@ -6798,7 +6800,7 @@ async function runClaimedGroupMemberTurn(
     keepRoomTurnInstruction = true;
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
-    if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now() });
+    if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId) });
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -7978,7 +7980,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/analytics") {
-      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR), capture: usageStats.capturing() });
+      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR), capture: usageStats.capturing(), period: usageStats.period() });
     }
     if (method === "PUT" && path === "/api/analytics") {
       const body = await readBody(req);
@@ -7986,8 +7988,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const enabled = saveAnalyticsConsent(DATA_DIR, body.enabled);
       usageStats.setEnabled(enabled);
       // One switch: off on any screen turns crash reports off on this PC too.
-      if (!enabled) void turnOffErrorReports(terminalBridgeAccess);
-      return json(res, 200, { enabled, capture: usageStats.capturing() });
+      if (enabled) keepErrorReports();
+      else void turnOffErrorReports(terminalBridgeAccess);
+      return json(res, 200, { enabled, capture: usageStats.capturing(), period: usageStats.period() });
     }
     if (method === "POST" && path === "/api/stats") {
       return usageStats.ingest(await readBody(req, 64 * 1024)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });

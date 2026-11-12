@@ -87,7 +87,7 @@ test("a server exit and a startup timeout wait in memory until a server can take
   for (const event of posted[2]) assert.equal(statsEventSchema.safeParse({ ...event, h: 1 }).success, true);
 });
 
-test("holds at most 50 crashes, and drops the ones a server refused", async () => {
+test("holds at most 50 crashes, keeps them when the server fails, and drops the ones it refused", async () => {
   const down = shell(Array(80).fill(null));
   for (let index = 0; index < 60; index++) down.crashes.capture("server", "server-gone", index);
   await settle();
@@ -100,6 +100,13 @@ test("holds at most 50 crashes, and drops the ones a server refused", async () =
   await settle();
   await off.crashes.flush();
   assert.equal(off.posted.length, 1);
+  const failing = shell([503, 200]);
+  failing.crashes.capture("server", "server-gone", 1);
+  await settle();
+  await failing.crashes.flush();
+  assert.deepEqual(failing.posted[1], failing.posted[0]);
+  await failing.crashes.flush();
+  assert.equal(failing.posted.length, 2);
   const thrown = installCrashStats(new EventEmitter(), () => null, async () => { throw new Error("ECONNREFUSED"); }, () => 1);
   thrown.capture("server", "server-gone", 1);
   await settle();
@@ -110,6 +117,7 @@ test("main forwards the crashes only it can see and never posts without a server
   assert.match(main, /if \(!killed\) crashStats\.capture\("server", "server-gone", code\);/);
   assert.match(main, /crashStats\.capture\("main", "startup-timeout"\);/);
   assert.match(main, /if \(!serverToken\) return null;/);
+  assert.match(main, /\/api\/stats`, \{\s+method: "POST", headers: \{ "content-type": "application\/json", Authorization: `Bearer \$\{serverToken\}` \}/);
   assert.match(main, /void crashStats\.flush\(\);/);
 });
 

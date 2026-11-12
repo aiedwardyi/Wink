@@ -129,7 +129,7 @@ export function ModelPickerControl({
   const runCost = dialRunCost(draft.model, draft.effort);
 
   const show = (switching = false) => {
-    trackScreen(loadModelPickerView() === "list" ? "model-picker" : "model-dial");
+    trackScreen(dial && dialFits && loadModelPickerView() !== "list" ? "model-dial" : "model-picker");
     setDraft(selection);
     setCustomOpen(false);
     setListView(loadModelPickerView() === "list");
@@ -165,7 +165,7 @@ export function ModelPickerControl({
     focusComposerAfterCloseRef.current = !contained && (fromKeyboard || !switchingRef.current);
     if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
     else {
-      if (!listView) switchVia("dial");
+      if (dialView) switchVia("dial");
       dispatch({ type: "setModel", botId: bot.id, selection: candidate });
     }
     if (closeDelay) saveTimerRef.current = window.setTimeout(finishSave, closeDelay);

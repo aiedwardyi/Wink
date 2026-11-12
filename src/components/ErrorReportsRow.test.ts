@@ -40,7 +40,7 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
   let resolve: (value: boolean) => void = () => {};
   const errorReportConsent = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
   const setErrorReportConsent = vi.fn(async (value: boolean) => value);
-  request.mockImplementation(async (_path: string, init?: RequestInit) => (init ? { enabled: init.body === '{"enabled":true}', capture: init.body === '{"enabled":true}' } : { enabled: false }));
+  request.mockImplementation(async (_path: string, init?: RequestInit) => (init ? { enabled: init.body === '{"enabled":true}', capture: init.body === '{"enabled":true}', period: 7 } : { enabled: false }));
   Object.defineProperty(window, "ogb", { value: { errorReportConsent, setErrorReportConsent }, configurable: true });
   const host = document.createElement("div");
   document.body.append(host);
@@ -58,11 +58,11 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(true);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: '{"enabled":true}' });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(usageStatsSwitched).toHaveBeenLastCalledWith(true);
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(true, 7);
     await act(async () => toggle.click());
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(false);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: '{"enabled":false}' });
-    expect(usageStatsSwitched).toHaveBeenLastCalledWith(false);
+    expect(usageStatsSwitched).toHaveBeenLastCalledWith(false, 7);
   } finally {
     await act(async () => root.unmount());
     host.remove();

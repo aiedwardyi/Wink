@@ -160,7 +160,7 @@ const STATS_URL = verifyProbe ? "" : statsUrl(() => require("./error-report-conf
 const crashStats = installCrashStats(app, () => mainWindow?.webContents, async (events) => {
   if (!serverToken) return null;
   const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/stats`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ events }), signal: AbortSignal.timeout(10_000),
+    method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${serverToken}` }, body: JSON.stringify({ events }), signal: AbortSignal.timeout(10_000),
   });
   return response.status;
 });

@@ -375,6 +375,26 @@ ${row({ n: 2 })}
     expect(queued().map((event) => event.e)).toEqual(["send"]);
   });
 
+  it("starts a new batch when the queue was trimmed under one the relay never answered", async () => {
+    consent(true);
+    const on = stats();
+    on.start();
+    on.capture(SAMPLES[4]!);
+    for (let index = 0; index < 1999; index++) on.capture(SAMPLES[8]!);
+    await on.flush();
+    answers.push(new Response("", { status: 500 }));
+    await on.upload();
+    for (let round = 0; round < 6; round++) {
+      for (let index = 0; index < 2000; index++) on.capture(SAMPLES[round < 5 ? 8 : 4]!);
+      await on.flush();
+    }
+    // The head row survived the trim, so only the row count tells the batch changed.
+    expect(queued()[0]).toMatchObject({ e: "turn" });
+    await on.upload();
+    expect(posts[1]!.batch.dropped).toBeGreaterThan(0);
+    expect(posts[1]!.batch.batch).not.toBe(posts[0]!.batch.batch);
+  });
+
   it("keeps a batch when the relay cannot be reached", async () => {
     consent(true);
     const on = stats();
@@ -525,6 +545,18 @@ describe("turns", () => {
     expect(JSON.stringify(rows)).not.toMatch(/dana|Dana/);
   });
 
+  it("leaves the live turn its tally and its row when a replaced turn finishes late", async () => {
+    consent(true);
+    const on = stats({ turn: (event) => (event.type === "turn.completed" && event.turnId === "u0" ? { ...facts, stop: "superseded" as const } : facts) });
+    on.start();
+    on.runtime({ ...base, type: "item.completed", itemType: "tool", ok: true });
+    on.runtime({ ...base, turnId: "u0", type: "turn.completed", ok: false });
+    on.runtime({ ...base, type: "item.completed", itemType: "tool", ok: true });
+    on.runtime({ ...base, type: "turn.completed", ok: true });
+    await on.flush();
+    expect(queued()).toEqual([expect.objectContaining({ e: "turn", stop: "done", tools: 2 })]);
+  });
+
   it.each([
     ["Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/140 Electron/38.2.0 Safari/537.36", true, "desktop"],
     ["Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/140 Safari/537.36", true, "browser"],
@@ -603,6 +635,24 @@ describe("screens", () => {
       { e: "feature", c: "phone", name: "engine.signin", kind: "other" },
       { e: "onboard", step: "signin", ms: 4000, engine: "other" },
     ]);
+  });
+
+  it("refuses a batch a screen recorded before stats last went off", async () => {
+    consent(true);
+    const on = stats();
+    on.start();
+    const events = [{ e: "feature", c: "phone", name: "export" }];
+    const before = on.period();
+    expect(on.ingest({ events, period: before })).toBe(true);
+    on.setEnabled(false);
+    on.setEnabled(true);
+    expect(on.period()).not.toBe(before);
+    expect(on.ingest({ events, period: before })).toBe(false);
+    expect(on.ingest({ events, period: on.period() })).toBe(true);
+    // The desktop shell's crashes carry no period.
+    expect(on.ingest({ events })).toBe(true);
+    await on.flush();
+    expect(queued()).toHaveLength(2);
   });
 
   it("refuses a screen's batch while stats are off", async () => {

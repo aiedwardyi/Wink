@@ -13,7 +13,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   request.mockImplementation(async (_path: string, init?: RequestInit) => {
     const { enabled } = JSON.parse(String(init?.body)) as { enabled: boolean };
-    return { enabled, capture: enabled };
+    return { enabled, capture: enabled, period: 7 };
   });
 });
 
@@ -31,7 +31,9 @@ it.each([[false, true], [true, false]])("saves the first-run box and tells this 
     await act(async () => host.querySelector("button")!.click());
     expect(trackOnboard).toHaveBeenCalledWith("finish");
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled }) });
-    expect(usageStatsSwitched).toHaveBeenCalledExactlyOnceWith(enabled);
+    // Unticked stops this screen before the PC answers.
+    expect(vi.mocked(usageStatsSwitched).mock.calls).toEqual(untick ? [[false], [false, 7]] : [[true, 7]]);
+    if (untick) expect(vi.mocked(usageStatsSwitched).mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]!);
     expect(done).toHaveBeenCalledOnce();
   } finally {
     await act(async () => root.unmount());

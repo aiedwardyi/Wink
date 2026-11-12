@@ -22,7 +22,7 @@ export function AnalyticsRow() {
     try {
       const body = await api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !enabled }) });
       setEnabled(body.enabled === true);
-      usageStatsSwitched(body.capture === true);
+      usageStatsSwitched(body.capture === true, body.period);
     } catch {} finally { setSaving(false); }
   };
   return (

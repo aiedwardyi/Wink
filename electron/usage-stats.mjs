@@ -9,7 +9,7 @@ export function statsUrl(readBaked) {
   return "";
 }
 
-/** `post` hands events to the local server; null means there is no server to take them yet. */
+/** `post` hands events to the local server; null means there is no server to take them yet. They wait then, and when it fails. */
 export function installCrashStats(app, owner, post, uptime = process.uptime) {
   let held = [];
   let posting = false;
@@ -21,7 +21,7 @@ export function installCrashStats(app, owner, post, uptime = process.uptime) {
     let status = null;
     try { status = await post(events); } catch {}
     posting = false;
-    if (status === null) held = [...events, ...held].slice(0, 50);
+    if (status === null || status >= 500) held = [...events, ...held].slice(0, 50);
     else void flush();
   };
   const capture = (process, kind, exit) => {

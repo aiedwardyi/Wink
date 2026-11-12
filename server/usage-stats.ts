@@ -79,7 +79,7 @@ const WORKER_ENGINES: Record<string, string> = { claude: "claudeAgent", codex: "
 const zip = promisify(gzip);
 const hourOf = () => Math.floor(Date.now() / HOUR);
 const whole = (value: number | undefined, max: number) => (value === undefined || !Number.isFinite(value) ? undefined : Math.max(0, Math.min(max, Math.round(value))));
-let batchShape: z.ZodType<{ events: Row[]; ui?: Row; lang?: "en" | "ko" }> | undefined;
+let batchShape: z.ZodType<{ events: Row[]; ui?: Row; lang?: "en" | "ko"; period?: number }> | undefined;
 
 /** Unknown ids become the list's catch-all and raw minutes become steps; anything else the schema refuses is dropped. */
 function clean(row: Row, schema: Schema): StatsEvent | null {
@@ -136,6 +136,8 @@ export function createUsageStats(options: UsageStatsOptions) {
   let ui: Row | undefined;
   let lang: "en" | "ko" = "en";
   let pending: { batch: string; head: string; count: number } | undefined;
+  // Changes each time stats go off: a screen's batch recorded before then is refused.
+  let period = 0;
   let failures = 0;
   let active: AbortController | undefined;
   let session: { start: number; day?: number } | undefined;
@@ -178,6 +180,7 @@ export function createUsageStats(options: UsageStatsOptions) {
   const trim = async (gen: number) => {
     if (((await stat(queue).catch(() => null))?.size ?? 0) <= QUEUE_MAX) return;
     let rows = await lines();
+    const before = rows.length;
     let bytes = rows.reduce((sum, row) => sum + row.length + 1, 0);
     const cut = (keep: (row: string) => boolean) => {
       rows = rows.filter((row) => {
@@ -189,7 +192,10 @@ export function createUsageStats(options: UsageStatsOptions) {
     };
     cut((row) => !row.includes('"e":"screen"'));
     cut(() => false);
-    if (gen === generation) await save(rows);
+    if (gen !== generation) return;
+    // A batch waiting to be sent again must keep the rows it was built from.
+    if (rows.length !== before) pending = undefined;
+    await save(rows);
   };
 
   const flush = () => run(async () => {
@@ -380,6 +386,7 @@ export function createUsageStats(options: UsageStatsOptions) {
     buffer = [];
     dropped = 0;
     pending = undefined;
+    period = Math.max(period + 1, Date.now());
     ui = undefined;
     turns.clear();
     senders.clear();
@@ -392,6 +399,8 @@ export function createUsageStats(options: UsageStatsOptions) {
     capture, flush, upload,
     /** Whether screens should record at all. */
     capturing: () => on !== false,
+    /** Screens send it back with each batch. */
+    period: () => period,
     /** Reads the saved choice. Called once the first window has painted. */
     start() {
       if (!available || started) return;
@@ -439,9 +448,9 @@ export function createUsageStats(options: UsageStatsOptions) {
     /** A batch from a screen or from the desktop shell. False when it was refused. */
     ingest(body: unknown): boolean {
       if (on === false) return false;
-      batchShape ??= z.object({ events: z.array(z.record(z.string(), z.unknown())).max(500), ui: z.record(z.string(), z.unknown()).optional(), lang: z.enum(["en", "ko"]).optional() });
+      batchShape ??= z.object({ events: z.array(z.record(z.string(), z.unknown())).max(500), ui: z.record(z.string(), z.unknown()).optional(), lang: z.enum(["en", "ko"]).optional(), period: z.number().optional() });
       const batch = batchShape.safeParse(body);
-      if (!batch.success) return false;
+      if (!batch.success || (batch.data.period !== undefined && batch.data.period !== period)) return false;
       if (batch.data.ui) ui = batch.data.ui;
       if (batch.data.lang) lang = batch.data.lang;
       const h = hourOf();
@@ -481,9 +490,11 @@ export function createUsageStats(options: UsageStatsOptions) {
           return;
         }
         case "turn.completed": {
+          const facts = options.turn(event);
+          // A replaced turn finishing late: the facts and the tally belong to the turn that replaced it.
+          if (facts?.stop === "superseded") return;
           const turn = turns.get(event.threadId);
           turns.delete(event.threadId);
-          const facts = options.turn(event);
           if (!facts) return;
           const sender = senders.get(facts.from ?? event.threadId);
           const since = (at: number | undefined) => (at === undefined || facts.startedAt === undefined ? undefined : whole(at - facts.startedAt, 7 * 24 * HOUR));

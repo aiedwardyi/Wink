@@ -12,7 +12,8 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
   const [share, setShare] = useState(true);
   const open = () => {
     trackOnboard("finish");
-    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true)).catch(() => {});
+    if (!share) usageStatsSwitched(false);
+    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
     onDone();
   };
   return (

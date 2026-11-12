@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { statsEventSchema } from "../../shared/usage-stats";
 import type { Action, AppState } from "../state/store-types";
 
-type Batch = { events: Array<Record<string, unknown>>; ui?: Record<string, unknown>; lang?: string };
+type Batch = { events: Array<Record<string, unknown>>; ui?: Record<string, unknown>; lang?: string; period?: number };
 const POISON = ["C:\\Users\\dana\\secret plan.txt", "dana@example.com", "Dana Kim", "118234567890123456789", "10.0.0.7", "what is my salary"];
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -12,13 +12,13 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function page({ capture = true, desktop = false, phone = false, status = 200 } = {}) {
+async function page({ capture = true, desktop = false, phone = false, status = 200, reachable = true, period = undefined as number | undefined } = {}) {
   const posts: Batch[] = [];
   const inits: RequestInit[] = [];
   const heard = new Map<string, (event?: unknown) => void>();
   const stored = new Map<string, string>();
   const clock = { now: 0 };
-  const state = { capture, status, tick: () => {}, longTask: (_list: { getEntries: () => Array<{ duration: number }> }) => {} };
+  const state = { capture, status, reachable, period, hold: undefined as Promise<void> | undefined, tick: () => {}, longTask: (_list: { getEntries: () => Array<{ duration: number }> }) => {} };
   const document = {
     visibilityState: "visible", documentElement: { dataset: { locale: "ko" } },
     addEventListener: (name: string, run: () => void) => void heard.set(`document.${name}`, run),
@@ -30,7 +30,12 @@ async function page({ capture = true, desktop = false, phone = false, status = 2
     addEventListener: (name: string, run: (event?: unknown) => void) => void heard.set(name, run),
   };
   const fetched = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === "/api/analytics") return { ok: true, status: 200, json: async () => ({ enabled: state.capture, capture: state.capture }) };
+    if (url === "/api/analytics") {
+      if (!state.reachable) throw new Error("offline");
+      const answer = { enabled: state.capture, capture: state.capture, period: state.period };
+      await state.hold;
+      return { ok: true, status: 200, json: async () => answer };
+    }
     posts.push(JSON.parse(String(init?.body)) as Batch);
     inits.push(init!);
     return { ok: state.status === 200, status: state.status };
@@ -114,12 +119,53 @@ describe("usage stats on a screen", () => {
   it("stops and drops what it holds once the PC refuses a batch", async () => {
     const { stats, posts, state, tick } = await page();
     state.status = 409;
+    state.capture = false;
     stats.trackFeature("export");
     await tick();
     expect(posts).toHaveLength(1);
     stats.trackFeature("export");
     await tick();
     expect(posts).toHaveLength(1);
+  });
+
+  it("drops what it held when stats went off and on again elsewhere, then sends under the PC's new period", async () => {
+    const { stats, posts, state, tick } = await page({ period: 1 });
+    stats.trackFeature("export");
+    stats.trackFeature("export");
+    state.period = 2;
+    state.status = 409;
+    await tick();
+    expect(posts[0]).toMatchObject({ period: 1 });
+    state.status = 200;
+    stats.trackFeature("export");
+    await tick();
+    expect(posts[1]).toEqual({ events: [{ e: "feature", name: "export", c: "browser" }], lang: "ko", period: 2 });
+  });
+
+  it("asks the PC again each minute until it answers, but not as the page hides", async () => {
+    const { stats, posts, state, heard, fetched, tick } = await page({ reachable: false });
+    stats.trackFeature("export");
+    heard.get("pagehide")!();
+    await settle();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    state.reachable = true;
+    await tick();
+    expect(posts).toEqual([]);
+    await tick();
+    expect(posts).toHaveLength(1);
+  });
+
+  it("lets a switch made on this screen beat an answer that was already on its way", async () => {
+    const { stats, posts, state, heard, tick } = await page({ capture: false });
+    let release = () => {};
+    state.hold = new Promise<void>((resolve) => { release = resolve; });
+    heard.get("document.visibilitychange")!();
+    stats.usageStatsSwitched(true, 7);
+    stats.trackFeature("export");
+    release();
+    await settle();
+    await tick();
+    expect(posts).toEqual([expect.objectContaining({ events: [{ e: "feature", name: "export", c: "browser" }], period: 7 })]);
   });
 
   it("holds 500 events and drops the rest", async () => {
@@ -230,6 +276,20 @@ describe("usage stats on a screen", () => {
     stats.usageStatsSwitched(true);
     await tick();
     expect(posts).toEqual([]);
+  });
+
+  it("forgets the first-reply timing once stats go off", async () => {
+    const { stats, stored, events, tick } = await page({ capture: false });
+    stats.trackOnboard("welcome");
+    stats.trackOnboard("finish");
+    expect(stored.get(stats.FIRST_REPLY_KEY)).toContain("tries");
+    stats.usageStatsSwitched(false);
+    expect(stored.get(stats.FIRST_REPLY_KEY)).toBe("done");
+    stats.usageStatsSwitched(true);
+    stats.trackSend("t1", () => ({ engine: "claudeAgent", model: "claude-opus-4-7" }));
+    stats.trackReplyText("t1");
+    await tick();
+    expect(events().map((event) => event.e)).toEqual(["send"]);
   });
 
   it("reports an install's first reply once, with the sends it took", async () => {

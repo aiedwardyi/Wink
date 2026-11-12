@@ -20,6 +20,9 @@ const WITH_CLIENT = new Set<unknown>(["open", "send", "screen", "setting", "feat
 // undefined while the switch is unknown or the first-run box is still open: events wait and none are sent.
 let on: boolean | undefined;
 let firstRun = false;
+// The PC's name for the stretch since stats last went off; it refuses a batch from an older one.
+let period: unknown;
+let switches = 0;
 let buffer: Tracked[] = [];
 const screens = new Map<Screen, number>();
 let screenHour = 0;
@@ -198,21 +201,32 @@ function drop(): void {
 }
 
 /** The switch as this PC's server reports it, at load and after a change made on this screen. */
-export function usageStatsSwitched(capture: boolean, answered = true): void {
-  if (answered) firstRun = false;
+export function usageStatsSwitched(capture: boolean, id?: unknown, answered = true): void {
+  if (answered) {
+    firstRun = false;
+    switches++;
+  }
+  period = id;
   on = capture ? true : firstRun ? undefined : false;
-  if (on === false) drop();
-  else if (on && answered) flush();
+  if (on === false) {
+    drop();
+    saveFirst(undefined);
+  } else if (on && answered) flush();
 }
 
 async function learn(): Promise<void> {
+  const started = switches;
   try {
     const response = await fetch(SWITCH_PATH);
-    if (response.ok) usageStatsSwitched((await response.json() as { capture?: unknown }).capture === true, false);
+    if (!response.ok) return;
+    const body = await response.json() as { capture?: unknown; period?: unknown };
+    // A switch made here while the PC was answering wins.
+    if (started === switches) usageStatsSwitched(body.capture === true, body.period, false);
   } catch { /* Events wait until the PC answers. */ }
 }
 
 function flush(last = false): void {
+  if (on === undefined && !last) void learn();
   if (on !== true) return;
   if (sending && (last || since(sending.start) > 2 * FLUSH_MS)) settleSend();
   const hour = Math.floor(Date.now() / HOUR);
@@ -231,9 +245,14 @@ function flush(last = false): void {
   fetch(PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ events, ui, lang: document.documentElement.dataset.locale === "ko" ? "ko" : "en" }),
+    body: JSON.stringify({ events, ui, lang: document.documentElement.dataset.locale === "ko" ? "ko" : "en", period }),
     keepalive: true,
-  }).then((response) => { if (response.status === 409) usageStatsSwitched(false); }).catch(() => {});
+  }).then((response) => {
+    if (response.status !== 409) return;
+    // Off, or on again since this screen last asked: what it held is dropped either way.
+    usageStatsSwitched(false);
+    void learn();
+  }).catch(() => {});
 }
 
 /** Costs one idle callback at startup; everything else waits for it. */

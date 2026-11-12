@@ -43,7 +43,7 @@ export function ErrorReportsRow() {
       if (results[0].status === "fulfilled") consent.current.reports = !enabled;
       if (results[1].status === "fulfilled") {
         consent.current.usage = !enabled;
-        usageStatsSwitched(results[1].value?.capture === true);
+        usageStatsSwitched(results[1].value?.capture === true, results[1].value?.period);
       }
       if (results.some((result) => result.status === "rejected")) throw new Error("Consent update failed");
       setEnabled(!enabled);
