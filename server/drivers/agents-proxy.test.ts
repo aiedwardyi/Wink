@@ -65,6 +65,7 @@ interface TaskStateRequestBody {
   next_action?: string;
   blockers?: Array<{ kind: string; note: string }>;
   artifacts?: Array<{ ref: string; label: string }>;
+  asks?: Array<{ id?: string; ask?: string; status: string; ref?: string }>;
 }
 let lastTaskStateBody: TaskStateRequestBody | null = null;
 let botWakesPaused = false;
@@ -686,6 +687,45 @@ describe("agents-proxy MCP surface", () => {
     const plan = await callTool("update_task_state", { plan: "step one, step two" });
     expect(plan.result.isError).toBe(true);
     expect(plan.result.content[0].text).toContain("plan must be an array");
+    expect(lastTaskStateBody).toBeNull();
+  });
+
+  it("publishes a flat asks schema and forwards asks to the harness", async () => {
+    const list = await rpc("tools/list");
+    const update = list.result.tools.find((tool: { name: string }) => tool.name === "update_task_state");
+    const asks = update.inputSchema.properties.asks;
+    expect(JSON.stringify(asks)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
+    expect(asks).toMatchObject({ type: "array", maxItems: 20 });
+    expect(asks.items.required).toEqual(["status"]);
+    expect(asks.items.properties.status.enum).toEqual(["open", "building", "waiting-for-user", "done", "declined"]);
+    expect(asks.items.properties.ask).toMatchObject({ maxLength: 80, pattern: "\\S" });
+    expect(asks.items.properties.ref).toMatchObject({ maxLength: 80, pattern: "^$|\\S" });
+    for (const [field, limit] of [[asks, 20], [asks.items.properties.ask, 80], [asks.items.properties.ref, 80]] as const) {
+      expect(field.description).toContain(String(limit));
+    }
+
+    lastTaskStateBody = null;
+    const sent = [
+      { ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348" },
+      { id: "A2", status: "done" },
+    ];
+    taskStateNotice = "Asks saved: added A3; 2 open.";
+    const res = await callTool("update_task_state", { asks: sent });
+    taskStateNotice = undefined;
+    expect(lastTaskStateBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", asks: sent });
+    expect(res.result.content[0].text).toBe("Task record saved. Next action: continue the current plan\nAsks saved: added A3; 2 open.");
+  });
+
+  it("rejects misshapen asks before calling the harness", async () => {
+    lastTaskStateBody = null;
+    const text = await callTool("update_task_state", { asks: "fix the login" });
+    expect(text.result.isError).toBe(true);
+    expect(text.result.content[0].text).toContain("asks must be an array");
+    const blank = await callTool("update_task_state", { asks: [{ ask: "   ", status: "open" }] });
+    expect(blank.result.isError).toBe(true);
+    expect(blank.result.content[0].text).toContain("cannot be blank");
+    const unknown = await callTool("update_task_state", { todo: [] });
+    expect(unknown.result.content[0].text).toContain("allowed: goal, plan, completed_note, next_action, blockers, artifacts, asks, pause_automatic_wakes.");
     expect(lastTaskStateBody).toBeNull();
   });
 

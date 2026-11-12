@@ -1,7 +1,9 @@
-import { render, type Source } from "./MemoryMapGlowPaint";
+import { painter, render, type Source } from "./MemoryMapGlowPaint";
 
 const scope = self as unknown as { postMessage(message: unknown, transfer: Transferable[]): void };
-self.onmessage = async ({ data }: MessageEvent<Source>) => {
+// null warms the context and shader ahead of the first open, and gets no answer
+self.onmessage = async ({ data }: MessageEvent<Source | null>) => {
+  if (!data) return void painter();
   let reply: { renderer?: string; layers: ImageBitmap[] | null } = { layers: null };
   try {
     const { renderer, layers } = render(data);
@@ -11,5 +13,4 @@ self.onmessage = async ({ data }: MessageEvent<Source>) => {
     console.warn("memory glow painter:", error);
   }
   scope.postMessage(reply, reply.layers ?? []);
-  self.close();
 };

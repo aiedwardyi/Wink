@@ -101,6 +101,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it.each(["en", "ko"] as const)("marks a promo account in Connections: %s", async (locale) => {
+  const codex = board.engines.find((engine) => engine.engine === "codex")!;
+  Object.assign(codex.accounts[0]!, { codexPromo: true });
+  accounts = codex.accounts.map((account) => ({ ...accounts[0]!, instanceId: account.id, accountOf: "codex", driverKind: "codex", displayName: "Codex" }));
+  await mount({ locale });
+  const row = host.querySelector('[data-connection-account="codex"]');
+  expect(row?.textContent).toContain(locale === "en" ? "Unavailable for Codex: API credit promo" : "Codex 사용 불가: API 크레딧 프로모션");
+});
+
 it("keeps account identities inside Connections account rows", async () => {
   for (const [phone, locale] of [[false, "en"], [true, "en"], [false, "ko"], [true, "ko"]] as const) {
     await mount({ phone, locale, settings: true });

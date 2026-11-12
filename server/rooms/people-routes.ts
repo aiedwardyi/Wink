@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { json } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
 import { removeRoomPerson } from "./door.ts";
-import { barRoomPerson, roomCode } from "./invites.ts";
+import { barRoomPerson, roomCode, shortRoomCode } from "./invites.ts";
 
 const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64}))$/;
 
@@ -16,6 +16,8 @@ export interface PeopleRouteDeps {
   relayHost: () => string | null;
   /** The caller holds a bot's comms token. */
   botCaller: boolean;
+  /** A short code from the relay, null while it can't mint one. */
+  mintRoomCode?(): Promise<{ code: string; exp: number } | null>;
 }
 
 /** False when the path isn't ours. The code goes only into the reply body. */
@@ -36,7 +38,8 @@ export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, me
     if (!relayHost) json(res, 409, { error: "phone access is off" });
     else {
       const code = roomCode(roomId);
-      json(res, 200, { code: `wkr1:${relayHost}:${code.id}.${code.secret}` });
+      const short = deps.mintRoomCode ? await shortRoomCode(roomId, deps.mintRoomCode) : null;
+      json(res, 200, { code: `wkr1:${relayHost}:${code.id}.${code.secret}`, ...(short ? { short } : {}) });
     }
   }
   return true;

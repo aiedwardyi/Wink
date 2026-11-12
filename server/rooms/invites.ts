@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 
+import { ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
 import { RateLimiter } from "../phone-auth.ts";
@@ -17,6 +18,7 @@ import { endDoorPerson } from "./door-streams.ts";
 import { checkedRoomName, joinerName } from "./names.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
+const SHORT_CODE_REFRESH_MS = 24 * 60 * 60_000;
 const MAX_PEOPLE = 20;
 const JOINS_PER_MINUTE = 20;
 const SECRET_PREFIX = "wki_";
@@ -80,6 +82,12 @@ function open(): DatabaseSync {
       person_id TEXT NOT NULL,
       removed INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (room_id, device)
+    );
+    CREATE TABLE IF NOT EXISTS short_codes (
+      code TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      code_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
     );
   `);
   return db;
@@ -158,6 +166,33 @@ export function roomCode(roomId: string): { id: string; secret: string } {
   database.prepare("INSERT OR IGNORE INTO room_codes (room_id, id, secret) VALUES (?, ?, ?)").run(roomId, newId(), newCredential(SECRET_PREFIX));
   const row = database.prepare("SELECT id, secret FROM room_codes WHERE room_id = ?").get(roomId) as { id: string; secret: string };
   return { id: row.id, secret: row.secret };
+}
+
+/** The room's short code with a day or more left, else a fresh one from `mint`, else null. */
+export async function shortRoomCode(roomId: string, mint: () => Promise<{ code: string; exp: number } | null>): Promise<string | null> {
+  const { id } = roomCode(roomId);
+  const live = db().prepare("SELECT code FROM short_codes WHERE room_id = ? AND code_id = ? AND expires_at > ? ORDER BY expires_at DESC")
+    .get(roomId, id, Date.now() + SHORT_CODE_REFRESH_MS) as { code: string } | undefined;
+  if (live) return live.code;
+  const minted = await mint();
+  // A Remove during the mint retired the code it was minted for.
+  if (!minted || !ROOM_CODE_RE.test(minted.code) || minted.exp <= Date.now() || roomCode(roomId).id !== id) return null;
+  const database = db();
+  database.prepare("DELETE FROM short_codes WHERE expires_at <= ?").run(Date.now());
+  database.prepare("INSERT OR REPLACE INTO short_codes (code, room_id, code_id, expires_at) VALUES (?, ?, ?, ?)")
+    .run(minted.code, roomId, id, Math.min(minted.exp, Date.now() + INVITE_TTL_MS));
+  return minted.code;
+}
+
+/** The room code a live short code stands for. Gone once Remove retires that room code. */
+export function shortCodeTarget(text: string): { id: string; secret: string } | null {
+  const code = text.trim().toUpperCase();
+  if (!ROOM_CODE_RE.test(code)) return null;
+  const row = db().prepare(`
+    SELECT c.id, c.secret FROM short_codes s JOIN room_codes c ON c.room_id = s.room_id AND c.id = s.code_id
+    WHERE s.code = ? AND s.expires_at > ?
+  `).get(code, Date.now()) as { id: string; secret: string } | undefined;
+  return row ? { id: row.id, secret: row.secret } : null;
 }
 
 /** One person per PC: the same device back while still in the room gets a fresh key, not a second seat. */

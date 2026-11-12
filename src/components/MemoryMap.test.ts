@@ -105,6 +105,51 @@ describe("MemoryMap", () => {
     }
   });
 
+  const asked = (statuses: string[]) => ({ ...bot, tasks: [{ threadId: "t", taskState: { goal: "Group release", plan: [], nextAction: "", updatedAt: 1, asks: statuses.map((status, at) => ({ text: `Ask ${at}`, at, status })) } }] }) as unknown as Bot;
+
+  it("lists open asks right under Working Memory with a calm tag each", async () => {
+    await mount({ bot: asked(["building", "waiting-for-user", "open", "done"]) });
+    const live = host.querySelector(".mm-live")!;
+    const box = live.querySelector(".mm-asks")!;
+    expect([...live.querySelectorAll(".mm-sec-name")].map((each) => each.textContent)).toEqual(["Working Memory", "Asks · 3 open", "Just Learned"]);
+    const rows = [...box.querySelectorAll(".mm-asks-open li")];
+    expect(rows.map((row) => row.textContent)).toEqual(["Ask 0building", "Ask 1waiting for you", "Ask 2to do"]);
+    expect(rows.map((row) => row.getAttribute("data-status"))).toEqual(["building", "waiting-for-user", "open"]);
+  });
+
+  it("folds done and declined asks behind a count and keeps them", async () => {
+    await mount({ bot: asked(["building", "done", "declined", "done"]) });
+    const toggle = host.querySelector<HTMLButtonElement>(".mm-asks-done-toggle")!;
+    expect(toggle.textContent).toBe("3 done");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect([...host.querySelectorAll(".mm-asks-closed li")].map((row) => row.textContent)).toEqual(["Ask 1done", "Ask 2declined", "Ask 3done"]);
+  });
+
+  it("says so in one line when nothing was asked, and when all are done", async () => {
+    await mount({ bot: asked([]) });
+    expect(host.querySelector(".mm-asks")!.textContent).toBe("AsksWhat you asked forNothing asked yet.");
+    await act(async () => root.unmount());
+    await mount({ bot: asked(["done"]) });
+    expect(host.querySelector(".mm-asks .mm-empty")!.textContent).toBe("All done.");
+  });
+
+  it("shows the asks in Korean", async () => {
+    applyLocale("ko");
+    await mount({ bot: asked(["waiting-for-user", "done"]) });
+    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("요청 · 1개 남음");
+    expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0확인 기다림");
+    expect(host.querySelector(".mm-asks-done-toggle")!.textContent).toBe("1개 완료");
+  });
+
+  it("scrolls a long ask list inside its box in gray tones only", () => {
+    expect(rule(".mm-asks-list")).toMatch(/max-height: \d+px;/);
+    expect(rule(".mm-asks-list")).toContain("overflow-y: auto;");
+    const asks = css.split("\n").filter((line) => line.startsWith(".mm-asks")).join("\n");
+    expect(asks).not.toMatch(/--mm-(cyan|indigo|violet|pale|live-ink)|--color-(accent|success)/);
+  });
+
   it("hides the Sleep line until Sleep has run", async () => {
     await mount();
     expect(host.querySelector(".mm-sleep")).toBeNull();
@@ -160,7 +205,7 @@ describe("smooth glow", () => {
     const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("self", { postMessage: sent, close() {} });
     await import("./MemoryMapGlow.worker");
-    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: null });
+    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: {} });
     expect(sent).toHaveBeenCalledWith({ layers: null }, []);
     expect(warned).toHaveBeenCalledTimes(1);
     warned.mockRestore(); vi.stubGlobal("self", page);

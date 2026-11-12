@@ -35,6 +35,7 @@ import type { RoutineRequestService } from "./routine-requests.ts";
 import type { RoutineManager, RoutineRun } from "./routines.ts";
 import { agentRoster, sectionKey, type BotRecord, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
+import { mergeTaskAsks } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
 import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUpdateError, taskStateUpdateSchema, type TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
@@ -183,6 +184,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       for (const artifact of artifacts) {
         if (!next.artifacts.some((existing) => existing.ref === artifact.ref)) next.artifacts.push(artifact);
       }
+      const asks = body.asks ? mergeTaskAsks(next.asks, body.asks, Date.now()) : null;
+      if (asks && "error" in asks) return json(res, 400, { error: asks.error });
+      if (asks) next.asks = asks.asks;
       next.updatedAt = Date.now();
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
@@ -193,7 +197,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         keepGoing.pause(bot.id, "bot-paused");
       }
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: taskStateNotice(clipped, dropped, folder) })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {

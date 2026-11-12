@@ -244,6 +244,8 @@ export interface MessageMenuTarget {
   user: boolean;
   pinned: boolean;
   canPin: boolean;
+  /** Pin reads as the team room's notice. */
+  notice?: boolean;
   queued?: { sendNow?: () => void; cancel: () => void };
 }
 
@@ -525,7 +527,7 @@ export function MessageMenu({
           {pinned
             ? <PinOff size={16} className="text-ink-secondary" />
             : <Pin size={16} className="text-ink-secondary" />}
-          {t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
+          {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
       {message.quick?.state !== "answer" && (

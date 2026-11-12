@@ -5,6 +5,7 @@
 import { useLayoutEffect } from "react";
 import { api, useStore, type Action } from "@/state/store";
 import { findCurrentId, findRowSelector, revealFindMatch, subscribeFindCurrent } from "@/lib/chat-find";
+import { groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import type { SearchHit } from "@/lib/search-hit";
 
 interface SearchOwner {
@@ -71,9 +72,10 @@ export async function landOnSearchHit(
     if (result?.bot) dispatch({ type: "taskSwitched", bot: result.bot });
   }
   if (group && group.threadId !== hit.threadId) {
+    const asked = groupTaskTicket();
     const result = await api(`/api/groups/${group.id}/tasks/${hit.threadId}`, { method: "POST" });
     if (stale()) return;
-    if (result?.group) dispatch({ type: "groupPatched", group: result.group });
+    if (result?.group) showGroupTask(result.group, dispatch, asked);
   }
   if (bot && !hit.onActivePath) {
     const branch = await api(`/api/bots/${bot.id}/active-branch`, {

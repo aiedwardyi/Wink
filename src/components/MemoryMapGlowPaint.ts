@@ -174,6 +174,34 @@ void main() {
 }`;
 
 
+interface Painter { gl: WebGL2RenderingContext; renderer: string; ready: boolean }
+// one context and shader for the worker's life: building them was most of a first paint
+let kept: Painter | null | undefined;
+
+/** Builds the context and shader, once; null where WebGL2 is missing. */
+export function painter(): Painter | null {
+  if (kept?.gl.isContextLost()) kept = undefined;
+  if (kept !== undefined) return kept;
+  const gl = new OffscreenCanvas(1, 1).getContext("webgl2", { antialias: false, depth: false, stencil: false });
+  if (!gl) return (kept = null);
+  const info = gl.getExtension("WEBGL_debug_renderer_info"), renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+  const program = gl.createProgram()!;
+  for (const [type, text] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, FRAGMENT]] as const) { const shader = gl.createShader(type)!; gl.shaderSource(shader, text); gl.compileShader(shader); gl.attachShader(program, shader); }
+  gl.linkProgram(program);
+  const ready = Boolean(gl.getProgramParameter(program, gl.LINK_STATUS));
+  if (ready) {
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  } else console.warn("memory glow shader:", gl.getProgramInfoLog(program));
+  return (kept = { gl, renderer, ready });
+}
+
 /** Paints every layer; blocks while the shader builds, so it runs in MemoryMapGlow.worker.ts. */
 export function render(source: Source): Rendered {
   const { dpr, size: [wide, high], live } = source, made = table(source);
@@ -182,23 +210,14 @@ export function render(source: Source): Rendered {
   // a ring's dither fades with the ring, so it starts stronger
   for (const [from, to, side] of made.rings) jobs.push([side, side, 0, from, to, 2]);
   if (live) jobs.push([live[6], live[7], 0, made.lit, made.rows, 1]);
-  const gl = new OffscreenCanvas(Math.max(...jobs.map((each) => each[0])), Math.max(...jobs.map((each) => each[1]))).getContext("webgl2", { antialias: false, depth: false, stencil: false });
-  if (!gl) return { layers: null };
-  const info = gl.getExtension("WEBGL_debug_renderer_info"), renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
-  const program = gl.createProgram()!;
-  for (const [type, text] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, FRAGMENT]] as const) { const shader = gl.createShader(type)!; gl.shaderSource(shader, text); gl.compileShader(shader); gl.attachShader(program, shader); }
-  gl.linkProgram(program);
+  const kit = painter();
+  if (!kit) return { layers: null };
+  const { gl, renderer } = kit, canvas = gl.canvas as OffscreenCanvas;
   let layers: Rendered["layers"] = null;
-  if (gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    gl.useProgram(program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+  if (kit.ready) {
+    canvas.width = Math.max(canvas.width, ...jobs.map((each) => each[0]));
+    canvas.height = Math.max(canvas.height, ...jobs.map((each) => each[1]));
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, WIDE, made.rows, 0, gl.RGBA, gl.FLOAT, made.data);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.vertexAttrib3fv(3, source.back);
     layers = jobs.map(([w, h, layer, from, to, grit], seed) => {
       gl.viewport(0, 0, w, h);
@@ -211,7 +230,6 @@ export function render(source: Source): Rendered {
       for (let i = 0; i < data.length; i += 4) { const a = data[i + 3]; if (a > 0 && a < 255) for (let k = 0; k < 3; k++) data[i + k] = Math.round((data[i + k] * 255) / a); }
       return { w, h, data };
     });
-  } else console.warn("memory glow shader:", gl.getProgramInfoLog(program));
-  gl.getExtension("WEBGL_lose_context")?.loseContext();
+  }
   return { renderer, layers };
 }

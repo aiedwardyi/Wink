@@ -219,12 +219,17 @@ export function ReactionChips({
   members,
   corner,
   className,
+  onToggle,
+  names,
 }: {
   threadId: string;
   message: Message;
   members?: Pick<Bot, "id" | "name">[];
   corner: "left" | "right";
   className?: string;
+  /** A team room: toggles go to the room, chips always count, `names` hold people. */
+  onToggle?: (emoji: string) => void;
+  names?: ReadonlyMap<string, string>;
 }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
@@ -234,7 +239,7 @@ export function ReactionChips({
   const grouped = new Map<string, string[]>();
   for (const r of reactions) grouped.set(r.emoji, [...(grouped.get(r.emoji) ?? []), r.by]);
   const nameOf = (by: string) =>
-    by === "user" ? t("chat.you") : (members?.find((b) => b.id === by)?.name ?? t("chrome.aBot"));
+    by === "user" ? t("chat.you") : (names?.get(by) ?? members?.find((b) => b.id === by)?.name ?? t("chrome.aBot"));
   return (
     <div
       data-message-reactions
@@ -248,7 +253,7 @@ export function ReactionChips({
         <button
           key={emoji}
           type="button"
-          onClick={() => dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
+          onClick={() => onToggle ? onToggle(emoji) : dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message })}
           title={bys.map(nameOf).join(", ")}
           aria-label={emoji}
           className={cn(
@@ -259,7 +264,7 @@ export function ReactionChips({
           )}
         >
           <ReactionIcon emoji={emoji} size={17} />
-          {bys.length > 1 && <span className="text-[11px] text-ink-secondary">{bys.length}</span>}
+          {(bys.length > 1 || onToggle) && <span className="text-[11px] text-ink-secondary">{bys.length}</span>}
         </button>
       ))}
     </div>

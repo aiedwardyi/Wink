@@ -46,7 +46,6 @@ beforeEach(() => {
   deps = {
     store,
     hostName: () => "Edward",
-    driverKind: () => "claudeAgent",
     instance: () => null,
     dispatch: vi.fn(),
     stopTurn: vi.fn(async (stopped: RoomAsk, ended?: () => Promise<unknown>) => {
@@ -112,22 +111,16 @@ describe("ask states", () => {
     expect(terminal()).toEqual(["Wink couldn't finish this."]);
   });
 
-  it("drops a level and ends work the new level no longer covers", async () => {
+  it("keeps a teammate's work when their level drops", async () => {
     const running = ask(mina);
     startAsk(running.id);
-    const words = ask(jun, "words");
     const { DatabaseSync } = await import("node:sqlite");
     const raw = new DatabaseSync(`${DATA_DIR}/rooms.db`);
-    raw.prepare("UPDATE people SET level = 'chat' WHERE id IN (?, ?)").run(mina.id, jun.id);
+    raw.prepare("UPDATE people SET level = 'chat' WHERE id = ?").run(mina.id);
     raw.close();
-    const done = revalidatePersonAsks(group.hosted.roomId, mina.id);
-    expect(askById(running.id)!.state).toBe("stopping");
-    await vi.waitFor(() => expect(deps.endSession).toHaveBeenCalled());
-    endSession();
-    await done;
-    expect(askById(running.id)!.state).toBe("cancelled");
-    await revalidatePersonAsks(group.hosted.roomId, jun.id);
-    expect(askById(words.id)!.state).toBe("queued");
+    await revalidatePersonAsks(group.hosted.roomId, mina.id);
+    expect(askById(running.id)!.state).toBe("running");
+    expect(deps.stopTurn).not.toHaveBeenCalled();
   });
 
   it("cancels a queued ask when its person is removed, and its queue item with it", async () => {
@@ -147,8 +140,9 @@ describe("ask states", () => {
 });
 
 describe("the central guard", () => {
-  it("refuses a hosted thread without a live ask for this room, thread and bot", async () => {
-    expect(hostedTurnRefused(group, group.threadId, botId)).toBe(true);
+  it("lets the host's own turn run on the shared thread, and an ask only for its room, thread and bot", async () => {
+    expect(hostedTurnRefused(group, group.threadId, botId)).toBe(false);
+    expect(hostedTurnRefused(group, "other-thread", botId)).toBe(true);
     expect(hostedTurnRefused(group, group.threadId, botId, "no-such-ask")).toBe(true);
     const queued = ask(mina);
     expect(hostedTurnRefused(group, group.threadId, "other-bot", queued.id)).toBe(true);
@@ -162,14 +156,6 @@ describe("the central guard", () => {
     const plain = store.createGroup("Plain", [botId]);
     expect(hostedTurnRefused(plain, plain.threadId, botId)).toBe(false);
     expect(hostedTurnRefused(undefined, "x", botId)).toBe(false);
-  });
-
-  it("ends an ask whose bot left the engines rooms run on", () => {
-    const queued = ask("host");
-    deps.driverKind = () => "grokAgent";
-    expect(hostedTurnRefused(group, group.threadId, botId, queued.id)).toBe(true);
-    expect(askById(queued.id)!.state).toBe("failed");
-    expect(terminal()).toEqual(["Wink can only answer in team rooms on Claude or Codex"]);
   });
 });
 

@@ -81,6 +81,7 @@ describe("startup timing", () => {
     expect(startup.beforeRequest("POST", "/api/diag/cold-open")).toBeUndefined();
     expect(startup.beforeRequest("PUT", "/api/internal/google-account")).toBeUndefined();
     expect(startup.beforeRequest("PUT", "/api/internal/terminal-bridge")).toBeUndefined();
+    expect(startup.beforeRequest("POST", "/api/attachments")).toBeUndefined();
     const action = vi.fn();
     const pending = startup.beforeRequest("POST", "/api/bots/b1/send")!.then(action);
     startup.paint();

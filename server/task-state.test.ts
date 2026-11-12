@@ -29,7 +29,8 @@ import {
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
-import { recordTaskCompletion, seedTaskResumePacket } from "./task-state-fold.ts";
+import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
+import type { TaskAsk } from "./task-asks.ts";
 
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
@@ -52,6 +53,10 @@ const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => 
   turnsAtWrite: 3,
   ...overrides,
 });
+const asks: TaskAsk[] = [
+  { id: "A1", ask: "Review the model picker PR", status: "waiting-for-user", ref: "PR #1348", at: 100, changedAt: 100 },
+  { id: "A2", ask: "Drop the old skin", status: "declined", at: 110, changedAt: 150 },
+];
 
 describe("task resume packets", () => {
   let dir: string;
@@ -131,6 +136,33 @@ describe("task resume packets", () => {
     expect(saved.completed).toHaveLength(30);
     expect(saved.completed[0]?.note).toBe("Milestone 5");
     expect(saved.completed.at(-1)?.note).toBe("Milestone 34");
+  });
+
+  it("keeps every ask, closed ones included, across rewrites and new instructions", () => {
+    const saved = writeTaskResumePacket(packet({ asks }), { dir });
+    expect(saved.asks).toEqual(asks);
+    const instructed = recordTaskInstruction(saved, { text: "Next task", messageId: "message-9", now: 300, turnsAtWrite: 4 });
+    writeTaskResumePacket(instructed, { dir });
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(asks);
+    expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
+  });
+
+  it("drops closed asks first to fit 16 KiB and never an open one", () => {
+    const many = Array.from({ length: 40 }, (_, index): TaskAsk => ({
+      id: `A${index + 1}`,
+      ask: `${index}:${"가".repeat(70)}`,
+      status: index % 2 ? "open" : "done",
+      ref: "r".repeat(80),
+      at: index,
+      changedAt: index,
+    }));
+    const completed = Array.from({ length: 30 }, (_, index) => ({ note: `${index}:${"x".repeat(250)}`, at: index }));
+
+    const saved = writeTaskResumePacket(packet({ asks: many, completed }), { dir });
+
+    expect(statSync(join(dir, "thread-1.json")).size).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
+    expect(saved.asks?.map((ask) => ask.id)).toEqual(many.filter((ask) => ask.status === "open").map((ask) => ask.id));
+    expect(saved.completed.length).toBeGreaterThan(0);
   });
 
   it("replaces an old packet without leaving temporary files", () => {
@@ -226,6 +258,34 @@ describe("task state update", () => {
     });
     expect(padded.success).toBe(true);
     if (padded.success) expect(padded.data.next_action).toBe("Verify citations");
+  });
+});
+
+describe("task state asks update", () => {
+  const parse = (body: Record<string, unknown>, clipped: string[] = []) =>
+    taskStateUpdateSchema(clipped).safeParse({ fromBotId: "bot-1", fromThreadId: "thread-1", ...body });
+
+  it("accepts asks alone, trims refs and clips long words", () => {
+    const clipped: string[] = [];
+    const parsed = parse({
+      asks: [
+        { ask: `Review ${"the picker ".repeat(10)}`, status: "waiting-for-user", ref: " PR #1348 " },
+        { id: "A2", status: "done" },
+      ],
+    }, clipped);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.asks?.[0]?.ask?.length).toBeLessThanOrEqual(80);
+    expect(parsed.data.asks?.[0]?.ref).toBe("PR #1348");
+    expect(parsed.data.asks?.[1]).toEqual({ id: "A2", status: "done" });
+    expect(clipped).toEqual(["asks.0.ask (116 > 80)"]);
+  });
+
+  it("rejects an unknown status and names asks among the allowed fields", () => {
+    const parsed = parse({ asks: [{ ask: "Fix login", status: "pending" }] });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(taskStateUpdateError(parsed.error)).toContain("allowed: goal, plan, completed_note, next_action, blockers, artifacts, asks.");
   });
 });
 

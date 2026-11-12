@@ -59,6 +59,22 @@ function setup() {
 }
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+it("publishes promo mark changes even when sign-in and generation stay the same", async () => {
+  const f = setup();
+  f.setRows([{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: true, state: "ready" }]);
+  let marked = false;
+  f.deps.codexPromo = () => marked;
+  const before = await f.board.read();
+  marked = true;
+  const after = await f.board.read(before.cursor);
+  expect(after.revision).toBeGreaterThan(before.revision);
+  expect(after.engines[0]!.accounts[0]!.codexPromo).toBe(true);
+  marked = false;
+  const cleared = await f.board.read(after.cursor);
+  expect(cleared.revision).toBeGreaterThan(after.revision);
+  expect(cleared.engines[0]!.accounts[0]!.codexPromo).toBeUndefined();
+});
+
 const account = (board: UsageBoard, id = "claude") => board.engines.flatMap((engine) => engine.accounts).find((row) => row.id === id)!;
 
 beforeEach(() => {

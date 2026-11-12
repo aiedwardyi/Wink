@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   Archive,
@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { conversationPreview } from "@/lib/conversation-preview";
-import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { EASE_STANDARD, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import {
   moveSection,
   placeSection,
@@ -102,7 +102,7 @@ import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
-import { ArchivedBotsPanel, BotListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
+import { ArchivedBotsPanel, BotListItem, RecentlyDeletedPanel, type MenuState, type SidebarRowDrag, type TrashedBot } from "./SidebarConversations";
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
@@ -611,7 +611,6 @@ export function Sidebar({
   onClose,
   onOverlayChange,
   onTerminalAttention,
-  rigidView = false,
   folded = false,
   onUnfold,
 }: {
@@ -619,8 +618,6 @@ export function Sidebar({
   onClose: () => void;
   onOverlayChange?: (key: string | null) => void;
   onTerminalAttention?: (attention: TerminalAttention) => void;
-  /** The view beside the sidebar must not resize mid-animation (terminal PTYs, native views). */
-  rigidView?: boolean;
   /** A right slot panel is open: show faces only, leaving the saved layout as it is. */
   folded?: boolean;
   onUnfold?: () => void;
@@ -652,11 +649,14 @@ export function Sidebar({
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trashBots, setTrashBots] = useState<TrashedBot[]>([]);
   const [exportingTeam, setExportingTeam] = useState(false);
   const [teamFeedback, setTeamFeedback] = useState<{
     error: boolean;
     text: string;
     undo?: TeamImportResult;
+    restoreBotId?: string;
   } | null>(null);
   const [deleteReach, setDeleteReach] = useState<"local" | "every-pc" | null>(null);
   const deletePresence = usePresence(deleteTarget);
@@ -680,23 +680,25 @@ export function Sidebar({
   const collapsedRoutine = anyRoutineRinging(state.routineRuns, collapsedChats, collapsedExceptId);
   const collapsedAsking = sidebarCollapsed && (collapsedQuestion || collapsedRoutine);
   const collapsedBadgeRef = useRef<HTMLSpanElement>(null);
-  const lastCollapsedUnread = useRef(collapsedUnread);
+  // null while expanded, so a fold shows its count without popping it
+  const lastCollapsedUnread = useRef<number | null>(sidebarCollapsed ? collapsedUnread : null);
   useEffect(() => {
+    const last = lastCollapsedUnread.current;
     if (
-      collapsedUnread > lastCollapsedUnread.current &&
+      last !== null && collapsedUnread > last &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
       collapsedBadgeRef.current?.animate(
         [{ transform: "scale(1)" }, { transform: "scale(1.3)" }, { transform: "scale(1)" }],
-        { duration: 260, easing: "ease-out" },
+        { duration: MOTION_FAST_MS, easing: EASE_STANDARD },
       );
     }
-    lastCollapsedUnread.current = collapsedUnread;
-  }, [collapsedUnread]);
+    lastCollapsedUnread.current = sidebarCollapsed ? collapsedUnread : null;
+  }, [collapsedUnread, sidebarCollapsed]);
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -709,6 +711,7 @@ export function Sidebar({
       else if (roomMenu) setRoomMenu(null);
       else if (wizard) setWizard(false);
       else if (archivedBotsOpen) setArchivedBotsOpen(false);
+      else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
     };
@@ -842,8 +845,8 @@ export function Sidebar({
     };
   }, [resizing]);
 
-  // Never transition the aside's width: its content would reflow every frame. Width
-  // snaps; a clip or ghost draws the edge and the view's margin follows it.
+  // Never transition the aside's width or the view's margin: their content would
+  // reflow every frame. Both snap; the ghost draws the edge and the view follows by transform.
   useLayoutEffect(() => {
     const from = shownSidebarWidth.current;
     shownSidebarWidth.current = sidebarDisplayWidth;
@@ -879,12 +882,9 @@ export function Sidebar({
     }
     const motions: Animation[] = [];
     // On the right the sidebar's growing/shrinking edge is its left, not its right.
-    const marginProp = sidebarOnRight ? "marginRight" : "marginLeft";
     const railShift = sidebarOnRight ? -shift : shift;
-    if (shift < 0) {
-      const clip = sidebarOnRight ? `inset(0 0 0 ${-shift}px)` : `inset(0 ${-shift}px 0 0)`;
-      motions.push(aside.animate([{ clipPath: clip }, { clipPath: "inset(0)" }], SIDEBAR_MOTION));
-    } else {
+    // An expanding list is uncovered by the view sliding off it, so only a shrink needs the ghost edge.
+    if (shift > 0) {
       ghost.style.width = `${shift}px`;
       const shrink = ghost.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { ...SIDEBAR_MOTION, fill: "forwards" });
       shrink.onfinish = () => {
@@ -893,27 +893,26 @@ export function Sidebar({
       };
       motions.push(shrink);
     }
-    const rail: HTMLElement[] = [];
-    for (let el = aside.nextElementSibling; el; el = el.nextElementSibling) {
-      if (el instanceof HTMLElement && !["absolute", "fixed"].includes(getComputedStyle(el).position)) rail.push(el);
-    }
-    if (rigidView) {
-      for (const el of rail) {
+    // The view and the open docked panels; a closing panel keeps its own exit. Picked
+    // without reading style, which React's commit has just made dirty.
+    const view = aside.nextElementSibling;
+    for (let el = view; el; el = el.nextElementSibling) {
+      if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) {
         motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
       }
-    } else {
-      // The margin belongs on whichever rail element abuts the aside, which on
-      // the right is the last one - a docked panel, not the view.
-      const abutting = sidebarOnRight ? rail.at(-1) : rail[0];
-      if (abutting) {
-        motions.push(abutting.animate([{ [marginProp]: `${shift}px` }, { [marginProp]: "0px" }], SIDEBAR_MOTION));
-      }
+    }
+    // the list's raised badges would show through the view sliding off it
+    const raised = shift < 0 && view instanceof HTMLElement ? view : null;
+    if (raised) {
+      raised.style.zIndex = "11";
+      motions[0]!.onfinish = () => { raised.style.zIndex = ""; };
     }
     return () => {
-      const progress = motions[0]!.effect?.getComputedTiming().progress;
+      const progress = motions[0]?.effect?.getComputedTiming().progress;
       if (progress != null) shownSidebarWidth.current = from + (sidebarDisplayWidth - from) * progress;
       for (const motion of motions) motion.cancel();
       ghost.style.width = "";
+      if (raised) raised.style.zIndex = "";
     };
   }, [sidebarDisplayWidth]);
 
@@ -953,6 +952,28 @@ export function Sidebar({
       setTeamLibraryOpen(true);
     });
   }, []);
+
+  const refreshTrash = useCallback(() => {
+    void api("/api/bot-trash")
+      .then((body: { bots?: TrashedBot[] }) => setTrashBots(body?.bots ?? []))
+      .catch(() => {});
+  }, []);
+  // a delete here or on another PC changes the bot list, and the menu shows the newest count
+  useEffect(() => {
+    refreshTrash();
+  }, [refreshTrash, state.bots.length, plusOpen]);
+
+  const undoTrash = async (botId: string) => {
+    setTeamFeedback(null);
+    try {
+      const response = await api(`/api/bot-trash/${botId}/restore`, { method: "POST" });
+      dispatch({ type: "botPatched", bot: response.bot });
+      dispatch({ type: "select", id: botId });
+      refreshTrash();
+    } catch (cause) {
+      setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
 
   useEffect(() => {
     if (!teamFeedback) return;
@@ -1641,7 +1662,7 @@ export function Sidebar({
               <>
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
                 <div data-closing={closing || undefined} inert={closing} className={cn(
-                  "animate-pop-in absolute top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
+                  "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
                   density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
                 )}>
                   <button
@@ -1688,6 +1709,19 @@ export function Sidebar({
                       <Archive size={16} className="text-ink-secondary" />
                       <span className="flex-1">{t("chrome.archivedBots")}</span>
                       <span className="text-[11.5px] text-ink-secondary">{archivedBots.length}</span>
+                    </button>
+                  )}
+                  {trashBots.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setPlusOpen(false);
+                        setTrashOpen(true);
+                      }}
+                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    >
+                      <Trash2 size={16} className="shrink-0 text-ink-secondary" />
+                      <span className="flex-1 whitespace-nowrap">{t("chrome.recentlyDeleted")}</span>
+                      <span className="text-[11.5px] text-ink-secondary">{trashBots.length}</span>
                     </button>
                   )}
                 </div>
@@ -1836,10 +1870,14 @@ export function Sidebar({
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
           >
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} />
-            <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-              {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || t("chrome.you")}
-            </span>
+            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} pending={!state.config} />
+            {state.config ? (
+              <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
+                {state.config.profile?.name?.trim() || state.config.profile?.email?.trim() || t("chrome.you")}
+              </span>
+            ) : (
+              <span aria-hidden="true" className={cn("h-3 w-20 animate-pulse rounded-full bg-raised motion-reduce:animate-none", density === "icons" && "hidden")} />
+            )}
           </button>
           {density !== "icons" && (
             <div className="flex shrink-0 items-center" data-sidebar-update>
@@ -1879,7 +1917,10 @@ export function Sidebar({
           body={t(deleteReach === "every-pc" ? "chrome.deleteBotBodyAllPcs" : "chrome.deleteBotBody", { name: deletePresence.value.name })}
           confirmLabel={t("chrome.delete")}
           onConfirm={() => {
-            if (deleteTarget) dispatch({ type: "deleteBot", botId: deleteTarget.id });
+            if (deleteTarget) {
+              dispatch({ type: "deleteBot", botId: deleteTarget.id });
+              setTeamFeedback({ error: false, text: t("chrome.botTrashed", { name: deleteTarget.name }), restoreBotId: deleteTarget.id });
+            }
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
@@ -1924,6 +1965,17 @@ export function Sidebar({
             bots={archivedBots}
             closing={closing}
             onClose={() => setArchivedBotsOpen(false)}
+            onRestored={(message) => setTeamFeedback({ error: false, text: message })}
+          />
+        )}
+      </Presence>
+      <Presence open={trashOpen}>
+        {(closing) => (
+          <RecentlyDeletedPanel
+            bots={trashBots}
+            closing={closing}
+            onClose={() => setTrashOpen(false)}
+            onChanged={refreshTrash}
             onRestored={(message) => setTeamFeedback({ error: false, text: message })}
           />
         )}
@@ -1973,6 +2025,14 @@ export function Sidebar({
               {pendingTeamUndo && (
                 <button
                   onClick={() => void undoTeamLoad(pendingTeamUndo)}
+                  className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
+                >
+                  {t("chrome.undo")}
+                </button>
+              )}
+              {teamFeedback.restoreBotId && (
+                <button
+                  onClick={() => void undoTrash(teamFeedback.restoreBotId!)}
                   className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
                 >
                   {t("chrome.undo")}
