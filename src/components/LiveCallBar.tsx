@@ -25,7 +25,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     working: "Working",
     ended: "Call ended",
     failed: "Call failed",
-    send: "Send: {order}?",
+    send: "Ask {bot} to do this?",
     yes: "Yes",
     no: "No",
     mute: "Mute",
@@ -47,7 +47,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     working: "작업 중",
     ended: "통화 종료",
     failed: "통화 실패",
-    send: "{order} 보낼까요?",
+    send: "{bot}에게 이렇게 요청할까요?",
     yes: "예",
     no: "아니요",
     mute: "음소거",
@@ -192,7 +192,6 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
     call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
   }, [bot.busy, bot.threadId, call, messages]);
 
-  const [sendBefore, sendAfter] = words.send.split("{order}");
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
   const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
@@ -214,9 +213,10 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
         <div data-live-call-order className="mb-2 overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
           {snap.pending && <TimeLeft key={snap.pending.expiresAt} expiresAt={snap.pending.expiresAt} />}
           <div className="flex items-center gap-2 p-3 max-md:flex-wrap">
-            <p className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
-              {sendBefore}<span className="font-medium">{snap.pending?.order.replace(/[.?!。]+$/, "")}</span>{sendAfter}
-            </p>
+            <div className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
+              <p>{words.send.replace("{bot}", bot.name)}</p>
+              <p className="font-medium">{snap.pending?.order}</p>
+            </div>
             <button type="button" onClick={() => void call.answer(true)} className={cn(target, "bg-accent text-accent-ink")}>{words.yes}</button>
             <button type="button" onClick={() => void call.answer(false)} className={cn(target, "bg-control text-ink")}>{words.no}</button>
           </div>
