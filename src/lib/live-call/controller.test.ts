@@ -1884,6 +1884,7 @@ describe("AUDIT5-FIX", () => {
   it.each([
     ["It is green. Want me to restart it?", "Yes, please."],
     ["PDF로 변환할까요?", "네, 보내주세요."],
+    ["파일 삭제해줄까요?", "네."],
     ["Should I restart it?", "Okay, do it."],
   ])("after the offer %s, %s confirms it", async (said, heard) => {
     const { call, engine, posts } = await started();

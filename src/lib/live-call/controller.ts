@@ -87,7 +87,7 @@ const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should
 // "How can I help?" and "무엇을 도와드릴까요?" ask, they offer nothing to say yes to.
 const offered = (said: string) => {
   const last = said.split(/(?<=[.!?])\s+/).at(-1) ?? "";
-  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || (/(할까요|드릴까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
+  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
 };
 
 /** The voice's offer as the person's request: "Want me to fix it?" posts as "Fix it." */
