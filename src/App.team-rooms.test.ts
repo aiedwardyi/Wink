@@ -377,7 +377,7 @@ describe("Team rooms for the host", () => {
     expect($("main")!.textContent).toContain("Design team");
   });
 
-  it("shows no bot, level, work, approval or hold controls in the room", async () => {
+  it("shows only the + for bots, with no level, work, approval or hold controls in the room", async () => {
     await boot({ groups: [teamRoom()] });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     expect($('[data-team-room="host"]')).not.toBeNull();
@@ -385,8 +385,8 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "Show and media", "People", "Attach a file"]);
-    expect(main.textContent).not.toMatch(/Nova|Manage members|Find in conversation|approve|hold|level/i);
+    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "Show and media", "People", "Manage members · 0 bots in this group.", "Attach a file"]);
+    expect(main.textContent).not.toMatch(/Nova|Find in conversation|approve|hold|level/i);
   });
 
   it("opens the room's Media from its header and shuts it again", async () => {
