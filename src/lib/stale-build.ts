@@ -1,7 +1,7 @@
 // A phone page opened before a home update keeps running the old UI build.
 // Its lazy views ask for chunk names the server no longer has, and it misses
 // new features until it reloads. Both paths reload once onto the new build.
-import { createElement, lazy, useEffect, useRef, useState, type ComponentProps, type ComponentType } from "react";
+import { createContext, createElement, useContext, useEffect, useRef, useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 import { STALE_RELOAD_KEY, staleReloadAllowed } from "../../shared/stale-reload";
 import { holdReload, onHoldReleased, reloadHeld } from "./reload-hold";
 
@@ -27,23 +27,33 @@ export function reloadOnce(store = sessionStore(), reload = () => location.reloa
   return true;
 }
 
-/** React.lazy whose failed chunk reloads the page once; a second failure reaches the view's boundary. */
+export const LazyFallback = createContext<ReactNode>(null);
+
+/** A lazy view whose failed chunk reloads the page once; a second failure reaches the view's boundary. */
 export function lazyView<T extends ComponentType<any>>(load: () => Promise<{ default: T }>) {
   let ready: T | null = null;
   const keep = () => load().then((module) => {
     ready = module.default;
     return module;
   });
-  const Lazy = lazy(() =>
-    keep().catch((error: Error): Promise<{ default: T }> => {
-      if (reloadOnce()) return new Promise(() => {});
-      throw error;
-    }),
-  );
-  // Even a loaded chunk suspends React.lazy once, and React holds that reveal ~300 ms; a preloaded view skips it.
+  // Plain state instead of React.lazy: React holds a suspended view's reveal ~300 ms after its fallback.
   function View(props: ComponentProps<T>) {
-    const [Shown] = useState<ComponentType<any>>(() => ready ?? Lazy);
-    return createElement(Shown, props);
+    const fallback = useContext(LazyFallback);
+    const [Shown, setShown] = useState<ComponentType<any> | null>(() => ready);
+    const [failed, setFailed] = useState<Error | null>(null);
+    useEffect(() => {
+      if (Shown) return;
+      let live = true;
+      keep().then(
+        (module) => live && setShown(() => module.default),
+        (error: Error) => live && !reloadOnce() && setFailed(error),
+      );
+      return () => {
+        live = false;
+      };
+    }, []);
+    if (failed) throw failed;
+    return Shown ? createElement(Shown, props) : fallback;
   }
   return Object.assign(View, { preload: () => keep().then(() => undefined) });
 }

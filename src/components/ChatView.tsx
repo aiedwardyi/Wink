@@ -125,6 +125,7 @@ import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
 const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
 const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
+export const warmCallViews = () => Promise.all([LiveCallBar.preload(), LiveCallBox.preload()]);
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
