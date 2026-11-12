@@ -1836,10 +1836,14 @@ export function Sidebar({
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
           >
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} />
-            <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-              {state.config?.profile?.name?.trim() || state.config?.profile?.email?.trim() || t("chrome.you")}
-            </span>
+            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} pending={!state.config} />
+            {state.config ? (
+              <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
+                {state.config.profile?.name?.trim() || state.config.profile?.email?.trim() || t("chrome.you")}
+              </span>
+            ) : (
+              <span aria-hidden="true" className={cn("h-3 w-20 animate-pulse rounded-full bg-raised motion-reduce:animate-none", density === "icons" && "hidden")} />
+            )}
           </button>
           {density !== "icons" && (
             <div className="flex shrink-0 items-center" data-sidebar-update>

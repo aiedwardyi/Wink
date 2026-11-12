@@ -602,6 +602,17 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it("holds a quiet placeholder, never No engines found, until the engine list loads", () => {
+    const saved = mockInstances.splice(0);
+    try {
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
+      expect(html).not.toContain("No engines found yet.");
+      expect(html).toContain("animate-pulse");
+    } finally {
+      mockInstances.push(...saved);
+    }
+  });
+
   it("shows installed engines once with no path or Details controls", () => {
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {

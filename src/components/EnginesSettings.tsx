@@ -131,7 +131,10 @@ export function EnginesSettings() {
   const missing = rows.filter((row) => row.snapshot.state !== "available");
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
+      {/* No instances yet means the first scan has not answered, not that nothing is installed. */}
+      {state.instances.length === 0
+        ? <div aria-hidden="true" className="h-16 animate-pulse rounded-lg bg-raised motion-reduce:animate-none" />
+        : rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
       {installed.map((instance) => {
         const accounts = groups.find((group) => group[0] === instance)!;
         return ["claudeAgent", "codex"].includes(instance.driverKind) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />

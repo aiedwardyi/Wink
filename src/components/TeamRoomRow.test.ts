@@ -1,7 +1,7 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import type { RoomLine } from "@/lib/team-rooms";
@@ -124,4 +124,68 @@ it("names a bot line with the bot's face, on the left", async () => {
   const label = host.querySelector<HTMLElement>("[data-team-room-bot]")!;
   expect(label.textContent).toBe("Wink");
   expect(label.querySelector("svg, img")).not.toBeNull();
+});
+
+describe("room transcript reads like a 1:1 chat", () => {
+  const day = 86_400_000;
+  const line = (id: string, at: number, extra: Partial<RoomLine> = {}): RoomLine => ({ id, at, author: { kind: "person", id: "p1", name: "Mina" }, text: `text ${id}`, files: [], ...extra });
+  async function show(lines: RoomLine[], onReply = vi.fn()) {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply, lines, mine: () => false, base: "/api/rooms/r1", label: "Room" }))));
+    return host;
+  }
+
+  it("copies and replies from the hover row", async () => {
+    const onReply = vi.fn();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const host = await show([line("m1", Date.now())], onReply);
+    await act(async () => host.querySelector<HTMLElement>('[data-mid="m1"] button[aria-label="Copy message"]')!.click());
+    expect(writeText).toHaveBeenCalledWith("text m1");
+    await act(async () => host.querySelector<HTMLElement>('[data-mid="m1"] button[aria-label="Reply to message"]')!.click());
+    expect(onReply.mock.calls[0][0].id).toBe("m1");
+  });
+
+  it("shows the 1:1 timestamp with its full date tip", async () => {
+    const host = await show([line("m1", Date.now())]);
+    const stamp = host.querySelector<HTMLButtonElement>('[data-mid="m1"] button.tabular-nums')!;
+    await act(async () => stamp.focus());
+    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  });
+
+  it("separates days like a 1:1 chat", async () => {
+    const now = Date.now();
+    const host = await show([line("a", now - 3 * day), line("b", now - 3 * day + 1000), line("c", now)]);
+    expect(host.querySelectorAll("[data-day-separator]")).toHaveLength(2);
+    expect(host.textContent).toContain("Today");
+  });
+
+  it("opens room pictures in the shared viewer with next", async () => {
+    vi.stubGlobal("Image", class { src = ""; });
+    const picture = (id: string) => ({ id, name: `${id}.png`, bytes: 10, type: "image/png" });
+    const host = await show([line("a", Date.now(), { text: "", files: [picture("one")] }), line("b", Date.now(), { text: "", files: [picture("two")] })]);
+    await act(async () => host.querySelector<HTMLElement>('[data-mid="a"] [aria-label="Preview attached image one.png"]')!.click());
+    expect(document.querySelector("[data-viewer-next]")).not.toBeNull();
+  });
+
+  it("jumps back to the latest line after scrolling up", async () => {
+    const host = await show([line("a", Date.now()), line("b", Date.now())]);
+    const pane = host.querySelector<HTMLElement>("[data-team-room-transcript]")!;
+    let top = 500;
+    Object.defineProperties(pane, {
+      clientHeight: { get: () => 500 }, scrollHeight: { get: () => 1000 },
+      scrollTop: { get: () => top, set: (value: number) => { top = Math.min(500, value); } },
+    });
+    expect(host.querySelector("[data-jump-latest]")).toBeNull();
+    const wheel = new Event("wheel", { bubbles: true });
+    Object.defineProperty(wheel, "deltaY", { value: -100 });
+    await act(async () => pane.dispatchEvent(wheel));
+    top = 100;
+    await act(async () => pane.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await act(async () => host.querySelector<HTMLElement>("[data-jump-latest]")!.click());
+    expect(top).toBe(500);
+    expect(host.querySelector("[data-jump-latest]")).toBeNull();
+  });
 });

@@ -1030,6 +1030,7 @@ export const en = {
   "composer.dictationPermission": "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
   "composer.agent": "Agent",
   "composer.channel": "Group",
+  "composer.person": "Person",
 
   "bot.workingFolder": "Project Folder",
   "bot.workingFolderEmpty": "Private bot workspace",
@@ -2733,6 +2734,7 @@ export const ko = {
   "composer.dictationPermission": "받아쓰기에는 마이크와 음성 인식 권한이 필요합니다 — 시스템 설정 → 개인 정보 보호 및 보안.",
   "composer.agent": "봇",
   "composer.channel": "그룹",
+  "composer.person": "사람",
 
   "bot.workingFolder": "프로젝트 폴더",
   "bot.workingFolderEmpty": "비공개 봇 작업 공간",
