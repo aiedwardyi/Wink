@@ -215,7 +215,7 @@ export class GuestClient {
     if (!room) return null;
     const notice = room.state?.notice && joinedEntry(roomId, room.state.notice.entryId);
     const entries = joinedEntries(roomId, Math.min(Math.max(1, Math.trunc(limit) || VIEW_ENTRIES), MAX_VIEW_ENTRIES));
-    return { ...this.view(room), entries, hasMore: (entries[0]?.seq ?? 1) > 1, ...(notice ? { noticeEntry: notice } : {}) };
+    return { ...this.view(room), entries, hasMore: entries.length < MAX_VIEW_ENTRIES && (entries[0]?.seq ?? 1) > 1, ...(notice ? { noticeEntry: notice } : {}) };
   }
 
   /** Local rows first; else the host's page before `before`. False when nothing older can be had. */
@@ -234,6 +234,7 @@ export class GuestClient {
     if (!page.success) return unavailable();
     // An older host ignores `before` and sends its newest page.
     const older = page.data.entries.filter((entry) => entry.seq < before);
+    if (joinedKey(roomId)?.key !== creds.key) return { ok: true, value: false };
     addJoinedEntries(roomId, older);
     return { ok: true, value: older.length > 0 };
   }

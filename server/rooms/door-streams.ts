@@ -60,6 +60,7 @@ export interface DoorStream {
   media?: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
+  heldBytes?: number;
 }
 
 const streams = new Set<DoorStream>();
@@ -161,8 +162,11 @@ export function goLive(stream: DoorStream, sentThrough: number): void {
 }
 
 function deliver(stream: DoorStream, frame: DoorFrame): void {
-  if (stream.buffer) stream.buffer.push(frame);
-  else writeFrame(stream, frame);
+  if (!stream.buffer) return writeFrame(stream, frame);
+  stream.buffer.push(frame);
+  stream.heldBytes = (stream.heldBytes ?? 0) + JSON.stringify(frame).length;
+  // A catch-up the reader stopped draining holds live frames; cut it like a live backlog.
+  if (stream.heldBytes > MAX_BACKLOG_BYTES) stream.res.destroy();
 }
 
 const roomStreams = (roomId: string) => [...streams].filter((stream) => stream.roomId === roomId);
