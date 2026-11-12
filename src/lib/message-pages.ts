@@ -46,12 +46,12 @@ export function createEarlierWindow(messages: Message[], {
     const all = rows();
     const at = all.findIndex((row) => row.first >= from);
     const cut = at < 0 ? undefined : all[at + EARLIER_CAP];
-    if (!cut) return null;
+    if (!cut || !viewport) return null;
     // never unmount a row the reader is about to scroll onto
     const id = messages[cut.first]?.id;
-    const row = viewport && [...viewport.querySelectorAll("[data-mid], [data-run]")].find((el) => el.getAttribute("data-mid") === id || el.getAttribute("data-run")?.endsWith(`:${id}`));
+    const row = [...viewport.querySelectorAll("[data-mid], [data-run]")].find((el) => el.getAttribute("data-mid") === id || el.getAttribute("data-run")?.endsWith(`:${id}`));
     const box = row?.lastElementChild?.getBoundingClientRect();
-    if (viewport && box && box.height > 0 && box.top < viewport.getBoundingClientRect().bottom + viewport.clientHeight) return null;
+    if (box && box.height > 0 && box.top < viewport.getBoundingClientRect().bottom + viewport.clientHeight) return null;
     return cut.first;
   };
   return { start, end };
