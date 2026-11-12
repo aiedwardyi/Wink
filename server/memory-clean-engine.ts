@@ -19,7 +19,7 @@ export const SEEDS = { propose: 33_600, organize: 14_600, questions: 12_500, ans
 const OUTPUT = 4096;
 export const callTokens = (prompt: string, overhead = OVERHEAD) => Math.ceil(Buffer.byteLength(prompt) / 3) + overhead;
 const questionsSchema = z.array(z.object({
-  kind: z.enum(["changed", "protected", "absent"]), question: z.string().min(1), answer: z.string().nullable(), file: z.string().optional(),
+  kind: z.enum(["changed", "protected", "absent"]), question: z.string().min(1), answer: z.string().nullable(), file: z.string().nullish().transform((file) => file ?? undefined),
 })).length(18);
 const answersSchema = z.array(z.union([z.array(z.string()).transform((items) => items.join(", ")), z.union([z.string(), z.number(), z.boolean()]).transform(String)]).nullable()).length(18);
 

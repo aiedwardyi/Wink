@@ -59,6 +59,10 @@ const words = (text: string) => normalize(text).split(" ").map(normalize).filter
 
 const within = (text: string, part: string) => !!part && ` ${words(text).join(" ")} `.includes(` ${part} `);
 
+const NEGATION = new Set(["no", "not", "never"]);
+
+const OFTEN = new Set(["once", "twice", "always"]);
+
 // A quote of one original line cannot carry a merge's swapped value, and a key from a merged line never passes on null.
 export function gradeByCode(key: string | null, answer: string | null, question = "", original: string[] = [], merged: string[] = []): boolean | undefined {
   if (key === null) return answer === null;
@@ -69,5 +73,9 @@ export function gradeByCode(key: string | null, answer: string | null, question 
   const bare = unasked(key);
   if (answer === null) return original.some((line) => within(line, bare)) && !merged.some((line) => within(line, bare));
   const said = words(answer).join(" ");
+  // a key that adds only a negation to the question is its "no"; a where or what key may also say how often
+  const rest = bare.split(" ");
+  if (bare && rest.every((word) => NEGATION.has(word)) && ![...NEGATION].some((word) => asked.has(word)) && ["yes", "no"].includes(said)) return said === "no";
+  if (!asked.has("how") && rest.some((word) => OFTEN.has(word)) && unasked(answer) && rest.filter((word) => !OFTEN.has(word)).join(" ") === unasked(answer)) return true;
   return normalize(key) === normalize(answer) || (!!bare && (bare === said || bare === unasked(answer))) || (within(answer, bare) && original.some((line) => within(line, said))) || undefined;
 }

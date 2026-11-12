@@ -115,6 +115,25 @@ describe("recall grading", () => {
     expect(gradeByCode("it queues when busy", null, question)).toBe(false);
   });
 
+  it("passes a bare no to a key that only adds a negation, grill-d heavy n2", async () => {
+    const { gradeByCode } = await load();
+    const question = "Should Lordrenen be cc'd on payroll invoices?";
+    expect(gradeByCode("Never cc Lordrenen", "No", question)).toBe(true);
+    expect(gradeByCode("Never cc Lordrenen", "Yes", question)).toBe(false);
+    expect(gradeByCode("Never cc Lordrenen", "No", "Should Lordrenen never be cc'd on payroll invoices?")).not.toBe(true);
+    expect(gradeByCode("Never cc Velzanen", "No", question)).not.toBe(true);
+  });
+
+  it("passes the asked part of a key that also says how often, grill-d light n3", async () => {
+    const { gradeByCode } = await load();
+    const question = "Where do findings go under the no-repeats rule?";
+    expect(gradeByCode("once, in the final reply", "in the final reply", question)).toBe(true);
+    expect(gradeByCode("once, in the final reply", "in the first reply", question)).not.toBe(true);
+    expect(gradeByCode("once, in the final reply", "once", question)).not.toBe(true);
+    expect(gradeByCode("once, in the final reply", "in the final reply", "How often do findings go in the final reply?")).not.toBe(true);
+    expect(gradeByCode("Opus 5.5", "Opus", "Which model runs QA?")).not.toBe(true);
+  });
+
   it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
     const { gradeByCode } = await load();
     const source = [
@@ -175,6 +194,17 @@ describe("recall grading", () => {
     expect(await cleanFiles({ ...input(engine), memory: `- kept\n- old done\n${line}\n` })).toMatchObject({ ok: true });
     expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 0?", expected: "her time", actual: "his gf", line }]]);
     expect(engine.prompts("questions")[0]).toContain("never by a pronoun");
+  });
+
+  it("treats a null file on a plain question as no file, grill-d heavy n1", async () => {
+    const run = async (file: unknown) => {
+      const engine = calls({ "MEMORY.md": [retire(2)] });
+      engine.propose.mockImplementation(async (prompt) => sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]")
+        ? JSON.stringify(questions().map((q) => ({ ...q, file }))) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] })));
+      return cleanFiles(input(engine));
+    };
+    expect(await run(null)).toMatchObject({ ok: true, recall: { passed: 18 } });
+    expect(await run(5)).toMatchObject({ ok: false, stage: "recall", detail: "ZodError" });
   });
 
   it("fails a null answer to a keyed question without a grade call", async () => {
