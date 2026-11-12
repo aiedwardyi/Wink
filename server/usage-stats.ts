@@ -60,6 +60,8 @@ export interface UsageStatsOptions {
   turn(event: RuntimeEvent): TurnFacts | null;
   /** A turn is running: the upload waits for it. */
   busy(): boolean;
+  /** Stats went off: drop whatever the caller holds for them. */
+  off?(): void;
   fetch?: typeof fetch;
 }
 
@@ -382,6 +384,7 @@ export function createUsageStats(options: UsageStatsOptions) {
     turns.clear();
     senders.clear();
     workers.clear();
+    options.off?.();
     for (const path of [queue, idFile, marker]) try { rmSync(path, { force: true }); } catch {}
   };
 

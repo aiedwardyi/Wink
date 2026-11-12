@@ -3446,6 +3446,10 @@ const usageStats = createUsageStats({
       ].filter((key): key is string => typeof key === "string"),
     };
   },
+  off: () => {
+    for (const threadId of statsTurns.keys()) takeTurnMarks(threadId);
+    statsTurns.clear();
+  },
   turn: (event) => {
     const facts = statsTurns.get(event.threadId);
     if (!facts || event.type !== "turn.completed") return facts ?? null;
@@ -7986,8 +7990,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { enabled, capture: usageStats.capturing() });
     }
     if (method === "POST" && path === "/api/stats") {
-      if (Number(req.headers["content-length"]) > 64 * 1024) return json(res, 413, { error: "too large" });
-      return usageStats.ingest(await readBody(req)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });
+      return usageStats.ingest(await readBody(req, 64 * 1024)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });
     }
 
     // ── phone access from anywhere: pairing, phones and relay status (PC only) ──

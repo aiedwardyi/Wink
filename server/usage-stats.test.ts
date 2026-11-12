@@ -142,6 +142,19 @@ describe("off", () => {
     expect(["stats-queue.ndjson", "stats-id", "stats-active"].filter((name) => existsSync(file(name)))).toEqual([]);
   });
 
+  it("tells its owner to drop what it holds for a turn, on a saved no and on the switch", () => {
+    const off = vi.fn();
+    consent(false);
+    stats({ off }).start();
+    expect(off).toHaveBeenCalledOnce();
+    consent(true);
+    const on = stats({ off });
+    on.start();
+    expect(off).toHaveBeenCalledOnce();
+    on.setEnabled(false);
+    expect(off).toHaveBeenCalledTimes(2);
+  });
+
   it("starts again with a new install id when turned back on", async () => {
     consent(true);
     const on = stats();
