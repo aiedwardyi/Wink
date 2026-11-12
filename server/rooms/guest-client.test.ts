@@ -273,7 +273,7 @@ describe("sync", () => {
     await until(() => seen.some((row) => row.url.includes("/stream")));
     expect(seen.some((row) => row.url === "/room/v1/join")).toBe(false);
     expect(seen.filter((row) => row.url.includes("/snapshot"))).toHaveLength(cached ? 0 : 1);
-    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC });
+    for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC, "x-orbit-room-files": "1", "x-orbit-room-media": "1" });
   });
 
   it("keeps the live stream when started after joining", async () => {

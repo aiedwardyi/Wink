@@ -49,6 +49,11 @@ describe("team room shape", () => {
     expect(roomMessage(hostLines(messages)[0]!)).toBe(messages[0]);
   });
 
+  it("keeps a bot's room answer after its bot leaves", () => {
+    const messages: Message[] = [{ id: "c", role: "bot", kind: "text", text: "On it", at: 3, from: { botId: "wink", name: "Wink", color: "blue" }, roomEntryId: "e3" }];
+    expect(hostLines(messages)).toEqual([{ id: "c", entryId: "e3", at: 3, author: { kind: "bot", id: "wink", name: "Wink" }, text: "On it", files: [], color: "blue", message: messages[0] }]);
+  });
+
   it("keeps joined reply ids on the line and its message adapter", () => {
     const entry = { seq: 2, id: "e2", at: 2, author: { kind: "person" as const, id: "mina", name: "Mina Park" }, text: "reply", replyToId: "e1" };
     const line = joinedLines([entry])[0]!;
@@ -164,7 +169,7 @@ describe("sending to a room", () => {
   it("names what went wrong and never sends after a refused upload", async () => {
     for (const [status, problem] of [
       [413, { key: "teamRoom.tooBig", vars: { name: "a.png" } }],
-      [415, { key: "teamRoom.fileType" }],
+      [415, { key: "teamRoom.fileKinds" }],
       [429, { key: "teamRoom.tooFast" }],
       [500, { key: "teamRoom.sendFailed" }],
     ] as const) {

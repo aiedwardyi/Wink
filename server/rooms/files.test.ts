@@ -149,10 +149,17 @@ describe("room file types", () => {
       expect(res.json.file).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{24}$/), name: "photo.png", type, bytes: bytes.length, sha256: sha(bytes) });
     }
     for (const bytes of [Buffer.from([0xff, 0xe1, ...randomBytes(60)]), ftyp("heic"), ftyp("avif"), Buffer.concat([Buffer.from("MZ"), randomBytes(200)]), Buffer.from([0x68, 0x69, 0x00, 0x21, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a])]) {
-      expect(await upload(room, bytes)).toMatchObject({ status: 415, json: { error: "this kind of file can't be shared" } });
+      expect(await upload(room, bytes)).toMatchObject({ status: 415, json: { error: "only pictures, video, audio, PDF, zip, Office and text files can be shared" } });
     }
     expect(await upload(room, Buffer.alloc(0))).toMatchObject({ status: 400, json: { error: "file is empty" } });
     expect(rows(room)).toHaveLength(cases.length);
+  });
+
+  it("take an isom .m4a as audio and never a UTF-16 text file as audio", async () => {
+    const room = createRoom("Team").id;
+    expect((await upload(room, ftyp("isom"), { name: "voice memo.m4a" })).json.file).toMatchObject({ type: "audio/mp4" });
+    expect((await upload(room, ftyp("isom"), { name: "clip.mp4" })).json.file).toMatchObject({ type: "video/mp4" });
+    expect(await upload(room, Buffer.from("﻿meeting notes\r\n", "utf16le"), { name: "notes.txt" })).toMatchObject({ status: 415 });
   });
 
   it("serve pictures under their fixed type, inline only as a preview, and everything else as a download", async () => {

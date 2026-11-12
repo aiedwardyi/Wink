@@ -494,7 +494,7 @@ export class GuestClient {
   private async call(
     relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
   ): Promise<GuestResult<unknown>> {
-    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
+    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", "x-orbit-room-media": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) {
       headers.authorization = `Bearer ${key}`;
       headers["x-wink-device"] = this.deps.joiner().device;
@@ -609,7 +609,7 @@ export class GuestClient {
       servername: creds.relayHost,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1" },
+      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1", "x-orbit-room-media": "1" },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,

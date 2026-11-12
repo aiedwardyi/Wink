@@ -35,9 +35,14 @@ const NO_JOINS: RoomJoin[] = [];
 export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
-  messages.flatMap((message) => (message.author && message.roomEntryId
-    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, message }]
-    : []));
+  messages.flatMap((message) => {
+    // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
+    const bot = !message.author && message.from;
+    const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
+    return author && message.roomEntryId
+      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), message }]
+      : [];
+  });
 
 export type JoinedLink = "connecting" | "live" | "offline";
 
@@ -221,7 +226,7 @@ export function filesProblem(files: readonly Pick<File, "name" | "size" | "type"
 
 function uploadProblem(status: number, name: string, error?: string): RoomProblem {
   if (status === 413) return { key: "teamRoom.tooBig", vars: { name } };
-  if (status === 415) return { key: "teamRoom.fileType" };
+  if (status === 415) return { key: "teamRoom.fileKinds" };
   if (status === 429) return { key: "teamRoom.tooFast" };
   if (status === 507) return { key: "teamRoom.outOfSpace" };
   if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };
