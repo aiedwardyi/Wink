@@ -43,7 +43,7 @@ describe("memory cleanup usage budget", () => {
   it("admits the final projected call exactly at the cap, but not one token beyond", async () => {
     const probe = run(used, true, false, false, true);
     expect(await probe.result).toMatchObject({ ok: true });
-    const bound = callTokens(probe.call.mock.calls[4]![0], SEEDS.propose);
+    const bound = callTokens(probe.call.mock.calls[4]![0], SEEDS.grade);
     for (const extra of [0, 1]) {
       const engine = run([1000, 1000, 1000, NIGHT_TOKENS - bound - 3000 + extra, 1000], true, false, false, true);
       expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
@@ -52,17 +52,20 @@ describe("memory cleanup usage budget", () => {
   });
 
   it("stops before a quiz whose questions, answers and grade can't all fit, synthetic counts", async () => {
-    const engine = run([22_000, 60_000], true, false, false, true);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget", tokens: 82_000 });
+    const engine = run([22_000, 100_000], true, false, false, true);
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget", tokens: 122_000 });
     expect(engine.call).toHaveBeenCalledTimes(2);
   });
 
-  it("estimates an engine's next call with its largest measured overhead, synthetic counts", async () => {
-    const probe = run();
-    expect(await probe.result).toMatchObject({ ok: true });
-    const engine = run([1000, callTokens(probe.call.mock.calls[1]![0], 0) + 60_000]);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
-    expect(engine.call).toHaveBeenCalledTimes(2);
+  it("lands a night whose propose ran long, grill-c heavy n1 counts", async () => {
+    const engine = run([48_366, 18_031, 14_132, 16_656, 5_196], true, false, false, true);
+    expect(await engine.result).toMatchObject({ ok: true, tokens: 102_381 });
+  });
+
+  it.each([[70_000, 2], [76_000, 1]])("estimates a repair with propose's largest measured overhead tonight, %i", async (spent, times) => {
+    const call = vi.fn<TextCall>(async () => ({ text: "{}", tokens: spent }));
+    await cleanFiles({ memory: "- kept\n", history: null, typed: new Set(), propose: call, recall: call });
+    expect(call).toHaveBeenCalledTimes(times);
   });
 
   it.each([false, true])("rejects an actual overrun on the final call, exact %s", async (exact) => {

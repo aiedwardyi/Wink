@@ -106,6 +106,15 @@ describe("recall grading", () => {
     expect(gradeByCode("deleted the cache", "the cache", "What gets deleting?")).not.toBe(true);
   });
 
+  it("passes a key whose extra words are only \"it\" and an inflected question word, grill-c light n3", async () => {
+    const { gradeByCode } = await load();
+    const question = "When does the Wink bot queue requests?";
+    expect(gradeByCode("it queues when busy", "when busy", question)).toBe(true);
+    expect(gradeByCode("it queues when busy", "busy", question)).toBe(true);
+    expect(gradeByCode("it queues when busy", "when idle", question)).not.toBe(true);
+    expect(gradeByCode("it queues when busy", null, question)).toBe(false);
+  });
+
   it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
     const { gradeByCode } = await load();
     const source = [
@@ -158,6 +167,14 @@ describe("recall grading", () => {
     const engine = calls({ "MEMORY.md": [retire(2)] }, ["it is value 0", ...keys.slice(1)]);
     expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
     expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 0?", expected: "value 0", actual: "it is value 0" }]]);
+  });
+
+  it("sends the key's source line with an undecided pair and asks for no pronoun keys, grill-c light n1", async () => {
+    const line = "- Quorum (heyquorum.com; his gf is the main user): never slower, and never take her time for tests.";
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["his gf", ...keys.slice(1)], ["her time", ...keys.slice(1)]);
+    expect(await cleanFiles({ ...input(engine), memory: `- kept\n- old done\n${line}\n` })).toMatchObject({ ok: true });
+    expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 0?", expected: "her time", actual: "his gf", line }]]);
+    expect(engine.prompts("questions")[0]).toContain("never by a pronoun");
   });
 
   it("fails a null answer to a keyed question without a grade call", async () => {

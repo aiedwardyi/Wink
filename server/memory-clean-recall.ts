@@ -63,8 +63,9 @@ const within = (text: string, part: string) => !!part && ` ${words(text).join(" 
 export function gradeByCode(key: string | null, answer: string | null, question = "", original: string[] = [], merged: string[] = []): boolean | undefined {
   if (key === null) return answer === null;
   const asked = new Set(words(question));
-  // "delete" is named by a question that says "deleted"
-  const unasked = (text: string) => words(text).filter((word) => !["", "s", "es", "d", "ed", "ing"].some((suffix) => asked.has(word + suffix))).join(" ");
+  // "delete" is named by a question that says "deleted" and "queues" by one that says "queue"; "it" is the asked subject
+  const unasked = (text: string) => words(text).filter((word) => word !== "it" && !["", "s", "es", "d", "ed", "ing"].some((suffix) => asked.has(word + suffix)
+    || !!suffix && word.length > suffix.length + 2 && word.endsWith(suffix) && asked.has(word.slice(0, -suffix.length)))).join(" ");
   const bare = unasked(key);
   if (answer === null) return original.some((line) => within(line, bare)) && !merged.some((line) => within(line, bare));
   const said = words(answer).join(" ");
