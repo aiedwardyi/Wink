@@ -6,6 +6,18 @@ const SEND_HOLD_SLOP = 10;
 let press: { x: number; y: number; timer: ReturnType<typeof setTimeout> } | null = null;
 let guardUntil = 0;
 let guarding = false;
+let sentAt = 0;
+
+export const STOP_AFTER_SEND_MS = 1000;
+
+// Stop mounts where Send was, so a double tap on Send would stop the turn it just started.
+export function markSent(): void {
+  sentAt = Date.now();
+}
+
+export function stopTooSoon(): boolean {
+  return Date.now() - sentAt < STOP_AFTER_SEND_MS;
+}
 
 function cancelPress(): void {
   if (press) clearTimeout(press.timer);

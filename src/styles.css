@@ -174,10 +174,14 @@
   justify-content: flex-end;
 }
 
-/* Rows are display:contents wrappers, so their children carry the containment. */
+/* Rows are display:contents wrappers, so their children carry the containment.
+   The newest row remembers its size too, or settling it drops to 80px for a frame and clamps the scroll. */
+[data-orbit-transcript] :is([data-settled], [data-mid], [data-run]) > * {
+  contain-intrinsic-block-size: auto 80px;
+}
+
 [data-orbit-transcript] [data-settled] > * {
   content-visibility: auto;
-  contain-intrinsic-block-size: auto 80px;
 }
 
 /* A jump measures the rows around its target at their real height. */

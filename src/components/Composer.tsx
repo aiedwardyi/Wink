@@ -70,7 +70,7 @@ import {
 } from "@/lib/composer-busy";
 import { composerIsBusy } from "@/lib/send-accept";
 import { composerEnterIntent, isComposerEnterKey } from "@/lib/composer-enter";
-import { holdToSendAfter } from "@/lib/send-hold";
+import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
@@ -755,6 +755,7 @@ export function Composer({
     }
     const t = composeMessage(liveText, attachments);
     if (!t) return;
+    markSent();
     hapticTick();
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
@@ -1353,6 +1354,7 @@ export function Composer({
           {busy && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
+              if (stopTooSoon()) return;
               if (group) stopRoom(group.id);
               else if (bot && !stopping) {
                 const botId = bot.id;
