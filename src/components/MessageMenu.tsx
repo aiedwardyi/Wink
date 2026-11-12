@@ -11,6 +11,7 @@ import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { ReactionIcon } from "./ReactionIcon";
 import { showSelectHandles } from "./select-handles";
 
 declare global {
@@ -424,7 +425,7 @@ export function MessageMenu({
         aria-checked={pressed}
         className={cn(EMOJI_CLASS, touch && "size-10", pressed && "bg-accent/15 ring-1 ring-accent/40")}
       >
-        {emoji}
+        <ReactionIcon emoji={emoji} size={17} />
       </button>
     );
   };
