@@ -2,6 +2,7 @@
 // in its own spot; without this boundary React unmounts the whole app.
 import { Component, Suspense, type ReactNode } from "react";
 import { useI18n } from "@/lib/i18n";
+import { LazyFallback } from "@/lib/stale-build";
 
 function ViewFailed({ overlay }: { overlay: boolean }) {
   const { t } = useI18n();
@@ -47,7 +48,9 @@ class ViewBoundary extends Component<{ children: ReactNode; overlay: boolean }, 
 export function LazyView({ fallback = null, overlay = false, children }: { fallback?: ReactNode; overlay?: boolean; children: ReactNode }) {
   return (
     <ViewBoundary overlay={overlay}>
-      <Suspense fallback={fallback}>{children}</Suspense>
+      <Suspense fallback={fallback}>
+        <LazyFallback.Provider value={fallback}>{children}</LazyFallback.Provider>
+      </Suspense>
     </ViewBoundary>
   );
 }
