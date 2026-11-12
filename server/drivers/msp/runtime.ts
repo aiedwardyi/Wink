@@ -34,6 +34,7 @@ import type { CliText, CliTextContext } from "../cli-text.ts";
 import { warmFingerprint, warmToolsKey, type WarmEligibilityInput } from "../acp/warm-eligibility.ts";
 import { finishNative } from "../native.ts";
 import { museUsageReport } from "../rate-limits.ts";
+import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
 
@@ -82,6 +83,8 @@ export interface MspSupport {
   wslResolveCli?: (cli: string, probeEnv: NodeJS.ProcessEnv) => Promise<string | null>;
   /** Tests inject their own; idle session hosts follow its TTL. */
   warmPool?: WarmPool;
+  /** Extra `serve` argv for this CLI's `--version` line. */
+  serveArgs?(version: string | null, wsl: boolean): string[];
   /** One-shot text for summaries, outside any MSP session. */
   text?(ctx: CliTextContext): CliText;
 }
@@ -264,13 +267,15 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       // WSL engine does not flap to "not found" on every passive refresh.
       let lastSnapshot: ProviderSnapshot | null = null;
       const effectiveCli = () => wslCli ?? baseCli;
+      let cliVersion: string | null = null;
       const isWslCli = () => /^\s*wsl(\.exe)?(\s|$)/i.test(effectiveCli());
       const probe = (target: string, probeEnv: NodeJS.ProcessEnv): Promise<string | null> =>
         new Promise((resolve) => {
           if (isWslCommand(target) && !wslProbeAllowed()) return resolve(null);
-          execCli(target, ["--version"], { timeout: 8000, env: probeEnv }, (err, stdout) =>
-            resolve(err ? null : stdout.trim()),
-          );
+          execCli(target, ["--version"], { timeout: 8000, env: probeEnv }, (err, stdout) => {
+            if (!err) cliVersion = stdout.trim();
+            resolve(err ? null : stdout.trim());
+          });
         });
       // Same 3-step fallback as the ACP core: bare, wrapped, resolved — one
       // resolution steers snapshot probes and every turn alike.
@@ -335,6 +340,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       }
       const active = new Map<string, Turn>();
       const children = new Set<ReturnType<typeof spawnCli>>();
+      const systemHeld = systemLedger();
 
       // Idle hosts live in the warm pool. A session host keeps its session
       // across turns only while its sign-in is still the CLI's current one;
@@ -427,7 +433,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         return host.closed;
       };
       const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
-        const child = spawnCli(effectiveCli(), ["serve"], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+        const args = ["serve", ...(support.serveArgs?.(cliVersion, isWslCli()) ?? [])];
+        const child = spawnCli(effectiveCli(), args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
         children.add(child);
         const host: Host = {
           child,
@@ -779,6 +786,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         let pendingText = "";
         // Poisoned-resume retry state (one retry max): recovered flips on the single retry.
         let recovered = false;
+        // The system text this turn carried, and whether the host compacted it away.
+        let systemSent: string | undefined;
+        let compacted = false;
         const bound: Array<() => void> = [];
 
         const stop = () => {
@@ -798,6 +808,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const settle = (ok: boolean, stopReason: string | null) => {
           if (state.settled) return;
           state.settled = true;
+          if (state.sessionId && compacted) systemHeld.forget(state.sessionId);
+          else if (state.sessionId && systemSent && ok && stopReason === null) systemHeld.record(state.sessionId, systemSent);
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const ask of [...asks.values()]) ask.finish("deny", "system");
           // The entry drops BEFORE turn.completed: the queue drain on that
@@ -902,6 +914,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             // Callers record the cursor from session.started: the fresh id
             // steers Retry onto the recovered session, not the poisoned one.
             emit({ ...base(threadId, turnId), type: "session.started", sessionId: freshId, model: state.model ?? turn.model ?? null });
+            systemSent = turn.system;
             const retryText = turn.system
               ? `${turn.system}\n\n${turn.resumeFallback?.text ?? turn.text}`
               : (turn.resumeFallback?.text ?? turn.text);
@@ -1174,6 +1187,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const onNotification = (method: string, params: any) => {
           if (state.settled) return;
           const p = (params ?? {}) as Record<string, any>;
+          if (p.item?.kind === "compaction") compacted = true;
           const tag = tagOf(p);
           if (state.mspTurnId === null) {
             // Ack-before-id race: hold in order until the ack names our turn.
@@ -1348,7 +1362,13 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             const promptText = turnHost.fellBack ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
             emit({ ...base(threadId, turnId), type: "session.started", sessionId, model: state.model ?? turn.model ?? null });
             turnTimer.mark("cliReady");
-            const text = turn.system ? `${turn.system}\n\n${promptText}` : promptText;
+            // A session that already holds this exact system text gets only the turn text.
+            const system = turn.system && (turnHost.fellBack || !systemHeld.holds(sessionId, turn.system)) ? turn.system : undefined;
+            if (system) {
+              systemHeld.forget(sessionId);
+              systemSent = system;
+            }
+            const text = system ? `${system}\n\n${promptText}` : promptText;
             await startTurnOn(sessionId, text);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
