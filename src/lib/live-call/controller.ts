@@ -191,6 +191,7 @@ export class LiveCall {
   };
   private hiddenAt = 0;
   private stalled = false;
+  private heals = 0;
   private askSends = new Set<string>();
   private askMs: number[] = [];
   private ack: number[] = [];
@@ -929,8 +930,9 @@ export class LiveCall {
   // Android can stop the page's audio and mic while it is away, and nothing else notices on return.
   private async heal() {
     if (this.ended || this.snapshot.startedAt === undefined) return;
+    const run = ++this.heals;
     const ok = await this.deps.audio.heal();
-    if (this.ended) return;
+    if (this.ended || run !== this.heals) return;
     this.stalled = !ok;
     this.release();
     this.refresh();

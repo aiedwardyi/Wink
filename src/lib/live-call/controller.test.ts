@@ -2003,6 +2003,23 @@ describe("LiveCall back from the background", () => {
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
   });
 
+  it("keeps a tap's resume when an older check gives up after it", async () => {
+    const audio = stalled([false]);
+    const { call } = await away(audio);
+    call.hidden(false);
+    await flush();
+    let giveUp!: (ok: boolean) => void;
+    vi.mocked(audio.heal).mockImplementationOnce(() => new Promise<boolean>((resolve) => { giveUp = resolve; }));
+    call.hidden(true);
+    call.hidden(false);
+    call.resume();
+    await flush();
+    expect(call.state().status).toBe("listening");
+    giveUp(false);
+    await flush();
+    expect(call.state().status).toBe("listening");
+  });
+
   it("says a relayed reply again when the socket closed before it finished", async () => {
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine, engines } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Green."] } } }, audio);
