@@ -11,7 +11,7 @@ import { attachmentExists, ATTACHMENTS_DIR, readAttachment } from "../attachment
 import { DATA_DIR } from "../config.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
 import { FILE_PATH, fileRoute } from "./file-routes.ts";
-import { ROOM_DISK_BYTES, sweepRoomFiles } from "./files.ts";
+import { MAX_MESSAGE_FILES, ROOM_DISK_BYTES, sweepRoomFiles } from "./files.ts";
 import { moveRoomFiles, roomFilesRoot } from "./files-folder.ts";
 
 const disk = vi.hoisted(() => ({ shortWrites: false, failSync: null as { path: string; code: string } | null }));
@@ -184,9 +184,9 @@ describe("room file limits", () => {
     expect(await upload(createRoom("Other").id, Buffer.alloc(200, "a"))).toMatchObject({ status: 200 });
   });
 
-  it("allow 50 uploads per person per 10 minutes", async () => {
+  it("allow several full messages of uploads per person per 10 minutes", async () => {
     const room = createRoom("Team").id;
-    for (let i = 0; i < 50; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
+    for (let i = 0; i < MAX_MESSAGE_FILES * 4; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
     expect(await upload(room, Buffer.from("one more"), {}, "p1")).toMatchObject({ status: 429, json: { error: "too many files at once, try again in a few minutes" } });
     expect((await upload(room, Buffer.from("someone else"), {}, "p2")).status).toBe(200);
   });
