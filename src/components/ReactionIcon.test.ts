@@ -41,11 +41,16 @@ describe("reaction icons", () => {
     }
   });
 
-  it("takes the text color, never a fixed fill", () => {
+  it("keeps the icon colors, never the text color", () => {
     const [chip] = renderChips(["👍"]);
     const svg = chip!.querySelector("svg")!.outerHTML;
-    expect(svg).toContain("currentColor");
-    expect(svg).not.toMatch(/#[0-9a-f]{3,6}/i);
+    expect(svg).toMatch(/#[0-9a-f]{3,6}/i);
+    expect(svg).not.toContain("currentColor");
+  });
+
+  it("draws the open-mouth face, not the hushed one", () => {
+    const [chip] = renderChips(["😮"]);
+    expect(chip!.querySelector("svg")!.outerHTML).toContain("face-with-open-mouth");
   });
 
   it("names each pill by its emoji for screen readers", () => {
