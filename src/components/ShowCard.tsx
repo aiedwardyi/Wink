@@ -5,7 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import { linkedFileSrc, showItem, showKind, showName, useShowItem } from "@/lib/show-pane";
 
 /** A bot's showable file in chat; lit while the pane shows it, a tap shows it again. */
-export function ShowCard({ threadId, path }: { threadId: string; path: string }) {
+export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: string; onOpen?: () => void }) {
   const { t } = useI18n();
   const shown = useShowItem();
   const kind = showKind(path)!;
@@ -25,7 +25,7 @@ export function ShowCard({ threadId, path }: { threadId: string; path: string })
       aria-pressed={lit}
       aria-label={t("show.card", { name })}
       title={path}
-      onClick={() => showItem({ threadId, path, kind })}
+      onClick={onOpen ?? (() => showItem({ threadId, path, kind }))}
       onContextMenu={menu}
       className="my-0.5 flex w-full max-w-[320px] min-w-0 items-center gap-2.5 rounded-xl border border-hairline/40 bg-raised/50 p-1.5 pr-2.5 text-left align-middle transition-colors hover:bg-raised data-showing:border-accent/70 data-showing:bg-raised data-showing:ring-1 data-showing:ring-accent/40"
     >
