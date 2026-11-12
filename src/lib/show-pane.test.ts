@@ -31,6 +31,11 @@ it("finds absolute file links, angle-bracketed and file:// ones too", () => {
   expect(showableLinks(text)).toEqual(["C:\\w\\a.png", "/Users/me/My Deck.pdf", "C:/w/c.html"]);
 });
 
+it("reads link paths the way the chat renders them", () => {
+  const text = "[a](C:/My%20Drive/a.pdf) [b](C:/My Drive/b.pdf) [c](C:/w/c.png#top) `[d](C:/w/d.png)`\n```\n[e](C:/w/e.png)\n```";
+  expect(showableLinks(text)).toEqual(["C:/My Drive/a.pdf", "C:/w/c.png"]);
+});
+
 it("opens on its own only for a file handed over while the chat is open", () => {
   const before = [user("u1"), deck];
   expect(walk([{ messages: before }, { messages: [...before, page] }])).toEqual([null, "C:\\work\\sync-flow.html"]);
