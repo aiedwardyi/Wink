@@ -57,7 +57,7 @@ import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
 import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
-import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
+import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -325,7 +325,8 @@ function RoomContextMenu({
       <TeamRoomSidebarActions group={group} onClose={onClose} />
       {!joined && <button
         onClick={() => {
-          dispatch({ type: "deleteGroup", groupId: group.id });
+          if (group.hosted) confirmRoomDelete(group);
+          else dispatch({ type: "deleteGroup", groupId: group.id });
           onClose();
         }}
         className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-danger hover:bg-raised/40"
