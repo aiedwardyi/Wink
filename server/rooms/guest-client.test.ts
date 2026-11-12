@@ -240,6 +240,16 @@ describe("join", () => {
     expect(seen.every((row) => row.headers.cookie === undefined)).toBe(true);
   });
 
+  it("never joins this PC's own room: it names the hosted group and sends nothing", async () => {
+    route = quietDoor;
+    const own = vi.fn((code: string) => (code.trim() === CODE ? "g-host" : null));
+    expect(await guest({ ownRoom: own }).join(`  ${CODE}
+`)).toEqual({ ok: false, status: 409, error: "own-room", groupId: "g-host" });
+    expect(await joinedRoute("POST", "/api/joined/join", client!, async () => ({ code: CODE }))).toEqual({ status: 409, body: { error: "own-room", groupId: "g-host" } });
+    expect(seen).toEqual([]);
+    expect(joinedRoom("r1")).toBeNull();
+  });
+
   it("follows no redirect and stores nothing on a refusal", async () => {
     route = (_req, res) => {
       res.writeHead(307, { location: `https://${HOST}/room/v1/join2` });

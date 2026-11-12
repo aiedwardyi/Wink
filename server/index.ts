@@ -53,6 +53,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { hostSend } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
@@ -6320,9 +6321,15 @@ sweepRoomFiles(store.groups);
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
+  ownRoom: (code) => ownRoomGroup(code, store.groups),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   alert: roomAlert,
 });
+try {
+  dropOwnJoins(store.groups);
+} catch (error) {
+  console.warn(`[rooms] own joined copy: ${error instanceof Error ? error.message : String(error)}`);
+}
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();

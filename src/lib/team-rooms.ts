@@ -152,9 +152,12 @@ export function createTeamRoom(name: string): Promise<{ group: Group }> {
   return request("/api/groups", { method: "POST", body: JSON.stringify({ name, hosted: true, peopleOnly: true, memberIds: [] }) });
 }
 
-type Refused = { status: number; error: string };
+/** `groupId` is the room this PC hosts, when its own code was entered. */
+type Refused = { status: number; error: string; groupId?: string };
 
-const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
+const refused = (status: number, body: any): Refused => ({
+  status, error: typeof body?.error === "string" ? body.error : "", ...(typeof body?.groupId === "string" ? { groupId: body.groupId } : {}),
+});
 
 /** `short` is the 6-character code, missing while this PC's relay can't mint one. */
 export type RoomInviteCode = { code: string; short?: string };

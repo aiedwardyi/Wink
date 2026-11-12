@@ -119,13 +119,16 @@ export interface JoinedView {
   canReact: boolean;
 }
 
-export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
+/** `groupId` is the room this PC hosts, when its own code was entered. */
+export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string; groupId?: string };
 
 export interface GuestClientDeps {
   /** Relay bases a code's host may sit under: the enrolled one and the baked team one. */
   bases(): ReadonlyArray<string | null>;
   /** This PC as the host sees it: its own name and a steady id a Remove can bar. */
   joiner(): { name: string; device: string };
+  /** The group this PC hosts behind `code`, so the host never joins its own room. */
+  ownRoom?(code: string): string | null;
   onChange?(roomId: string): void;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
@@ -247,6 +250,8 @@ export class GuestClient {
   /** The whole join: the pasted code in, a synced room out. */
   async join(code: string): Promise<GuestResult<JoinedView>> {
     if (this.changing.size) return failed(409, "room is busy");
+    const own = this.deps.ownRoom?.(code);
+    if (own) return { ...failed(409, "own-room"), groupId: own };
     this.joining++;
     try {
       return await this.joinNow(code);
