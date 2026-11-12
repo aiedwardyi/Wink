@@ -7,9 +7,10 @@ import { filesProblem, hostRoomBase, isRoomPicture, roomPictureUrl, type TeamRoo
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 
-export function RoomPicture({ src, size = 32 }: { src?: string; size?: number }) {
+/** `retry`: a change, like the host coming back online, loads a failed picture again. */
+export function RoomPicture({ src, size = 32, retry }: { src?: string; size?: number; retry?: unknown }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
+  useEffect(() => setFailed(false), [src, retry]);
   return (
     <span data-room-picture className="flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
       {src && !failed ? (

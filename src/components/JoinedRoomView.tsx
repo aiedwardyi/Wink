@@ -68,7 +68,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <div className="flex min-w-0 items-center gap-2.5">
-          <RoomPicture src={roomPictureUrl(base, room?.state?.picture)} />
+          <RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />
           <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{name}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
