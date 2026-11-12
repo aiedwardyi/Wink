@@ -5740,7 +5740,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
       // dispatched: the rewind is spent
-      if (rewound) store.patchBot(bot.id, { rewound: false }, { soon: true });
+      if (rewound) store.patchBot(bot.id, { rewound: false });
       // and this engine now owns the thread's most recent turn
       store.markTaskDispatched(bot.id, threadId, instanceId, model);
       // a turn can settle before dispatch returns, and a poller started

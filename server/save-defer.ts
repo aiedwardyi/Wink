@@ -32,5 +32,7 @@ export function coalescedSave(write: () => void) {
 
 /** http holds a response write until the next tick; this sends it before the caller's next line. */
 export function sendNow(res: ServerResponse): void {
-  res.socket?.uncork();
+  // Node 24.22 holds the write on the response, older Node on its socket
+  if (res.writableCorked) res.uncork();
+  else res.socket?.uncork();
 }
