@@ -349,6 +349,7 @@ export const Transcript = memo(function Transcript({
   const showActivities = showToolCalls || terminal;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const people = useMemo(() => {
+    if (!group.hosted) return undefined;
     const names = reactionNames(roomPeople(group));
     for (const m of transcript) if (m.author?.kind === "person") names.set(`person:${m.author.id}`, m.author.name);
     return names;

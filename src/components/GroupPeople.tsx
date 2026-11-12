@@ -71,10 +71,8 @@ export function GroupPeople({ group }: { group: Group }) {
           {t("teamRoom.invite")}
         </button>
       )}
-      {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">
-        {t(problem)}
-        {problem === "teamRoom.phoneOff" && <button type="button" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "companion" })} className="ml-2 font-medium text-accent hover:underline">{t("teamRoom.openPhoneAccess")}</button>}
-      </p>}
+      {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t(problem)}</p>}
+      {problem === "teamRoom.phoneOff" && <button type="button" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "companion" })} className="mt-1 px-3 text-[12.5px] font-medium text-accent hover:underline">{t("teamRoom.openPhoneAccess")}</button>}
       {people.length > 0 && (
         <ul className="mt-2 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
           {people.map((person) => (
