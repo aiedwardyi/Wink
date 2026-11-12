@@ -26,6 +26,7 @@ describe("harness playbook", () => {
     const body = harnessPlaybookBody();
     expect(body.startsWith("## Cards")).toBe(true);
     expect(body).not.toContain(close);
+    expect(harnessPlaybookBody(`${loadHarnessPlaybook()}\n\n`)).toBe(body);
     expect(squash(`${harnessPlaybookPrompt(true).slice(0, -close.length)}<!-- on demand -->${body}${close}`)).toBe(squash(loadHarnessPlaybook()));
   });
 

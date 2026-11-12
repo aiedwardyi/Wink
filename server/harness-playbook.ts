@@ -48,7 +48,7 @@ export function harnessPlaybookPrompt(terminalShared: boolean, playbook = HARNES
 
 export function harnessPlaybookBody(playbook = HARNESS_PLAYBOOK): string {
   const at = playbook.indexOf(ON_DEMAND);
-  return at < 0 ? "" : playbook.slice(at + ON_DEMAND.length, playbook.length - CLOSE.length).trim();
+  return at < 0 ? "" : playbook.slice(at + ON_DEMAND.length, playbook.lastIndexOf(CLOSE)).trim();
 }
 
 // Loose on purpose: a wrongly held shell command costs one read, a missed launch skips the rules.
