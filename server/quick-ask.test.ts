@@ -439,6 +439,16 @@ describe("quick route", () => {
     await vi.waitFor(() => expect(h.ask).toHaveBeenCalledTimes(2));
     expect((h.ask.mock.calls[1] as unknown[])[2]).toMatchObject({ text: "and which file is that in?", notes: expect.stringContaining(`Q: ${QUESTION}\nA: Port 8787.`) });
   });
+
+  it("gives a call ask the call lines before it", async () => {
+    const h = harness();
+    const call = { id: "c-0123456789ab" };
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Which port does the server use?", call });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...call, voice: true } });
+    await h.send({ text: QUESTION, call: { ...call, ask: true } });
+    await h.settled();
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nYou: Let me check.") });
+  });
 });
 
 describe("boot recovery", () => {
@@ -516,6 +526,28 @@ describe("Gate 0", () => {
     ["not nominated", { text: "ship it" }],
   ])("skips the helper: %s", (_name, patch) => {
     expect(routesQuick({ ...base, ...patch })).toBe(false);
+  });
+
+  const typed = { id: "u", at: 2, role: "user", kind: "text", text: "nevermind, keep going" } as Message;
+  const newer = { ...card, id: "c2", at: 3 } as Message;
+  const approval = { ...card, card: { title: "?", subtitle: "", options: [], requestId: "r1", tool: "Bash" } } as Message;
+  const closed = (patch: object) => ({ ...card, card: { ...card.card!, ...patch } }) as Message;
+
+  describe.each([QUESTION, "지금 뭐 하고 있어?"])("open cards: %s", (text) => {
+    it.each<[string, Message[]]>([
+      ["an old card the person typed past", [card, typed]],
+      ["an answered card", [closed({ answered: "Yes" })]],
+      ["a dismissed card", [closed({ dismissed: true })]],
+    ])("passes: %s", (_name, messages) => {
+      expect(routesQuick({ ...base, text, messages })).toBe(true);
+    });
+
+    it.each<[string, Message[]]>([
+      ["the newest card, still open", [card, typed, newer]],
+      ["an open approval the person typed past", [approval, typed]],
+    ])("skips the helper: %s", (_name, messages) => {
+      expect(routesQuick({ ...base, text, messages })).toBe(false);
+    });
   });
 
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {

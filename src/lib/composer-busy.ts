@@ -2,8 +2,8 @@
 // does with the live box.
 //
 // Rooms hold client-side lines while a member speaks and flush them FIFO
-// on settle. A second Enter used to no-op after the first hold — Desktop
-// QA then saw only ADV-QUEUE-0. Every busy send now enqueues (or POSTs
+// on settle. A second Enter used to no-op after the first hold, so
+// only the first line survived. Every busy send now enqueues (or POSTs
 // for 1:1). 1:1 already POSTs mid-turn (steer-queue); lecturing the empty
 // box about "the turn" made forever-chat feel like supervising an agent.
 // Keep the queue; drop the gate-y chrome.
@@ -33,8 +33,8 @@ export function modelForNextSend<T>(
 }
 
 /** Prefer the live textarea. A fill+Enter burst updates the DOM before
- * React re-renders; reading only the rendered draft resends QUEUE-0 or
- * sends "" and drops QUEUE-1..n. An empty live value wins so a second
+ * React re-renders; reading only the rendered draft resends the first line or
+ * sends "" and drops the later ones. An empty live value wins so a second
  * Enter in the same tick cannot duplicate the line we just cleared. */
 export function composerSendSourceText(
   liveValue: string | null | undefined,

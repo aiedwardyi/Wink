@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 
+import { googleSubHash } from "../shared/google-id-token.ts";
 import { RELAY_BASE_RE } from "../shared/relay-protocol.ts";
 import { ACCOUNT_TIMEOUT_MS, ACCOUNT_TOKEN_MAX_AGE_MS, idTokenClaims } from "./phone-relay/account.ts";
 import { relayHostFor } from "./phone-relay/mode.ts";
@@ -13,19 +14,29 @@ export interface TeamTokenSource {
 
 const denied = { status: 403, body: { owner: false } };
 
-/** Enrolled base wins. A baked value may be a base or an https relay origin. */
-export function teamRelayOrigin(enrolledBase: string | null, baked: string | null): string | null {
-  const chosen = (enrolledBase || baked || "").trim().toLowerCase();
+/** A base or an https relay origin, as baked, to its base. */
+export function teamRelayBase(value: string | null): string | null {
+  const chosen = (value || "").trim().toLowerCase();
   if (!chosen || chosen.startsWith("http://")) return null;
   const host = (chosen.startsWith("https://") ? chosen.slice("https://".length) : chosen).split("/")[0] ?? "";
   const base = host.startsWith("relay.") ? host.slice("relay.".length) : host;
-  if (!RELAY_BASE_RE.test(base)) return null;
-  return `https://${relayHostFor(base)}`;
+  return RELAY_BASE_RE.test(base) ? base : null;
+}
+
+/** Enrolled base wins. A baked value may be a base or an https relay origin. */
+export function teamRelayOrigin(enrolledBase: string | null, baked: string | null): string | null {
+  const base = teamRelayBase(enrolledBase || baked);
+  return base ? `https://${relayHostFor(base)}` : null;
 }
 
 /** sha256 hex of the trimmed lowercase email. The bake stores this, never the email. */
 export function teamOwnerHash(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+}
+
+/** The relay's opaque id for a Google sub; keep in step with relay/src/team.ts. */
+function teamPersonId(sub: string): string {
+  return createHash("sha256").update(`wink-team-person/1\0${googleSubHash(sub)}`, "utf8").digest("base64url");
 }
 
 /** Held token only while it is as fresh as a relay account registration, else refresh. */
@@ -62,7 +73,11 @@ export async function teamRoute(
       signal: AbortSignal.timeout(ACCOUNT_TIMEOUT_MS),
     });
     if (!response.ok) return denied;
-    return { status: 200, body: await response.json() };
+    const body = (await response.json()) as { people?: unknown } | null;
+    const sub = idTokenClaims(token)?.sub;
+    if (!sub || !Array.isArray(body?.people)) return { status: 200, body };
+    const self = teamPersonId(sub);
+    return { status: 200, body: { ...body, people: body.people.filter((person: { id?: unknown }) => person?.id !== self) } };
   } catch {
     return denied;
   }

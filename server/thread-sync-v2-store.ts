@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 
+import { isVoiceLine } from "../shared/live-call.ts";
 import { lastMessageAt, withMessageTransaction } from "./message-db.ts";
 import { soonAfterWake, wakeClock } from "./pc-wake.ts";
 import { publishThreadPictures } from "./picture-sync.ts";
@@ -498,12 +499,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       return created?.value === id && based(created.baseStamp) === parent;
     };
     const edited = rows.some((row, i) => (kids.get(row.id)?.length ?? 0) !== (i < rows.length - 1 ? 1 : 0));
-    const turns = rows.filter((row) => row.role === "user" && row.kind === "text" && !row.quick).length;
+    const turns = rows.filter((row) => row.role === "user" && row.kind === "text" && !isVoiceLine(row) && !row.quick).length;
     const prompts = new Set(trunk.slice(at).map((id) => byId.get(id)!).filter((row) => row.role === "user" && row.kind === "text").map((row) => row.text?.trim()).filter(Boolean));
     const duplicate = rows.some((row) => row.role === "user" && row.kind === "text" && row.text?.trim() && prompts.has(row.text.trim()));
-    const pending = rows.slice(rows.findLastIndex((row) => row.role === "user" && row.kind === "text") + 1);
+    const pending = rows.slice(rows.findLastIndex((row) => row.role === "user" && row.kind === "text" && !isVoiceLine(row)) + 1);
     const final = pending.slice(pending.findLastIndex((row) => row.kind === "activity") + 1)
-      .some((row) => row.role === "bot" && row.kind === "text" && row.text?.trim() && !row.summarized);
+      .some((row) => row.role === "bot" && row.kind === "text" && row.text?.trim() && !row.summarized && !isVoiceLine(row));
     const reason = !rows.every((row) => mine(row.id)) ? "another writer"
       : edited || !appended(rows[0].id, branch[at - 1] ?? null) ? "edit or regenerate"
       : based(pick.version.baseStamp) !== parentOf(tip) || (kids.get(parentOf(rows[0].id)) ?? []).some((id) => id !== rows[0].id && mine(id)) ? "branch switch"
@@ -672,7 +673,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
         if (!row) return 0;
         const path = host.store.activePath(threadId);
         const at = path.findIndex((message) => message.id === row.tip);
-        if (at < 0 || path.slice(at + 1).some((message) => message.role === "bot" && message.kind === "text")) {
+        if (at < 0 || path.slice(at + 1).some((message) => message.role === "bot" && message.kind === "text" && !isVoiceLine(message))) {
           db.prepare("DELETE FROM sync_v2_joins WHERE thread = ?").run(threadId);
           return 0;
         }

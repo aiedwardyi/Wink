@@ -80,6 +80,33 @@ voice choice is a quality decision, not a latency one. The way to make a call
 feel conversational is to put the bot you call on a fast model and let it
 delegate real work to specialists over `ask_bot` — no new machinery required.
 
+## Live call
+
+The phone icon in a chat header opens a live call: open mic, a Gemini Live
+voice, and the bot still doing the work. The voice is the mouth, the bot is the
+brain. It runs in any browser, phone first; the desktop app keeps Call mode.
+
+- **Key stays on the PC.** `POST /api/bots/:id/call/token` mints a 1-use token
+  with the brief, voice, tools and VAD locked in (REST field
+  `bidiGenerateContentSetup`). The page only sees the token. No key: the
+  existing Gemini key card lands in the chat, and saving it starts the call.
+- **Lines are rows.** What you say and what the voice says go through
+  `/call/lines` as chat rows tagged `call`. `isVoiceLine` keeps them from
+  settling, streaming, counting unread or being quoted as the bot's answer.
+- **Work waits for a yes.** The voice proposes work (`propose_work`), the bar
+  shows "Send: <order>?", and a tapped or spoken yes (en/ko, `consent.ts`) sends
+  it through the normal send route as a `call.order` row. 45 s with no answer
+  expires it.
+- **Reports come back.** When a voice order settles, the reply goes to the voice as a
+  `[Wink]` line (`realtimeInput.text`) and is spoken in 1-3 sentences. A reply to a
+  typed message stays silent: it goes in as context (`clientContent`,
+  `turnComplete: false`) once the voice is quiet. The voice never says done
+  before the bot does; a slip is corrected and counted.
+- **Language.** The voice speaks the app language and switches only when asked by
+  name; misheard speech never switches it.
+- **Stats.** `/call/end` appends one line to `diag/live-call.jsonl`.
+- Live code is a lazy chunk; chats without a call pay nothing.
+
 ## Rejected
 
 | Option | Why not |
@@ -89,11 +116,11 @@ delegate real work to specialists over `ask_bot` — no new machinery required.
 | Kokoro-82M in the renderer | Genuinely good and free, but it is a second provider, a 2.2MB chunk, an ONNX runtime and a first-run model download. Simplicity won. |
 | Cartesia | Cheaper and faster to first byte, but a second provider earns its keep only once one is not enough |
 | ElevenLabs Agents | Its custom-LLM `cascade_timeout_seconds` maxes at 15s and agent turns exceed that; it also wants to own turn-taking and tool calls, which is what the harness owns |
-| OpenAI Realtime / Gemini Live (speech-to-speech) | They replace the brain, and the brain being Claude Code on your own machine *is* the product |
+| ~~OpenAI Realtime / Gemini Live (speech-to-speech)~~ | Superseded by Live call: the voice is only the mouth, the bot stays the brain |
 
 ## Known gaps
 
-- **Calls are macOS-only**, because dictation is. The voice half works everywhere.
+- **Call mode is macOS-only**, because dictation is. Live call covers browsers; not yet the desktop app.
 - **Rooms don't speak yet**, though per-bot voices already exist (`bot.voice`).
 - **No spend meter.** ElevenLabs bills per character. Auto-speak is off by
   default partly for that reason, but the app should eventually show usage.

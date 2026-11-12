@@ -846,6 +846,38 @@ describe("ModelDial", () => {
       expect(selected()).toBe("gpt-6-luna");
     });
 
+    it("steps a rolled mouse wheel every 130 ms, not once per roll", async () => {
+      for (let i = 0; i < 10; i++) {
+        await wheel(100);
+        await wait(60);
+      }
+      expect(selected()).toBe("grok-4.7");
+    });
+
+    it("steps a rolled line-mode wheel on the same gap", async () => {
+      for (let i = 0; i < 10; i++) {
+        await wheel(3, 1);
+        await wait(60);
+      }
+      expect(selected()).toBe("grok-4.7");
+    });
+
+    it.each([[0, 100], [1, 3]])("repeats a mouse notch at 130 ms, not 129, in delta mode %i", async (mode, delta) => {
+      await wheel(delta, mode);
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await wait(129);
+      await wheel(delta, mode);
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await wait(1);
+      await wheel(delta, mode);
+      expect(selected()).toBe("gpt-6.1-sol");
+    });
+
+    it("keeps a trackpad flick starting on a big delta to one step", async () => {
+      await burst([60, 34, 20, 11, 6, 3, 2, 1].map((delta) => delta * 1.5));
+      expect(selected()).toBe("claude-sonnet-5-5");
+    });
+
     it("turns back at once when a burst reverses", async () => {
       await burst([20, 40, 20]);
       expect(selected()).toBe("claude-sonnet-5-5");

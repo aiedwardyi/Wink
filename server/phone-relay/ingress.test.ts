@@ -208,18 +208,130 @@ describe("relay ingress", () => {
       server.requestTimeout = 300;
     }
     tls.write(`GET /slow HTTP/1.1\r\nhost: ${HOST}\r\n`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     clock.advance(60_000);
     const cut = await Promise.race([closed(pcEnd).then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000))]);
     expect(cut).toBe(true);
     tls.destroy();
   });
 
-  /** An ingress whose handler never reads its request and keeps every response open, like /api/events. */
+  it.each([
+    ["keeps a relay socket open 90 s after a response", 90_000],
+    ["keeps it open at 299 s", 299_000],
+  ])("%s", async (_name, idle) => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    expect(await get(tls, "/warm")).toBe("ok /warm");
+    clock.advance(idle);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    expect(await get(tls, "/again")).toBe("ok /again");
+    clock.advance(idle);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.destroy();
+  });
+
+  it("closes an idle socket by 311 s", async () => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    expect(await get(tls, "/warm")).toBe("ok /warm");
+    clock.advance(309_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    clock.advance(1_000);
+    expect(pcEnd.destroyed).toBe(true);
+    tls.destroy();
+  });
+
+  it("fresh connection with no request still closes at the headers timeout", async () => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    clock.advance(59_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    tls.destroy();
+  });
+
+  it("after an idle gap, headers that trickle past the headers timeout still close the socket", async () => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    expect(await get(tls, "/warm")).toBe("ok /warm");
+    clock.advance(90_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.write("GET /slow HTTP/1.1\r\n");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    clock.advance(30_000);
+    tls.write(`host: ${HOST}\r\n`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    clock.advance(29_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    tls.destroy();
+  });
+
+  it("keeps the headers deadline for a buffered pipelined request", async () => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    tls.write(`GET /first HTTP/1.1\r\nhost: ${HOST}\r\n\r\nGET /slow HTTP/1.1\r\nhost: ${HOST}\r\n`);
+    await once(tls, "data");
+    clock.advance(59_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    tls.destroy();
+  });
+
+  it("does not arm an idle wait while a pipelined event stream is active", async () => {
+    const clock = new FakeClock();
+    let first: ServerResponse;
+    const ingress = new RelayIngress({
+      host: HOST,
+      clock,
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        if (req.url === "/first") {
+          first = res;
+          return;
+        }
+        first.end("ok");
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write("data: hello\n\n");
+      },
+    });
+    ingress.setCertificate(certA.keyPem, certA.certPem);
+    open.push(ingress);
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    tls.write(`GET /first HTTP/1.1\r\nhost: ${HOST}\r\n\r\nGET /api/events HTTP/1.1\r\nhost: ${HOST}\r\n\r\n`);
+    await once(tls, "data");
+    clock.advance(311_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.destroy();
+  });
+
+  /** Keeps event responses open without reading the request. */
   async function streaming(clock: FakeClock) {
     const ingress = new RelayIngress({
       host: HOST,
       clock,
-      handler: (_req: IncomingMessage, res: ServerResponse) => {
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        if (req.url === "/warm") {
+          res.end("ok /warm");
+          return;
+        }
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write("data: hello\n\n");
       },
@@ -243,6 +355,46 @@ describe("relay ingress", () => {
     await once(tls, "data");
     clock.advance(301_000);
     expect(await closesSoon(pcEnd)).toBe(false);
+    tls.destroy();
+  });
+
+  it("an event stream is not cut by the keep-alive wait", async () => {
+    const clock = new FakeClock();
+    const { pcEnd, tls } = await streaming(clock);
+    expect(await get(tls, "/warm")).toBe("ok /warm");
+    clock.advance(299_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.write(`GET /api/events HTTP/1.1\r\nhost: ${HOST}\r\n\r\n`);
+    await once(tls, "data");
+    clock.advance(311_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.destroy();
+  });
+
+  it("starts the request body deadline after the idle gap", async () => {
+    const clock = new FakeClock();
+    const { pcEnd, tls } = await streaming(clock);
+    expect(await get(tls, "/warm")).toBe("ok /warm");
+    clock.advance(299_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.write(`POST /upload HTTP/1.1\r\nhost: ${HOST}\r\ncontent-length: 10\r\n\r\nabc`);
+    await once(tls, "data");
+    clock.advance(299_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    tls.destroy();
+  });
+
+  it("lets a room upload body stream past requestTimeout until its size-scaled deadline", async () => {
+    const clock = new FakeClock();
+    const { pcEnd, tls } = await streaming(clock);
+    tls.write(`POST /room/v1/rooms/r1/files?uploadId=u HTTP/1.1\r\nhost: ${HOST}\r\ncontent-length: 1000000\r\n\r\nabc`);
+    await once(tls, "data");
+    clock.advance(301_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(7_000);
+    expect(await closesSoon(pcEnd)).toBe(true);
     tls.destroy();
   });
 

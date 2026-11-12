@@ -503,6 +503,10 @@ it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
 });
 
+it("closes the hand on press, before the drag starts", () => {
+  expect(usageCss).toMatch(/\[data-usage-reorder\]:active \{ cursor: grabbing; \}/);
+});
+
 it("keeps a 44 px hold band on the 20 px engine head", () => {
   expect(usageCss).toMatch(/\.usage-engine-head\[data-usage-reorder\]::before \{[^}]*inset: -12px 0;/);
 });
@@ -666,6 +670,40 @@ it("reorders the small card by a held touch and by keyboard", async () => {
   await act(async () => quickRows()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })));
   expect(quickIds()).toEqual([before[1], before[0], before[2]]);
   expect(document.activeElement).toBe(quickRows()[1]);
+});
+
+// Chromium counts a translated row in its scroller's scrollHeight.
+const scroller = (box: HTMLElement, rows: HTMLElement[]) => {
+  let top = 0;
+  const height = () => Math.max(240, ...rows.map((row, index) => index * 80 + 80 + (parseFloat(row.style.translate.split(" ")[1] ?? "") || 0)));
+  box.style.overflowY = "auto";
+  Object.defineProperties(box, {
+    clientHeight: { configurable: true, value: 200 },
+    scrollHeight: { configurable: true, get: height },
+    scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height() - 200)); } },
+  });
+  vi.spyOn(box, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 200));
+  return height;
+};
+
+it.each(["mouse", "touch"])("keeps the small card's scroll height while a %s drag is held at its edge", async (pointer) => {
+  await openQuick();
+  const rows = [...quickRows()];
+  stack(rows);
+  const height = scroller(document.querySelector<HTMLElement>("[data-quick-scroll]")!, rows);
+  if (pointer === "mouse") {
+    await act(async () => {
+      rows[0]!.dispatchEvent(mouse("pointerdown", 40, 40));
+      document.dispatchEvent(mouse("pointermove", 40, 190));
+    });
+  } else {
+    await act(async () => void touch(rows[0]!, "touchstart", 40));
+    await held(400);
+    await act(async () => void touch(rows[0]!, "touchmove", 190));
+  }
+  await held(10_000);
+  expect(height()).toBe(240);
+  await act(async () => void (pointer === "mouse" ? document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })) : touch(rows[0]!, "touchcancel")));
 });
 
 it("picks a row up on a long press", async () => {

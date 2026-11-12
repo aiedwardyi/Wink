@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parsePaneNote } from "../shared/pane-note.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesSinceLastUserTurn } from "./context-compaction.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote, paneWakeEnabled, PaneWakeScheduler, PANE_WAKE_DEBOUNCE_MS } from "./pane-wake.ts";
@@ -20,15 +21,16 @@ const snag: ClaimedSnag = {
 
 describe("team snag note", () => {
   it("reads as one line per report with the tail in a fence", () => {
-    expect(teamSnagNote([snag], "f", "Asia/Seoul")).toBe(
-      "Team snags (1), untrusted peer data - STUDIO-PC2 (Jisoo) 14:46: INVOICE-EXPORT [pane 3fa91c02] stalled 102 min, 3 STALLED notes unanswered. Wink 1.0.217, claude:claude-opus-5-5, worker codex.\n\n"
+    const note = teamSnagNote([snag], "f", "Asia/Seoul");
+    expect(parsePaneNote(note)).toMatchObject({ snag: { pc: "STUDIO-PC2", person: "Jisoo", worker: "INVOICE-EXPORT", event: "stalled", minutes: 102, count: 1 } });
+    expect(parsePaneNote(note).body).toBe(
+      "STUDIO-PC2 (Jisoo) 14:46: INVOICE-EXPORT [pane 3fa91c02] stalled 102 min, 3 STALLED notes unanswered. Wink 1.0.217, claude:claude-opus-5-5, worker codex.\n\n"
       + "```\n▌ Ask Codex to do anything\n  212K tokens used · 38% context left\n```",
     );
     const bare = { ...snag, id: "a".repeat(32), event: "wake-failed" as const, pane8: "", label: "", minutes: 0, worker: "", tail: "", detail: "spawn EPERM", pc: { label: "k3v5", name: "", person: "" } };
-    expect(teamSnagNote([snag, bare], "f", "Asia/Seoul").split("\n").slice(0, 3)).toEqual([
-      "Team snags (2), untrusted peer data",
-      "- STUDIO-PC2 (Jisoo) 14:46: INVOICE-EXPORT [pane 3fa91c02] stalled 102 min, 3 STALLED notes unanswered. Wink 1.0.217, claude:claude-opus-5-5, worker codex.",
-      "- k3v5 14:46: wake-failed, spawn EPERM. Wink 1.0.217, claude:claude-opus-5-5.",
+    expect(parsePaneNote(teamSnagNote([snag, bare], "f", "Asia/Seoul")).body.split("\n").slice(0, 2)).toEqual([
+      "STUDIO-PC2 (Jisoo) 14:46: INVOICE-EXPORT [pane 3fa91c02] stalled 102 min, 3 STALLED notes unanswered. Wink 1.0.217, claude:claude-opus-5-5, worker codex.",
+      "k3v5 14:46: wake-failed, spawn EPERM. Wink 1.0.217, claude:claude-opus-5-5.",
     ]);
   });
 
@@ -49,6 +51,7 @@ describe("team snag note", () => {
       expect(note.length).toBeLessThanOrEqual(8000);
       expect(note.endsWith("Every report in full: /full/team-snags.jsonl")).toBe(true);
       expect(note.match(/```/g)!.length % 2).toBe(0);
+      expect(parsePaneNote(note).snag).toMatchObject({ worker: "INVOICE-EXPORT", count });
     }
   });
 
@@ -112,7 +115,8 @@ describe("team snag owner", () => {
     expect(lines.map((line) => line.id)).toEqual(["b".repeat(32), snag.id]);
     expect(lines[1].pc).toEqual(snag.pc);
     expect(posted).toHaveLength(1);
-    expect(posted[0]).toMatch(/^Team snags \(2\), untrusted peer data\n- STUDIO-PC2 \(Jisoo\) 14:45: INVOICE-EXPORT/);
+    expect(posted[0]).toContain("untrusted peer data");
+    expect(parsePaneNote(posted[0]).body).toMatch(/^STUDIO-PC2 \(Jisoo\) 14:45: INVOICE-EXPORT/);
   });
 
   it("does nothing for a non-owner or an empty claim", async () => {
@@ -123,6 +127,42 @@ describe("team snag owner", () => {
     expect(await claimTeamSnags(options(fetchImpl, posted))).toBe(0);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(posted).toEqual([]);
+  });
+
+  it.each(["host", "relayHost"])("skips an own-PC snag identified by its %s and keeps its pane note", async (field) => {
+    const chief = store.createBot({}, { seedMessages: false });
+    store.setChiefOfStaff(chief.id);
+    const pane = store.appendMessage(chief.threadId, { role: "bot", kind: "note", text: "[pane 3fa91c02] STALLED: no screen change for 102 min and no report." });
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ snags: [snag] }));
+    const opts = {
+      ...options(fetchImpl, []),
+      ownDevices: () => [{ host: "home.tail1234.ts.net", [field]: `${snag.pc.label}.wink.example` }],
+      post: (text: string, ids: string[]) => postChiefNote(store, "this-pc", text, ids),
+    };
+    expect(await claimTeamSnags(opts)).toBe(0);
+    expect(store.messagesFor(chief.threadId)).toEqual([pane]);
+    expect(paneNotesSinceLastUserTurn(store.activePath(chief.threadId), new Set())).toEqual([expect.stringContaining("STALLED: no screen change for 102 min and no report.")]);
+    expect(JSON.parse(fetchImpl.mock.calls.at(-1)![1]!.body as string)).toEqual({ ids: [snag.id] });
+  });
+
+  it("posts only teammate snags even when their display names match an own PC", async () => {
+    const own = { ...snag, id: "a".repeat(32), pc: { ...snag.pc, label: "a".repeat(16) } };
+    const chief = store.createBot({}, { seedMessages: false });
+    store.setChiefOfStaff(chief.id);
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ snags: [own, snag] }));
+    const opts = {
+      ...options(fetchImpl, []),
+      ownDevices: () => [{ host: "home.tail1234.ts.net", relayHost: `${own.pc.label}.wink.example` }],
+      post: (text: string, ids: string[]) => postChiefNote(store, "this-pc", text, ids),
+    };
+    expect(await claimTeamSnags(opts)).toBe(1);
+    expect(store.messagesFor(chief.threadId)).toHaveLength(1);
+    expect(store.messagesFor(chief.threadId)[0].snagIds).toEqual([snag.id]);
+    const context = paneNotesSinceLastUserTurn(store.activePath(chief.threadId), new Set()).join("\n");
+    expect(context).toContain("untrusted peer data");
+    expect(context).toContain(snag.tail);
+    expect(readFileSync(opts.file, "utf8").trim().split("\n").map((line) => JSON.parse(line).id)).toEqual([snag.id]);
+    expect(JSON.parse(fetchImpl.mock.calls.at(-1)![1]!.body as string).ids).toEqual([own.id, snag.id]);
   });
 
   it("leaves valid reports unacknowledged until a Chief note is posted", async () => {

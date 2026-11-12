@@ -172,6 +172,7 @@ export interface Message {
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../shared/live-call.ts").CallTag;
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
@@ -193,6 +194,10 @@ export interface Message {
   /** group threads: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
   origin?: string;
+  /** Team room rows: who said it, and the room log entry it mirrors. */
+  author?: import("./rooms/db.ts").RoomAuthor;
+  roomEntryId?: string;
+  roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
   snagIds?: string[];
   reportIds?: string[];
@@ -245,6 +250,7 @@ export interface GroupTaskRecord {
  * The bulletin is the room's shared instructions — every member's turn gets
  * it as part of its system prompt. */
 export interface GroupRecord {
+  picture?: string;
   id: string;
   /** The active task's thread. Direct-message channels remain single-threaded. */
   threadId: ThreadId;
@@ -261,6 +267,8 @@ export interface GroupRecord {
   /** true for auto-created bot⇄bot channels (ask_bot exchanges live here;
    * the user can open the channel and chip in) */
   dm?: boolean;
+  /** A team room this PC hosts; its people and log live in rooms.db. */
+  hosted?: { roomId: string };
   /** transient: the member currently running a turn (never persisted) */
   busyBotId?: string | null;
   /** the room's shared desk: where member turns run their shell tools,
@@ -475,7 +483,7 @@ export type StoreChange =
   | { type: "bots.order"; botIds: string[] }
   | { type: "groups.order"; groupIds: string[] }
   | { type: "group"; groupId: string }
-  | { type: "group.deleted"; groupId: string };
+  | { type: "group.deleted"; groupId: string; hosted?: true };
 
 /** What a task is called before its first message names it. */
 export const UNTITLED_TASK = "New task";
@@ -1049,6 +1057,7 @@ export class Store {
       defaultResponder?: GroupDefaultResponder;
       completed?: boolean;
     },
+    hosted?: GroupRecord["hosted"],
   ): GroupRecord {
     const threadId = newId();
     const createdAt = Date.now();
@@ -1066,6 +1075,7 @@ export class Store {
       dm: dm || undefined,
       busyBotId: null,
       section,
+      ...(hosted ? { hosted } : {}),
     };
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
@@ -1085,7 +1095,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();
@@ -1130,7 +1140,7 @@ export class Store {
     for (const threadId of new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)])) {
       this.deleteThreadRecord(threadId);
     }
-    this.emit({ type: "group.deleted", groupId: id });
+    this.emit({ type: "group.deleted", groupId: id, ...(group.hosted ? { hosted: true as const } : {}) });
     return true;
   }
 

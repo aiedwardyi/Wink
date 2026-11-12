@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { catalogs } from "@/lib/i18n-catalog";
+import { savePickerLook } from "@/lib/picker-look";
 import { saveRainbowBox } from "@/lib/rainbow-box";
 import { SKINS } from "@/lib/skins";
 import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -166,10 +167,10 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Moss", "Wink Day", "Notebook"]) {
+    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Precision Dimmed", "Bronze", "Dim Sand", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
-    expect(html).toContain(`More themes (${SKINS.length - 9})`);
+    expect(html).toContain(`More themes (${SKINS.length - 11})`);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-skin="catppuccin-frappe"');
     expect(html).not.toContain('data-skin="servo-gray"');
@@ -263,6 +264,30 @@ describe("SettingsModal friends chrome", () => {
     expect(checked()).toContain("Off");
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
     expect(source).toContain("onChange={saveRainbowBox}");
+  });
+
+  it("picks the model picker look from Dark, Light and Atelier under Chat Box, following the skin until picked", () => {
+    const html = markup("themes");
+    expect(html.indexOf('aria-label="Model Picker"')).toBeGreaterThan(html.indexOf('aria-label="Chat Box"'));
+    const group = () => markup("themes").match(/<div role="radiogroup" aria-label="Model Picker"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
+    const checked = () => group().match(/aria-checked="true"[^>]*>([^<]+)</)?.[1];
+    expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dark", "Light", "Atelier"]);
+    const dataset = document.documentElement.dataset;
+    try {
+      for (const [skin, look] of [["precision", "Dark"], ["wink-day", "Light"], ["atelier", "Atelier"]]) {
+        dataset.skin = skin;
+        expect(checked(), skin).toBe(look);
+      }
+      savePickerLook("dark");
+      expect(checked()).toBe("Dark");
+      dataset.skin = "precision";
+      savePickerLook("atelier");
+      expect(checked()).toBe("Atelier");
+    } finally {
+      delete dataset.skin;
+    }
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={savePickerLook}");
+    expect([catalogs.ko["settings.pickerLook.title"], catalogs.ko["settings.pickerLook.dark"], catalogs.ko["settings.pickerLook.light"]]).toEqual(["모델 선택", "다크", "라이트"]);
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
@@ -379,14 +404,14 @@ describe("SettingsModal friends chrome", () => {
 
   it("splits featured skins into Dark then Light groups", () => {
     const html = markup("themes");
-    const dark = html.indexOf(">Dark<");
-    const light = html.indexOf(">Light<");
+    const dark = html.lastIndexOf(">Dark<");
+    const light = html.lastIndexOf(">Light<");
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "moss"]);
-    expect(ids(html.slice(light))).toEqual(["wink-day", "notebook"]);
-    expect(ids(html)).toHaveLength(9);
+    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "precision-dimmed", "bronze"]);
+    expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
+    expect(ids(html)).toHaveLength(11);
   });
 
 

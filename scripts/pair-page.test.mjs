@@ -39,6 +39,11 @@ afterEach(() => {
 });
 
 describe("pair page", () => {
+  it("reuses the enabled-button press pattern", () => {
+    expect(SOURCE).toMatch(/button:active:not\(:disabled\)\s*\{[^}]*transform: scale\(0\.99\)/);
+    expect(SOURCE).toContain("transition: filter 150ms, transform 150ms");
+  });
+
   it("shows only its progress while the QR link pairs on its own", () => {
     const page = open("/pair#k=wkp_token");
     expect(page.status.textContent).toBe("Pairing...");

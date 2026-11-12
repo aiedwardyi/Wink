@@ -95,7 +95,8 @@ describe("engine sign-in row", () => {
     expect(host.textContent).not.toContain("Connected");
     await act(async () => root!.render(createElement(I18nProvider, null,
       createElement(EngineRow, { instance: { ...row, snapshot: { state: "available", authenticated: true } } }))));
-    expect(host.textContent).toBe("museAgentSign Out");
+    expect(host.querySelector("[data-engine-head]")!.textContent).toBe("museAgent");
+    expect(host.querySelector("[data-account-row]")!.textContent).toBe("museAgentSign Out");
     expect(host.textContent).not.toContain("Sign In");
   });
 
@@ -262,7 +263,7 @@ describe("engine sign-in row", () => {
   it.each(["claudeAgent", "antigravityAgent"])("keeps %s on the computer without relaying a code", async (kind) => {
     vi.mocked(window.matchMedia).mockReturnValue({ matches: true } as MediaQueryList);
     await render(createElement(EngineSignIn, { instance: instance(kind, { install: { login: { args: ["login"] } }, loginState: "pending", loginCapture: capture }) }));
-    expect(host.textContent).toBe("Sign in on a computer");
+    expect(host.textContent).toBe("Sign in on computer");
     expect(host.querySelector("button, a, code")).toBeNull();
   });
 
@@ -376,7 +377,8 @@ describe("engine sign-in row", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRow, { instance: row }));
-    expect(host.textContent).toBe("codexSign Out");
+    expect(host.querySelector("[data-engine-head]")!.textContent).toBe("codex");
+    expect(host.querySelector("[data-account-row]")!.textContent).toBe("codexSign Out");
     expect(host.querySelector("input, select, code, a")).toBeNull();
     await click("Sign Out");
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/codex/sign-out", expect.objectContaining({ method: "POST", body: "{}" }));
@@ -395,7 +397,8 @@ describe("engine sign-in row", () => {
   it("never offers agy sign-out", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json({ candidates: [] })));
     await render(createElement(EngineRow, { instance: instance("antigravityAgent", { snapshot: { state: "available", authenticated: true }, install: { signInCommand: "agy" } }) }));
-    expect(host.textContent).toBe("antigravityAgentConnected");
+    expect(host.querySelector("[data-engine-head]")!.textContent).toBe("antigravityAgent");
+    expect(host.querySelector("[data-account-row]")!.textContent).toBe("antigravityAgentConnected");
     expect(host.querySelector("button")).toBeNull();
   });
 });

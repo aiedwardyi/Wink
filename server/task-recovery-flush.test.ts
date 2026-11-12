@@ -297,6 +297,17 @@ describe("turn completion disposition after stop", () => {
     })).toEqual({ superseded: false, interrupted: false });
   });
 
+  it.each(["hook_denied", "agent_cancelled"])("leaves a %s failure out of the Resume card", (stopReason) => {
+    expect(turnCompletionDisposition({
+      eventTurnId: "turn-denied",
+      liveTurnId: "turn-denied",
+      interruptedTurnIds: new Set(),
+      interruptedAt: 0,
+      dispatchedAt: 1,
+      stopReason,
+    })).toEqual({ superseded: false, interrupted: false });
+  });
+
   it("ignores a late stopped completion after a newer turn dispatched", () => {
     expect(turnCompletionDisposition({
       eventTurnId: "turn-stop",

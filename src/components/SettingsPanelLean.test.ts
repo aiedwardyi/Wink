@@ -91,6 +91,7 @@ const claudeBot = {
 
 const memoryRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("Memory File"))!;
+const editFile = (host: HTMLElement) => memoryRow(host).closest("section")!.querySelector<HTMLButtonElement>("button.mm-action")!;
 const tab = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === label)!;
 const shown = (node: Element | null | undefined) => Boolean(node && !node.closest("[hidden]"));
@@ -235,6 +236,7 @@ describe("SettingsPanel memory and order", () => {
     });
     expect(host.textContent).toContain("1 line");
     await act(async () => memoryRow(host).click());
+    await act(async () => editFile(host).click());
     const box = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]');
     expect(box?.value).toBe("likes tea");
   });
@@ -485,6 +487,7 @@ describe("SettingsPanel memory groups", () => {
     const row = memoryRow(host);
     expect(row.getAttribute("aria-expanded")).toBe("false");
     await act(async () => row.click());
+    await act(async () => editFile(host).click());
     expect(host.querySelector<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]")?.value).toBe(memory);
     expect(host.textContent).toContain("Loads at the start of every chat.");
     await act(async () => row.click());
@@ -492,6 +495,36 @@ describe("SettingsPanel memory groups", () => {
     // the file folds away on the shared motion, then unmounts
     await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
     expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+  });
+
+  it("memory file shows an edit button", async () => {
+    await render(claudeBot);
+    await act(async () => memoryRow(host).click());
+    expect(editFile(host).textContent).toBe("Edit");
+    expect(editFile(host).querySelector("svg.lucide-pencil")).not.toBeNull();
+  });
+
+  it("edit toggles to done and back", async () => {
+    await render(claudeBot);
+    await act(async () => tab(host, "Memory").click());
+    await act(async () => memoryRow(host).click());
+    await act(async () => editFile(host).click());
+    const box = host.querySelector<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]");
+    expect(editFile(host).textContent).toBe("Done");
+    expect(box?.value).toBe(memory);
+    expect(document.activeElement).toBe(box);
+    await act(async () => editFile(host).click());
+    expect(editFile(host).textContent).toBe("Edit");
+    expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+  });
+
+  it("read view is not a text box", async () => {
+    await render(claudeBot);
+    await act(async () => memoryRow(host).click());
+    expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+    const view = Array.from(host.querySelectorAll("div")).filter((node) => node.textContent === memory).at(-1)!;
+    expect(view.className).toContain("whitespace-pre-wrap");
+    expect(view.className).not.toContain("bg-inset");
   });
 
   it("keeps exactly one memory editor, text intact, when the window resizes", async () => {
@@ -509,6 +542,7 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => tab(host, "Memory").click());
     await until(() => host.querySelector(".mm-live-tag"));
     await act(async () => memoryRow(host).click());
+    await act(async () => host.querySelector<HTMLButtonElement>(".mm-sheet button.mm-action")!.click());
     const typed = `${memory}
 - typed before resize`;
     await act(async () => {
@@ -556,6 +590,7 @@ describe("SettingsPanel memory groups", () => {
     expect(memoryRow(host).textContent).toBe("Memory FileLoads at the start of every chat.");
     expect(shown(host.querySelector('button[aria-label="Auto Notes"]'))).toBe(true);
     await act(async () => memoryRow(host).click());
+    await act(async () => editFile(host).click());
     expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')?.readOnly).toBe(false);
   });
 
@@ -644,6 +679,7 @@ describe("SettingsPanel memory autosave", () => {
     // the memory file opens collapsed; a conflict opens it on its own
     if (!host.querySelector("textarea[aria-label=\"Memory\"]")) {
       await act(async () => memoryRow(host).click());
+      await act(async () => editFile(host)?.click());
     }
   };
   const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')!;
@@ -1272,6 +1308,7 @@ describe("SettingsPanel memory autosave", () => {
     expect((await until(() => host.querySelector(".mm-failed")))?.firstChild?.textContent).toBe("Couldn't load memory.");
     vi.mocked(fetch).mockImplementation(serve);
     await act(async () => button("Retry").click());
+    await act(async () => editFile(host).click());
     expect(box().readOnly).toBe(false);
     expect(box().value).toBe("important synced notes");
     expect(host.querySelector(".mm-failed")).toBeNull();

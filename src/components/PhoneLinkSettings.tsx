@@ -1,64 +1,56 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
+import { ChevronDown } from "lucide-react";
 
+import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
-import { api } from "@/state/store";
+import { cn } from "@/lib/cn";
 import { ConnectDevices } from "./ConnectDevices";
+import { DeviceRow, DevicesGroup, YourPcs } from "./DeviceRows";
 import { PhoneAccessSettings } from "./PhoneAccessSettings";
+import { PhonePairing } from "./PhonePairing";
 import { Fold } from "./Fold";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 export function PhoneLinkSettings() {
   const { t } = useI18n();
-  const [relayOpen, setRelayOpen] = useState(false);
-  const [relayManaged, setRelayManaged] = useState(false);
-  const relayBox = useRef<HTMLDivElement>(null);
+  const [on, setOn] = useState(false);
+  const [othersOpen, setOthersOpen] = useState(false);
+  const [pairOpen, setPairOpen] = useState(false);
+  const [tailscaleOpen, setTailscaleOpen] = useState(false);
+  const [paired, setPaired] = useState(0);
+  const onPaired = useCallback(() => setPaired((count) => count + 1), []);
+  const closePairing = useCallback(() => setPairOpen(false), []);
 
-  useEffect(() => {
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return;
-    let live = true;
-    api("/api/phone-relay/status").then(() => live && setRelayManaged(true), () => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  // The form renders once its status loads, so wait for it before focusing it. Scroll only
-  // once its fold has opened too: mid-fold, the scroller cannot reach where the form ends up.
-  useEffect(() => {
-    const box = relayBox.current;
-    if (!relayOpen || !box) return;
-    const fold = box.closest("[data-fold]");
-    let focused = false;
-    const reveal = () => {
-      if (!box.firstElementChild) return false;
-      if (!focused) {
-        focused = true;
-        box.querySelector<HTMLElement>("input, select, textarea")?.focus({ preventScroll: true });
-      }
-      if (fold?.getAttribute("data-fold") === "opening") return false;
-      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      box.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
-      return true;
-    };
-    if (reveal()) return;
-    const watch = new MutationObserver(() => {
-      if (reveal()) watch.disconnect();
-    });
-    watch.observe(box, { childList: true, subtree: true });
-    if (fold) watch.observe(fold, { attributes: true, attributeFilter: ["data-fold"] });
-    return () => watch.disconnect();
-  }, [relayOpen]);
+  if (!onThisPc()) {
+    return <div data-phone-settings className="rounded-xl bg-card p-4"><ConnectDevices /></div>;
+  }
 
   return (
-    <div data-phone-settings className="rounded-xl bg-card p-4">
-      <ConnectDevices />
-      {relayManaged && <>
-        <button type="button" aria-expanded={relayOpen} aria-controls="phone-relay-settings" onClick={() => setRelayOpen((open) => !open)} className="mt-5 text-[12px] text-ink-secondary underline hover:text-ink">
-          {t("settings.phone.relay")}
+    <div data-phone-settings className="usage-sections">
+      <PhoneAccessSettings refresh={paired} onEnabled={setOn} pcs={<YourPcs />} />
+      <section data-other-ways="" className="min-w-0">
+        <button type="button" aria-expanded={othersOpen} aria-controls="devices-other" onClick={() => setOthersOpen((open) => !open)}
+          className="group flex items-center gap-2 text-[14px] font-semibold leading-5 text-ink">
+          {t("settings.devices.otherWays")}
+          <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform duration-150 ease-out group-hover:text-ink motion-reduce:transition-none", !othersOpen && "-rotate-90")} />
         </button>
-        <Fold open={relayOpen} id="phone-relay-settings">
-          <div ref={relayBox} className="mt-4 border-t border-hairline/40 pt-4"><PhoneAccessSettings /></div>
+        <Fold open={othersOpen} id="devices-other">
+          <DevicesGroup label={t("settings.devices.otherWays")}>
+            <DeviceRow name={t("settings.devices.codeInstead")} sub={t("settings.devices.codeInsteadHelp")}
+              control={<button type="button" disabled={!on} aria-expanded={pairOpen} aria-controls="phone-pairing" onClick={() => setPairOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.getCode")}</button>}>
+              <Fold open={pairOpen} id="phone-pairing">
+                <div className="pt-3"><PhonePairing onPaired={onPaired} onClose={closePairing} /></div>
+              </Fold>
+            </DeviceRow>
+            <DeviceRow name={t("settings.devices.tailscale")} sub={t("settings.devices.tailscaleHelp")}
+              control={<button type="button" aria-expanded={tailscaleOpen} aria-controls="devices-tailscale" onClick={() => setTailscaleOpen((open) => !open)} className={ROW_BUTTON}>{t("settings.devices.setUp")}</button>} />
+          </DevicesGroup>
+          {/* Below the box: the store QRs need the full width at 360 px. */}
+          <Fold open={tailscaleOpen} id="devices-tailscale">
+            <div className="pt-3"><ConnectDevices /></div>
+          </Fold>
         </Fold>
-      </>}
+      </section>
     </div>
   );
 }

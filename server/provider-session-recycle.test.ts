@@ -483,8 +483,8 @@ describe("provider session recycle by native prompt size", () => {
 
 describe("summary repair across native recycles", () => {
   const NOTICE = "Model summary unavailable; full transcript retained by Wink.";
-  // Pokkey's overnight session-fat resets on 10-13 (FINDINGS reset ledger).
-  const POKKEY_PROMPTS = [
+  // Prompt-token pairs (first, last) from long sessions that were reset across native recycles.
+  const LONG_SESSION_PROMPTS = [
     [119_050, 316_610],
     [124_648, 254_457],
     [126_430, 265_974],
@@ -540,7 +540,7 @@ describe("summary repair across native recycles", () => {
 
       // 3. nine session-fat recycles each replay F verbatim
       store.markTaskDispatched(bot.id, threadId, "claude", "claude-opus-5-5");
-      for (const [index, [firstPrompt, lastPrompt]] of POKKEY_PROMPTS.entries()) {
+      for (const [index, [firstPrompt, lastPrompt]] of LONG_SESSION_PROMPTS.entries()) {
         store.setResumeCursor(bot.id, "claude", `session-${index}`, threadId);
         store.recordNativePrompt(bot.id, threadId, "claude", { first: firstPrompt, last: lastPrompt }, 1_000_000);
         const send = say(200 + index, "user");

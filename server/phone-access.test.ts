@@ -21,7 +21,7 @@ import { GPAIR_TTL_MS, pairNonce } from "./phone-google.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { enrollWith } from "./phone-relay/enroll.ts";
 import { createPhoneRelay } from "./phone-relay/runtime.ts";
-import { readTicket, writeAccount } from "./phone-relay/store.ts";
+import { readIdentity, readTicket, writeAccount } from "./phone-relay/store.ts";
 import type { JsonObject } from "./schema.ts";
 import { FakeClock } from "./phone-relay/testing/fake-clock.ts";
 import { loopbackLookup } from "./phone-relay/testing/fake-relay.ts";
@@ -30,8 +30,11 @@ import { BASE, StatusLog, rig, tempDataDir, type Rig } from "./phone-relay/testi
 import { listenLocal } from "./phone-relay/testing/net.ts";
 import { isRelayRequest, markRelaySocket } from "./phone-relay/via.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
+import { createTerminalLive } from "./terminal-live.ts";
+import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
 
 const COMMS = "c".repeat(48);
+const BOT_BEARER = "Bearer bot-caller";
 const pairingSchema = z.object({ url: z.string(), code: z.string() });
 const phonesSchema = z.object({ phones: z.array(z.object({ id: z.string(), name: z.string() })) });
 const REMOTE_KEY = "a".repeat(64);
@@ -79,7 +82,7 @@ function send(res: ServerResponse, status: number, body: JsonObject): void {
 }
 
 /** The order of checks in server/index.ts, around fake routes. */
-function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticDir: string, sse: Set<ServerResponse>) {
+function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticDir: string, sse: Set<ServerResponse>, live: ReturnType<typeof createTerminalLive>) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const relay = isRelayRequest(req);
     let phone = null;
@@ -135,6 +138,8 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
         rootsFor: () => [linkedRoot],
       });
     }
+    const terminal = path.match(/^\/api\/bots\/([\w-]+)\/terminal\/(live|input|resize|lease)$/);
+    if (terminal) return live.handle(req, res, terminal[1]!, terminal[2]!, url);
     if (path === "/api/bots") return send(res, 200, { bots: [] });
     if (method === "GET" && path === "/api/health") return send(res, 200, { app: "openmausbot", pid: 1 });
     if (method === "GET" && !path.startsWith("/api/")) {
@@ -160,7 +165,7 @@ function staticFiles(): string {
   return dir;
 }
 
-async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld } = {}): Promise<World> {
+async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (invite: string) => Promise<void>; google?: GoogleWorld; terminal?: TerminalBridgeAccess } = {}): Promise<World> {
   const r = await rig();
   const issuer = new FakeGoogle();
   const pc = { sub: options.google?.sub === undefined ? OWNER : options.google.sub };
@@ -197,7 +202,8 @@ async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (in
       keys: issuer.keys,
     },
   });
-  const handler = app(access, reached, linkedRoot, staticDir, sse);
+  const live = createTerminalLive({ access: () => options.terminal ?? null, botCaller: (header) => header === BOT_BEARER });
+  const handler = app(access, reached, linkedRoot, staticDir, sse, live);
   const server = createServer(handler);
   const port = await listenLocal(server);
   await access.start(handler);
@@ -291,6 +297,32 @@ function redeem(w: World, credential: string, init: { name?: string; requestId?:
   });
 }
 
+/** The bridge's stream and key routes; a stream stays open until the server lets it go. */
+async function terminalBridge() {
+  const streams = new Set<ServerResponse>();
+  const keys: unknown[] = [];
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET") {
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      res.write(`${JSON.stringify({ sessionId: "s1", generation: 1, output: "hi", seq: 1, exitCode: null })}
+`);
+      streams.add(res);
+      res.once("close", () => streams.delete(res));
+      return;
+    }
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    keys.push(JSON.parse(raw));
+    res.writeHead(200, { "content-type": "application/json" }).end("{}");
+  });
+  const port = await listenLocal(server);
+  worlds.push(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  return { access: { url: `http://127.0.0.1:${port}`, token: "bridge-secret" }, streams, keys };
+}
+
 /** Pairs a phone and returns its Cookie header value. */
 async function pairPhone(w: World, name = "Pixel"): Promise<string> {
   const { token } = await mint(w);
@@ -317,6 +349,18 @@ async function googleSignIn(w: World, init: { label?: string; sub?: string; cook
 }
 
 describe("phone Google sign-in through the relay", () => {
+  it.each(["/pair", "/pair?g=1", "/api/phone/google/start"])("reuses the phone session for %s", async (path) => {
+    const w = await world({ google: {} });
+    const { res } = await googleSignIn(w);
+    const cookie = res.headers["set-cookie"]![0]!.split(";")[0]!;
+    const again = await viaRelay(w.r, path, { headers: { cookie } });
+    expect(again.status).toBe(302);
+    expect(again.headers.location).toBe("/");
+    expect(again.headers["set-cookie"]).toBeUndefined();
+    expect(again.headers["cache-control"]).toBe("no-store");
+    expect(phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body)).phones).toHaveLength(1);
+  });
+
   it("sends the phone to the sign-in page and admits it with the normal phone cookie", async () => {
     const w = await world({ google: {} });
     expect((await viaRelay(w.r, "/api/phone/google/start", { method: "HEAD" })).status).toBe(204);
@@ -336,6 +380,58 @@ describe("phone Google sign-in through the relay", () => {
     const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
     expect(phones.map((phone) => phone.name)).toEqual(["Galaxy S25"]);
     expect(JSON.parse(readFileSync(join(w.r.dataDir, PHONES_FILE), "utf8")).phones[0].via).toBe("google");
+  });
+
+  it("keeps the host and Google session across fresh PC instances and an updated build", async () => {
+    const w = await world({ google: {} });
+    const first = await googleSignIn(w);
+    const cookie = first.res.headers["set-cookie"]![0]!.split(";")[0]!;
+    const before = readFileSync(join(w.r.dataDir, "phone-relay", "identity.pem"), "utf8");
+    await w.access.stop();
+    for (const build of ["restart", "updated build"]) {
+      const access = new PhoneAccess({
+        dataDir: w.r.dataDir,
+        env: {},
+        staticDir: null,
+        config: () => w.config,
+        saveEnabled: () => {},
+        clock: w.clock,
+        start: (options) => createPhoneRelay(options, { clock: new FakeClock(), env: {}, connector: w.r.relay.connector(), ctSource: null, acmeInsecureDirectories: true }),
+        google: { webClientId: WEB_CLIENT, sub: () => OWNER, idToken: () => null, freshIdToken: async () => null, name: () => "Desk PC", keys: w.google.issuer.keys },
+      });
+      try {
+        await access.start(async (req, res) => {
+          const gate = await access.gate(req, res);
+          if (!gate.handled) res.end(build);
+        });
+        await vi.waitFor(() => expect(access.status().state).toBe("connected"));
+        expect(access.status().host).toBe(w.r.host);
+        expect(readIdentity(w.r.dataDir)).toMatchObject({ kind: "ok", value: { pk: w.r.identity.pk, label: w.r.identity.label } });
+        expect(readFileSync(join(w.r.dataDir, "phone-relay", "identity.pem"), "utf8")).toBe(before);
+        expect(await viaRelay(w.r, "/", { headers: { cookie } })).toMatchObject({ status: 200, body: build });
+        const paired = await viaRelay(w.r, "/pair?g=1", { headers: { cookie } });
+        expect(paired).toMatchObject({ status: 302, headers: { location: "/" } });
+        expect(paired.headers["set-cookie"]).toBeUndefined();
+        expect(await viaRelay(w.r, "/api/bots")).toMatchObject({ status: 401 });
+      } finally {
+        await access.stop();
+      }
+    }
+  });
+
+  it("requires pairing after browser sign-out, PC removal, or navigation to another PC", async () => {
+    const w = await world({ google: {} });
+    const first = await googleSignIn(w);
+    const cookie = first.res.headers["set-cookie"]![0]!.split(";")[0]!;
+    expect(await viaRelay(w.r, "/pair")).toMatchObject({ status: 200, body: "PAIR PAGE" });
+    expect((await viaRelay(w.r, "/api/phone/google/start")).headers.location).toMatch(/^https:\/\/wink\.test\/signin\?/);
+    const other = await world({ google: {} });
+    expect((await viaRelay(other.r, "/pair?g=1", { headers: { cookie } })).status).toBe(200);
+    expect((await viaRelay(other.r, "/api/bots", { headers: { cookie } })).status).toBe(401);
+    const id = JSON.parse(first.res.body).phone.id;
+    expect((await w.local(`/api/phone/devices/${id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await viaRelay(w.r, "/pair?g=1", { headers: { cookie } })).status).toBe(200);
+    expect((await viaRelay(w.r, "/api/phone/google/start", { headers: { cookie } })).headers.location).toMatch(/^https:\/\/wink\.test\/signin\?/);
   });
 
   it("refuses another Google account, a Desktop token and another browser's cookie", async () => {
@@ -734,6 +830,47 @@ describe("relay request gate", () => {
     expect((await viaRelay(w.r, "/api/bots", { headers: upgrade })).status).toBe(401);
     expect((await viaRelay(w.r, "/api/bots", { headers: { ...upgrade, host: "localhost", cookie: session } })).status).toBe(403);
     expect((await viaRelay(w.r, "/api/bots", { headers: { ...upgrade, cookie: session } })).status).toBe(200);
+  });
+});
+
+describe("live terminal through the relay", () => {
+  it("streams to a paired phone, takes its keys with this PC's Origin and ends the bridge stream when it goes", async () => {
+    const bridge = await terminalBridge();
+    const w = await world({ terminal: bridge.access });
+    const session = await pairPhone(w);
+    const stream = await streamViaRelay(w.r, "/api/bots/b1/terminal/live", { cookie: session });
+    expect(stream.res.statusCode).toBe(200);
+    expect(stream.res.headers["content-type"]).toBe("text/event-stream");
+    expect(String((await once(stream.res, "data"))[0])).toContain('"kind":"snapshot"');
+    expect(bridge.streams.size).toBe(1);
+    const keys = await viaRelay(w.r, "/api/bots/b1/terminal/input", {
+      method: "POST",
+      headers: { cookie: session, origin: w.origin, "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "s1", generation: 1, data: "" }),
+    });
+    expect(keys.status).toBe(200);
+    expect(bridge.keys).toEqual([{ sessionId: "s1", generation: 1, data: "" }]);
+    stream.socket.destroy();
+    await vi.waitFor(() => expect(bridge.streams.size).toBe(0));
+  });
+
+  it("holds the live routes to the phone cookie, Host and Origin and refuses a bot", async () => {
+    const bridge = await terminalBridge();
+    const w = await world({ terminal: bridge.access });
+    const session = await pairPhone(w);
+    const live = (headers: Record<string, string>) => viaRelay(w.r, "/api/bots/b1/terminal/live", { headers });
+    const input = (headers: Record<string, string>) =>
+      viaRelay(w.r, "/api/bots/b1/terminal/input", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ sessionId: "s1", generation: 1, data: "x" }) });
+    expect((await live({})).status).toBe(401);
+    expect((await live({ authorization: `Bearer ${COMMS}`, cookie: `orbit_remote=${REMOTE_KEY}` })).status).toBe(401);
+    expect((await live({ cookie: session, host: "localhost" })).status).toBe(403);
+    expect((await live({ cookie: session, authorization: BOT_BEARER })).status).toBe(403);
+    expect((await input({ cookie: session })).status).toBe(403);
+    expect((await input({ cookie: session, origin: "https://evil.example" })).status).toBe(403);
+    expect((await input({ origin: w.origin })).status).toBe(401);
+    expect((await input({ cookie: session, origin: w.origin, authorization: BOT_BEARER })).status).toBe(403);
+    expect(bridge.streams.size).toBe(0);
+    expect(bridge.keys).toEqual([]);
   });
 });
 

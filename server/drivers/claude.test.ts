@@ -21,7 +21,10 @@ import type { ProviderInstance } from "../contracts.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { ClaudeDriver, claudeToolSummary, claudeUserContent, permissionSocketPath, type ClaudeConfig } from "./claude.ts";
+import { warmPool } from "./warm-pool.ts";
+import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
+import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
@@ -1577,6 +1580,83 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(consumed.mock.calls).toEqual([[taken]]);
   });
 
+  describe("a turn that called no_reply_needed", () => {
+    const quietCli = async () => {
+      const cli = join(scratch, "quiet-loop.mjs");
+      const log = join(scratch, "quiet-prompts.jsonl");
+      writeFileSync(cli, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const argv = process.argv.slice(2);
+const session = argv[argv.indexOf(argv.includes("--resume") ? "--resume" : "--session-id") + 1];
+const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const quiet = (id) => {
+  out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "mcp__agents__no_reply_needed", input: {} }] } });
+  out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+};
+let onInterrupt = null;
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.type === "control_request") {
+    out({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
+    onInterrupt?.();
+    return;
+  }
+  const text = message.message.content;
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, text }) + "\\n");
+  out({ type: "system", subtype: "init", session_id: session });
+  if (text !== "wake") {
+    out({ type: "assistant", message: { content: [{ type: "text", text: "reply to: " + text }] } });
+    out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01 });
+    return;
+  }
+  quiet("q1");
+  const loop = setTimeout(() => {
+    onInterrupt = null;
+    quiet("q2");
+    out({ type: "assistant", message: { content: [{ type: "text", text: "No response requested." }] } });
+    out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.02 });
+  }, 500);
+  onInterrupt = () => {
+    clearTimeout(loop);
+    onInterrupt = null;
+    out({ type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
+    out({ type: "result", subtype: "error_during_execution", is_error: true, stop_reason: null, total_cost_usd: 0.01 });
+  };
+});
+`);
+      chmodSync(cli, 0o755);
+      await create(undefined, {}, { cli });
+      return () => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    };
+    const quietCalls = (turnId: string) =>
+      recorder.events.filter((e) => e.type === "item.started" && e.turnId === turnId && e.title === "mcp__agents__no_reply_needed");
+
+    it("ends at the first call as a clean finish and the session takes the next turn", async () => {
+      const prompts = await quietCli();
+      instance.adapter.onEvent(createQuietEnd(() => [], () => instance.adapter));
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+      const session = await recorder.until((e) => e.type === "session.started");
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(done).toMatchObject({ ok: true, stopReason: "end_turn", cost: 0.01 });
+      expect(quietCalls(turnId)).toHaveLength(1);
+      expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toBe(false);
+      expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello", resumeCursor: (session as { sessionId: string }).sessionId });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId)).resolves.toMatchObject({ ok: true });
+      expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text").map((e) => (e as { text: string }).text)).toEqual(["reply to: hello"]);
+      expect(prompts().map((p) => p.pid)).toEqual([prompts()[0]!.pid, prompts()[0]!.pid]);
+    });
+
+    it("runs on when the user typed into that turn", async () => {
+      await quietCli();
+      instance.adapter.onEvent(createQuietEnd(() => [{ id: "m1", role: "user", kind: "text", text: "wake", at: Date.now() }] as Message[], () => instance.adapter));
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-typed", text: "wake" });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).resolves.toMatchObject({ ok: true, cost: 0.02 });
+      expect(quietCalls(turnId)).toHaveLength(2);
+    });
+  });
+
   describe("a user steer into a turn that showed nothing", () => {
     const stdinLog = () => readFileSync(join(scratch, "stdin.log"), "utf8").trim().split("\n");
     const replies = () =>
@@ -2384,6 +2464,117 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     return false;
   };
+
+  describe("prepare", () => {
+    const focus = { threadId: "t-prep", approval: "ask" as const };
+    const prompts = () => readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    // a turn per thread, then their idle close: what prepare re-opens
+    const closed = async (threadIds = [focus.threadId], idleMs = "300") => {
+      process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
+      process.env.OMB_CLAUDE_SESSION_IDLE_MS = idleMs;
+      process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+      await create();
+      const spawn = vi.spyOn(procs, "spawnCli");
+      for (const threadId of threadIds) {
+        const { turnId } = await instance.adapter.sendTurn({ threadId, text: "one", approval: "ask" });
+        await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      }
+      for (const { value } of spawn.mock.results) expect(await exited(value.pid!)).toBe(true);
+      const cursor = (recorder.events.find((e) => e.type === "session.started" && e.threadId === focus.threadId) as { sessionId: string }).sessionId;
+      return { spawn, cursor };
+    };
+    const next = async (cursor: string, change: { effort?: "high"; resumeCursor?: undefined } = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, ...change });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env.FAKE_CLAUDE_EAGER_INIT;
+    });
+
+    it("re-opens the closed session before Send and hands it to the next turn", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const argv = spawn.mock.calls[1]![1];
+      expect(argv[argv.indexOf("--resume") + 1]).toBe(cursor);
+      expect(warmPool.stats().reserved).toBe(1);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(prompts().at(-1)).toMatchObject({ pid: spawn.mock.results[1]!.value.pid, text: "two" });
+      expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
+      expect(warmPool.stats().reserved).toBe(0);
+    });
+
+    it.each([
+      ["a changed contract", { effort: "high" as const }],
+      ["a fresh session", { resumeCursor: undefined }],
+    ])("throws the prepared process away for %s", async (_name, change) => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      const prepared = spawn.mock.results[1]!.value.pid!;
+
+      await next(cursor, change);
+      expect(spawn).toHaveBeenCalledTimes(3);
+      expect(prompts().map((prompt) => prompt.pid)).not.toContain(prepared);
+      expect(prompts().at(-1)!.pid).toBe(spawn.mock.results[2]!.value.pid);
+      expect(await exited(prepared)).toBe(true);
+    });
+
+    it("prepares nothing without a closed session, once the bot's settings moved, or twice", async () => {
+      const { spawn } = await closed();
+      await instance.prepare!(undefined, { ...focus, threadId: "t-never" });
+      await instance.prepare!(undefined, { ...focus, effort: "high" });
+      await instance.prepare!(undefined, { ...focus, approval: "auto" });
+      await instance.prepare!(undefined, { ...focus, model: "claude-other" });
+      await instance.prepare!();
+      const release = warmPool.barrier({ instanceId: "claude-test" }, "test");
+      await instance.prepare!(undefined, focus);
+      release();
+      expect(spawn).toHaveBeenCalledOnce();
+
+      await Promise.all([instance.prepare!(undefined, focus), instance.prepare!(undefined, focus)]);
+      await instance.prepare!(undefined, focus);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("opens no turn from a prepared process's own output", async () => {
+      const { spawn, cursor } = await closed(undefined, "2000");
+      const eager = join(scratch, "eager-init");
+      process.env.FAKE_CLAUDE_EAGER_INIT = eager;
+      await instance.prepare!(undefined, focus);
+      while (!existsSync(eager)) await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(recorder.events.filter((e) => e.type === "turn.started" || e.type === "session.started")).toHaveLength(2);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps one prepared process per instance, the focused bot's", async () => {
+      const { spawn } = await closed([focus.threadId, "t-prep-b"]);
+      await instance.prepare!(undefined, focus);
+      const first = spawn.mock.results[2]!.value.pid!;
+      await instance.prepare!(undefined, { ...focus, threadId: "t-prep-b" });
+      expect(await exited(first)).toBe(true);
+      await vi.waitFor(() => expect(warmPool.stats().closing).toBe(0));
+      await instance.prepare!(undefined, { ...focus, threadId: "t-prep-b" });
+      expect(spawn).toHaveBeenCalledTimes(4);
+    });
+
+    it("closes a prepared process the warm pool drops", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, focus);
+      const prepared = spawn.mock.results[1]!.value.pid!;
+      warmPool.invalidate({ instanceId: "claude-test" }, "reload");
+      expect(await exited(prepared)).toBe(true);
+
+      await next(cursor);
+      expect(spawn).toHaveBeenCalledTimes(3);
+    });
+  });
 
   it("keeps a session with live background work for the next resumed turn", async () => {
     await create("background-task");

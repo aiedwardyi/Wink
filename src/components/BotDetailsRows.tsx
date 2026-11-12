@@ -28,7 +28,7 @@ export function DetailsSwitch({ on, label, disabled, className, onToggle }: {
   );
 }
 
-export function DetailsLabel({ label, hint }: { label: string; hint?: ReactNode }) {
+export function DetailsLabel({ label, hint }: { label: ReactNode; hint?: ReactNode }) {
   return (
     <div className="min-w-0">
       <div className="text-[14px] font-medium text-ink">{label}</div>

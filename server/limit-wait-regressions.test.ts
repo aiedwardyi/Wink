@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { isVoiceLine } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { KeepGoing, KEEP_GOING_INTERVAL_MS } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
@@ -138,7 +139,7 @@ it.each(["cancel", "reconcile"])("L10: a failed %s in the store listener still r
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   // Importing index.ts boots the server; execute only the listener's prelude.
   const prelude = source.split("store.onChange((change) => {")[1]!.split("  switch (change.type) {")[0]!;
-  const run = new Function("change", "store", "limitWaits", "console", `${prelude}\nreturn 'broadcast';`);
+  const run = new Function("change", "store", "limitWaits", "console", "isVoiceLine", `${prelude}\nreturn 'broadcast';`);
   const h = harness(); const file = join(h.dir, "limit-waits.json");
   let fail = false;
   const store = new LimitWaitStore(file, (...args) => { if (fail) throw new Error("disk full"); writeFileAtomic(...args); });
@@ -148,6 +149,6 @@ it.each(["cancel", "reconcile"])("L10: a failed %s in the store listener still r
   if (operation === "reconcile") valid = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
   const change = operation === "cancel" ? { type: "message", threadId: "chat", message: { role: "user" } } : { type: "bot" };
-  expect(run(change, { botByThread: () => ({ id: "bot" }) }, tracked.waits, console)).toBe("broadcast");
+  expect(run(change, { botByThread: () => ({ id: "bot" }) }, tracked.waits, console, isVoiceLine)).toBe("broadcast");
   expect(tracked.waits.held("bot")).toBe(false);
 });

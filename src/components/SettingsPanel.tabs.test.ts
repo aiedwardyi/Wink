@@ -60,6 +60,7 @@ const write = (value: string) => act(async () => {
   box()!.dispatchEvent(new Event("input", { bubbles: true }));
 });
 const fileRow = () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((each) => each.textContent?.includes("Memory File"))!;
+const editFile = () => fileRow().closest("section")!.querySelector<HTMLButtonElement>("button.mm-action")!;
 const closes = () => dispatch.mock.calls.filter(([action]) => action.type === "toggleSettings");
 
 function Harness({ of = bot }: { of?: Bot }) {
@@ -330,6 +331,7 @@ describe("Memory tab on return", () => {
     await open();
     await toMemory();
     await act(async () => fileRow().click());
+    await act(async () => editFile().click());
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "- Uses Linux");
       box()!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -344,6 +346,7 @@ describe("Memory tab on return", () => {
     await open();
     await toMemory();
     await act(async () => fileRow().click());
+    await act(async () => editFile().click());
     await write("- Uses Linux");
     expect(fileRow().parentElement!.querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
     expect(fileRow().querySelector("[data-save-state]")).toBeNull();

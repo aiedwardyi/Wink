@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
 import type { AcceptedSends } from "@/lib/send-accept";
 import { currentTurnId } from "@/lib/turn-stage";
+import { en, ko } from "@/lib/i18n-catalog";
 
 const acceptedSends: AcceptedSends = {};
 
@@ -15,6 +16,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const chatView = readFileSync(join(here, "ChatView.tsx"), "utf8");
 const phoneHeaderName = readFileSync(join(here, "..", "lib", "use-phone-header-name.ts"), "utf8");
 const settingsPanel = readFileSync(join(here, "SettingsPanel.tsx"), "utf8");
+const verifyCard = readFileSync(join(here, "VerifyCard.tsx"), "utf8");
 
 function headerBlock(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -38,6 +40,15 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(chatHeader).toContain('title={t("chat.openProfile"');
     expect(chatHeader).toContain('onActivate={() => dispatch({ type: "toggleSettings", open: true })}');
     expect(chatHeader).not.toContain("avatar: !isPhone()");
+  });
+
+  it("tips the avatar as Bot details & memory with a pointer cursor", () => {
+    const avatar = headerBlock(chatHeader, "data-orbit-chat-focus-fallback", "<BotAvatar");
+    expect(avatar).toContain('title={t("chat.avatarTip")}');
+    expect(avatar).toContain('aria-label={t("chat.avatarTip")}');
+    expect(avatar).toContain("cursor-pointer");
+    expect(en["chat.avatarTip"]).toBe("Bot details & memory");
+    expect(ko["chat.avatarTip"]).toBe("봇 정보 · 메모리");
   });
 
   it("shows the bot name below md and opens Bot details with no pencil", () => {
@@ -81,8 +92,16 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(chatHeader).not.toContain("max-md:flex-[1_0_auto]");
     expect(chatHeader).not.toContain("max-md:min-w-min");
     expect(chatHeader).toContain("max-md:flex-nowrap");
-    expect(chatHeader).toContain("rounded-md p-1.5 hover:bg-raised max-md:hidden");
+    expect(chatHeader).toContain("rounded-md p-1.5 hover:bg-control max-md:hidden");
     expect(chatHeader).toContain("flex max-w-full shrink-0 flex-wrap items-center justify-end");
+  });
+
+  it("gives every header icon button the same soft hover fill", () => {
+    const hover = (source: string, marker: string) => headerBlock(source, marker, "/>").match(/hover:bg-[\w-]+/g);
+    expect(hover(chatHeader, "data-chat-keep-going")).toEqual(["hover:bg-control"]);
+    expect(hover(chatHeader, "<WorkerChip")).toEqual(["hover:bg-control"]);
+    expect(hover(chatHeader, "onClick={() => find.toggleFind()}")).toEqual(["hover:bg-control"]);
+    expect(hover(verifyCard, "data-verify-watch-icon")).toEqual(["hover:bg-control"]);
   });
 
   it("keeps WorkingFolder on SettingsPanel", () => {

@@ -98,6 +98,7 @@ export function roomConversationPreview(
     const last = group.messages[i];
     const text = messagePreview(last, group.messages, translate, showToolCalls);
     if (!text) continue;
+    if (last.author?.kind === "person") return translate("chrome.speakerPrefix", { name: last.author.name, text });
     if (last.role === "user") return translate("chrome.youPrefix", { text });
     return last.from ? translate("chrome.speakerPrefix", { name: last.from.name, text }) : text;
   }

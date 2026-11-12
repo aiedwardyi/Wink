@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 async function renderWith(status: number, onDone = vi.fn(), body: object = { error: "x" }) {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status })));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -33,6 +33,56 @@ function phoneWidth() {
 }
 
 describe("Onboarding engine check", () => {
+  it.each([false, true])("skips setup on a browser with existing bots (phone %s)", async (phone) => {
+    if (phone) phoneWidth();
+    const onDone = vi.fn();
+    const host = await renderWith(200, onDone, { instances: [], bots: [{ id: "existing" }] });
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(host.textContent).toBe("");
+    expect(fetch).toHaveBeenCalledWith("/api/bots?messages=0");
+  });
+
+  it.each([false, true])("keeps setup on a fresh browser (phone %s)", async (phone) => {
+    if (phone) phoneWidth();
+    const onDone = vi.fn();
+    const host = await renderWith(200, onDone, { instances: [], bots: [] });
+    expect(host.textContent).toContain("Welcome to Wink");
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps desktop setup even when bots exist", async () => {
+    vi.stubGlobal("ogb", { platform: "win32" });
+    const onDone = vi.fn();
+    const host = await renderWith(200, onDone, { instances: [], bots: [{ id: "existing" }] });
+    expect(host.textContent).toContain("Welcome to Wink");
+    expect(onDone).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/instances");
+  });
+
+  it("waits for the browser's bot check without flashing Welcome", async () => {
+    let answer!: (response: Response) => void;
+    const bots = new Promise<Response>((resolve) => { answer = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => path.startsWith("/api/bots") ? bots : Response.json({ instances: [] })));
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    roots.push(root);
+    const onDone = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(Onboarding, { onDone }))));
+    expect(host.textContent).toBe("");
+    expect(onDone).not.toHaveBeenCalled();
+    await act(async () => answer(Response.json({ bots: [{ id: "existing" }] })));
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("keeps sign-in on an unpaired browser (phone %s)", async (phone) => {
+    if (phone) phoneWidth();
+    const onDone = vi.fn();
+    const host = await renderWith(401, onDone);
+    expect(host.textContent).toContain("Scan the code on your PC");
+    expect(onDone).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/instances");
+  });
+
   it("opens the shell directly when no engine is installed", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     localStorage.setItem("omb-locale", "en");
@@ -108,7 +158,7 @@ describe("Onboarding engine check", () => {
     const ready = instances.map((instance) => ({ ...instance,
       snapshot: { state: instance.instanceId === readyId ? "available" : "unavailable", authenticated: instance.instanceId === readyId },
     }));
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ instances: ready })));
+    vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ instances: ready })));
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(next.disabled).toBe(false);
     expect(document.activeElement).toBe(next);
@@ -168,7 +218,7 @@ describe("Onboarding engine check", () => {
   it("opens a paired phone straight to the chat", async () => {
     phoneWidth();
     const onDone = vi.fn();
-    const host = await renderWith(200, onDone);
+    const host = await renderWith(200, onDone, { instances: [], bots: [{ id: "existing" }] });
     expect(onDone).toHaveBeenCalledOnce();
     expect(host.textContent).toBe("");
   });

@@ -38,6 +38,26 @@ function deviceWindowUrl(rawHost, tailnet) {
   return new URL(`https://${host}/`);
 }
 
+// Same shapes as shared/relay-protocol.ts, which shipped electron files cannot import.
+const RELAY_BASE_RE = /^(?=.{3,200}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const RELAY_LABEL_RE = /^[a-z2-7]{16}$/;
+
+/** The baked team relay holds a base or an https relay origin. */
+function teamRelayBase(raw) {
+  const value = Object.prototype.toString.call(raw) === "[object String]" ? raw.trim().toLowerCase() : "";
+  if (!value || value.startsWith("http://")) return "";
+  const host = (value.startsWith("https://") ? value.slice("https://".length) : value).split("/")[0];
+  const base = host.startsWith("relay.") ? host.slice("relay.".length) : host;
+  return RELAY_BASE_RE.test(base) ? base : "";
+}
+
+// Only the baked team base: this PC's own relay base is a bearer-writable setting. No trim or case folding.
+function relayDeviceUrl(rawHost, teamRelay) {
+  const base = teamRelayBase(teamRelay);
+  if (!base || Object.prototype.toString.call(rawHost) !== "[object String]" || !rawHost.endsWith(`.${base}`)) return "";
+  return RELAY_LABEL_RE.test(rawHost.slice(0, -base.length - 1)) ? `https://${rawHost}/` : "";
+}
+
 function deviceWindowTitle(rawName, host) {
   const name = Object.prototype.toString.call(rawName) === "[object String]" ? rawName.trim().slice(0, 64) : "";
   return `Wink - ${name || host}`;
@@ -252,4 +272,4 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   };
 }
 
-module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus };
+module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus };

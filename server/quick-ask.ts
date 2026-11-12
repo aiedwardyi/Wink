@@ -3,9 +3,12 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { isVoiceLine } from "../shared/live-call.ts";
+import { isOpenRequest, scanQuestion } from "../shared/open-question.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
+import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
@@ -39,9 +42,6 @@ export interface QuickGate {
   accountReady: boolean;
 }
 
-const openAsk = (message: Message) =>
-  message.kind === "options" && Boolean(message.card?.requestId || message.card?.askUser) && !message.card?.answered && !message.card?.dismissed;
-
 /** Gate 0, then the rules. Any doubt goes to the bot. */
 export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
@@ -49,7 +49,7 @@ export function routesQuick(gate: QuickGate): boolean {
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
   if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
   if (!gate.instance.fork && !gate.instance.generateText) return false;
-  if (gate.messages.some(openAsk)) return false;
+  if (scanQuestion(gate.messages) || gate.messages.some(isOpenRequest)) return false;
   return nominate(gate.text) === "quick";
 }
 
@@ -132,6 +132,20 @@ export function requeueDroppedAsk(store: AskStore, botId: string, threadId: stri
   drain();
 }
 
+/** The same for a call's order or ask: its row stays and the queue drains into it. */
+export function requeueDroppedCall(store: AskStore, botId: string, threadId: string, row: Message, drain: () => void): void {
+  if (stopped.has(row.id) || !store.activePath(threadId).some((message) => message.id === row.id && message.steered)) return;
+  try {
+    const queued = queueSteeredMessage(botId, threadId, row.text ?? "", { sendId: row.sendId, call: row.call });
+    if (queued.skipped) return;
+    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id });
+  } catch (error) {
+    console.warn(`[queue] dropped call send could not requeue: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  drain();
+}
+
 // Asks whose job is running, so a restart finds the ones left in another task without reading every thread.
 const running = new Map<string, { botId: string; threadId: string }>();
 let saving = false;
@@ -183,7 +197,7 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
         stopped.add(row.id);
         // a stopped ask reads as handed off, so it is neither pending nor recovered
         store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
-      } else if (turn && row.steered && row.quick?.state === "handoff") stopped.add(row.id);
+      } else if (turn && row.steered && (row.quick?.state === "handoff" || row.call?.order || row.call?.ask)) stopped.add(row.id);
     }
   }
 }
@@ -206,7 +220,8 @@ async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: str
   deps.usage?.start(botId, threadId, usageId);
   try {
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
-    const notes = quickAnswersSinceLastUserTurn(messages, new Set()).join("\n\n");
+    const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
+    const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
     result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes });
   } catch {}
   deps.usage?.settle(usageId);
@@ -241,7 +256,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const path = store.activePath(threadId);
   // the bot's own reply already stands under the ask; a late answer could contradict it
   const asked = path.findIndex((row) => row.id === ask.id);
-  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && row.text?.trim())) {
+  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim())) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;

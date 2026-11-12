@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
 
 import { leaveFor } from "@/lib/back-navigation";
+import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
@@ -25,7 +26,7 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
 
 const DEVICES_CHANGE = "orbit-devices-change";
 
-function useDevices(enabled: boolean, watching = false) {
+export function useDevices(enabled: boolean, watching = false) {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const live = useRef(true);
   const requested = useRef(0);
@@ -97,6 +98,7 @@ export function DeviceSwitcher({
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
   const presence = usePresence(open);
   // The menu lives on the body, so the drawer sliding shut would strand it over the chat.
   useEffect(() => {
@@ -140,21 +142,31 @@ export function DeviceSwitcher({
       >
             {devices.map((device) =>
               device.current && renaming ? (
-                <li key={device.deviceId} className="px-2.5 py-1">
+                <li key={device.deviceId} className="flex items-center gap-1 px-2.5 py-1">
                   <input
+                    ref={renameInput}
                     autoFocus
                     defaultValue={device.name}
                     maxLength={64}
                     aria-label={t("chrome.renameDevice")}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") rename(event.currentTarget.value);
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) rename(event.currentTarget.value);
                       if (event.key === "Escape") {
                         event.stopPropagation();
                         setRenaming(false);
                       }
                     }}
-                    className="w-full rounded-md border border-hairline bg-raised px-2 py-1.5 text-[14px] text-ink outline-none focus:border-accent"
+                    className="min-w-0 flex-1 rounded-md border border-hairline bg-raised px-2 py-1.5 text-[14px] text-ink outline-none focus:border-accent"
                   />
+                  <button
+                    type="button"
+                    onClick={() => rename(renameInput.current?.value ?? "")}
+                    aria-label={t("room.save")}
+                    title={t("room.save")}
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
+                  >
+                    <Check size={15} />
+                  </button>
                 </li>
               ) : (
                 <li key={device.deviceId} className="flex items-center">
@@ -204,7 +216,7 @@ export function DeviceSwitcher({
                 </li>
               ),
             )}
-            <li className="mt-1 border-t border-hairline/40 pt-1">
+            {onThisPc() && <li className="mt-1 border-t border-hairline/40 pt-1">
               <button type="button" data-connect-device onClick={() => {
                 close();
                 dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
@@ -212,7 +224,7 @@ export function DeviceSwitcher({
                 <Plus size={16} className="shrink-0" />
                 <span>{t("settings.devices.connect")}</span>
               </button>
-            </li>
+            </li>}
           </ul>
     </>
   );

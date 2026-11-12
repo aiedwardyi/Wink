@@ -13,6 +13,8 @@ import { workerResumeStatus } from "./worker-resume.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
+// A live viewer this far behind is dropped and reattaches from the ring; the PTY never waits on it.
+const VIEWER_BACKLOG_LIMIT = 1024 ** 2;
 const READY_TIMEOUT_MS = 5_000;
 const WINDOWS_READY_TIMEOUT_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 500;
@@ -368,8 +370,13 @@ function commandHash(command) {
 }
 
 // Wrap the existing reader without loading a module; Write-Error preserves a failed $? for the user's prompt.
+// Get-Module guard: calling the cmdlet would autoload PSReadLine. Separate tries: 2.0 has no PredictionSource.
 export function workerShellArgs(id, noProfile = false) {
-  const script = `$global:OrbitPrompt = $function:prompt
+  const script = `if (Get-Module PSReadLine) {
+  try { Set-PSReadLineOption -PredictionSource None } catch {}
+  try { Set-PSReadLineOption -HistorySaveStyle SaveNothing } catch {}
+}
+$global:OrbitPrompt = $function:prompt
 $global:OrbitReadLine = $null
 $global:OrbitHash = $null
 function global:prompt {
@@ -606,6 +613,19 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       authorize({ sender: session.owner, senderFrame: session.owner.mainFrame });
       session.owner.send(channel, value);
     } catch {}
+  };
+  const fanOut = (session, frame) => {
+    for (const viewer of session.viewers) {
+      let backlog = Infinity;
+      try { backlog = viewer.send(frame); } catch {}
+      if (backlog <= VIEWER_BACKLOG_LIMIT) continue;
+      session.viewers.delete(viewer);
+      try { viewer.drop(); } catch {}
+    }
+  };
+  const endViewers = (session) => {
+    for (const viewer of session.viewers) viewer.end();
+    session.viewers.clear();
   };
   const clearActivityTimer = (session) => {
     if (!session.activityTimer) return;
@@ -877,6 +897,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     clearTimeout(session.claudeTrustTimer);
     if (active.get(session.key) === session.id) active.delete(session.key);
     if (!wasRetired) emit(session, "terminal:closed", { id: session.id, botId: session.botId });
+    endViewers(session);
     const exited = session.pty.exited;
     if (exited) {
       exiting.add(exited);
@@ -985,6 +1006,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (!session.exitReported) {
       session.exitReported = true;
       emit(session, "terminal:exit", { id: session.id, exitCode: session.exitCode });
+      if (session.viewers.size) fanOut(session, { exitCode: session.exitCode });
+      endViewers(session);
     }
     if (session.retired && sessions.get(session.id) === session) sessions.delete(session.id);
   };
@@ -1089,7 +1112,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.pendingInputEcho = echo.pending;
       if (parsed.bell && session.activityArmed) reportAttention(session, "bell");
       if (!parsed.bell && echo.text.trim()) scheduleActivity(session);
-      emit(session, "terminal:data", { id: session.id, data, seq: ++session.seq });
+      const seq = ++session.seq;
+      emit(session, "terminal:data", { id: session.id, data, seq });
+      if (session.viewers.size) fanOut(session, { seq, data });
     });
     pty.onExit(({ exitCode }) => { if (session.pty === pty) reportExit(session, exitCode); });
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The test adapter predates worker error events.
@@ -1178,7 +1203,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
     const session = {
-      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
+      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
@@ -1394,6 +1419,72 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (pending.get(key) === operation) pending.delete(key);
     }
   };
+  const writeInput = (session, data) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-text IPC payloads before passing them to the PTY.
+    if (typeof data !== "string" || data.length > 64 * 1024) throw new Error("Invalid terminal input");
+    if (session.exitCode !== null) throw new Error("Terminal has exited");
+    const mouse = isMouseReport(data);
+    if (!mouse && !isTerminalReply(data)) cancelClaudeStartup(session);
+    const echo = mouse ? "" : inputEchoText(data);
+    const submit = mouse ? false : isSubmitInput(data);
+    // Mouse and focus reports from a TUI are not the user taking over.
+    if (echo || submit) {
+      if (session.botPane && !session.runningCommand) session.commandUserInput = true;
+      clearActivityTimer(session);
+      session.userInputAt = now();
+      session.idleCompacting = false;
+    }
+    if (submit) session.activityArmed = true;
+    if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
+    // A shell can emit a bell more than once; arm the next command after Enter.
+    if (submit) {
+      session.autoNote = null;
+      session.autoDelivered = false;
+      session.autoReported = false;
+      session.attentionReported = false;
+      session.activityCooldownUntil = 0;
+    }
+    // X10 bytes past column/row 95 exceed 0x7F; a UTF-8 string write
+    // would expand them to two bytes, so send the raw binary instead.
+    const payload = mouse && data.includes("\x1b[M") ? Buffer.from(data, "binary") : data;
+    if (session.respawn) {
+      if (!mouse) session.respawn.push(data);
+      return undefined;
+    }
+    try {
+      const result = session.pty.write(payload);
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
+      return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
+    } catch (cause) {
+      fail(session, cause);
+      throw cause;
+    }
+  };
+  const resizePane = (session, cols, rows) => {
+    dimensions(cols, rows);
+    if (session.exitCode !== null) return undefined;
+    session.resizedAt = now();
+    try {
+      const result = session.pty.resize(cols, rows);
+      session.screen.resize(cols, rows);
+      session.cols = cols;
+      if (session.viewers.size) fanOut(session, { cols, rows });
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
+      return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
+    } catch (cause) {
+      fail(session, cause);
+      throw cause;
+    }
+  };
+  const inputSession = (botId, input) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
+    if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Live input crosses the local proxy boundary.
+    if (!input || typeof input !== "object" || typeof input.sessionId !== "string" || !Number.isInteger(input.generation)) throw new Error("Invalid terminal input");
+    const session = resolveBotSession(botSessions(botId), input.sessionId).session;
+    if (!session || session.generation !== input.generation) throw new Error("Terminal session is stale; take a fresh snapshot");
+    return session;
+  };
   return {
     async open(event, input) {
       authorize(event);
@@ -1432,46 +1523,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return true;
     },
     write(event, id, data) {
-      const session = owned(event, id);
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-text IPC payloads before passing them to the PTY.
-      if (typeof data !== "string" || data.length > 64 * 1024) throw new Error("Invalid terminal input");
-      if (session.exitCode !== null) throw new Error("Terminal has exited");
-      const mouse = isMouseReport(data);
-      if (!mouse && !isTerminalReply(data)) cancelClaudeStartup(session);
-      const echo = mouse ? "" : inputEchoText(data);
-      const submit = mouse ? false : isSubmitInput(data);
-      // Mouse and focus reports from a TUI are not the user taking over.
-      if (echo || submit) {
-        if (session.botPane && !session.runningCommand) session.commandUserInput = true;
-        clearActivityTimer(session);
-        session.userInputAt = now();
-        session.idleCompacting = false;
-      }
-      if (submit) session.activityArmed = true;
-      if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
-      // A shell can emit a bell more than once; arm the next command after Enter.
-      if (submit) {
-        session.autoNote = null;
-        session.autoDelivered = false;
-        session.autoReported = false;
-        session.attentionReported = false;
-        session.activityCooldownUntil = 0;
-      }
-      // X10 bytes past column/row 95 exceed 0x7F; a UTF-8 string write
-      // would expand them to two bytes, so send the raw binary instead.
-      const payload = mouse && data.includes("\x1b[M") ? Buffer.from(data, "binary") : data;
-      if (session.respawn) {
-        if (!mouse) session.respawn.push(data);
-        return undefined;
-      }
-      try {
-        const result = session.pty.write(payload);
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
-        return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
-      } catch (cause) {
-        fail(session, cause);
-        throw cause;
-      }
+      return writeInput(owned(event, id), data);
     },
     acknowledge(event, id) {
       const session = owned(event, id);
@@ -1481,20 +1533,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.activityCooldownUntil = now() + attentionCooldownMs;
     },
     resize(event, id, cols, rows) {
-      const session = owned(event, id);
-      dimensions(cols, rows);
-      if (session.exitCode !== null) return undefined;
-      session.resizedAt = now();
-      try {
-        const result = session.pty.resize(cols, rows);
-        session.screen.resize(cols, rows);
-        session.cols = cols;
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge operations synchronously or asynchronously.
-        return result && typeof result.then === "function" ? result.catch((cause) => { fail(session, cause); throw cause; }) : result;
-      } catch (cause) {
-        fail(session, cause);
-        throw cause;
-      }
+      return resizePane(owned(event, id), cols, rows);
     },
     read(event, id, options = {}) {
       const session = owned(event, id);
@@ -1638,6 +1677,23 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const result = botWrite(session, input.text);
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge writes synchronously or asynchronously.
       return result && typeof result.then === "function" ? result.then(() => snapshot(session)) : snapshot(session);
+    },
+    /** Adds a live viewer to a bot pane; its snapshot and later chunks share one seq order. */
+    watchBot(botId, sessionId, viewer) {
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
+      if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
+      const live = botSessions(botId);
+      const session = sessionId ? resolveBotSession(live, sessionId).session : live.find((candidate) => !candidate.botPane) ?? live[0];
+      if (!session) throw new Error(sessionId ? "Unknown terminal" : "No active terminal for this bot");
+      const { generation, output, seq, cols, rows, modes, resetModes, exitCode } = snapshot(session);
+      if (exitCode === null) session.viewers.add(viewer);
+      return { snapshot: { sessionId: session.id, generation, output, seq, cols, rows, modes, resetModes, exitCode }, stop: () => session.viewers.delete(viewer) };
+    },
+    inputBot(botId, input) {
+      return writeInput(inputSession(botId, input), input.data);
+    },
+    resizeBot(botId, input) {
+      return resizePane(inputSession(botId, input), input.cols, input.rows);
     },
     attendBot(botId, sessionId, kind, text) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.

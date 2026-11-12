@@ -113,6 +113,13 @@ describe("execCli --version cache", () => {
   });
 });
 
+describe("execCli env", () => {
+  it("turns off agy's self-updater on Windows, whose console windowsHide can't hide", async () => {
+    writeFileSync(script, "console.log(process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? \"unset\");\n");
+    expect(await run(["-p", "/usage"])).toBe(process.platform === "win32" ? "true" : "unset");
+  });
+});
+
 describe("describeSpawnFailure cwd", () => {
   const enoent = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
 

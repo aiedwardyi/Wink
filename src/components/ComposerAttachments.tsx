@@ -2,11 +2,11 @@
 // file drop that creates them. A long paste collapses into a card of its
 // first lines instead of flooding the composer; a file dropped anywhere
 // on the window attaches by path.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { ClipboardPaste, File as FileIcon, Image as ImageIcon, MessageSquareText, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { holdReload } from "@/lib/reload-hold";
+import { useFileDrop } from "@/lib/use-file-drop";
 import {
   attachmentImageUrl,
   intakeFiles,
@@ -19,13 +19,13 @@ import {
 } from "@/lib/composer-attachments";
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
+import { FileDropOverlay } from "./FileDropOverlay";
 
-/** Electron 32 removed File.path — only the preload can name a file. */
+/** Electron 32 removed File.path; only the preload can name a file. */
 export function pathForFile(file: File): string {
   return window.ogb?.getPathForFile?.(file) ?? "";
 }
 
-/** Renders pending attachments and their composer actions. */
 export function ComposerAttachments({
   disabled = false,
   items,
@@ -52,79 +52,25 @@ export function ComposerAttachments({
   onRepickUpload?: (id: string) => void;
 }) {
   const { t } = useI18n();
-  const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<PreviewImage | null>(null);
   const previewPresence = usePresence(preview);
-  // dragenter/dragleave fire once per element crossed, so the overlay
-  // tracks depth rather than the last event it happened to see
-  const depth = useRef(0);
-
-  useEffect(() => {
-    let active = true;
-    const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
-
-    const onEnter = (e: DragEvent) => {
-      if (disabled) return;
-      if (!carriesFiles(e)) return;
-      depth.current += 1;
-      setDragging(true);
-    };
-    const onLeave = (e: DragEvent) => {
-      if (!carriesFiles(e)) return;
-      depth.current = Math.max(0, depth.current - 1);
-      if (depth.current === 0) setDragging(false);
-    };
-    // without preventDefault the window navigates to the dropped file and
-    // the app is simply gone
-    const onOver = (e: DragEvent) => {
-      if (carriesFiles(e)) e.preventDefault();
-    };
-    const drop = async (e: DragEvent) => {
-      if (!carriesFiles(e)) return;
-      e.preventDefault();
-      depth.current = 0;
-      setDragging(false);
-      if (disabled) return;
-      const files = Array.from(e.dataTransfer?.files ?? []);
-      const startedAt = performance.now();
-      // Same intake the attach button uses: a dropped file and a picked one
-      // must not appear in a different order.
-      const { attachments, uploads, notice: message } = await intakeFiles(files, {
-        t,
-        allowImages,
-        getPath: pathForFile,
-        uploadImage: pasteImageAttachment,
-      });
-      if (!active) return;
-      if (attachments.length) onAdd(attachments, uploads, startedAt);
-      // onAdd clears only a notice from before this drop started, so an error
-      // a concurrent intake just raised stays until the user reads it.
-      if (message) onNotice(message);
-    };
-    const onDrop = (e: DragEvent) => void holdReload(drop(e));
-
-    window.addEventListener("dragenter", onEnter);
-    window.addEventListener("dragleave", onLeave);
-    window.addEventListener("dragover", onOver);
-    window.addEventListener("drop", onDrop);
-    return () => {
-      active = false;
-      window.removeEventListener("dragenter", onEnter);
-      window.removeEventListener("dragleave", onLeave);
-      window.removeEventListener("dragover", onOver);
-      window.removeEventListener("drop", onDrop);
-    };
-  }, [onAdd, allowImages, onNotice, t, disabled]);
+  const dragging = useFileDrop(useCallback(async (files: File[], isActive: () => boolean) => {
+    const startedAt = performance.now();
+    const { attachments, uploads, notice: message } = await intakeFiles(files, {
+      t,
+      allowImages,
+      getPath: pathForFile,
+      uploadImage: pasteImageAttachment,
+    });
+    if (!isActive()) return;
+    if (attachments.length) onAdd(attachments, uploads, startedAt);
+    // A concurrent intake's notice must survive this drop.
+    if (message) onNotice(message);
+  }, [onAdd, allowImages, onNotice, t]), disabled);
 
   return (
     <>
-      {dragging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-10">
-          <div className="rounded-2xl border-2 border-dashed border-accent/70 bg-panel/90 px-8 py-6 text-[14px] font-medium text-ink shadow-2xl">
-            Drop to attach — the bot gets the file path
-          </div>
-        </div>
-      )}
+      {dragging && <FileDropOverlay label={"Drop to attach \u2014 the bot gets the file path"} />}
 
       {notice && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">

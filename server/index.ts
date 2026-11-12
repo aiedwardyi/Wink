@@ -50,6 +50,20 @@ import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
+import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { hostedSend } from "./rooms/send.ts";
+import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
+import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
+import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
+import { GuestClient } from "./rooms/guest-client.ts";
+import { joinedRoute } from "./rooms/joined-routes.ts";
+import { hostFileRoute } from "./rooms/file-routes.ts";
+import { sweepRoomFiles } from "./rooms/files.ts";
+import { joinedFileRoute } from "./rooms/joined-files.ts";
+import { peopleRoute } from "./rooms/people-routes.ts";
+import { shareRoute } from "./rooms/share.ts";
+import { translateRoute, translationInstances } from "./rooms/translate.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
@@ -155,6 +169,8 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
+import { createQuietEnd } from "./quiet-end.ts";
+import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
@@ -256,6 +272,7 @@ import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts"
 import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
+import { createTerminalLive } from "./terminal-live.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -307,12 +324,12 @@ import {
 import { PhoneAccess } from "./phone-access.ts";
 import { createDevicePresence } from "./device-presence.ts";
 import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awake.ts";
-import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
+import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
-import { teamRoute } from "./team-route.ts";
+import { teamRelayBase, teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
@@ -384,7 +401,7 @@ import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from 
 import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
-import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile, serveLinkedFolder } from "./linked-files.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -416,6 +433,8 @@ import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from ".
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
+import { isVoiceLine, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
 import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
@@ -544,6 +563,7 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
     saveConfig({ phoneRelay: { base, enabled: true } });
     Object.assign(cfg, loadConfig());
   },
+  room: handleRoomDoor,
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
     const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
@@ -576,7 +596,7 @@ googleAccount.onSession(() => {
     if (!fill || googleAccount.owner()?.sub !== sub) return;
     saveConfig({ profile: fill.avatarUrl ? { ...fill, googleAvatarUrl: fill.avatarUrl } : fill });
     Object.assign(cfg, loadConfig());
-    if (fill.name) phoneAccess.nameChanged();
+    if (fill.name) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
     broadcast({ kind: "config", ...configStatus() });
   }).catch((error) => console.warn(`[google] profile fill failed: ${error instanceof Error ? error.message : String(error)}`));
 });
@@ -1868,6 +1888,7 @@ function publicGroupState(group: GroupRecord) {
     ...groupClears(group),
     working: groupIsWorking(group),
     taskState: store.taskPacket(group.threadId) ?? undefined,
+    ...(group.hosted ? { room: hostedRoomView(group.hosted) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -1887,7 +1908,7 @@ const groupWithThread = (group: GroupRecord) => ({
 // still send their richer payload on top.
 store.onChange((change) => {
   try {
-    if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin) {
+    if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin && !isVoiceLine(change.message)) {
       if (!change.imported && change.message.kind === "text" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
@@ -1939,7 +1960,7 @@ store.onChange((change) => {
       break;
     }
     case "group.deleted":
-      broadcast({ kind: "group.deleted", groupId: change.groupId });
+      broadcast({ kind: "group.deleted", groupId: change.groupId, ...(change.hosted ? { hosted: true } : {}) });
       break;
   }
 });
@@ -2908,7 +2929,12 @@ function notify(notification: Notification | null, turnMs?: number, routineRun?:
   const routine = routineRun
     ? { name: routineRun.routineName, unattended: routineTriggerIsUnattended(routineRun.triggerSource) }
     : undefined;
-  phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+  if (!isHostedThread(store, notification.threadId)) phonePing(notification.botId, pingForNotification(notification, turnMs, routine), notification);
+}
+
+function roomAlert(alert: RoomAlert) {
+  broadcast({ kind: "notify", notification: roomNotification(alert), at: Date.now() });
+  void sendWebPushToDevices(DATA_DIR, pushPayload(roomPing(alert), { botId: alert.chat, threadId: alert.threadId }, alert.chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 const phonePingAllowed = createPingLimiter();
@@ -2916,7 +2942,8 @@ const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:o
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
   if (!ping || !phonePingAllowed(botId, ping.title, ping.message)) return;
-  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
+  const chat = store.groupByThread(open.threadId)?.id;
+  void sendWebPushToDevices(DATA_DIR, pushPayload(ping, open, chat), webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`));
 }
 
 // Group threads: the fold needs to know WHO is talking — the turn engine
@@ -3337,6 +3364,8 @@ void (async () => {
 
 // Threads whose driver is waiting out a busy provider; a queued send cancels the wait.
 const busyResumeThreads = new Set<string>();
+const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
+const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
@@ -3358,7 +3387,9 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
+  if (quietTurnText(event)) return;
   event = stripStrayUserTags(event);
+  quietEnd(event);
   quickAnswersTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
@@ -3435,7 +3466,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
-        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => m.role === "user" || (m.role === "bot" && m.kind === "text")) : undefined;
+        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text"))) : undefined;
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
@@ -4493,6 +4524,7 @@ type StartTurnOptions = {
   /** Stable identity supplied by the composer so a network retry cannot
    * dispatch the same user action twice. */
   sendId?: string;
+  call?: CallTag;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4747,6 +4779,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           text: opts?.transcriptText ?? text,
           replyToId: opts?.replyTo?.id,
           sendId: opts?.sendId,
+          call: opts?.call,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -5097,6 +5130,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
+  const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
@@ -5105,7 +5139,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...closedAsk, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5631,7 +5665,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -6097,6 +6131,7 @@ function queueBusyRoomMember(
   onDispatchError?: (message: string) => void,
   instructionId?: string,
   rootId?: string | null,
+  askId?: string,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
@@ -6106,6 +6141,7 @@ function queueBusyRoomMember(
     cardContinuation,
     onDispatchError,
     instructionId,
+    askId,
   });
   return true;
 }
@@ -6121,10 +6157,10 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean> },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
-  if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
+  if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
     fail("the room is no longer available");
     return Promise.resolve();
   }
@@ -6157,6 +6193,7 @@ function enqueueDrainedRoomTurn(
       operation.instructionId,
       undefined,
       room.rootId ?? null,
+      room.askId,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6206,6 +6243,28 @@ _loadPending();
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
 
+configureRoomAsks({
+  store,
+  hostName: () => cfg.profile?.name?.trim() || "The host",
+  driverKind: (botId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot)?.driverKind : undefined; },
+  instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
+  dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
+  stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
+  endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
+  alert: roomAlert,
+});
+configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
+sweepRoomFiles(store.groups);
+const guestClient = new GuestClient({
+  bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
+  joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
+  onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  alert: roomAlert,
+});
+guestClient.start();
+// Room asks queued or running died with the previous process; held ones wait on.
+if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
+
 async function runGroupMemberTurn(
   groupId: string,
   threadId: string,
@@ -6218,6 +6277,7 @@ async function runGroupMemberTurn(
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
+  authority?: string,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6225,9 +6285,9 @@ async function runGroupMemberTurn(
   const ownsThread = group?.dm
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
-  if (!group || !bot || !ownsThread) return false;
+  if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
@@ -6250,6 +6310,7 @@ async function runGroupMemberTurn(
       instructionId,
       excludeIds,
       rootId,
+      authority,
     );
   } finally {
     releaseTurnStart();
@@ -6275,6 +6336,7 @@ async function runClaimedGroupMemberTurn(
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
+  authority?: string,
 ): Promise<boolean> {
   const epoch = currentTurnEpoch(botId);
   if (isCancelled?.()) return false;
@@ -6283,11 +6345,11 @@ async function runClaimedGroupMemberTurn(
   const ownsThread = group?.dm
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
-  if (!group || !bot || !ownsThread) return false;
+  if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6442,7 +6504,7 @@ async function runClaimedGroupMemberTurn(
   // Connected-app discovery is intentionally awaited before a provider owns
   // the bot. An interrupt during that setup window must still stop the queued
   // room operation before it starts a process.
-  if (isCancelled?.()) return false;
+  if (isCancelled?.() || hostedTurnRefused(group, threadId, bot.id, authority)) return false;
   // A 1:1 or another room turn may have claimed this bot while connected-app
   // setup was in flight. Re-check immediately before the synchronous claim so
   // one bot can never own two provider processes.
@@ -6450,7 +6512,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   store.setActivity(bot.id, "working", threadId);
@@ -6469,7 +6531,7 @@ async function runClaimedGroupMemberTurn(
     .join(", ");
   // A Chief answering in a room gets the same roster and delegation framing as
   // its 1:1 turns. Without it the tools are mounted but unexplained, and the
-  // Chief improvises in front of the whole room (QA 13).
+  // Chief improvises in front of the whole room.
   const coordinationPrompt = bot.chiefOfStaff
     ? chiefOfStaffSystemPrompt(
         bot.id,
@@ -6541,7 +6603,8 @@ async function runClaimedGroupMemberTurn(
     let unsub = () => {};
     let unregisterStall = () => {};
     const deadline = new RoomTurnDeadline(timeoutMinutes, () => {
-      void instance.adapter.interruptTurn(threadId).catch(() => {});
+      if (authority) void endAsk(authority, "failed");
+      else void instance.adapter.interruptTurn(threadId).catch(() => {});
       store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
@@ -6580,7 +6643,7 @@ async function runClaimedGroupMemberTurn(
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
-      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
+      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
       }
       const live = providerReload.started(threadId, selection.instanceId);
@@ -6655,7 +6718,7 @@ ${text}` : text,
   }
 
   // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  if (!isCancelled?.() && !group.hosted && hop < MAX_GROUP_HOPS && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -6674,6 +6737,7 @@ ${text}` : text,
 }
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
+  if (store.group(groupId)?.hosted) return;
   const key = `${botId}\0${threadId}`;
   if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
@@ -6694,6 +6758,7 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
+  if (group.hosted) return hostedSend(group as HostedGroup, { kind: "host" }, text, replyTo ? replyTo.roomEntryId ?? "" : undefined, sendId).message;
   if (roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
@@ -7073,7 +7138,7 @@ function resumeSecretCard(botId: string, threadId: string, messageId: string, ou
       error: undefined,
     },
   });
-  dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
+  if (!isCallKeyCard(message.secret)) dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
   return true;
 }
 
@@ -7149,6 +7214,7 @@ function configStatus() {
       detailedReplies: detailedRepliesEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
+      terminalLive: true,
       modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
   };
@@ -7256,6 +7322,7 @@ const verifySite = createVerifySite({
 });
 const verifyAuto = createVerifyAuto({
   enabled: verifyAutoOn,
+  skip: threadId => isHostedThread(store, threadId),
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   startDocs: input => verifyDoc.schedule(input),
@@ -7294,6 +7361,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
@@ -7365,6 +7433,7 @@ const threadRoutes = createThreadRoutes({
   resolveAndSendRoutine,
   approvalBus,
 });
+const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -7393,6 +7462,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    if (!relay && roomDoorPath(path)) return json(res, 404, { error: "not found" });
     const startupWait = startupTiming.beforeRequest(method, path);
     if (startupWait) await startupWait;
     // Terminal panes hold a per-pane grant, never the comms token. The note
@@ -7779,7 +7849,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null);
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST, remoteRetry.status().state === "checking"), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {
@@ -7885,19 +7955,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/uploads") && (await uploads.handle(req, res, method, path, url))) return;
 
-    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-file(?:\/.*)?$/);
+    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-(file(?:\/.*)?|folder)$/);
     if (m && method === "GET") {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
       const group = bot ? undefined : store.groupByThread(threadId);
-      if (!bot && !group) return json(res, 404, { error: "no such conversation" });
+      if ((!bot && !group) || linkedFilesClosed(group, threadId)) return json(res, 404, { error: "no such conversation" });
       const messages = store.messagesFor(threadId).map((message) => ({
         id: message.id,
         role: message.role,
         text: message.text,
         fromBotId: message.from?.botId,
       }));
-      return serveLinkedFile(req, res, {
+      return (m[2] === "folder" ? serveLinkedFolder : serveLinkedFile)(req, res, {
         ...credentials,
         threadId,
         messages,
@@ -8068,6 +8138,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       whatsNew.markSeen((await readBody(req))?.release);
       return json(res, 200, { ok: true });
     }
+    if (method === "POST" && path === "/api/whats-new/anchor") {
+      const body = await readBody(req);
+      whatsNew.place(body?.release, body?.id);
+      return json(res, 200, { ok: true });
+    }
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");
       return json(res, update.status, update.body);
@@ -8114,6 +8189,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const resumed = await terminalResumeResponse({ store, access: terminalBridgeAccess, credentials, cookie: req.headers.cookie }, m[1], await readBody(req));
       return json(res, resumed.status, resumed.body);
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/terminal\/(live|input|resize|lease)$/);
+    if (m) {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return await terminalLive.handle(req, res, bot.id, m[2], url);
+    }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to
@@ -8145,6 +8226,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "POST") {
       return await botChatRoutes.send(req, res, m);
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
+    if (m && method === "POST") return await liveCall(req, res, m);
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
@@ -8378,6 +8461,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
     }
+    if (await translateRoute(req, res, method, path, { store, instances: () => translationInstances(registry, botAccounts), key: cfg.gemini?.apiKey, hostName: cfg.profile?.name?.trim(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await joinedFileRoute(req, res, method, url, guestClient)) return;
+    if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req));
+    if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);
       return json(res, reply.status, reply.body);
@@ -8502,7 +8592,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
       }
-      if ((cfg.profile?.name ?? "").trim() !== previousPerson) phoneAccess.nameChanged();
+      if ((cfg.profile?.name ?? "").trim() !== previousPerson) { phoneAccess.nameChanged(); hostNameChanged(); void guestClient.nameChanged(); }
       memoryPass.onConfigChanged();
       if (patch.imageGen?.key !== undefined) {
         usageBoard.touch();
@@ -8709,6 +8799,7 @@ startTeamSnagOwner({
   email: () => googleAccount.owner()?.email ?? null,
   tokens: googleAccount,
   file: join(DATA_DIR, "team-snags.jsonl"),
+  ownDevices: () => [{ host: phoneAccess.presenceHost() ?? "" }, ...(profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [])],
   post: (text, ids) => postChiefNote(store, profileSyncSettings.deviceId, text, ids),
   postedIds: () => chiefSnagIds(store),
   warn: (line) => console.warn(line),
@@ -8736,6 +8827,7 @@ if (early) {
   startupTiming.serving();
 } else {
   const server = createServer(SERVER_TIMEOUTS, handleRequest);
+  keepRoomUploads(server);
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`wink server on http://127.0.0.1:${PORT}`);
     markServerServing();

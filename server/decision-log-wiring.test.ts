@@ -75,6 +75,7 @@ async function makePermissionBot(patch: Record<string, unknown>, instanceId = "g
   expect(created.status).toBe(201);
   const bot = created.body.bot;
   const patched = await api("PATCH", `/api/bots/${bot.id}`, {
+    autoApprove: false,
     ...patch,
     modelSelection: { instanceId, model: "fake-model" },
   });

@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,5 +219,13 @@ describe("motion", () => {
     expect(desk().classList.contains("animate-fade-in")).toBe(true);
     await reopen();
     expect(desk().classList.contains("animate-fade-in")).toBe(false);
+  });
+});
+
+describe("show more row", () => {
+  it("is clickable across the whole row", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "UsageDesk.css"), "utf8");
+    expect(css).toMatch(/^\.usage-cap \{ padding: 0; \}$/m);
+    expect(css).toMatch(/^\.usage-cap button \{ width: 100%;[^}]*padding: 6px 12px 8px;/m);
   });
 });

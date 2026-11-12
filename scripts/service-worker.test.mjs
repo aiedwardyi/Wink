@@ -98,6 +98,12 @@ describe("service worker", () => {
     expect(shown.map(({ options }) => options.badge)).toEqual(["/app-icon-192.png?v=2", "/app-icon-192.png?v=2"]);
   });
 
+  it("tags each alert with its chat and send time", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    await push(listeners, { title: "Scout finished", body: "done", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
+    expect(shown[0].options.data).toEqual({ url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
+  });
+
   it("adds the tap time to the url when it opens a window", async () => {
     const { listeners, opened, now } = worker("home.tail1234.ts.net");
     await click(listeners, "/?bot=b1&thread=t-new");
@@ -148,5 +154,28 @@ describe("service worker", () => {
     const { listeners } = worker(RELAY, async () => new Response("live page"));
     await install(listeners);
     expect(await (await load(listeners, "navigate")).text()).toBe("live page");
+  });
+
+  it.each([["en", "Choose another PC"], ["ko", "다른 PC 선택"]])("links the %s offline page to PC discovery", (lang, text) => {
+    const page = readFileSync(join(ROOT, "public/offline.html"), "utf8");
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+    const elements = new Map();
+    const element = (id) => {
+      if (!elements.has(id)) elements.set(id, { textContent: "", hidden: true, addEventListener() {} });
+      return elements.get(id);
+    };
+    for (const script of scripts) runInNewContext(script, {
+      URL,
+      location: { hostname: RELAY, href: `https://${RELAY}/` },
+      history: {},
+      navigator: { onLine: false, language: lang },
+      localStorage: { getItem: () => lang },
+      document: { documentElement: {}, getElementById: element },
+      window: { addEventListener() {} },
+      setInterval() {},
+    });
+    expect(element("pick").href).toBe("https://wink.test/?pick=1");
+    expect(element("pick").textContent).toBe(text);
+    expect(element("pick").hidden).toBe(false);
   });
 });

@@ -182,7 +182,7 @@ export async function resolveVerifySite(entryText: string, roots: string[], sign
   }
 }
 
-/** The frozen bridge grant (V0.md "Bridge auth rule"). */
+/** The frozen bridge grant (bridge auth rule). */
 export function verifyGrant(token: string, run: VerifyBridgeRun): string {
   const payload = Buffer.from(JSON.stringify([VERIFY_GRANT_PREFIX, run.botId, run.runId, run.root, run.entry, run.revision, run.expiresAt])).toString("base64url");
   return `${payload}.${createHmac("sha256", token).update(payload).digest("base64url")}`;

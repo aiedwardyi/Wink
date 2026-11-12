@@ -1,6 +1,7 @@
 // The Terminal skin's reading of a transcript: Claude Code's tool verbs, the
 // one ⎿ line a step settles into, and the status line's meters.
 import type { ToolDetail } from "../../shared/tool-detail";
+import { isVoiceLine, type CallTag } from "../../shared/live-call";
 import type { MessageKey } from "./i18n-catalog";
 import type { Translate } from "./i18n";
 
@@ -92,7 +93,7 @@ export function termModelLabel(label: string): string {
     .replace(/\s+\((Thinking|High|Medium|Low|Codex)\)$/, "");
 }
 
-type LogRow = { role: "bot" | "user"; kind: string; tool?: { name: string; ok?: boolean } };
+type LogRow = { role: "bot" | "user"; kind: string; call?: CallTag; tool?: { name: string; ok?: boolean } };
 
 /** Logfile's gutter as data-* its CSS prints: `[14:02:11]` and INFO or WARN. Empty on every other skin. */
 export function logLine(on: boolean, at: number, rows: LogRow[]): { "data-log-time"?: string; "data-log-level"?: "info" | "warn" } {
@@ -100,6 +101,6 @@ export function logLine(on: boolean, at: number, rows: LogRow[]): { "data-log-ti
   const d = new Date(at);
   const time = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
   const warn = rows.some((row) => row.tool?.ok === false || row.tool?.name.startsWith("error:"));
-  const info = rows.some((row) => row.role === "bot" && row.kind === "text");
+  const info = rows.some((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row));
   return { "data-log-time": time, "data-log-level": warn ? "warn" : info ? "info" : undefined };
 }

@@ -16,6 +16,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import type { PrepareTurn, ProviderDriver, ProviderInstance, SendTurnInput } from "../../contracts.ts";
+import { createQuietEnd } from "../../quiet-end.ts";
+import type { Message } from "../../store.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { createAcpDriver, probeCliVersion, skipSubscriptionAuthForLocalInject, wslSessionPaths, type AcpSupport } from "./core.ts";
 import { toWslPath } from "../../env-path.ts";
@@ -2117,6 +2119,53 @@ describe("ACP turns (fake CLI)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
     expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own" });
+  });
+
+  it("a prompt a Grok hook denied fails naming the hook and its reason, on every resend", async () => {
+    await create(GrokAgentDriver, "hook-denied");
+    for (const text of ["hi", "hi again"]) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-hook", text });
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(done).toMatchObject({ ok: false, stopReason: "hook_denied" });
+      expect(recorder.events.find((e) => e.type === "runtime.error" && e.turnId === turnId)).toMatchObject({
+        message: expect.stringMatching(/^Grok hook failed \(재판기록_대화기록\): (?=.{200}$)~\\scoop\\apps\\python\\current\\python\.exe: can't open file 'G:\\내 드라이브\\대화기록_게이트\.py': \[Errno 2\] No such file or directory x+…$/),
+      });
+    }
+  });
+
+  it("an unknown cancel category stays a plain error and names the category", async () => {
+    await create(GrokAgentDriver, "cancel-category");
+    await instance.adapter.sendTurn({ threadId: "t-category", text: "go" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: false, stopReason: "agent_cancelled" });
+    expect(recorder.events.find((e) => e.type === "runtime.error")).toMatchObject({ message: "Grok stopped this reply on its own (QuotaGuard)" });
+  });
+
+  it("a Stop stays a quiet Stop whatever category the cancel carries", async () => {
+    await create(GrokAgentDriver, "stop-replies");
+    await instance.adapter.sendTurn({ threadId: "t-stop-category", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+    await instance.adapter.interruptTurn("t-stop-category");
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
+  it.each([
+    ["ends at the first no_reply_needed result as a clean finish", [], 1],
+    ["runs on past no_reply_needed when the user typed into the turn", [{ id: "m1", role: "user", kind: "text", text: "wake", at: Number.MAX_SAFE_INTEGER }], 2],
+  ] as const)("%s", async (_name, typed, calls) => {
+    await create(GrokAgentDriver, "quiet-loop");
+    instance.adapter.onEvent(createQuietEnd(() => typed as unknown as Message[], () => instance.adapter));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+    const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    expect(done).toMatchObject({ ok: true, stopReason: null });
+    expect(recorder.events.filter((e) => e.type === "item.started" && e.title === "no_reply_needed")).toHaveLength(calls);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+    if (calls === 1) {
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello" });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId)).resolves.toMatchObject({ ok: true, stopReason: null });
+    }
   });
 
   it("an exit before result becomes runtime.error + failed turn", async () => {

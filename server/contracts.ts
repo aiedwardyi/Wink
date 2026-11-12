@@ -202,6 +202,8 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
+  /** A team room ask: its native session ends with the turn. */
+  hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
@@ -264,6 +266,9 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   depth: 0 | 1 | 2;
   captured: import("./drivers/warm-pool.ts").Captured;
 };
+
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it. */
+export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval">;
 
 export interface TurnStartResult {
   turnId: TurnId;
@@ -335,6 +340,9 @@ export interface ProviderAdapter {
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  /** End this running turn as a clean finish, through the driver's own
+   * interrupt. Absent = the turn runs on to its natural end. */
+  endTurn?(threadId: ThreadId, turnId: TurnId): Promise<void>;
   /** Answer a pending ask. Resolves with what actually happened — never
    * throws for an ask that is no longer there: `unavailable` means nobody
    * could take the answer (the turn ended, the broker died, the driver
@@ -369,6 +377,8 @@ export interface ProviderAdapter {
   /** True while the thread's live session still runs background work (a
    * backgrounded subagent or command) that would die with it. Absent = false. */
   hasBackgroundWork?(threadId: ThreadId): boolean;
+  /** Ends the thread's native session and resolves once it has exited. Only team room asks call it. */
+  endSession?(threadId: ThreadId): Promise<void>;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
 }
@@ -500,7 +510,7 @@ export interface ProviderInstance {
    * from a generic helper that may expose prompts in argv or lack approvals. */
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
-  prepare?(turn?: PrepareTurn): Promise<void>;
+  prepare?(turn?: PrepareTurn, focus?: PrepareFocus): Promise<void>;
   /** The Captured this instance last computed itself (snapshot or capture), only while still current:
    *  same pool generation, non-empty identity, enabled, not disposed; otherwise null.
    *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.

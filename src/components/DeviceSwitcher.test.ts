@@ -72,6 +72,21 @@ const click = (target: Element) => target.dispatchEvent(new MouseEvent("click", 
 const key = (target: Element, name: string) => target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
 
 describe("DeviceSwitcher", () => {
+  it.each([false, true])("saves this PC with the rename check (phone %s)", async (phone) => {
+    if (phone) setPhone(true); else setDesktop();
+    const { host } = await renderView([device("home", { current: true }), device("work")], vi.fn(), DeviceSwitcher, phone);
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    await act(async () => click(document.querySelector("button[aria-label='Rename this PC']")!));
+    const input = document.querySelector("input")!;
+    input.value = " Home studio ";
+    const save = document.querySelector('button[aria-label="Save"]');
+    expect(save).not.toBeNull();
+    expect(save!.querySelector("svg.lucide-check")).not.toBeNull();
+    await act(async () => click(save!));
+    expect(store.api).toHaveBeenCalledWith("/api/devices/name", { method: "PUT", body: JSON.stringify({ name: "Home studio" }) });
+    expect(document.querySelector("input")).toBeNull();
+  });
+
   it.each([false, true])("keeps newer PC status when overlapping polls finish out of order (phone %s)", async (phone) => {
     vi.useFakeTimers();
     try {
@@ -125,6 +140,16 @@ describe("DeviceSwitcher", () => {
     expect(connect.closest("li")).toBe(host.querySelector("ul")?.lastElementChild);
     await act(async () => click(connect));
     expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "companion" });
+    await act(async () => root.unmount());
+  });
+
+  it("connect a device hidden off this PC", async () => {
+    setPhone(true);
+    vi.stubGlobal("location", { hostname: "abcdefghijklmnop.wink.test" });
+    const { host, root } = await renderView([device("home", { current: true }), device("work")], vi.fn(), DeviceSwitcher, true);
+    await act(async () => click(host.querySelector("button")!));
+    expect(document.querySelector("[data-device-id]")).not.toBeNull();
+    expect(document.querySelector("[data-connect-device]")).toBeNull();
     await act(async () => root.unmount());
   });
 

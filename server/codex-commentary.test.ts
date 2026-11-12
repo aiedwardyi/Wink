@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { isVoiceLine } from "../shared/live-call.ts";
 import { isShownMessage } from "../src/lib/shown-message.ts";
 import { ensureDirs } from "./config.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
@@ -59,7 +60,7 @@ function chat(threadId: string) {
   const patches: Array<Partial<Message>> = [];
   const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(),
+    turnSummaries, takePeerReplyStamp, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(),
     store: {
       messagesFor: () => messages,
       patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => {

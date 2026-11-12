@@ -3,6 +3,7 @@
 // separates a slow provider from a wedged one. Every phase below reads a
 // signal the client already receives.
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { isVoiceLine, type CallTag } from "../../shared/live-call";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
@@ -242,7 +243,8 @@ export function nextTurnSignals(signals: TurnSignals, threadId: string, event: T
  * settled assistant text does that. Leaving the reasoning buffer set past a
  * tool pins the label to "Thinking" for the whole post-tool model wait.
  */
-export function streamResetFor(message: { role?: string; kind?: string }): "stream" | "reasoning" | null {
+export function streamResetFor(message: { role?: string; kind?: string; call?: CallTag }): "stream" | "reasoning" | null {
+  if (isVoiceLine(message)) return null;
   if (message.role === "bot" && message.kind === "text") return "stream";
   if (message.kind === "activity") return "reasoning";
   return null;

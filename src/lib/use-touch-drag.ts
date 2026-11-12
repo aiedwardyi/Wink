@@ -37,6 +37,13 @@ const MARK_HEIGHT: Record<TouchDropMark, number> = { top: 2, bottom: 2, into: 4 
 
 export type TouchDropMark = "top" | "bottom" | "into";
 
+/** How far down a node may be translated before it grows its scroller, whose edge scroll would then chase it forever. */
+export function roomBelow(node: HTMLElement, scroller: HTMLElement | null) {
+  if (!scroller) return Infinity;
+  const box = scroller.getBoundingClientRect();
+  return scroller.scrollHeight - (node.getBoundingClientRect().bottom - box.top - scroller.clientTop + scroller.scrollTop);
+}
+
 export type TouchDragHandlers = {
   /** The element to lift for a pressed `selector` match, or null when it can't move. */
   lift: (pressed: HTMLElement) => HTMLElement | null;
@@ -60,6 +67,7 @@ type Press = {
   lastX: number;
   lastY: number;
   scrollTop: number;
+  room: number;
   moved: boolean;
   dirty: boolean;
   styled: HTMLElement;
@@ -111,7 +119,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
     });
     const scroller = () => latest.current.scroller?.() ?? list;
     const follow = (current: Press) => {
-      current.lifted?.style.setProperty("translate", `0 ${current.lastY - current.y + scroller().scrollTop - current.scrollTop}px`);
+      current.lifted?.style.setProperty("translate", `0 ${Math.min(current.room, current.lastY - current.y + scroller().scrollTop - current.scrollTop)}px`);
     };
     const draw = (marker: HTMLElement, next: [HTMLElement, TouchDropMark] | null) => {
       // an unchanged write can still invalidate paint, and most crossings only move the marker
@@ -185,6 +193,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         return;
       }
       press.lifted = lifted;
+      press.room = roomBelow(lifted, scroller());
       for (const [key, value] of Object.entries(LIFTED_STYLE)) lifted.style.setProperty(key, value);
       lifted.setAttribute("data-touch-lifted", "");
       const marker = list.ownerDocument.createElement("div");
@@ -216,6 +225,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         lastX: touch.clientX,
         lastY: touch.clientY,
         scrollTop: scroller().scrollTop,
+        room: Infinity,
         moved: false,
         dirty: false,
         styled,
