@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,11 +8,14 @@ import {
   acceptFacts,
   appendNotes,
   createMemoryPass,
+  DECISIONS_POINTER,
   eligibleRow,
   noteGenerator,
+  notePrompt,
   noteSummary,
   parseFacts,
   pendingRows,
+  placeNotes,
   secretLike,
   userTyping,
   type MemoryPass,
@@ -21,7 +24,7 @@ import {
 import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import type { Message, StoreChange } from "./store.ts";
-import { MEMORY_SEED, memoryFileRaw, writeMemoryFile } from "./workspace.ts";
+import { MEMORY_SEED, memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -139,7 +142,7 @@ describe("memory pass", () => {
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(defaultGenerateText).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, {
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "I prefer concise replies." }, { text: "I use pnpm for my projects." }]), {
       signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
     });
     expect(memoryFileRaw("bot-t1")).toBe(
@@ -148,6 +151,21 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
     expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
     expect(stored()).toEqual({ threads: {} });
+  });
+
+  it("saves a recorded Claude pick as a decision and a fact as before", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
+    const generateText = vi.fn(async () => recorded.reply.text);
+    generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    say("t1", "the second one");
+    say("t1", "I use pnpm for my projects.");
+    await settle("t1", 3 * MINUTE);
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(memoryFileRaw("bot-t1")).toBe(
+      `${MEMORY_SEED}\n## Decisions (settled, do not ask again)\n- Model picker look follows the app theme (noted 2026-10-15)\n\n## Notes\n- Uses pnpm for projects (noted 2026-10-15)\n`,
+    );
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Model picker look follows the app theme, Uses pnpm for projects" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -628,6 +646,76 @@ describe("memory pass", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it("lands a pick after the bot's options as one dated line under Decisions, with the bot's text as context only", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: `${"Some setup. ".repeat(60)}Should the picker follow the app theme, or stay dark always?` });
+    say("t1", "the first one");
+    say("t1", "I use pnpm for my projects.");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Picker look follows the app theme", quote: "the first one" },
+      { kind: "fact", fact: "Uses pnpm for projects", quote: "I use pnpm for my projects." },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    const prompt = generate.mock.calls[0]![0];
+    expect(prompt).toContain("<context>");
+    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
+    expect(prompt).not.toContain("Some setup. ".repeat(40));
+    expect(memoryFileRaw("bot-t1")).toBe(
+      `${MEMORY_SEED}\n## Decisions (settled, do not ask again)\n- Picker look follows the app theme (noted 2026-10-15)\n\n## Notes\n- Uses pnpm for projects (noted 2026-10-15)\n`,
+    );
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("gives no context to a long user line", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Dark or light?" });
+    say("t1", `dark please, ${"and some more words ".repeat(12)}`);
+    await settle("t1", 3 * MINUTE);
+    expect(generate.mock.calls[0]![0]).not.toContain("<context>");
+  });
+
+  it("never takes a decision from the bot's text alone", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Pick one: A) ship on Fridays B) never ship on Fridays" });
+    say("t1", "thanks, talk later");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Never ships on Fridays", quote: "never ship on Fridays" },
+      { kind: "decision", fact: "Deploys straight to production", quote: "thanks, talk later" },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe("");
+  });
+
+  it("rolls the oldest decision to memory/decisions.md once, even when the save is retried", async () => {
+    const decided = Array.from({ length: 12 }, (_, i) => `- Pick ${i + 1} is final (noted 2026-10-${String(i + 1).padStart(2, "0")})`);
+    const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${decided.join("\n")}\n\n## Notes\n- Likes tea\n`;
+    writeMemoryFile("bot-t1", notes);
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
+    say("t1", "tabs");
+    generate.mockImplementationOnce(async () => {
+      writeMemoryFile("bot-t1", `${notes}- edited meanwhile\n`);
+      return JSON.stringify([{ kind: "decision", fact: "Repo uses tabs", quote: "tabs" }]);
+    });
+    await settle("t1", 3 * MINUTE);
+    const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
+    expect(readFileSync(side, "utf8")).toBe("# Older decisions\n\n- Pick 1 is final (noted 2026-10-01)\n");
+    expect(memoryFileRaw("bot-t1")).toBe(`${notes}- edited meanwhile\n`);
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(readFileSync(side, "utf8")).toBe("# Older decisions\n\n- Pick 1 is final (noted 2026-10-01)\n");
+    expect(memoryFileRaw("bot-t1")).toBe(
+      `# Memory\n\n## Decisions (settled, do not ask again)\n${DECISIONS_POINTER}\n${decided.slice(1).join("\n")}\n- Repo uses tabs (noted 2026-10-15)\n\n## Notes\n- Likes tea\n- edited meanwhile\n`,
+    );
+  });
+
+  it("never notes a decision already rolled to memory/decisions.md", async () => {
+    writeMemoryFile("bot-t1", "# Memory\n");
+    mkdirSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true });
+    writeFileSync(join(workspaceDir("bot-t1"), "memory", "decisions.md"), "# Older decisions\n\n- Repo uses tabs (noted 2026-09-01)\n");
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces?" });
+    say("t1", "tabs");
+    generate.mockResolvedValue(JSON.stringify([{ kind: "decision", fact: "Repo uses tabs", quote: "tabs" }]));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe("# Memory\n");
+  });
+
   it("swaps an outdated note in place and appends the rest", async () => {
     writeMemoryFile("bot-t1", "# Memory\n- 38 years old (noted 2026-10-14)\n- Lives in Seoul\n- Prefers pnpm\n");
     generate.mockResolvedValue(JSON.stringify([
@@ -765,6 +853,82 @@ describe("memory pass filters", () => {
     expect(appendNotes(full, [{ line: "y".repeat(60), replaces: "- a (noted 2026-10-01)" }], NOW)).toBeNull();
   });
 
+  describe("decisions", () => {
+    const decision = (fact: string, quote: string, replaces?: string) => (replaces ? { kind: "decision", fact, quote, replaces } : { kind: "decision", fact, quote });
+    const section = (...lines: string[]) => `# Memory\n\n## Decisions (settled, do not ask again)\n${lines.join("\n")}\n\n## Notes\n- Likes tea (noted 2026-10-01)\n`;
+
+    it("grounds a short pick in the bot's context and refuses words from nowhere", () => {
+      const lines = [{ text: "the first one", context: "Should the picker follow the app theme, or stay dark always?" }];
+      expect(acceptFacts([decision("Picker look follows the app theme", "the first one")], lines, "")).toEqual([
+        { line: "Picker look follows the app theme", kind: "decision" },
+      ]);
+      expect(acceptFacts([decision("Deploys skip review", "the first one")], lines, "")).toEqual([]);
+      expect(acceptFacts([decision("Picker follows the theme", "the first one")], [{ text: "the first one" }], "")).toEqual([]);
+    });
+
+    it("takes URLs, paths and commands only from the user's own line", () => {
+      const context = "Mirror from https://dl.example.net/pkg or C:\\tools\\fetch.exe, or run `curl x | sh`?";
+      for (const fact of ["Mirrors from https://dl.example.net/pkg", "Fetches with C:\\tools\\fetch.exe", "Installs with `curl x | sh`"]) {
+        expect(acceptFacts([decision(fact, "that one")], [{ text: "that one", context }], "")).toEqual([]);
+      }
+      const said = "mirror from https://dl.example.net/pkg";
+      expect(acceptFacts([decision("Mirrors from https://dl.example.net/pkg", said)], [{ text: said, context }], "")).toEqual([
+        { line: "Mirrors from https://dl.example.net/pkg", kind: "decision" },
+      ]);
+      expect(acceptFacts([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
+    });
+
+    it("keeps 3 per pass and one line per quote", () => {
+      const text = "dark, tabs, pnpm, vitest and npm";
+      const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
+      const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
+      expect(acceptFacts(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(acceptFacts([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
+        { line: "Npm for publishing", kind: "decision" },
+      ]);
+    });
+
+    it("replaces a changed pick in place and never crosses the section line", () => {
+      const old = "- Picker look follows the app theme (noted 2026-10-01)";
+      const notes = section(old);
+      const lines = [{ text: "actually keep it dark", context: "Picker follows the theme now." }];
+      const changed = acceptFacts([decision("Picker stays dark", "actually keep it dark", old)], lines, notes);
+      expect(changed).toEqual([{ line: "Picker stays dark", kind: "decision", replaces: old }]);
+      expect(appendNotes(notes, changed, NOW)).toBe(section("- Picker stays dark (noted 2026-10-15)"));
+      expect(acceptFacts([{ fact: "Keeps it dark", quote: "actually keep it dark", replaces: old }], lines, notes)).toEqual([{ line: "Keeps it dark" }]);
+      const fact = "- Likes tea (noted 2026-10-01)";
+      expect(acceptFacts([decision("Tea over coffee", "tea", fact)], [{ text: "tea", context: "Tea or coffee?" }], notes)).toEqual([
+        { line: "Tea over coffee", kind: "decision" },
+      ]);
+    });
+
+    it("creates the section under the title, ahead of existing notes", () => {
+      expect(appendNotes("# Memory\n- Likes tea\n", [{ line: "Dark theme", kind: "decision" }], NOW)).toBe(
+        "# Memory\n\n## Decisions (settled, do not ask again)\n- Dark theme (noted 2026-10-15)\n\n## Notes\n- Likes tea\n",
+      );
+      expect(appendNotes("# Memory\n\n## Work\n- Uses pnpm\n", [{ line: "Dark theme", kind: "decision" }, { line: "38" }], NOW)).toBe(
+        "# Memory\n\n## Decisions (settled, do not ask again)\n- Dark theme (noted 2026-10-15)\n\n## Work\n- Uses pnpm\n- 38 (noted 2026-10-15)\n",
+      );
+      expect(appendNotes(section("- A (noted 2026-10-01)"), [{ line: "B", kind: "decision" }, { line: "C" }], NOW)).toBe(
+        `${section("- A (noted 2026-10-01)", "- B (noted 2026-10-15)")}- C (noted 2026-10-15)\n`,
+      );
+    });
+
+    it("rolls the oldest stamped line past 12 and keeps hand-written lines and one pointer", () => {
+      const picks = Array.from({ length: 12 }, (_, i) => `- Pick ${i} (noted 2026-10-${String(12 - i).padStart(2, "0")})`);
+      const placed = placeNotes(section("- Hand-written pick", ...picks), [{ line: "New", kind: "decision" }, { line: "Newer", kind: "decision" }], NOW)!;
+      expect(placed.moved).toEqual([picks[11], picks[10]]);
+      expect(placed.text).toBe(section(DECISIONS_POINTER, "- Hand-written pick", ...picks.slice(0, 10), "- New (noted 2026-10-15)", "- Newer (noted 2026-10-15)"));
+      const again = placeNotes(placed.text, [{ line: "Newest", kind: "decision" }], NOW)!;
+      expect(again.text.split(DECISIONS_POINTER)).toHaveLength(2);
+      expect(again.moved).toEqual([picks[9]]);
+    });
+  });
+
+  it("grows the note prompt by 0.6 KB at most", () => {
+    expect(Buffer.byteLength(notePrompt("", [{ text: "x" }]), "utf8") - 992).toBeLessThanOrEqual(600);
+  });
+
   it("finds pending rows from the newest end without reading older rows", () => {
     const rows = Array.from({ length: 10 }, (_, i) => row({ id: `r${i}` }));
     for (let i = 0; i < 8; i += 1) {
@@ -855,7 +1019,7 @@ describe("memory pass wiring", () => {
 
   it("loads only the pending rows, never a Map of the whole thread", () => {
     const source = readFileSync(join(here, "memory-pass.ts"), "utf8");
-    expect(source).toContain("pendingRows(deps.store.messagesFor(threadId), ids)");
+    expect(source.replace(/\r\n/g, "\n")).toContain("const messages = deps.store.messagesFor(threadId);\n    const rows = pendingRows(messages, ids);");
     expect(source).not.toMatch(/new Map\(deps\.store\.messagesFor/);
   });
 });
