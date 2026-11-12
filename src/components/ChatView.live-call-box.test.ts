@@ -209,6 +209,24 @@ describe("live call in the message box", () => {
     }
   });
 
+  it("shows an order that was not sent in the bar, en and ko", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login page bug." } }]));
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "No")!.click());
+      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("Not sent: Fix the login page bug. (declined)");
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t2", name: "propose_work", args: { order: "로그인 버그 고쳐 줘" } }]));
+      expect(host.querySelector("[data-live-call-notice]")).toBeNull();
+      await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "아니요")!.click());
+      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘 (declined)");
+    } finally {
+      applyLocale("en");
+      await unmount();
+    }
+  });
+
   it("keeps the newest wrapped caption at the bottom", async () => {
     const { host, unmount } = await mount();
     try {

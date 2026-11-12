@@ -16,18 +16,20 @@ const FAILED = /\b(?:nothing (?:was|has been|got) sent|(?:wasn'?t|was not|isn'?t
 
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
 
-/** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. */
-export function claimOf(said: string, recap = false): { claim: Claim; sentence: string } | null {
+/** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. With an unsent order, any plain answer is a promise. */
+export function claimOf(said: string, recap = false, order = false): { claim: Claim; sentence: string } | null {
   if (FAILED.test(said)) return { claim: "failed", sentence: said };
   const clarifies = CLARIFY.test(said);
+  let plain = "";
   for (const sentence of sentences(said)) {
     if (HYPOTHETICAL.test(sentence)) continue;
     const ahead = recap ? sentence.replace(DONE, " ") : sentence;
     if (ACTION_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
     if (CANT.test(sentence)) return { claim: "cant", sentence };
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
+    plain ||= sentence;
   }
-  return null;
+  return order && plain && !clarifies ? { claim: "promise", sentence: plain } : null;
 }
 
 const CHANGES = "open|run|restart|reboot|fix|send|add|delete|remove|schedule|install|deploy|push|merge|create|write|edit|change|move|close|kill|stop|start|update|rename|commit";

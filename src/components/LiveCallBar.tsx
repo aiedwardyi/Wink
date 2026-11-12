@@ -16,7 +16,7 @@ import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -28,6 +28,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     send: "Ask {bot} to do this?",
     yes: "Yes",
     no: "No",
+    notSent: "Not sent",
+    noReply: "No reply",
     mute: "Mute",
     unmute: "Unmute",
     end: "End",
@@ -50,6 +52,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     send: "{bot}에게 이렇게 요청할까요?",
     yes: "예",
     no: "아니요",
+    notSent: "보내지 않음",
+    noReply: "답 없음",
     mute: "음소거",
     unmute: "음소거 해제",
     end: "종료",
@@ -193,7 +197,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.busy, bot.threadId, call, messages]);
 
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : privacy ? words.privacy : "";
+  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? `${words[snap.notice.kind]}: ${snap.notice.text}` : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
@@ -223,7 +227,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
         </div>
       </Fold>
       {note && (
-        <p role={snap.status === "failed" ? "alert" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
+        <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
           {note}
           {micBlocked && window.ogb?.permOpenSettings && (
             <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>
