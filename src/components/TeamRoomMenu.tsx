@@ -7,6 +7,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
+import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
@@ -99,7 +100,7 @@ export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClo
     const result = await inviteToRoom(group.hosted.roomId);
     if (!("code" in result)) return setProblem(inviteErrorKey(result.status));
     try {
-      await navigator.clipboard.writeText(result.code);
+      await navigator.clipboard.writeText(result.short ?? result.code);
       onClose();
     } catch {
       setProblem("errors.request");
@@ -187,7 +188,9 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     }
     busy.current = false;
     setJoining(false);
-    setProblem(joinErrorKey(result.status, result.error));
+    const short = !rejoin && !looksLikeRoomCode(value);
+    setProblem(joinErrorKey(result.status, result.error, short));
+    if (short) setCode("");
     input.current?.select();
   };
 
@@ -197,7 +200,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     else setProblem(pasted && value.trim() ? "teamRoom.badCode" : null);
   };
 
-  useEffect(() => input.current?.focus(), []);
+  useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>("[data-join-boxes] input"))?.focus(), []);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
@@ -207,7 +210,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         <div title={rejoin.name} className="mb-2 truncate text-[13px] text-ink-secondary">{rejoin.name}</div>
         <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.rejoinCodeHint")}</p>
       </>}
-      <input
+      {rejoin ? <input
         ref={input}
         value={code}
         readOnly={joining}
@@ -226,7 +229,20 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         placeholder={t("teamRoom.codePlaceholder")}
         aria-label={t("teamRoom.codePlaceholder")}
         className={`${INPUT} font-mono text-[13px]`}
-      />
+      /> : <div data-join-boxes>
+        <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.shortCodePrompt")}</p>
+        <CodeBoxes
+          value={code}
+          disabled={joining}
+          label={t("teamRoom.shortCodeLabel")}
+          onChange={(value) => {
+            setCode(value);
+            setProblem(null);
+          }}
+          onDone={(value) => void join(value)}
+          onLong={(value) => (looksLikeRoomCode(value) ? void join(value) : setProblem("teamRoom.badCode"))}
+        />
+      </div>}
       <p role={problem ? "alert" : "status"} className={problem ? "mt-2 text-[12.5px] text-danger" : "mt-2 min-h-[1.25rem] text-[12.5px] text-ink-secondary"}>
         {problem ? t(problem) : joining ? t("teamRoom.joining") : ""}
       </p>

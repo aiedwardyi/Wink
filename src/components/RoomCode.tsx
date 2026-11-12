@@ -4,7 +4,10 @@ import { Check, Copy } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 
-export function RoomCode({ code }: { code: string }) {
+import { BOX } from "./CodeBoxes";
+
+/** Shows `short` as six boxes when the relay minted one, else the long code. */
+export function RoomCode({ code, short }: { code: string; short?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<number | null>(null);
@@ -13,7 +16,7 @@ export function RoomCode({ code }: { code: string }) {
   }, []);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(short ?? code);
       setCopied(true);
       if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
       resetTimer.current = window.setTimeout(() => setCopied(false), 1_200);
@@ -35,9 +38,13 @@ export function RoomCode({ code }: { code: string }) {
             {copied ? t("teamRoom.copied") : t("teamRoom.copy")}
           </button>
         </div>
-        <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{code}</div>
+        {short ? (
+          <div data-room-short-code aria-label={short} className="mt-2 flex select-all justify-between gap-2">
+            {[...short].map((ch, i) => <span key={i} aria-hidden className={`${BOX} flex items-center justify-center bg-card`}>{ch}</span>)}
+          </div>
+        ) : <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{code}</div>}
       </div>
-      <p data-room-code-hint className="px-3 text-[12px] text-ink-secondary">{t("teamRoom.codeHint")}</p>
+      <p data-room-code-hint className="px-3 text-[12px] text-ink-secondary">{t(short ? "teamRoom.shortCodeHint" : "teamRoom.codeHint")}</p>
     </div>
   );
 }

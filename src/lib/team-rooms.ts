@@ -96,11 +96,11 @@ const CODE = /^wkr1:[a-z0-9.-]{1,253}:[\w-]{1,64}\.wki_[A-Za-z0-9_-]{43}$/;
 
 export const looksLikeRoomCode = (text: string) => CODE.test(text.trim());
 
-export function joinErrorKey(status: number, error: string): MessageKey {
+export function joinErrorKey(status: number, error: string, short = false): MessageKey {
   if (error === "room-full") return "teamRoom.full";
   if (status === 429) return "teamRoom.busy";
   if (status === 503) return "teamRoom.unreachable";
-  return "teamRoom.badCode";
+  return short ? "teamRoom.badShortCode" : "teamRoom.badCode";
 }
 
 export const hostRoomBase = (roomId: string) => `/api/rooms/${roomId}`;
@@ -124,11 +124,16 @@ type Refused = { status: number; error: string };
 
 const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
 
-export async function inviteToRoom(roomId: string): Promise<{ code: string } | Refused> {
+/** `short` is the 6-character code, missing while this PC's relay can't mint one. */
+export type RoomInviteCode = { code: string; short?: string };
+
+const shortOf = (body: any) => (typeof body?.short === "string" ? { short: body.short } : {});
+
+export async function inviteToRoom(roomId: string): Promise<RoomInviteCode | Refused> {
   try {
     const res = await fetchResponse(`${hostRoomBase(roomId)}/invites`, { method: "POST" });
     const body = await responseBody(res);
-    return res.ok && typeof body?.code === "string" ? { code: body.code } : refused(res.status, body);
+    return res.ok && typeof body?.code === "string" ? { code: body.code, ...shortOf(body) } : refused(res.status, body);
   } catch {
     return { status: 0, error: "" };
   }
@@ -137,11 +142,11 @@ export async function inviteToRoom(roomId: string): Promise<{ code: string } | R
 export const inviteErrorKey = (status: number): MessageKey => (status === 409 ? "teamRoom.phoneOff" : "errors.request");
 
 /** Invite in a group: the first press shares it, later ones hand back the same code. */
-export async function shareGroup(groupId: string): Promise<{ code: string; group: Group } | Refused> {
+export async function shareGroup(groupId: string): Promise<RoomInviteCode & { group: Group } | Refused> {
   try {
     const res = await fetchResponse(`/api/groups/${groupId}/share`, { method: "POST" });
     const body = await responseBody(res);
-    return res.ok && typeof body?.code === "string" && body.group ? { code: body.code, group: body.group } : refused(res.status, body);
+    return res.ok && typeof body?.code === "string" && body.group ? { code: body.code, ...shortOf(body), group: body.group } : refused(res.status, body);
   } catch {
     return { status: 0, error: "" };
   }

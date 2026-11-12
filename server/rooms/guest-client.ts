@@ -7,7 +7,7 @@ import { request } from "node:https";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
-import { labelFromHost } from "../../shared/relay-protocol.ts";
+import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES } from "./files.ts";
 import {
@@ -85,7 +85,7 @@ const stateSchema = z.object({
   people: z.array(personSchema).max(100),
   bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
 });
-const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/) });
+const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
 const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
@@ -212,20 +212,40 @@ export class GuestClient {
     }
   }
 
+  /** The host a short code points at, from the first of `bases` whose relay knows it. */
+  private async shortCodeHost(code: string): Promise<GuestResult<string>> {
+    let answered = false;
+    for (const base of new Set(this.deps.bases())) {
+      if (!base) continue;
+      const reply = await this.call(`relay.${base}`, "GET", `/v1/room-codes/${code}`, null);
+      const label = reply.ok ? (reply.value as { label?: unknown } | null)?.label : undefined;
+      if (typeof label === "string" && LABEL_RE.test(label)) return { ok: true, value: hostFor(label, base) };
+      if (!reply.ok && reply.status === 429) return reply;
+      if (reply.ok || reply.status !== 503) answered = true;
+    }
+    return answered ? failed(404, "no-invite") : unavailable();
+  }
+
   private async joinNow(code: string, expectedRoomId?: string): Promise<GuestResult<JoinedView>> {
     const pasted = code.trim();
-    const relayHost = roomCodeHost(pasted, this.deps.bases());
+    const short = !expectedRoomId && ROOM_CODE_RE.test(pasted.toUpperCase()) ? pasted.toUpperCase() : null;
+    const found = short ? await this.shortCodeHost(short) : null;
+    if (found && !found.ok) return found;
+    const relayHost = found ? found.value : roomCodeHost(pasted, this.deps.bases());
     if (!relayHost) return failed(400, "bad-code");
     const { name, device } = this.deps.joiner();
     // The door refuses join bodies over 1 KB, and a profile name has no cap.
-    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
+    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: short ?? pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
     if (!reply.ok) return reply;
     const joined = joinSchema.safeParse(reply.value);
     if (!joined.success) return unavailable();
     const { roomId, person, key } = joined.data;
     if (expectedRoomId && roomId !== expectedRoomId) return failed(400, "bad-code");
+    // A short code expires, so a rejoin needs the long one the door hands back.
+    const saved = short ? joined.data.code : pasted;
+    if (!saved || CODE.exec(saved)?.[1] !== relayHost) return unavailable();
     this.unfollow(roomId);
-    saveJoined(roomId, relayHost, person, key, pasted);
+    saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
     this.follow(roomId);

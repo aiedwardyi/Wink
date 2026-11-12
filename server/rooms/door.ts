@@ -24,7 +24,7 @@ import {
   type DoorState,
 } from "./door-streams.ts";
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
-import { guestByKey, inviteRoomId, joinRoom, removeGuest, type JoinResult } from "./invites.ts";
+import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
 import { hostedSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
 
@@ -39,6 +39,7 @@ const MAX_STREAMS = 2;
 const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|asks\/[\w-]{1,64}\/cancel)$/;
 const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
+const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
 const JOIN_STATUS = {
   busy: 429,
   "no-invite": 404,
@@ -207,20 +208,22 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   const body = await readJson(req, JOIN_BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
   const fields = record(body.value);
-  const code = fields?.code;
-  const parts = typeof code === "string" ? CODE.exec(code) : null;
-  if (!parts || parts[1] !== relayHost) return send(res, 400, { error: "bad-code" });
+  const text = fields?.code;
+  const short = typeof text === "string" && SHORT.test(text) ? (shortCodeTarget(text) ?? { id: "", secret: "" }) : null;
+  const parts = short || typeof text !== "string" ? null : CODE.exec(text);
+  if (!short && (!parts || parts[1] !== relayHost)) return send(res, 400, { error: "bad-code" });
+  const [codeId, secret] = short ? [short.id, short.secret] : [parts![2]!, parts![3]!];
   // An unknown invite still goes through joinRoom, so it spends the join limit.
-  const roomId = inviteRoomId(parts[2]!);
+  const roomId = inviteRoomId(codeId);
   if (fields?.roomId !== undefined && fields.roomId !== roomId) return send(res, 400, { error: "bad-code" });
   const group = roomId ? doorGroup(roomId) : null;
   if (roomId && !group) return send(res, 404, { error: "no-invite" });
-  const result = joinRoom(parts[2]!, parts[3]!, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
+  const result = joinRoom(codeId, secret, group ? takenNames(group) : [deps.hostName()], { name: fields?.name, device: fields?.device });
   if (!result.ok) return send(res, JOIN_STATUS[result.error], { error: result.error });
   recordRoomJoin(result.roomId, result.person);
   pushRoomState(result.roomId);
   tellHost(result.roomId);
-  send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key });
+  send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key, ...(short ? { code: `wkr1:${relayHost}:${codeId}.${secret}` } : {}) });
 }
 
 const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
