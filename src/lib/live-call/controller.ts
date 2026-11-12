@@ -14,7 +14,7 @@ export const MIC_MISSING = "Microphone missing";
 export const MIC_BUSY = "Microphone busy";
 const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
-export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "ended" | "failed";
+export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "paused" | "ended" | "failed";
 export type CallState = {
   status: CallStatus;
   startedAt?: number;
@@ -29,6 +29,7 @@ export type CallState = {
 
 export type CallAudioPort = {
   capture(onFrame: (pcm: ArrayBuffer) => void): Promise<void>;
+  heal(): Promise<boolean>;
   play(pcm: Int16Array): void;
   flush(): void;
   close(): void;
@@ -189,6 +190,8 @@ export class LiveCall {
     hidden: { spans: 0, ms: 0 }, closeCodes: [] as number[], ttfa: [] as number[], usage: 0,
   };
   private hiddenAt = 0;
+  private stalled = false;
+  private heals = 0;
   private askSends = new Set<string>();
   private askMs: number[] = [];
   private ack: number[] = [];
@@ -230,7 +233,7 @@ export class LiveCall {
   private refresh() {
     const { status } = this.snapshot;
     if (status === "ended" || status === "failed" || status === "needsKey" || status === "starting") return;
-    const next: CallStatus = this.deps.audio.playing ? "speaking" : this.awaiting || this.busy ? "working" : "listening";
+    const next: CallStatus = this.stalled ? "paused" : this.deps.audio.playing ? "speaking" : this.awaiting || this.busy ? "working" : "listening";
     if (next !== status) this.set({ status: next });
   }
 
@@ -407,7 +410,11 @@ export class LiveCall {
     this.turnHadAudio = false;
     this.generating = false;
     this.guarded = false;
-    this.cutPlaying();
+    // A relayed line the dropped socket never finished is said again on the new one.
+    if (this.playing && !this.playing.ended) {
+      this.held.unshift(this.playing.item);
+      this.playing = undefined;
+    } else this.cutPlaying();
     old?.close();
     if (this.ended) return;
     if (!this.handle || this.reconnecting >= MAX_RECONNECTS) return this.fail("The call dropped");
@@ -862,7 +869,7 @@ export class LiveCall {
 
   // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
-    if (!this.connected || this.playing || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
+    if (!this.connected || this.stalled || this.playing || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();
@@ -911,7 +918,24 @@ export class LiveCall {
     } else if (this.hiddenAt) {
       this.stats.hidden.ms += this.now() - this.hiddenAt;
       this.hiddenAt = 0;
+      void this.heal();
     }
+  }
+
+  /** The tap a phone can need before audio plays again. */
+  resume() {
+    void this.heal();
+  }
+
+  // Android can stop the page's audio and mic while it is away, and nothing else notices on return.
+  private async heal() {
+    if (this.ended || this.snapshot.startedAt === undefined) return;
+    const run = ++this.heals;
+    const ok = await this.deps.audio.heal();
+    if (this.ended || run !== this.heals) return;
+    this.stalled = !ok;
+    this.release();
+    this.refresh();
   }
 
   private fail(error: string) {

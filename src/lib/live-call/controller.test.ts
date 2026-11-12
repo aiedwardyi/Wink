@@ -26,6 +26,7 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     flushed: 0,
     playing: false,
     async capture() {},
+    async heal() { return true; },
     play() {},
     flush() { this.flushed += 1; },
     close() {},
@@ -1945,5 +1946,101 @@ describe("AUDIT5-FIX", () => {
     engine().events.answering();
     await flush();
     expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+  });
+});
+
+describe("LiveCall back from the background", () => {
+  // Android stops a hidden page's audio mid-speech: its queued voice never drains until the context runs again.
+  function stalled(heals: boolean[]) {
+    const audio = { ...fakeAudio(), playing: false };
+    audio.heal = vi.fn(async () => {
+      const ok = heals.shift() ?? true;
+      if (ok && audio.playing) {
+        audio.playing = false;
+        audio.onIdle();
+      }
+      return ok;
+    });
+    return audio;
+  }
+
+  async function away(audio: ReturnType<typeof stalled>) {
+    const s = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Green."] } } }, audio);
+    s.engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Check the build." } }]);
+    await s.call.answer(true);
+    s.call.observe({ busy: true, messages: [orderRow("o", "Check the build.")] });
+    expect(s.call.state().status).toBe("working");
+    audio.onStart();
+    audio.playing = true;
+    s.call.hidden(true);
+    s.engine().events.turnDone();
+    s.call.observe({ busy: false, messages: [orderRow("o", "Check the build."), botRow("r", "Green.")] });
+    await flush();
+    expect(s.engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    return s;
+  }
+
+  it("heals the audio on return and relays the reply that finished while away", async () => {
+    const audio = stalled([true]);
+    const { call, engine } = await away(audio);
+    call.hidden(false);
+    await flush();
+    expect(audio.heal).toHaveBeenCalledOnce();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("waits for a tap when the phone blocks audio, then relays the reply", async () => {
+    const audio = stalled([false, true]);
+    const { call, engine } = await away(audio);
+    call.hidden(false);
+    await flush();
+    expect(call.state().status).toBe("paused");
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    call.resume();
+    await flush();
+    expect(call.state().status).toBe("listening");
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
+  });
+
+  it("keeps a tap's resume when an older check gives up after it", async () => {
+    const audio = stalled([false]);
+    const { call } = await away(audio);
+    call.hidden(false);
+    await flush();
+    let giveUp!: (ok: boolean) => void;
+    vi.mocked(audio.heal).mockImplementationOnce(() => new Promise<boolean>((resolve) => { giveUp = resolve; }));
+    call.hidden(true);
+    call.hidden(false);
+    call.resume();
+    await flush();
+    expect(call.state().status).toBe("listening");
+    giveUp(false);
+    await flush();
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("says a relayed reply again when the socket closed before it finished", async () => {
+    const audio = { ...fakeAudio(), playing: false };
+    const { call, engine, engines } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Green."] } } }, audio);
+    engine().events.resumable("h1");
+    call.observe({ busy: false, messages: [userRow("u", "Is the build green?"), botRow("r", "Green.")] });
+    await flush();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
+    call.hidden(true);
+    engine().events.closed(1006, "");
+    await flush();
+    expect(engines).toHaveLength(2);
+    engine().events.ready();
+    expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
+  });
+
+  it("checks nothing when the app comes back before the call started", async () => {
+    const audio = stalled([false]);
+    const { call } = setup({}, audio);
+    call.hidden(true);
+    call.hidden(false);
+    await flush();
+    expect(audio.heal).not.toHaveBeenCalled();
   });
 });

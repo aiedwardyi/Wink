@@ -3,14 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CallAudio } from "./audio";
 
 function setup() {
-  const micTrack = { stop: vi.fn() };
+  const micTrack = { stop: vi.fn(), readyState: "live", muted: false };
   const voiceTrack = { stop: vi.fn() };
-  const stream = { getTracks: () => [micTrack] };
+  const stream = { getTracks: () => [micTrack], getAudioTracks: () => [micTrack] };
   const destination = { stream: { getTracks: () => [voiceTrack] }, disconnect: vi.fn() };
-  const output = { srcObject: null as unknown, play: vi.fn(async () => {}), pause: vi.fn() };
+  const output = { srcObject: null as unknown, paused: true, play: vi.fn(async () => { output.paused = false; }), pause: vi.fn(() => { output.paused = true; }) };
   vi.stubGlobal("Audio", class { constructor() { return output; } });
   vi.stubGlobal("AudioWorkletNode", class { port = { onmessage: null }; disconnect() {} });
-  const getUserMedia = vi.fn(async () => stream);
+  const getUserMedia = vi.fn(async (): Promise<unknown> => stream);
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
   const analyser = () => ({ connect: vi.fn(), getFloatTimeDomainData: (data: Float32Array) => data.fill(0.1) });
   const voice = analyser();
@@ -18,11 +18,12 @@ function setup() {
   const tones: Array<{ connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];
   const sources: Array<{ buffer: unknown; connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; onended: (() => void) | null }> = [];
   const ctx = {
+    state: "suspended",
     currentTime: 1,
     destination: {},
     createAnalyser: vi.fn().mockReturnValueOnce(voice).mockReturnValueOnce(mic),
     createMediaStreamDestination: () => destination,
-    createMediaStreamSource: () => ({ connect: vi.fn() }),
+    createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
     createBuffer: (_channels: number, length: number, rate: number) => ({ duration: length / rate, getChannelData: () => new Float32Array(length) }),
     createBufferSource: () => {
       const source = { buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null };
@@ -37,7 +38,7 @@ function setup() {
     createGain: () => ({ gain: { value: 0, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn(), setTargetAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() }),
     createBiquadFilter: () => ({ type: "", frequency: { value: 0 }, connect: vi.fn() }),
     audioWorklet: { addModule: vi.fn(async () => {}) },
-    resume: vi.fn(async () => {}),
+    resume: vi.fn(async (): Promise<void> => { ctx.state = "running"; }),
     close: vi.fn(async () => {}),
   };
   return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones };
@@ -133,5 +134,71 @@ describe("CallAudio", () => {
     output.play.mockRejectedValueOnce(new Error("Playback blocked"));
     await expect(audio.capture(() => {})).rejects.toThrow("Playback blocked");
     audio.close();
+  });
+
+  it("resumes the context and the output on return", async () => {
+    const { audio, ctx, output } = setup();
+    await audio.capture(() => {});
+    ctx.state = "suspended";
+    output.pause();
+    await expect(audio.heal()).resolves.toBe(true);
+    expect(ctx.state).toBe("running");
+    expect(output.paused).toBe(false);
+    audio.close();
+  });
+
+  it("reopens an ended or muted mic on return, and hang-up stops the new one", async () => {
+    const { audio, getUserMedia, micTrack } = setup();
+    await audio.capture(() => {});
+    const track = () => ({ stop: vi.fn(), readyState: "live", muted: false });
+    const ended = track();
+    const muted = track();
+    getUserMedia.mockResolvedValueOnce({ getTracks: () => [ended], getAudioTracks: () => [ended] });
+    getUserMedia.mockResolvedValueOnce({ getTracks: () => [muted], getAudioTracks: () => [muted] });
+    await expect(audio.heal()).resolves.toBe(true);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    micTrack.readyState = "ended";
+    await expect(audio.heal()).resolves.toBe(true);
+    expect(micTrack.stop).toHaveBeenCalled();
+    ended.muted = true;
+    await expect(audio.heal()).resolves.toBe(true);
+    expect(ended.stop).toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
+    audio.close();
+    expect(muted.stop).toHaveBeenCalledOnce();
+  });
+
+  it("says so when the phone wants a tap before audio plays again", async () => {
+    vi.useFakeTimers();
+    try {
+      const { audio, ctx, output } = setup();
+      await audio.capture(() => {});
+      ctx.state = "suspended";
+      ctx.resume.mockReturnValueOnce(new Promise(() => {}));
+      const waiting = audio.heal();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(waiting).resolves.toBe(false);
+      output.pause();
+      output.play.mockRejectedValueOnce(new DOMException("needs a tap", "NotAllowedError"));
+      await expect(audio.heal()).resolves.toBe(false);
+      await expect(audio.heal()).resolves.toBe(true);
+      audio.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a mic that reopens after hang-up", async () => {
+    const { audio, getUserMedia, micTrack } = setup();
+    await audio.capture(() => {});
+    const late = { stop: vi.fn(), readyState: "live", muted: false };
+    let grant!: (stream: unknown) => void;
+    getUserMedia.mockReturnValueOnce(new Promise((resolve) => { grant = resolve; }));
+    micTrack.readyState = "ended";
+    const healing = audio.heal();
+    audio.close();
+    grant({ getTracks: () => [late], getAudioTracks: () => [late] });
+    await expect(healing).resolves.toBe(false);
+    expect(late.stop).toHaveBeenCalledOnce();
   });
 });
