@@ -205,7 +205,7 @@ describe("smooth glow", () => {
     const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("self", { postMessage: sent, close() {} });
     await import("./MemoryMapGlow.worker");
-    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: null });
+    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: {} });
     expect(sent).toHaveBeenCalledWith({ layers: null }, []);
     expect(warned).toHaveBeenCalledTimes(1);
     warned.mockRestore(); vi.stubGlobal("self", page);

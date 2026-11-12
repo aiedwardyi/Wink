@@ -13,6 +13,8 @@ import { Fold } from "./Fold";
 import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
 import "./MemoryMap.css";
 
+export { warmGlow } from "./MemoryMapGlow";
+
 export interface SleepReadout {
   sleptAt: Date;
   kept: number;
@@ -82,12 +84,14 @@ function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTi
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, saveState, fileAction, editing = false, onEditing, onStack }: {
+export function MemoryMap({ bot, text, topics, target, active, loading = false, sleep = null, failed = false, onRetry, editor, saveState, fileAction, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
   target?: AppState["settingsMemoryTarget"];
   active: boolean;
+  /** the first read is out: the map shows its frame and fills in when it lands */
+  loading?: boolean;
   sleep?: SleepReadout | null;
   failed?: boolean;
   onRetry?: () => void;
@@ -119,7 +123,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const [still, setStill] = useState(false);
   const [smooth, setSmooth] = useState(paintsGlow);
   // labels and counts, then icons and glow, then Live; an open editor shows at once
-  const stage = useStage(2, editing);
+  const stage = useStage(loading ? 0 : 2, editing);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const before = useRef<string | null>(null);
   const quiet = useRef(false);
@@ -139,8 +143,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     return () => clearTimeout(probe);
   }, [smooth]);
 
-  // the painter reads the CSS glow, which the first stage adds
-  const painted = smooth && stage > 0;
+  // the painter reads the CSS glow, which the first stage adds, and waits for the last, so it paints the final sizes once
+  const painted = smooth && stage > 1;
   useLayoutEffect(() => {
     if (!painted || !root.current) return;
     return smoothGlow(root.current, () => setSmooth(false));
@@ -309,8 +313,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     </div>
   );
 
-  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed ? null : t("bot.memoryNone"));
-  const count = (value: number) => (failed ? null : value);
+  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed || loading ? null : t("bot.memoryNone"));
+  const count = (value: number) => (failed || loading ? null : value);
   const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
   const topicList = <TopicRows botId={bot.id} topics={topics} />;
   const muscleList = map.muscle.length ? <FactList facts={map.muscle} day={day} fresh={fresh} /> : <div className="mm-empty">{t("bot.memoryNone")}</div>;
@@ -319,7 +323,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} data-smooth={smooth || undefined} onClick={outside}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} data-smooth={smooth || undefined} data-filling={loading || undefined} onClick={outside}>
       {stage > 0 && (
         <>
           <svg width="0" height="0" className="absolute" aria-hidden="true">

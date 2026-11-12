@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { conversationPreview } from "@/lib/conversation-preview";
-import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { EASE_STANDARD, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import {
   moveSection,
   placeSection,
@@ -611,7 +611,6 @@ export function Sidebar({
   onClose,
   onOverlayChange,
   onTerminalAttention,
-  rigidView = false,
   folded = false,
   onUnfold,
 }: {
@@ -619,8 +618,6 @@ export function Sidebar({
   onClose: () => void;
   onOverlayChange?: (key: string | null) => void;
   onTerminalAttention?: (attention: TerminalAttention) => void;
-  /** The view beside the sidebar must not resize mid-animation (terminal PTYs, native views). */
-  rigidView?: boolean;
   /** A right slot panel is open: show faces only, leaving the saved layout as it is. */
   folded?: boolean;
   onUnfold?: () => void;
@@ -680,19 +677,21 @@ export function Sidebar({
   const collapsedRoutine = anyRoutineRinging(state.routineRuns, collapsedChats, collapsedExceptId);
   const collapsedAsking = sidebarCollapsed && (collapsedQuestion || collapsedRoutine);
   const collapsedBadgeRef = useRef<HTMLSpanElement>(null);
-  const lastCollapsedUnread = useRef(collapsedUnread);
+  // null while expanded, so a fold shows its count without popping it
+  const lastCollapsedUnread = useRef<number | null>(sidebarCollapsed ? collapsedUnread : null);
   useEffect(() => {
+    const last = lastCollapsedUnread.current;
     if (
-      collapsedUnread > lastCollapsedUnread.current &&
+      last !== null && collapsedUnread > last &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
       collapsedBadgeRef.current?.animate(
         [{ transform: "scale(1)" }, { transform: "scale(1.3)" }, { transform: "scale(1)" }],
-        { duration: 260, easing: "ease-out" },
+        { duration: MOTION_FAST_MS, easing: EASE_STANDARD },
       );
     }
-    lastCollapsedUnread.current = collapsedUnread;
-  }, [collapsedUnread]);
+    lastCollapsedUnread.current = sidebarCollapsed ? collapsedUnread : null;
+  }, [collapsedUnread, sidebarCollapsed]);
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
@@ -842,8 +841,8 @@ export function Sidebar({
     };
   }, [resizing]);
 
-  // Never transition the aside's width: its content would reflow every frame. Width
-  // snaps; a clip or ghost draws the edge and the view's margin follows it.
+  // Never transition the aside's width or the view's margin: their content would
+  // reflow every frame. Both snap; the ghost draws the edge and the view follows by transform.
   useLayoutEffect(() => {
     const from = shownSidebarWidth.current;
     shownSidebarWidth.current = sidebarDisplayWidth;
@@ -879,12 +878,9 @@ export function Sidebar({
     }
     const motions: Animation[] = [];
     // On the right the sidebar's growing/shrinking edge is its left, not its right.
-    const marginProp = sidebarOnRight ? "marginRight" : "marginLeft";
     const railShift = sidebarOnRight ? -shift : shift;
-    if (shift < 0) {
-      const clip = sidebarOnRight ? `inset(0 0 0 ${-shift}px)` : `inset(0 ${-shift}px 0 0)`;
-      motions.push(aside.animate([{ clipPath: clip }, { clipPath: "inset(0)" }], SIDEBAR_MOTION));
-    } else {
+    // An expanding list is uncovered by the view sliding off it, so only a shrink needs the ghost edge.
+    if (shift > 0) {
       ghost.style.width = `${shift}px`;
       const shrink = ghost.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { ...SIDEBAR_MOTION, fill: "forwards" });
       shrink.onfinish = () => {
@@ -893,27 +889,26 @@ export function Sidebar({
       };
       motions.push(shrink);
     }
-    const rail: HTMLElement[] = [];
-    for (let el = aside.nextElementSibling; el; el = el.nextElementSibling) {
-      if (el instanceof HTMLElement && !["absolute", "fixed"].includes(getComputedStyle(el).position)) rail.push(el);
-    }
-    if (rigidView) {
-      for (const el of rail) {
+    // The view and the open docked panels; a closing panel keeps its own exit. Picked
+    // without reading style, which React's commit has just made dirty.
+    const view = aside.nextElementSibling;
+    for (let el = view; el; el = el.nextElementSibling) {
+      if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) {
         motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
       }
-    } else {
-      // The margin belongs on whichever rail element abuts the aside, which on
-      // the right is the last one - a docked panel, not the view.
-      const abutting = sidebarOnRight ? rail.at(-1) : rail[0];
-      if (abutting) {
-        motions.push(abutting.animate([{ [marginProp]: `${shift}px` }, { [marginProp]: "0px" }], SIDEBAR_MOTION));
-      }
+    }
+    // the list's raised badges would show through the view sliding off it
+    const raised = shift < 0 && view instanceof HTMLElement ? view : null;
+    if (raised) {
+      raised.style.zIndex = "11";
+      motions[0]!.onfinish = () => { raised.style.zIndex = ""; };
     }
     return () => {
-      const progress = motions[0]!.effect?.getComputedTiming().progress;
+      const progress = motions[0]?.effect?.getComputedTiming().progress;
       if (progress != null) shownSidebarWidth.current = from + (sidebarDisplayWidth - from) * progress;
       for (const motion of motions) motion.cancel();
       ghost.style.width = "";
+      if (raised) raised.style.zIndex = "";
     };
   }, [sidebarDisplayWidth]);
 
