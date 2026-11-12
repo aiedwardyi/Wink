@@ -64,14 +64,14 @@ export function watchCodexPromo(session, at, postNote) {
   const home = env.CODEX_HOME || join(env.HOME || env.USERPROFILE || homedir(), ".codex");
   const generation = session.workerAccount?.generation ?? session.workerSession?.run.accountGeneration ?? 0;
   const key = JSON.stringify([home, generation, session.stallArmedAt]);
-  if (session.codexPromoNote?.key !== key) session.codexPromoNote = { key, at, tries: 0, retryAt: 0, marked: false };
+  if (session.codexPromoNote?.key !== key) session.codexPromoNote = { key, at, retryAt: 0, marked: false };
   const note = session.codexPromoNote;
   if (at - note.at < 1000) return true;
   if (!note.marked) {
     try { markCodexPromo(home, generation); note.marked = true; }
     catch { console.error("Codex account restriction could not be saved"); }
   }
-  if (session.mail && note.tries < 3 && at >= note.retryAt) {
+  if (session.mail && at >= note.retryAt) {
     postNote(session, note, CODEX_PROMO_MESSAGE, (delivered) => { note.retryAt = delivered ? Infinity : at + 15_000; });
   }
   return true;

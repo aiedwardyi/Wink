@@ -1,11 +1,12 @@
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
-import { clearCodexPromo, markCodexPromo } from "../electron/codex-promo.mjs";
+import { CODEX_PROMO_MESSAGE, clearCodexPromo, markCodexPromo } from "../electron/codex-promo.mjs";
 import { DATA_DIR } from "./config.ts";
 import { codexCredit } from "./codex-credit.ts";
 import { createCodexPromoStatus, refreshCodexPromo } from "./codex-promo.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
+import { en } from "../src/lib/i18n-catalog.ts";
 
 it("refreshes an open board for the bot and worker promo notice", () => {
   const refresh = vi.fn();
@@ -35,4 +36,8 @@ it("reads persisted promo marks for the exact base, added and credit account", (
     clearCodexPromo(account.home);
     expect(status()(account.id, account.generation)).toBe(false);
   }
+});
+
+it("keeps the localized promo note keyed to the sent message", () => {
+  expect(en["errors.codexPromo"]).toBe(CODEX_PROMO_MESSAGE);
 });
