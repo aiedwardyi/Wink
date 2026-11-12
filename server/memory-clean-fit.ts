@@ -5,12 +5,15 @@ import { contentWords, FILE_FLOOR, filedPointer, GROWTH_MAX, openLine, protected
 export const PLANNED = "Filed by plan";
 // over the light limits a night files at least this many lines, so it always makes progress
 const STEP_LINES = 3;
-// over the load cap a night files up to the caps, and this many lines keeps the route quiz small
+// over the load cap a night files up to the caps, at most this many lines
 const MAX_LINES = 24;
 const DROPPABLE = ["merge", "replace", "retire"];
 const CURABLE = ["budget", "cap-growth"];
 
 type Slot = { n: number; topic: string; row: number; ids: number[]; bytes: number; text: string };
+
+const bare = (line: string) => line.replace(/\r$/, "").replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\s*\(noted \d{4}-\d\d-\d\d\)/g, "").trim();
+export const subjectOf = (line: string) => bare(line).split(/:\s| - /)[0]!.trim();
 
 /** Code files enough lines to fit every cap with no model op, so a night never waits on the model doing sums; model ops ride on top only while the fit holds. */
 export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<CleanFile, unknown>, runId: string, at: number) {
@@ -27,20 +30,26 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
   const before = Buffer.byteLength(source.text);
   const over = before > FILE_FLOOR || lines.length > 140;
   const guarded = protectedLines(source.text, input.typed);
-  const used = new Set(model.flatMap(changeIds));
   const asked = (input.user ?? []).filter((line) => line.kind === "remember");
   const heard = new Set((input.user ?? []).flatMap((line) => [...contentWords(line.text)]));
   const month = `notes-${new Date(at).toISOString().slice(0, 7)}`;
   const plain = (line: string) => line.replace(/\r$/, "");
   const bytes = (line: string) => Buffer.byteLength(plain(line)) + 1;
   const bullet = (line = "") => /^\s*(?:[-*+]|\d+[.)])\s/.test(line);
-  // two lines on one subject ask the same route question, and a stale pair wants a replace, not a topic
-  const subject = (line: string) => plain(line).replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\s*\(noted \d{4}-\d\d-\d\d\)/g, "").split(/:\s| - /)[0]!.trim().toLowerCase();
-  const subjects = new Map<string, number>();
-  for (const line of lines) if (line.trim()) subjects.set(subject(line), (subjects.get(subject(line)) ?? 0) + 1);
+  // a stale pair wants a replace, not a topic: one subject, a line with no separator under another line's subject, or two such lines on the same first three content words
+  const keyed = lines.flatMap((line, i) => {
+    if (!line.trim() || /^#/.test(line)) return [];
+    const text = bare(line).toLowerCase();
+    const words = text.split(/\s+/).map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")).filter((word) => contentWords(word).size || /\p{N}/u.test(word));
+    const split = /:\s| - /.test(text);
+    return [{ id: i + 1, text, split, key: subjectOf(line).toLowerCase(), three: split ? "" : words.slice(0, 3).join(" ") }];
+  });
+  const under = (text: string, key: string) => !!key && (text === key || text.startsWith(`${key} `));
+  const paired = new Set(keyed.flatMap((a) => keyed.some((b) => b.id !== a.id && (a.key === b.key || !a.split && under(a.text, b.key) || !b.split && under(b.text, a.key)
+    || !!a.three && a.three === b.three)) ? [a.id] : []));
   // lines the user has not talked about this week go first, then the oldest, then the largest
   let pool = lines.flatMap((line, i) => {
-    if (!over || !line.trim() || /^#/.test(line) || !bullet(line) && bullet(lines[i + 1]) || subjects.get(subject(line))! > 1 || guarded.has(i + 1) || openLine(line) || used.has(i + 1)
+    if (!over || !line.trim() || /^#/.test(line) || !bullet(line) && bullet(lines[i + 1]) || paired.has(i + 1) || guarded.has(i + 1) || bytes(line) > GROWTH_MAX || openLine(line)
       || asked.some((item) => rememberCovered(item.text, line))) return [];
     const words = [...contentWords(line)];
     return [{ id: i + 1, hot: words.filter((word) => heard.has(word)).length / Math.max(1, words.length), noted: /\(noted (\d{4}-\d\d-\d\d)\)/.exec(line)?.[1] ?? "", bytes: bytes(line) }];
@@ -58,7 +67,16 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
   const base = stage([], true)[0]!;
   const own = base.budgets.find((item) => item.file === source.file);
   const slots: Slot[] = [];
-  let grow = () => false;
+  const hits = (id: number, text: string) => {
+    const words = contentWords(text);
+    return [...contentWords(lines[id - 1]!)].filter((word) => words.has(word)).length;
+  };
+  // a line that shares as many words with another row as with its own could route to either file
+  const mixed = (ids: number[], own: string, other: string) => ids.some((id) => hits(id, other) >= hits(id, own));
+  const pointers = lines.flatMap((line, i) => /^- memory\/(?!memory-history)[\w.-]+\.md: /.test(line) ? [i + 1] : []);
+  // rows of the model's file ops kept on top of the floor
+  const filings: Array<{ ids: number[]; text: string; topic: string }> = [];
+  let grow = (_skip: Set<number>) => false;
   if (pool.length && own && (base.ok || base.errors.every((error) => CURABLE.includes(error.reason)))) {
     const sum = (key: "touchedLines" | "changedChars") => base.budgets.reduce((n, item) => n + item[key], 0);
     const grown = base.budgets.reduce((n, item) => n + item.finalBytes - item.beforeBytes, 0);
@@ -86,16 +104,6 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
       const capped = sum("touchedLines") + count + filled.length > 40 || sum("changedChars") + filed + rows > 8000 || grown + rows > GROWTH_MAX;
       return { count, fits, capped };
     };
-    const hits = (id: number, text: string) => {
-      const words = contentWords(text);
-      return [...contentWords(lines[id - 1]!)].filter((word) => words.has(word)).length;
-    };
-    // a line that shares as many words with another row as with its own could route to either file
-    const mixed = (ids: number[], own: string, other: string) => ids.some((id) => hits(id, other) >= hits(id, own));
-    const pointers = lines.flatMap((line, i) => /^- memory\/(?!memory-history)[\w.-]+\.md: /.test(line) ? [i + 1] : []);
-    // rows the model's file ops write tonight count too, in both directions
-    const lands = (change: Change) => stage([change]).every((item) => item.ok ? !item.dropped.length : item.errors.every((error) => CURABLE.includes(error.reason)));
-    const filings = model.flatMap((change) => change.op === "file" && lands(change) ? [{ ids: change.ids, text: filedPointer(source.text, change.ids, `memory/${change.topic}.md`) }] : []);
     const added: Array<{ slot: Slot; id: number }> = [];
     const add = (line: { id: number; bytes: number }) => {
       for (let i = 0; i < 2; i++) {
@@ -137,22 +145,37 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
       slot.bytes -= bytes(lines[id - 1]!);
       slot.text = slot.ids.length ? rowText(slot, slot.ids) : slot.row ? plain(lines[slot.row - 1]!) : "";
     }
-    grow = () => {
-      while (queue.length) if (add(queue.shift()!)) return true;
+    grow = (skip) => {
+      for (let i = 0; i < queue.length;) {
+        if (skip.has(queue[i]!.id)) i++;
+        else if (add(queue.splice(i, 1)[0]!)) return true;
+      }
       return false;
     };
   }
-  const planned = planOps(slots);
-  // without a passing floor the model ops are the only way to fit, as before the plan
-  if (!passes(stage(planned, true)) || passes(stage([...model, ...planned]))) return { list: listOf([...model, ...planned]), ids: new Set(planned.flatMap(changeIds)), rejected };
-  // each model op must keep the plan passing even with every merge, replace and retire judged away later; one short of room files more lines first
+  // a model file op is proved only when no line has a stale pair and no other row matches a line as well as its own, in both directions
+  const proves = (change: Change) => {
+    if (change.op !== "file") return true;
+    const path = `memory/${change.topic}.md`;
+    const text = filedPointer(source.text, change.ids, path);
+    const others = [...pointers.flatMap((row) => lines[row - 1]!.startsWith(`- ${path}: `) ? [] : [{ ids: [], text: plain(lines[row - 1]!) }]),
+      ...slots.filter((slot) => slot.ids.length && slot.topic !== change.topic), ...filings.filter((filing) => filing.topic !== change.topic)];
+    return !change.ids.some((id) => paired.has(id)) && !others.some((row) => mixed(change.ids, text, row.text) || mixed(row.ids, row.text, text));
+  };
+  // the floor is built first; each model op rides on it only while the plan passes, even with every merge, replace and retire judged away later; one short of room files more lines first
   const kept: Change[] = [];
   for (const change of model) {
     for (let tries = 0; tries < 6; tries++) {
+      const taken = new Set([...kept, ...planOps(slots)].flatMap(changeIds));
+      if (changeIds(change).some((id) => taken.has(id)) || !proves(change)) break;
       const staged = stage([...kept, change, ...planOps(slots)]);
-      if (passes(staged)) { kept.push(change); break; }
+      if (passes(staged)) {
+        kept.push(change);
+        if (change.op === "file") filings.push({ ids: change.ids, text: filedPointer(source.text, change.ids, `memory/${change.topic}.md`), topic: change.topic });
+        break;
+      }
       const reasons = staged.flatMap((item) => item.ok ? [] : item.errors.map((error) => error.reason));
-      if (!reasons.length || !reasons.every((reason) => CURABLE.includes(reason)) || !grow()) break;
+      if (!reasons.length || !reasons.every((reason) => CURABLE.includes(reason)) || !grow(new Set([...taken, ...changeIds(change)]))) break;
     }
   }
   const final = planOps(slots);

@@ -70,5 +70,5 @@ export type CleanInput = {
 export type CleanResult =
   | { ok: true; runId: string; memory: string; side?: { file: CleanFile; text: string }; topics: Array<{ file: CleanFile; before: string | null; text: string }>; owned: string[];
     block: string; header: RunHeader; recall: { asked: number; passed: number; wrong: number }; tokens: number;
-    routeReads: Array<{ id: number; question: string; file: string; hash: string }>; budgets: Array<CleanBudget & { file: CleanFile }> }
+    budgets: Array<CleanBudget & { file: CleanFile }> }
   | { ok: false; stage: "nothing" | "propose" | "validate" | "recall" | "aborted"; detail: string; tokens?: number };

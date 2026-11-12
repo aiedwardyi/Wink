@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { callTokens, cleanFiles, NIGHT_TOKENS } from "./memory-clean-engine.ts";
+import { callTokens, cleanFiles, NIGHT_TOKENS, SEEDS } from "./memory-clean-engine.ts";
 import type { TextCall } from "./memory-clean-types.ts";
 import { sleepReply } from "./testing/sleep-verdicts.ts";
 
@@ -12,7 +12,7 @@ const questions = Array.from({ length: 18 }, (_, i) => ({
 const list = JSON.stringify({ version: 1, file: "MEMORY.md", changes: Array.from({ length: 24 }, (_, i) => ({ op: "retire", id: i + 1, reason: "Completed" })) });
 const used = [18_908, 5_000, 17_184, 9_717, 12_280];
 
-function run(tokens: Array<number | undefined> = used, grade = true, legacy = false, exact = false) {
+function run(tokens: Array<number | undefined> = used, grade = true, legacy = false, exact = false, split = false) {
   let calls = 0;
   const call = vi.fn<TextCall>(async (prompt) => {
     const at = calls++;
@@ -21,7 +21,8 @@ function run(tokens: Array<number | undefined> = used, grade = true, legacy = fa
       : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify([grade, grade]) : list);
     return legacy ? text : { text, tokens: tokens[at] };
   });
-  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall: call }) };
+  const recall: TextCall = split ? (prompt, opts) => call(prompt, opts) : call;
+  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall }) };
 }
 
 describe("memory cleanup usage budget", () => {
@@ -40,14 +41,28 @@ describe("memory cleanup usage budget", () => {
   });
 
   it("admits the final projected call exactly at the cap, but not one token beyond", async () => {
-    const probe = run();
+    const probe = run(used, true, false, false, true);
     expect(await probe.result).toMatchObject({ ok: true });
-    const bound = callTokens(probe.call.mock.calls[4]![0], 0) + 4096;
+    const bound = callTokens(probe.call.mock.calls[4]![0], SEEDS.propose);
     for (const extra of [0, 1]) {
-      const engine = run([1000, 1000, 1000, NIGHT_TOKENS - bound - 3000 + extra, 1000]);
+      const engine = run([1000, 1000, 1000, NIGHT_TOKENS - bound - 3000 + extra, 1000], true, false, false, true);
       expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
       expect(engine.call).toHaveBeenCalledTimes(extra ? 4 : 5);
     }
+  });
+
+  it("stops before a quiz whose questions, answers and grade can't all fit, synthetic counts", async () => {
+    const engine = run([22_000, 60_000], true, false, false, true);
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget", tokens: 82_000 });
+    expect(engine.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("estimates an engine's next call with its largest measured overhead, synthetic counts", async () => {
+    const probe = run();
+    expect(await probe.result).toMatchObject({ ok: true });
+    const engine = run([1000, callTokens(probe.call.mock.calls[1]![0], 0) + 60_000]);
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
+    expect(engine.call).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])("rejects an actual overrun on the final call, exact %s", async (exact) => {

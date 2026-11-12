@@ -302,9 +302,9 @@ describe("memory cleanup service", () => {
   });
 
   it("cleans only the largest pointed, changed side file per run", async () => {
-    const small = `- head\n- completed\n${"s".repeat(49000)}\n`;
-    const large = `- head\n- completed\n${"l".repeat(51000)}\n`;
-    const unpointed = `- head\n- completed\n${"u".repeat(60000)}\n`;
+    const small = `- head\n- completed\n# ${"s".repeat(49000)}\n`;
+    const large = `- head\n- completed\n# ${"l".repeat(51000)}\n`;
+    const unpointed = `- head\n- completed\n# ${"u".repeat(60000)}\n`;
     writeMemoryFile(bot.id, original.split("\n").slice(0, 100).join("\n") + "\n- memory/small.md: details\n- memory/large.md: details\n");
     writeFileSync(join(workspaceDir(bot.id), "memory/small.md"), small);
     writeFileSync(join(workspaceDir(bot.id), "memory/large.md"), large);
@@ -321,14 +321,14 @@ describe("memory cleanup service", () => {
   it("picks a side file named by a bare pointer", async () => {
     writeMemoryFile(bot.id, original.split("\n").slice(0, 100).join("\n") + "\n- queued.md: open tasks\n");
     mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
-    writeFileSync(join(workspaceDir(bot.id), "memory/queued.md"), `- head\n- completed\n${"q".repeat(49000)}\n`);
+    writeFileSync(join(workspaceDir(bot.id), "memory/queued.md"), `- head\n- completed\n# ${"q".repeat(49000)}\n`);
     await run();
     expect(service.summary(bot.id).run?.files).toEqual(["MEMORY.md", "memory/queued.md"]);
   });
 
   it("fences a concurrent side-file write", async () => {
     const memory = original.split("\n").slice(0, 100).join("\n") + "\n- memory/topic.md: details\n";
-    const side = `- head\n- completed\n${"s".repeat(49000)}\n`;
+    const side = `- head\n- completed\n# ${"s".repeat(49000)}\n`;
     const path = join(workspaceDir(bot.id), "memory/topic.md");
     writeMemoryFile(bot.id, memory); writeFileSync(path, side);
     const call = engine.propose.getMockImplementation()!;

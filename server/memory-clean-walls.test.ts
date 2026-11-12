@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { cleanFiles, sleepInput, validateChangeList, type CleanInput } from "./memory-clean.ts";
-import { factParts } from "./memory-clean-coverage.ts";
 import { appendBlock } from "./memory-clean-format.ts";
 import { rememberCovered } from "./memory-clean-validate.ts";
-import { sleepEngines, sleepRoutes } from "./testing/sleep-verdicts.ts";
+import { sleepEngines } from "./testing/sleep-verdicts.ts";
 
 const now = Date.UTC(2026, 10, 12);
 const syllables = ["ka", "lo", "mi", "ne", "ru", "so", "ti", "va", "be", "du"];
@@ -55,6 +54,15 @@ describe("memory cleanup latent walls", () => {
     expect(Buffer.byteLength(result.memory) - Buffer.byteLength(memory(140)) + grown.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(1000);
   });
 
+  it("drops a model file op whose lines match the floor's row as well as their own, synthetic replies", async () => {
+    const text = Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`).join("\n") + "\n";
+    const result = await night(text, { user: [] }, () => [{ op: "file", ids: [1, 2, 3], topic: "trips", reason: "Detail" }]);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.topics.map((topic) => topic.file)).toEqual([expect.stringMatching(/^memory\/notes-/)]);
+    expect(result.memory).toContain("- trip 0 stop at harbor 0\n");
+  });
+
   it("files at least 3 lines over 140 lines with no new user lines", async () => {
     const result = await night(memory(150), { user: [] });
     expect(result).toMatchObject({ ok: true });
@@ -85,15 +93,12 @@ describe("memory cleanup latent walls", () => {
 
 describe("memory cleanup recall-stage walls", () => {
   it("files no heading line and neither line of a same-subject pair", async () => {
-    const text = `Safety\n- Studio at Uiwang: entry number 4170\n- Studio at Uiwang: entry number 4952\n- Dentist: Dr. Kasquilick at 10:40\n- Dentist - Dr. Kasquilick at 10:40\n${memory(260)}`;
+    const pairs = "- Gym renewal: 2027-01-10\n- Gym renewal moved to 2027-01-17\n- Choir practice starts 6pm\n- Choir practice now starts 7:30pm\n";
+    const text = `Safety\n- Studio at Uiwang: entry number 4170\n- Studio at Uiwang: entry number 4952\n- Dentist: Dr. Kasquilick at 10:40\n- Dentist - Dr. Kasquilick at 10:40\n${pairs}${memory(260)}`;
     const result = await night(text, { user: [] });
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    expect(result.topics.flatMap((topic) => topic.text.split("\n")).filter((line) => /Safety|Uiwang|Dentist/.test(line))).toEqual([]);
-  });
-
-  it("keeps a title abbreviation inside its fact part", () => {
-    expect(factParts("- Dentist: Dr. Kasquilick, 2026-12-12 at 10:40 (noted 2026-11-07)")).toEqual(["Dentist: Dr. Kasquilick, 2026-12-12 at 10:40"]);
+    expect(result.topics.flatMap((topic) => topic.text.split("\n")).filter((line) => /Safety|Uiwang|Dentist|Gym|Choir/.test(line))).toEqual([]);
   });
 
   it("asks each filed topic's file question when the quiz leaves it out", async () => {
@@ -101,7 +106,7 @@ describe("memory cleanup recall-stage walls", () => {
     const keys = new Map<string, string | null>(Array.from({ length: 18 }, (_, i) => [`Fact ${i}?`, i < 16 ? `value ${i}` : null] as const));
     let asked: string[] = [];
     const propose = async (prompt: string) => prompt.startsWith("[memory-clean:questions]")
-      ? JSON.stringify({ questions: [...keys].map(([question, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question, answer })), routes: sleepRoutes(prompt) })
+      ? JSON.stringify([...keys].map(([question, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question, answer })))
       : engines.propose(prompt);
     const recall = async (prompt: string) => {
       if (!prompt.startsWith("[memory-clean:answers]")) return engines.recall(prompt);
@@ -111,20 +116,10 @@ describe("memory cleanup recall-stage walls", () => {
     };
     const result = await night(memory(150), { user: [], propose, recall });
     expect(result).toMatchObject({ ok: true });
-    if (result.ok) expect(asked.filter((question) => !keys.has(question))).toHaveLength(result.topics.length);
-  });
-
-  it("lists each filed line's parts for its routes, an instruction clause included", async () => {
-    const engines = sleepEngines();
-    let sources: Array<{ text: string; parts?: string[] }> = [];
-    const propose = async (prompt: string) => {
-      if (prompt.startsWith("[memory-clean:questions]")) sources = JSON.parse(/^Route sources: (.*)$/m.exec(prompt)![1]!);
-      return engines.propose(prompt);
-    };
-    const line = `- ${word(901)} talking points live in the ${word(902)} notes. Help him practice it.`;
-    expect(await night(`${line}\n${memory(150)}`, { user: [], propose, recall: engines.recall })).toMatchObject({ ok: true });
-    expect(sources.find((source) => source.text === line)?.parts).toEqual(factParts(line));
-    expect(factParts(line)).toContain("Help him practice it.");
+    if (!result.ok) return;
+    const written = asked.filter((question) => !keys.has(question));
+    expect(written).toHaveLength(result.topics.length);
+    expect(written.every((question) => /^Which file holds the note about \w+ stores the \w+ ledger/.test(question) && !question.includes("memory/"))).toBe(true);
   });
 
   it("shows the quiz answers a pointer row the night extended", async () => {

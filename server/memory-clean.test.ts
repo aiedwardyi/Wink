@@ -448,7 +448,9 @@ describe("sleep", () => {
     let changes: unknown[];
     let service: ReturnType<Awaited<ReturnType<typeof load>>["createMemoryClean"]>;
     const detail = (i: number) => `- detail ${i} ${"x".repeat(280)}`;
-    const original = ["- Never delete", detail(0), detail(1), "- Mom's birthday is March 3", ...Array.from({ length: 56 }, (_, i) => detail(i + 2))].join("\n") + "\n";
+    // the floor files the larger fillers, so the model's file op on 2 and 3 rides on top
+    const original = ["- Never delete", detail(0), detail(1), "- Mom's birthday is March 3", ...Array.from({ length: 3 }, (_, i) => `- filler ${i} ${"z".repeat(285)}`),
+      ...Array.from({ length: 53 }, (_, i) => detail(i + 2))].join("\n") + "\n";
     const typed = async () => (await load()).typedHashes(bot.id, dataDir);
 
     beforeEach(async () => {

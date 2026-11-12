@@ -183,14 +183,15 @@ describe("recall grading", () => {
   });
 
   it("fails a filed fact the answerer cannot find from MEMORY.md alone", async () => {
-    const trips = Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`).join("\n") + "\n";
+    // the floor files the larger fillers, so the model's file op on 1 to 3 rides on top
+    const trips = [...Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`), ...Array.from({ length: 3 }, (_, i) => `- filler ${i} ${"z".repeat(280)}`)].join("\n") + "\n";
     const filed = [{ op: "file", ids: [1, 2, 3], topic: "trips", pointer: "- memory/trips.md: trip stops 0, 1 and 2", reason: "Detail" }] as unknown as Change[];
     const asked = questions().map((q, i) => i === 0 ? { ...q, file: "memory/trips.md", answer: "memory/trips.md" } : q);
     const run = async (first: string | null) => {
-      const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1)]);
+      const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1, 11), "memory/notes-2026-11.md", ...keys.slice(12)]);
       engine.propose.mockImplementation(async (prompt) => sleepReply(prompt) ?? (prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(asked)
         : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify(pairs(prompt).map(() => true)) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: filed })));
-      return { result: await cleanFiles({ memory: trips, history: null, typed: new Set(), propose: engine.propose, recall: engine.recall }), engine };
+      return { result: await cleanFiles({ memory: trips, history: null, typed: new Set(), now: Date.UTC(2026, 10, 4), propose: engine.propose, recall: engine.recall }), engine };
     };
     const missed = await run("harbor 0");
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
@@ -201,9 +202,9 @@ describe("recall grading", () => {
     const [answers] = missed.engine.prompts("answers");
     expect(answers).toContain("- memory/trips.md: trip 0 stop harbor; trip 1 stop harbor; trip 2 stop harbor");
     expect(answers).not.toContain("trip 1 stop at harbor 1");
-    expect(missed.engine.prompts("grade")).toHaveLength(1);
+    expect(missed.engine.prompts("grade")).toHaveLength(0);
     const found = await run("memory/trips.md");
-    expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }] });
+    expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }, { file: "memory/notes-2026-11.md" }] });
   });
 });
 
