@@ -287,7 +287,7 @@ describe("Team rooms for the host", () => {
     expect($('[data-joined-room-row] [data-sidebar-unread-count]')).toBeNull();
   });
 
-  it.each(["New team room", "Join team room", "People"])("Back closes %s first", async (label) => {
+  it.each(["Join with code", "People"])("Back closes %s first", async (label) => {
     const layers = new Map<string, () => void>();
     const layer = (event: CustomEvent<{ key: string; close?: () => void }>) => {
       if (event.detail.close) layers.set(event.detail.key, event.detail.close);
@@ -363,14 +363,13 @@ describe("Team rooms for the host", () => {
     expect($('aside [data-room-picture] img')).not.toBeNull();
   });
 
-  it("creates a zero-bot room from a name alone and opens it", async () => {
+  it("creates a zero-bot room from New group with a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
     await openPlus();
-    await click(button("New team room"));
-    const name = $<HTMLInputElement>('input[aria-label="Room name"]')!;
-    expect(document.querySelectorAll('[role="dialog"] input')).toHaveLength(1);
-    await type(name, "Design team");
+    expect(button("New team room")).toBeUndefined();
+    await click(button("New group"));
+    await type($<HTMLInputElement>('input[aria-label="Name your group"]'), "Design team");
     await click(button("Create"));
     expect(asked("POST", "/api/groups").map((call) => call.body)).toEqual([{ name: "Design team", hosted: true, peopleOnly: true, memberIds: [] }]);
     await vi.waitFor(() => expect($('[data-team-room="host"]')).not.toBeNull());
@@ -395,12 +394,10 @@ describe("Team rooms for the host", () => {
     let code = CODE;
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     await boot({
       groups: [teamRoom()],
       route: (call) => {
         if (call.path === "/api/rooms/r1/invites") return reply({ code });
-        if (call.path === "/api/bots?messages=0") return reply({ bots: [], groups: [{ ...teamRoom(people) }] });
         if (call.method === "DELETE" && call.path === "/api/rooms/r1/people/p1") {
           people = people.filter((person) => person.id !== "p1");
           code = CODE.replace("inv_mina", "inv_next");
@@ -416,14 +413,14 @@ describe("Team rooms for the host", () => {
     expect(button("Invite")).toBeUndefined();
     await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
     expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(1);
-    expect(dialog.textContent).toContain("Anyone with this code can join.");
+    expect(dialog.textContent).toContain("Anyone with this code can join and read this whole chat.");
     expect(dialog.textContent).toContain("No one yet.");
     await click(button("Copy"));
     expect(writeText).toHaveBeenCalledWith(CODE);
     expect($("[data-team-room-code]")!.textContent).toContain("Copied");
 
     people = [{ id: "p1", name: "Mina" }, { id: "p2", name: "Joon" }];
-    await act(async () => vi.advanceTimersByTime(3_000));
+    await act(async () => store.dispatch!({ type: "groupPatched", group: { id: "g1", room: { name: "Design team", people, joins: [] } } }));
     await vi.waitFor(() => expect(button("Remove Joon")).toBeTruthy());
     expect(document.querySelectorAll("[data-team-room-code]")).toHaveLength(1);
     expect($("[data-team-room-code]")!.textContent).toContain(CODE);
@@ -466,7 +463,7 @@ describe("Team rooms for the host", () => {
     await click(button("참여자"));
     await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
     expect($('[role="dialog"]')!.textContent).toContain("초대 코드");
-    expect($('[role="dialog"]')!.textContent).toContain("이 코드가 있으면 누구나 참여할 수 있어요.");
+    expect($('[role="dialog"]')!.textContent).toContain("이 코드가 있으면 누구나 참여해서 이 채팅 전체를 읽을 수 있어요.");
     expect(button("복사")).toBeTruthy();
   });
 
@@ -547,7 +544,7 @@ describe("Team rooms for a teammate", () => {
       },
     });
     await openPlus();
-    await click(button("Join team room"));
+    await click(button("Join with code"));
     const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
     expect(document.querySelectorAll('[role="dialog"] button')).toHaveLength(0);
     await paste(box, `  ${CODE}\n`);
@@ -570,7 +567,7 @@ describe("Team rooms for a teammate", () => {
       },
     });
     await openPlus();
-    await click(button("Join team room"));
+    await click(button("Join with code"));
     const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
     await paste(box, "hello there");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("That code doesn't work.");
@@ -672,8 +669,8 @@ describe("Team rooms for a teammate", () => {
   it("speaks Korean", async () => {
     await boot({ locale: "ko", route: (call) => (call.path === "/api/joined/rooms" ? reply({ rooms: [] }) : undefined) });
     await openPlus();
-    expect(button("새 팀 채팅방")).toBeTruthy();
-    await click(button("팀 채팅방 참여"));
+    expect(button("새 팀 채팅방")).toBeUndefined();
+    await click(button("코드로 참여"));
     const box = $<HTMLInputElement>('input[aria-label="코드를 붙여 넣으세요"]')!;
     await paste(box, "아무거나");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("사용할 수 없는 코드예요.");

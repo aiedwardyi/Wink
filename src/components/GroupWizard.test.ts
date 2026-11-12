@@ -351,20 +351,75 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("disables create with no members and allows a single bot", async () => {
+  it("allows a single bot", async () => {
     const { host, root } = await renderWizard();
     try {
-      await toMembers(host);
-      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
       await act(async () => {
         pickRow(host, "Ada").click();
       });
-      expect(button(host, "Create").hasAttribute("disabled")).toBe(false);
       await act(async () => {
         button(host, "Create").click();
       });
       expect(findCreate()).toMatchObject({ memberIds: ["b1"] });
     } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("holds Create while a new bot is still saving", async () => {
+    let finish: (value: { bot: { id: string; name: string } }) => void = () => undefined;
+    apiImpl = () => new Promise((resolve) => (finish = resolve));
+    const { host, root } = await renderWizard();
+    try {
+      await toMembers(host);
+      await act(async () => button(host, "+ New bot").click());
+      const [name] = nameInputs(host);
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "review my code");
+        name!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, "Add bot").click());
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
+      await act(async () => button(host, "Create").click());
+      expect(dispatched.some((action) => action.type === "createGroup" || action.type === "groupPatched")).toBe(false);
+      await act(async () => finish({ bot: { id: "nb1", name: "review my code" } }));
+      await flush();
+      await act(async () => button(host, "Create").click());
+      expect(findCreate()).toMatchObject({ memberIds: ["nb1"] });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it.each([
+    ["en", "Create", "Name your group"],
+    ["ko", "만들기", "그룹 이름 정하기"],
+  ] as const)("creates a people group from a name alone and opens it in %s", async (locale, create, label) => {
+    applyLocale(locale);
+    const group = { id: "g9", threadId: "t9", name: "Design team", memberIds: [], hosted: { roomId: "r9" } };
+    const posts: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      posts.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ group }), { status: 201, headers: { "content-type": "application/json" } });
+    }));
+    const { host, root } = await renderWizard();
+    try {
+      expect(button(host, create).hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        const name = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "Design team");
+        name.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, create).click());
+      await flush();
+      expect(posts).toEqual([{ name: "Design team", hosted: true, peopleOnly: true, memberIds: [] }]);
+      expect(dispatched).toEqual([{ type: "groupPatched", group }, { type: "select", id: "g9" }]);
+    } finally {
+      vi.unstubAllGlobals();
       await act(async () => {
         root.unmount();
       });

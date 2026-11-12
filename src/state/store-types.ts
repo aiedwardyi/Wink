@@ -185,7 +185,14 @@ export interface Group {
   hasMore?: boolean;
   /** A team room this PC hosts; `room` is its live roster. */
   hosted?: { roomId: string };
-  room?: { name: string; people: Array<{ id: string; name: string }> } | { missing: true };
+  room?: { name: string; people: Array<{ id: string; name: string }>; joins: RoomJoin[] } | { missing: true };
+}
+
+/** A person's first join to a shared group, once per seat. */
+export interface RoomJoin {
+  personId: string;
+  name: string;
+  at: number;
 }
 
 /** One of a channel's independent conversations. The channel's threadId

@@ -61,7 +61,7 @@ export function roomTranscriptRows(
         : messageVisible(first, options.showToolCalls, options.showActivities) || Boolean(options.workerRows?.has(first.id));
     if (!visible) return { visible, newDay: false, cluster: false };
     const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
-    const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || newDay;
+    const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || prev.author?.id !== first.author?.id || newDay;
     prev = item.kind === "message" ? item.message : item.messages.at(-1);
     return { visible, newDay, cluster };
   });

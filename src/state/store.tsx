@@ -35,6 +35,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
+import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
@@ -1682,6 +1683,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "select": {
+          closeGroupArchive();
           // a chat picked before hydrate drops a pending notification target
           pendingNotificationSwitch.current = null;
           if (stateRef.current.workspaceOpen && stateRef.current.selectedId === action.id) break;
@@ -1880,11 +1882,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "notificationSwitchPending":
           pendingNotificationSwitch.current = action.target;
           break;
-        case "switchGroupTask":
+        case "switchGroupTask": {
+          const asked = groupTaskTicket();
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
-            .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
+            .then((r: any) => r?.group && showGroupTask(r.group, dispatch, asked))
             .catch(showError);
           break;
+        }
         case "interruptGroup":
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
