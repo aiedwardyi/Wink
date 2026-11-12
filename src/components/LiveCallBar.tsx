@@ -24,6 +24,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     listening: "Listening",
     speaking: "Speaking",
     working: "Working",
+    paused: "Tap to resume",
     ended: "Call ended",
     failed: "Call failed",
     send: "Ask {bot} to do this?",
@@ -49,6 +50,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     listening: "듣는 중",
     speaking: "말하는 중",
     working: "작업 중",
+    paused: "탭해서 통화 이어가기",
     ended: "통화 종료",
     failed: "통화 실패",
     send: "{bot}에게 이렇게 요청할까요?",
@@ -244,6 +246,16 @@ export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live;
   );
 }
 
+export function ResumeButton({ live }: { live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  return (
+    <button type="button" data-live-call-resume onClick={() => live.call.resume()} className="px-1 pb-1.5 text-left text-xs font-medium text-accent hover:underline max-md:min-h-10">
+      {words.paused}
+    </button>
+  );
+}
+
 /** The call's notes and order card in its own chat. */
 export function LiveCallBar({ bot }: { bot: Bot }) {
   const live = useLive(bot.id);
@@ -273,6 +285,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
       <Fold open={Boolean(snap.pending)} soft keep>
         <OrderCard bot={bot} live={live} />
       </Fold>
+      {snap.status === "paused" && <ResumeButton live={live} />}
       {note && (
         <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
           {note}
