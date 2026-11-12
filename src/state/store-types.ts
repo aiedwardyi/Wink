@@ -147,6 +147,8 @@ export type GroupDefaultResponder =
 /** A room: several bots + you in one shared thread. */
 export interface Group {
   picture?: string | null;
+  /** A team room's pinned line; `by` is "host" or "person:<id>". */
+  notice?: { entryId: string; by: string; at: number } | null;
   id: string;
   threadId: string;
   name: string;

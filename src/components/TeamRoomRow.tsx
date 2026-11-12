@@ -17,18 +17,32 @@ import { AttachedImageGallery } from "./AttachmentPreview";
 import { BotAvatar } from "./Avatar";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
+import { ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
+import { RoomNotice } from "./RoomNotice";
 
-export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false, quote, onJump, onMenu }: {
+/** No `set` hides Pin; `canUnpin` covers the current notice only. */
+export interface RoomNoticeControl {
+  entryId?: string;
+  text?: string;
+  canUnpin: boolean;
+  set?: (entryId: string | null) => void;
+}
+
+export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false, quote, onJump, onMenu, notice, reactionNames, onReact }: {
   line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string; canTranslate?: boolean; quote?: RoomLine;
   onJump: (id: string) => void; onMenu: (request: MessageMenuRequest) => void;
+  notice?: RoomNoticeControl; reactionNames?: ReadonlyMap<string, string>; onReact?: (message: Message, emoji: string) => void;
 }) {
   const { t, locale } = useI18n();
   const translation = useRoomTranslation(base, line.entryId ?? line.id, locale);
   const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
   const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
-  const target = { threadId: base, message: roomMessage(line), copyText: line.text, user: mine, pinned: false, canPin: false };
+  const entryId = line.entryId ?? line.id;
+  const pinned = notice?.entryId === entryId;
+  const message = roomMessage(line);
+  const target = { threadId: base, message, copyText: line.text, user: mine, pinned, canPin: Boolean(notice?.set) && (!pinned || notice!.canUnpin), notice: true };
   return (
     <div className="contents">
       {named && line.author.kind === "bot" ? (
@@ -110,6 +124,9 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
             </div>
           </div>
         </div>
+        {onReact
+          ? <ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={(emoji) => onReact(message, emoji)} className={cn("static mt-1 max-w-full translate-y-0", !mine && "ml-8")} />
+          : line.reactions?.length ? <div className={cn("pointer-events-none", !mine && "ml-8")}><ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={() => {}} className="static mt-1 max-w-full translate-y-0" /></div> : null}
         <span className="mt-0.5 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
           {formatTime(line.at, localeTag(locale))}
         </span>
@@ -119,7 +136,10 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
 }
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void }) {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply, onReact, reactionNames, notice }: {
+  lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void;
+  onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl;
+}) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
@@ -178,7 +198,14 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   }, [fill]);
   return (
     <>
-      {menu?.kind === "message" && <MessageMenu {...menu} onReply={onReply} onPin={() => {}} onClose={() => setMenu(null)} />}
+      {menu?.kind === "message" && <MessageMenu
+        {...menu}
+        onReply={onReply}
+        onPin={(message) => notice?.set?.(notice.entryId === (message.roomEntryId ?? message.id) ? null : message.roomEntryId ?? message.id)}
+        onReact={onReact && ((emoji) => onReact(menu.target.message, emoji))}
+        onClose={() => setMenu(null)}
+      />}
+      {notice?.entryId && <RoomNotice base={base} line={lines.find((line) => (line.entryId ?? line.id) === notice.entryId)} text={notice.text} onJump={jump} />}
       {menu?.kind === "selection" && <SelectionMenu {...menu} onClose={() => setMenu(null)} />}
       <div
         ref={scrollRef}
@@ -215,7 +242,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
             const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
             const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
             const quote = line.replyToId ? byId.get(line.replyToId) : undefined;
-            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} />;
+            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} notice={notice} reactionNames={reactionNames} onReact={onReact} />;
           })}
         </div>
       </div>
