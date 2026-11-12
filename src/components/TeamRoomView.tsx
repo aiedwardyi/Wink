@@ -13,6 +13,7 @@ import { Presence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
 
 import { ReconnectingCue } from "./ReconnectingCue";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { TeamRoomPicture } from "./RoomPicture";
 import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
@@ -46,6 +47,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
           <div className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
             <TeamRoomFilesMenu roomId={group.hosted.roomId} />
+            <ShowPaneButton threadId={group.threadId} />
             <button
               ref={peopleButton}
               type="button"
