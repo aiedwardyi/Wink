@@ -17,6 +17,7 @@ import {
   ROOM_DOCUMENT_MAX_BYTES as DOCUMENT_MAX_BYTES,
   ROOM_IMAGE_MAX_BYTES as IMAGE_MAX_BYTES,
   roomMessage,
+  roomNoticeText,
   sendToRoom,
   type JoinedView,
 } from "./team-rooms";
@@ -80,6 +81,13 @@ describe("team room shape", () => {
     expect(lines.map((line) => line.color)).toEqual(["blue", undefined, undefined]);
   });
 
+  it("shows the host's full pinned line when the room has it, else the pin's preview", () => {
+    const notice = { entryId: "e1", by: "host", at: 1, text: "preview…" };
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [], noticeText: "the whole line" } }))).toBe("the whole line");
+    expect(roomNoticeText(group({ notice, room: { name: "Room", people: [], joins: [] } }))).toBe("preview…");
+    expect(roomNoticeText(group({ notice, room: { missing: true } }))).toBe("preview…");
+  });
+
   it("selects a joined room by an id no bot or group can have", () => {
     expect(joinedRoomIdOf(joinedSelection("r9"))).toBe("r9");
     expect(joinedRoomIdOf("nova")).toBeNull();
@@ -99,7 +107,9 @@ describe("room codes", () => {
     expect(joinErrorKey(409, "room-full")).toBe("teamRoom.full");
     expect(joinErrorKey(429, "busy")).toBe("teamRoom.busy");
     expect(joinErrorKey(503, "unavailable")).toBe("teamRoom.unreachable");
-    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "removed"], [404, "no-invite"], [409, "name-taken"]] as const) {
+    expect(joinErrorKey(403, "removed")).toBe("teamRoom.removed");
+    expect(joinErrorKey(403, "removed", true)).toBe("teamRoom.removed");
+    for (const [status, error] of [[400, "bad-code"], [401, "wrong-secret"], [401, "too-many-tries"], [403, "forbidden"], [404, "no-invite"], [409, "name-taken"]] as const) {
       expect(joinErrorKey(status, error)).toBe("teamRoom.badCode");
     }
     expect(inviteErrorKey(409)).toBe("teamRoom.phoneOff");

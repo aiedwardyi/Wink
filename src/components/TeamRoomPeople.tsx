@@ -1,9 +1,9 @@
-// People can edit their own Wink name; the host also has Invite and Remove.
+// People can edit their own Wink name; the host also has Invite, Remove and Let back in.
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
@@ -24,6 +24,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
   const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [codeChanged, setCodeChanged] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const confirm = usePresence(removing);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -31,6 +32,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
   closeRef.current = onClose;
   const roomId = group?.hosted.roomId;
   const people = group ? roomPeople(group) : joined?.state?.people ?? [];
+  const removed = group ? roomRemoved(group) : [];
   useBackLayer(!closing, onClose);
 
   useEffect(() => {
@@ -79,13 +81,26 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
     };
   }, [closing, triggerRef]);
 
-  const remove = async (personId: string) => {
+  const remove = async (gone: { id: string; name: string }) => {
     const room = group?.room && "people" in group.room ? group.room : null;
     if (!room || !group || !roomId) return;
     try {
-      await removeFromRoom(roomId, personId);
+      const result = await removeFromRoom(roomId, gone.id);
       setCodeVersion((version) => version + 1);
-      dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== personId) } } });
+      if (result.codeChanged) setCodeChanged(true);
+      const barred = [...(room.removed ?? []).filter((person) => person.id !== gone.id), ...(result.codeChanged ? [] : [gone])];
+      dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, people: room.people.filter((person) => person.id !== gone.id), removed: barred } } });
+    } catch {
+      setProblem("errors.request");
+    }
+  };
+
+  const letBack = async (personId: string) => {
+    const room = group?.room && "people" in group.room ? group.room : null;
+    if (!room || !group || !roomId) return;
+    try {
+      await letBackIn(roomId, personId);
+      dispatch({ type: "groupPatched", group: { id: group.id, room: { ...room, removed: (room.removed ?? []).filter((person) => person.id !== personId) } } });
     } catch {
       setProblem("errors.request");
     }
@@ -119,6 +134,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
         </div>
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group?.name ?? joined?.state?.roomName}</div>
         {code && <RoomCode {...code} />}
+        {codeChanged && <p role="status" className="mt-2 text-[12.5px] text-ink-secondary">{t("teamRoom.codeChanged")}</p>}
         {problem && <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(problem)}</p>}
         <ul className="mt-3 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
           {group ? <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} /> : (
@@ -138,6 +154,19 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
             </li>
           ))}
           {people.length === 0 && <li className="px-2 py-1.5 text-[13px] text-ink-secondary">{t("teamRoom.nobody")}</li>}
+          {removed.map((person) => (
+            <li key={person.id} data-room-removed className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised/50">
+              <span className="min-w-0 flex-1 truncate text-[14px] text-ink-secondary">{person.name}</span>
+              <button
+                type="button"
+                onClick={() => void letBack(person.id)}
+                aria-label={t("teamRoom.letBackNamed", { name: person.name })}
+                className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent hover:bg-raised"
+              >
+                {t("teamRoom.letBack")}
+              </button>
+            </li>
+          ))}
         </ul>
       </div>
       {confirm.mounted && confirm.value && (
@@ -149,7 +178,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
           onCancel={() => setRemoving(null)}
           onConfirm={() => {
             setRemoving(null);
-            void remove(confirm.value!.id);
+            void remove(confirm.value!);
           }}
         />
       )}
