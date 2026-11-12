@@ -35,6 +35,7 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
     let drag: Drag | null = null;
     let swallow = false;
     let swallowTimer: ReturnType<typeof setTimeout> | undefined;
+    let spring: Animation | undefined;
     const mark = (side: BubbleSide | null, progress: number, armed: BubbleSide | null) => {
       if (side) {
         el.dataset.swipe = side;
@@ -49,7 +50,7 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
     const springBack = (offset: number) => {
       moving.style.transform = "";
       if (!offset || reducedMotion() || typeof moving.animate !== "function") return;
-      moving.animate(
+      spring = moving.animate(
         [{ transform: `translateX(${offset}px)` }, { transform: "translateX(0)" }],
         { duration: SWIPE_MOTION_MS, easing: SWIPE_SPRING },
       );
@@ -66,6 +67,10 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
     };
     const onStart = (e: TouchEvent) => {
       end(false);
+      swallow = false;
+      clearTimeout(swallowTimer);
+      spring?.cancel();
+      spring = undefined;
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || menuOpen || swipeBlocked(e.target, touch.clientX)) return;
       drag = { x: touch.clientX, y: touch.clientY, dx: 0, locked: false, armed: null };
@@ -96,6 +101,8 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
       mark(offset ? (offset < 0 ? "left" : "right") : null, Math.min(1, Math.abs(dx) / BUBBLE_ARM), armed);
     };
     const onEnd = (e: TouchEvent) => {
+      const lifted = e.changedTouches?.[0];
+      if (drag?.locked && lifted) drag.dx = lifted.clientX - drag.x;
       if (drag?.locked) {
         // cancelling the touchend keeps a drag from ending in a click
         if (e.cancelable) e.preventDefault();

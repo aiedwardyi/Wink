@@ -272,6 +272,46 @@ describe("bubble swipe rules", () => {
     expect(click).toHaveBeenCalledTimes(1);
   });
 
+  it("a new touch cancels the running spring", async () => {
+    await render();
+    const cancel = vi.fn();
+    bubble().animate = vi.fn(() => ({ cancel })) as unknown as HTMLElement["animate"];
+    await drag(100, 130, 200);
+    await act(async () => { touch("touchend", 0); });
+    await act(async () => { touch("touchstart", 100); });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tap right after a drag is not swallowed", async () => {
+    await render();
+    await drag(100, 130, 200);
+    await act(async () => { touch("touchend", 0); });
+    await act(async () => { touch("touchstart", 100); touch("touchend", 0); });
+    await act(async () => { bubble().querySelector("a")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it("decides on the lift position, not the last move", async () => {
+    await render();
+    await drag(100, 130, 140);
+    await act(async () => { touch("touchend", 0); });
+    expect(onReply).not.toHaveBeenCalled();
+    await drag(100, 130, 200);
+    await act(async () => {
+      const end = new Event("touchend", { bubbles: true, cancelable: true });
+      Object.defineProperties(end, { touches: { value: [] }, changedTouches: { value: [{ clientX: 120, clientY: 200 }] }, timeStamp: { value: 9999 } });
+      bubble().querySelector("p")!.dispatchEvent(end);
+    });
+    expect(onReply).not.toHaveBeenCalled();
+    await drag(100, 130, 140);
+    await act(async () => {
+      const end = new Event("touchend", { bubbles: true, cancelable: true });
+      Object.defineProperties(end, { touches: { value: [] }, changedTouches: { value: [{ clientX: 200, clientY: 200 }] }, timeStamp: { value: 10000 } });
+      bubble().querySelector("p")!.dispatchEvent(end);
+    });
+    expect(onReply).toHaveBeenCalledTimes(1);
+  });
+
   it("a plain tap is not swallowed", async () => {
     await render();
     await act(async () => { touch("touchstart", 100); touch("touchend", 0); });
