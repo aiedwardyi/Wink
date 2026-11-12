@@ -117,3 +117,47 @@ describe("open ask_user question", () => {
     expect(anyChatNeedsYou(chats, "open")).toBe(false);
   });
 });
+
+describe("an ask_user card that stays open", () => {
+  const live = (id: string, card: Partial<NonNullable<Message["card"]>> = {}) => ask(id, { staysOpen: true, ...card });
+
+  it("stays live while the person types past a card with choices", () => {
+    const question = live("q1");
+    const thread = [question, typed("u1", "what's for lunch?")];
+    expect(openQuestion(thread)).toBe(question);
+    expect(askUserStatus(thread, question)).toEqual({ state: "waiting" });
+  });
+
+  it("is answered by typing only while pinned without choices", () => {
+    const question = live("q1", { options: [] });
+    const thread = [question, typed("u1", "Friday")];
+    expect(openQuestion(thread)).toBeNull();
+    expect(askUserStatus(thread, question)).toEqual({ state: "answered", reply: "Friday" });
+  });
+
+  it("keeps an older different question live behind a newer one, and pins the next once one is answered", () => {
+    const older = live("q1");
+    const newer = live("q2");
+    expect(askUserStatus([older, typed("u1", "hm"), newer], older)).toEqual({ state: "waiting" });
+    expect(pinnedQuestion([older, newer])).toBe(newer);
+    const answered = { ...newer, card: { ...newer.card!, answered: "Yes" } };
+    expect(pinnedQuestion([older, answered])).toBe(older);
+    expect(pinnedQuestion([{ ...older, card: { ...older.card!, dismissed: true } }, answered])).toBeNull();
+  });
+
+  it("reads an older card's quoted answer as its own, leaving the newer one waiting", () => {
+    const older = live("q1");
+    const newer = live("q2", { options: [] });
+    const after = [older, newer, typed("u1", "Re: “question q1”\nNo")];
+    expect(askUserStatus(after, older)).toEqual({ state: "answered", reply: "No" });
+    expect(askUserStatus(after, newer)).toEqual({ state: "waiting" });
+  });
+
+  it("closes only when asked again word for word", () => {
+    const older = live("q1");
+    const again = live("q2", { subtitle: "question q1" });
+    expect(askUserStatus([older, again], older)).toEqual({ state: "askedAgain" });
+    expect(openQuestion([older, again])).toBe(again);
+  });
+});
+

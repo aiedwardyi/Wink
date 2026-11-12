@@ -348,6 +348,21 @@ describe("update reload during a send", () => {
     await vi.waitFor(() => expect(reloadHeld()).toBe(false));
   });
 
+  it("ties an older question card's answer to its question", async () => {
+    const card = (subtitle: string): OptionCardData => ({ title: "Q", subtitle, options: ["Yes", "No"], askUser: true, staysOpen: true });
+    const asking: Bot = {
+      ...bot,
+      messages: [
+        { id: "m-old", at: 1, role: "bot", kind: "options", card: card("Ship it?") },
+        { id: "m-new", at: 2, role: "bot", kind: "options", card: card("Which branch?") },
+      ],
+    };
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true }), [asking]);
+    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-old", answer: "Yes" }));
+    const posted = fetch.mock.calls.find(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST");
+    expect(JSON.parse(String(posted?.[1]?.body)).text).toBe("Re: “Ship it?”\nYes");
+  });
+
   it.each([
     { name: "bot", action: { type: "dismissCard", botId: bot.id, messageId: "m-card" }, path: "/api/bots/b1/cards/m-card" },
     { name: "room", action: { type: "dismissGroupCard", groupId: group.id, messageId: "m-card" }, path: "/api/groups/g1/cards/m-card" },

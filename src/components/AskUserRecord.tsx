@@ -1,24 +1,27 @@
-// A bot's ask_user question as it reads in the transcript. The answer lives
-// in the pin above the composer (or simply the next message the person
-// sends), so like ApprovalCard this only records what happened: no chips.
+// A bot's ask_user question as it reads in the transcript. The pinned one is
+// answered above the composer; an older one still waiting keeps its choices here.
 import { Check, CircleHelp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { askUserStatus } from "@/lib/open-question";
+import { AskChoices } from "./PendingQuestion";
 
 export function AskUserRecord({
   message,
   transcript,
   askerName,
   pinned = false,
+  onPick,
 }: {
   message: Message;
-  /** the chat's messages, to see whether it was answered or superseded */
+  /** the chat's messages, to see whether it was answered or asked again */
   transcript: readonly Message[];
   askerName?: string;
   /** the composer pins this question, so the record need not repeat it */
   pinned?: boolean;
+  /** absent on a read-only transcript */
+  onPick?: (choice: string) => void;
 }) {
   const { t } = useI18n();
   const card = message.card;
@@ -36,6 +39,7 @@ export function AskUserRecord({
     >
       {askerName && <div className="text-[13px] font-semibold text-ink">{t("ask.asks", { name: askerName })}</div>}
       <div className="mt-1 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-ink">{card.subtitle}</div>
+      {waiting && onPick && <AskChoices options={card.options} onPick={onPick} />}
       <div className="mt-3 flex min-w-0 items-center gap-1.5 text-[13px] text-ink-secondary">
         {status.state === "answered" ? (
           <>
@@ -46,9 +50,9 @@ export function AskUserRecord({
           <>
             <X size={14} className="shrink-0" /> {t("ask.dismissed")}
           </>
-        ) : status.state === "superseded" ? (
+        ) : status.state === "superseded" || status.state === "askedAgain" ? (
           <>
-            <X size={14} className="shrink-0" /> {t("ask.superseded")}
+            <X size={14} className="shrink-0" /> {t(status.state === "askedAgain" ? "ask.askedAgain" : "ask.superseded")}
           </>
         ) : (
           <>

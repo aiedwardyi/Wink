@@ -36,6 +36,15 @@ describe("AskUserRecord", () => {
     expect(render(question, [question, ask("q2")])).toContain("Superseded by a newer question");
   });
 
+  it("keeps an older waiting question's choices live, and closes it once asked again", () => {
+    const older = ask("q1", { staysOpen: true });
+    const newer = ask("q2", { staysOpen: true, subtitle: "Which branch?" });
+    const markup = renderToStaticMarkup(createElement(AskUserRecord, { message: older, transcript: [older, newer], askerName: "Ada", onPick: () => {} }));
+    expect(markup).toContain("Waiting for your answer below");
+    expect(markup).toContain(">Staging</button>");
+    expect(render(older, [older, ask("q3", { staysOpen: true })])).toContain("Asked again below");
+  });
+
   it("renders nothing while the composer pins the question", () => {
     const question = ask("q1");
     expect(render(question, [question], true)).toBe("");

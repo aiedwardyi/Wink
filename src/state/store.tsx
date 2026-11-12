@@ -18,6 +18,7 @@ import {
 } from "react";
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
+import { answerText } from "../../shared/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -1554,9 +1555,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(showError);
           } else {
             persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true });
+            const asked = bot?.messages.find((m) => m.id === action.messageId);
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
-              body: JSON.stringify({ text: action.answer }),
+              body: JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer }),
             }).catch(showError);
           }
           break;
@@ -1574,10 +1576,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "answerGroupCard":
+        case "answerGroupCard": {
           persistGroupCard(action.groupId, action.messageId, { answered: action.answer });
-          wrapped({ type: "sendGroup", groupId: action.groupId, text: action.answer });
+          const messages = stateRef.current.groups.find((group) => group.id === action.groupId)?.messages ?? [];
+          const asked = messages.find((m) => m.id === action.messageId);
+          wrapped({ type: "sendGroup", groupId: action.groupId, text: asked ? answerText(messages, asked, action.answer) : action.answer });
           break;
+        }
         case "dismissGroupCard":
           persistGroupCard(action.groupId, action.messageId, { dismissed: true });
           break;

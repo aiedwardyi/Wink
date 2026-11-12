@@ -83,9 +83,10 @@ export interface OptionCardData {
   dismissed?: boolean;
   /** Present when this card is a live provider ask (approval/question). */
   requestId?: string;
-  /** A bot's non-blocking ask_user question. Answered by the user's next
-   * message; never has a requestId. */
+  /** A bot's non-blocking ask_user question; never has a requestId. */
   askUser?: true;
+  /** an ask_user card that waits until answered; older ones closed when typed past */
+  staysOpen?: true;
   /** permission cards: the tool being requested, so the card can show what
    * is actually being asked and offer "always allow this tool". */
   tool?: string;

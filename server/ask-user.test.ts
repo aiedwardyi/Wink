@@ -41,7 +41,7 @@ describe("ask-user endpoint", () => {
         message: {
           role: "bot",
           kind: "options",
-          card: { title: "Your bot has a question", subtitle: "Prod or staging?", options: ["Prod", "Staging"], askUser: true },
+          card: { title: "Your bot has a question", subtitle: "Prod or staging?", options: ["Prod", "Staging"], askUser: true, staysOpen: true },
         },
       },
     ]);
@@ -143,6 +143,12 @@ describe("closed ask_user card note", () => {
     expect(turnPrompt([askCard("c1", "Ship it?", {}, { dismissed: true }), typed], typed)).toBe("ok");
     expect(turnPrompt([askCard("c1", "Ship it?"), said("u1", "later"), typed], typed)).toBe("ok");
     expect(turnPrompt([said("u0", "hi"), typed], typed)).toBe("ok");
+  });
+
+  it("tells the bot nothing when its card stays open past the typed message", () => {
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    expect(closedAskNotes([askCard("c1", "Ship it?", {}, { staysOpen: true }), said("u1", "hm")], "hm", "u1")).toEqual([]);
+    expect(memberClosedAskNotes([askCard("c1", "Ship it?", { from: ada }, { staysOpen: true }), said("u1", "hm")], "bot-a")).toEqual([]);
   });
 
   it("treats a tapped choice as the answer even before its patch lands", () => {
@@ -257,6 +263,17 @@ describe("skipped ask_user questions", () => {
     h.append(card);
     h.patch({ ...card, card: { ...card.card!, answered: "Yes" } });
     expect(h.asks()).toEqual([{ ...filed("A1", "Ship it?", 0), status: "done", changedAt: 50 }]);
+  });
+
+  it("closes a filed question once the person types its answer", () => {
+    const h = watched();
+    h.append(askCard("c1", "Ship it when?", {}, { staysOpen: true, options: [] }));
+    h.append(askCard("c2", "Which branch?", { at: 3 }, { staysOpen: true }));
+    expect(h.asks()).toEqual([{ id: "A1", ask: "Ship it when?", status: "open", kind: "question", at: 50, changedAt: 50 }]);
+    h.append(said("u1", "Yes"));
+    expect(h.asks()).toHaveLength(1);
+    h.append(said("u2", "Re: “Ship it when?”\nFriday"));
+    expect(h.asks()).toEqual([]);
   });
 
   it("files a question once while it stays open", () => {
