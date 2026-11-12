@@ -126,11 +126,13 @@ it("a call steer dropped after it was recorded goes down the queue once, on its 
   expect(drain).toHaveBeenCalledTimes(1);
   expect(h.last()).toMatchObject({ text: "check the build", call: { ...CALL, order: true } });
   expect(h.last().steered).toBeUndefined();
+  expect(h.last().queued).toBe(true);
   h.store.setActivity(h.bot.id, "idle");
   const run = vi.fn();
   drainSteeredMessages(h.store, run);
   expect(run).toHaveBeenCalledTimes(1);
   expect(h.store.activePath(h.bot.threadId).filter((row) => row.text === "check the build")).toHaveLength(1);
+  expect(h.last().queued).toBeUndefined();
 });
 
 it("a call steer dropped after Stop stays stopped", async () => {

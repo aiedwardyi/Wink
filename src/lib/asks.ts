@@ -13,9 +13,11 @@ const Ask = z.object({
   when: z.union([z.number(), z.string().transform(Date.parse)]).optional(),
   status: z.string().transform((status) => status.replace(/_/g, "-")).pipe(z.enum(ASK_STATUSES)),
   ref: z.string().optional(),
-}).transform(({ text, ask, at, when, status, ref }) => {
+  kind: z.string().optional(),
+}).transform(({ text, ask, at, when, status, ref, kind }) => {
   const out: Ask = { text: (text ?? ask ?? "").trim(), at: at ?? when ?? NaN, status };
   if (ref) out.ref = ref;
+  if (kind === "question") out.question = true;
   return out;
 }).refine((ask) => ask.text !== "" && Number.isFinite(ask.at));
 
@@ -24,6 +26,8 @@ export interface Ask {
   at: number;
   status: AskStatus;
   ref?: string;
+  /** the bot's own question the user skipped, not something they asked for */
+  question?: true;
 }
 
 const CLOSED: ReadonlySet<AskStatus> = new Set(["done", "declined"]);
