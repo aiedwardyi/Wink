@@ -242,6 +242,19 @@ describe("ManageMembersPanel people", () => {
     expect(dispatched).toContainEqual({ type: "groupPatched", group: after });
   });
 
+  it.each([["shared", true], ["plain", false]] as const)("removing the last bot from a %s group saves: %s", async (kind, saved) => {
+    // SAFETY: the picker reads only id, name and hidden from each bot.
+    mockState.value = { bots: [{ id: "b1", name: "Wink" } as Bot], instances: [] };
+    await open(kind === "shared" ? shared([]) : { ...group, memberIds: ["b1"] }, "en", () => json({}));
+    await act(async () => host.querySelector<HTMLElement>('[role="checkbox"]')!.click());
+    const save = [...host.querySelectorAll("button")].find((button) => button.textContent === "Save")!;
+    expect(save.disabled).toBe(!saved);
+    expect(host.textContent!.includes("A group needs at least one bot.")).toBe(!saved);
+    await act(async () => save.click());
+    expect(dispatched).toEqual(saved ? [{ type: "patchGroup", groupId: "group-1", patch: { memberIds: [] } }] : []);
+    mockState.value = { bots: [], instances: [] };
+  });
+
   it("keeps People's label and hint on the code's gutter", async () => {
     await open(shared([]), "en", () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
     const code = people().querySelector("[data-team-room-code]")!;
