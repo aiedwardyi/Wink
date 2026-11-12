@@ -817,12 +817,28 @@ describe("paged transcripts", () => {
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
     scroller.scrollTop = 0;
     await arrive("thread-a2", threads["thread-a2"]![800]!);
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(scroller.scrollTop).toBe(scroller.scrollHeight);
     await snapshot([{ ...task, messages: threads["thread-a2"]!.slice(800) }]);
     await act(async () => vi.advanceTimersByTimeAsync(50));
     expect(host.textContent).toContain("t row 999;");
     expect(button(host, "Show later messages")).toBeUndefined();
     expect(calls.filter((call) => call.includes("around="))).toEqual([]);
+  });
+
+  it("pins a chat to the bottom once per frame however many rows land in it", async () => {
+    const thread = Array.from({ length: 20 }, (_, i) => chained(i));
+    pagedServer("thread-a", thread, { bots: [bot(thread, false)], groups: [] });
+    const host = await mount("chat");
+    await vi.waitFor(() => expect(host.textContent).toContain("row 19;"));
+    const scroller = host.querySelector("[data-orbit-transcript]") as HTMLElement;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    const scrollTo = vi.spyOn(scroller, "scrollTo");
+    for (let i = 20; i < 25; i++) await arrive("thread-a", chained(i));
+    await act(async () => vi.advanceTimersByTimeAsync(16));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scroller.scrollTop).toBe(250);
   });
 
   it("follows a room's new task to the bottom after the reader scrolled up in the old one", async () => {
@@ -1237,6 +1253,7 @@ describe("open window and jump pill", () => {
 
     size.scroll = 1000;
     await arrive(view === "chat" ? "thread-a" : "thread-g", { id: "x3", at: 1, role: "user", kind: "text", text: "x row 3;" });
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(scroller.scrollTop).toBe(1000);
   });
 
@@ -1356,6 +1373,7 @@ describe("open window and jump pill", () => {
     });
     size.scroll = 1000;
     await arrive(threadOf(view), { id: "x3", at: 1, role: "user", kind: "text", text: "x row 3;" });
+    await act(async () => vi.advanceTimersByTimeAsync(16));
     expect(top).toBe(1000);
   });
 
