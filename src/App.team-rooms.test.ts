@@ -375,6 +375,20 @@ describe("Team rooms for the host", () => {
     expect($('aside [data-room-picture] img')).not.toBeNull();
   });
 
+  it("keeps the room picture, bell, side pane and notice after a bot joins", async () => {
+    const original = line("original", { kind: "person", id: "p-mina", name: "Mina Park" }, "Standup at 10");
+    const room = { ...teamRoom([], [original]), memberIds: ["nova"], picture: "P".repeat(24), notice: { entryId: "e-original", by: "host", at: 1, text: "Standup at 10" } } as Group;
+    await boot({ groups: [room], route: (call) => call.method === "PATCH" ? reply({ group: room }) : undefined });
+    await act(async () => store.dispatch!({ type: "select", id: "g1" }));
+    const main = await found(() => $("main [data-room-notice]")?.closest("main"));
+    expect(main.querySelector("[data-room-title] [data-room-picture] img")).not.toBeNull();
+    expect(button("Turn off alerts for this room")).toBeTruthy();
+    expect(button("Show and media")).toBeTruthy();
+    await act(async () => { main.querySelector("[data-mid=original] [data-orbit-message-content]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 })); });
+    await click(button("Unpin notice"));
+    expect(asked("PATCH", "/api/groups/g1").map((call) => call.body)).toEqual([{ notice: null }]);
+  });
+
   it("creates a zero-bot room from New group with a name alone and opens it", async () => {
     const created = teamRoom();
     await boot({ route: (call) => (call.method === "POST" && call.path === "/api/groups" ? reply({ group: created }) : undefined) });
