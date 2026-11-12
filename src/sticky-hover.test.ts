@@ -3,7 +3,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
-const here = dirname(fileURLToPath(import.meta.url));
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sheets = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((each) =>
   each.isDirectory() ? sheets(join(dir, each.name)) : each.name.endsWith(".css") ? [join(dir, each.name)] : []);
 
@@ -26,7 +26,7 @@ const ungated = (css: string) => {
 };
 
 it("hover looks apply only where the pointer can hover", () => {
-  const found = sheets(here).flatMap((file) => ungated(readFileSync(file, "utf8")).map((rule) => `${relative(here, file)}: ${rule}`));
+  const found = ["src", "site"].flatMap((dir) => sheets(join(root, dir))).flatMap((file) => ungated(readFileSync(file, "utf8")).map((rule) => `${relative(root, file)}: ${rule}`));
   expect(found).toEqual([]);
 });
 
