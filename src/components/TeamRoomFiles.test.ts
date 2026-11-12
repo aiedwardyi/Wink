@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
-import { TeamRoomFiles } from "./TeamRoomFiles";
+import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomRow } from "./TeamRoomRow";
 
 const mock = vi.hoisted(() => ({ request: vi.fn(), showMedia: vi.fn(), phone: false }));
@@ -62,26 +62,12 @@ describe("room files", () => {
     expect(mock.request).not.toHaveBeenCalled();
   });
 
-  it("lists the room's files as one row that opens Media", async () => {
-    const onClose = vi.fn();
-    const file = (name: string, type: string) => ({ id: name.padStart(24, "a"), name, bytes: 1024 ** 3, type, sender: "Mina", at: Date.now() });
-    mock.request.mockResolvedValue({ files: [file("a.png", "image/png"), file("b.png", "image/png"), file("plan.pdf", "application/pdf")], used: 3 * 1024 ** 3, capacity: 100 * 1024 ** 3, error: null });
-    await render(createElement(TeamRoomFiles, { roomId: "room1", threadId: "r-thread", closing: false, onClose }));
-    expect(document.body.textContent).toContain("3 GB used / 100 GB");
-    expect(document.querySelectorAll("[data-room-file]")).toHaveLength(0);
-    const row = document.querySelector<HTMLButtonElement>("[data-room-media-row]")!;
-    expect(row.textContent).toBe("Media and files3");
-    await act(async () => row.click());
+  it("the header Files button opens Media for the room, with no dialog", async () => {
+    await render(createElement(TeamRoomFilesMenu, { threadId: "r-thread" }));
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Files"]')!.click());
     expect(mock.showMedia).toHaveBeenCalledWith("r-thread");
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("shows an empty room's row at 0 and keeps the read-only notice, in Korean too", async () => {
-    localStorage.setItem("omb-locale", "ko");
-    mock.request.mockResolvedValue({ files: [], used: 0, capacity: 100 * 1024 ** 3, error: "unavailable" });
-    await render(createElement(TeamRoomFiles, { roomId: "room1", threadId: "r-thread", closing: false, onClose: vi.fn() }));
-    expect(document.querySelector("[data-room-media-row]")!.textContent).toBe("미디어와 파일0");
-    expect(document.querySelector('[role="alert"]')!.textContent).toContain("읽기 전용");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(mock.request).not.toHaveBeenCalled();
   });
 
   it("renders a deleted file without a download or preview in both languages", () => {

@@ -18,18 +18,18 @@ const plan = { id: id(2), name: "plan.pdf", type: "application/pdf", bytes: 10, 
 let root: Root;
 let host: HTMLElement;
 let calls: string[];
-let room: { files: unknown[]; error: string | null };
+let room: { files: unknown[]; used: number; capacity: number; error: string | null };
 
 beforeEach(() => {
   calls = [];
-  room = { files: [photo, plan], error: null };
+  room = { files: [photo, plan], used: 18_000, capacity: 100 * 1024 ** 3, error: null };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(`${init?.method ?? "GET"} ${url}`);
     if (init?.method === "DELETE") {
       room = { ...room, files: room.files.filter((file) => !url.endsWith((file as { id: string }).id)) };
       return Response.json({ ok: true });
     }
-    if (url.endsWith("/files")) return Response.json({ ...room, used: 0, capacity: 1 });
+    if (url.endsWith("/files")) return Response.json(room);
     return new Response(null, { status: 206 });
   }));
   host = document.createElement("div");
@@ -90,9 +90,19 @@ it("a hold on a room picture opens the menu, and the lift does not open the pict
   expect(document.querySelector("[data-media-viewer]")).toBeNull();
 });
 
-it("a read-only room folder can't delete", async () => {
+it("a room's Media ends with the space used", async () => {
+  await open(roomSource);
+  const media = host.querySelector("[data-show-media]")!;
+  expect(media.lastElementChild!.textContent).toBe("17.6 KB used / 100 GB");
+  expect(media.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("a read-only room folder shows its notice on top and can't delete", async () => {
   room.error = "unavailable";
   await open(roomSource);
+  const media = host.querySelector("[data-show-media]")!;
+  expect(media.firstElementChild!.getAttribute("role")).toBe("alert");
+  expect(media.firstElementChild!.textContent).toContain("read-only");
   rightClick(host.querySelector("[data-media-file]")!);
   await settle();
   expect(menuItem()!.disabled).toBe(true);
@@ -103,4 +113,5 @@ it("a bot chat's Media keeps the native menu", async () => {
   await open({ threadId: "t1", messages: [reply] });
   expect(rightClick(host.querySelector("[data-media-file]")!).defaultPrevented).toBe(false);
   expect(menuItem()).toBeNull();
+  expect(host.querySelector("[data-show-media]")!.textContent).not.toContain("used /");
 });

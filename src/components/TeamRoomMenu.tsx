@@ -6,6 +6,7 @@ import { Copy, Files, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
+import { showMedia } from "@/lib/show-pane";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -13,16 +14,11 @@ import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
-import { TeamRoomFiles } from "./TeamRoomFiles";
 import { TeamRoomPeople } from "./TeamRoomPeople";
 
-export function TeamRoomFilesMenu({ roomId, threadId }: { roomId: string; threadId: string }) {
+export function TeamRoomFilesMenu({ threadId }: { threadId: string }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  return <>
-    <button type="button" onClick={() => setOpen(true)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>
-    <Presence open={open}>{(closing) => <TeamRoomFiles roomId={roomId} threadId={threadId} closing={closing} onClose={() => setOpen(false)} />}</Presence>
-  </>;
+  return <button type="button" onClick={() => showMedia(threadId)} aria-label={t("teamRoom.files")} title={t("teamRoom.files")} className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Files size={18} /></button>;
 }
 
 type Sheet = "join" | "rejoin" | "people" | "leave" | "remove" | null;

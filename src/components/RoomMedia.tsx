@@ -1,13 +1,14 @@
-// Media's Delete for a hosted room's files: right-click on desktop, a hold on a phone.
+// A hosted room's parts of Media: the folder notice, the space used, and Delete (right-click on desktop, a hold on a phone).
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Trash2 } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { cn } from "@/lib/cn";
+import { formatSize } from "@/lib/composer-attachments";
 import { useI18n } from "@/lib/i18n";
 import type { MediaFile } from "@/lib/show-media";
-import { hostRoomBase } from "@/lib/team-rooms";
+import { hostRoomBase, type RoomFile } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
 
@@ -16,6 +17,11 @@ import { HOLD_MS, HOLD_SLOP, MENU_CLASS } from "./MessageMenu";
 
 const PICTURES = "[data-media-grid] > button";
 const EDGE = 8;
+
+/** The room's `/files` answer; a failed list has no sizes. */
+export type RoomFiles = { files: RoomFile[]; used?: number; capacity?: number; error: string | null };
+
+const size = (bytes: number) => bytes >= 1024 ** 3 ? `${Number((bytes / 1024 ** 3).toFixed(2))} GB` : formatSize(bytes);
 
 let removed = 0;
 const watchers = new Set<() => void>();
@@ -38,17 +44,21 @@ function fileAt(frame: HTMLElement, files: readonly MediaFile[], target: EventTa
   return same ? file : undefined;
 }
 
-export function RoomFileMenu({ roomId, files, frame }: { roomId: string; files: readonly MediaFile[] | null; frame: RefObject<HTMLDivElement | null> }) {
+export function RoomFilesNotice({ list }: { list: RoomFiles }) {
+  const { t } = useI18n();
+  return list.error ? <p role="alert" className="mb-2 px-2 pt-1 text-[12px] text-danger">{t("teamRoom.folderError")}</p> : null;
+}
+
+export function RoomMedia({ roomId, list, files, frame }: { roomId: string; list: RoomFiles; files: readonly MediaFile[] | null; frame: RefObject<HTMLDivElement | null> }) {
   const { t } = useI18n();
   const base = hostRoomBase(roomId);
   const [menu, setMenu] = useState<{ file: MediaFile; x: number; y: number } | null>(null);
   const [place, setPlace] = useState({ top: 0, left: 0 });
-  const [readOnly, setReadOnly] = useState(true);
   const [deleting, setDeleting] = useState<MediaFile | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const list = useRef(files);
-  list.current = files;
+  const shown = useRef(files);
+  shown.current = files;
   const box = useRef<HTMLDivElement>(null);
   useBackLayer(menu !== null, () => setMenu(null));
 
@@ -58,7 +68,7 @@ export function RoomFileMenu({ roomId, files, frame }: { roomId: string; files: 
     let hold: { x: number; y: number; timer: number } | null = null;
     let held = false;
     const open = (target: EventTarget | null, x: number, y: number) => {
-      const file = list.current && fileAt(el, list.current, target);
+      const file = shown.current && fileAt(el, shown.current, target);
       if (file) setMenu({ file, x, y });
       return Boolean(file);
     };
@@ -108,9 +118,6 @@ export function RoomFileMenu({ roomId, files, frame }: { roomId: string; files: 
 
   useEffect(() => {
     if (!menu) return;
-    let alive = true;
-    setReadOnly(true);
-    request(`${base}/files`).then((next: { error: string | null }) => { if (alive) setReadOnly(Boolean(next.error)); }, () => {});
     const outside = (event: PointerEvent) => {
       if (!(event.target instanceof Node && box.current?.contains(event.target))) setMenu(null);
     };
@@ -118,11 +125,10 @@ export function RoomFileMenu({ roomId, files, frame }: { roomId: string; files: 
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     return () => {
-      alive = false;
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
     };
-  }, [menu, base]);
+  }, [menu]);
 
   useLayoutEffect(() => {
     if (!menu || !box.current) return;
@@ -144,9 +150,10 @@ export function RoomFileMenu({ roomId, files, frame }: { roomId: string; files: 
   };
 
   return <>
+    {list.capacity !== undefined && <p className="px-2 pb-1 pt-3 text-center text-[11.5px] tabular-nums text-ink-secondary">{t("teamRoom.filesUsed", { used: size(list.used ?? 0), total: size(list.capacity) })}</p>}
     {menu && createPortal(
       <div ref={box} role="menu" aria-label={menu.file.name} style={place} className={cn(MENU_CLASS, "z-[60] min-w-44")}>
-        <button type="button" role="menuitem" autoFocus disabled={readOnly} onClick={() => { setFailed(false); setDeleting(menu.file); setMenu(null); }}
+        <button type="button" role="menuitem" autoFocus disabled={Boolean(list.error)} onClick={() => { setFailed(false); setDeleting(menu.file); setMenu(null); }}
           className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-danger hover:bg-raised/70 disabled:opacity-40">
           <Trash2 size={16} />{t("teamRoom.deleteFile")}
         </button>
