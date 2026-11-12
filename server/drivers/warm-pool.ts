@@ -1,6 +1,7 @@
-// Process-wide pool of speculative engine children (Grok, Muse, Gemini).
-// Claude and Codex never use it. Holds no protocol code: drivers spawn and
-// hand shake, the pool owns capacity, identity generations and lifetimes.
+// Process-wide pool of speculative engine children (Grok, Muse, Gemini, and
+// Claude sessions prepared before Send). Codex never uses it. Holds no
+// protocol code: drivers spawn and hand shake, the pool owns capacity,
+// identity generations and lifetimes.
 import os from "node:os";
 
 import { canServeTurn, type WarmSession } from "./acp/warm-eligibility.ts";

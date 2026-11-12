@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { Brain, Check, ChevronDown } from "lucide-react";
+import { Brain, Check, ChevronDown, Pencil } from "lucide-react";
 import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -44,10 +44,9 @@ export function SaveState({ status }: { status: MemorySaveStatus }) {
   );
 }
 
-export function MemoryFold({ title, hint, meta, status, open, onToggle, ref, children }: {
-  title: string;
+export function MemoryFold({ title, hint, status, open, onToggle, ref, children }: {
+  title: ReactNode;
   hint: string;
-  meta?: ReactNode;
   status?: ReactNode;
   open: boolean;
   onToggle: () => void;
@@ -69,39 +68,58 @@ export function MemoryFold({ title, hint, meta, status, open, onToggle, ref, chi
           <div className="min-w-0 flex-1">
             <DetailsLabel label={title} hint={hint} />
           </div>
-          {meta && <span className="shrink-0 text-[12px] text-ink-secondary">{meta}</span>}
           <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
         </button>
-        {status && <div className="shrink-0 pr-4">{status}</div>}
+        {status && <div className="flex shrink-0 items-center gap-3 pr-4">{status}</div>}
       </div>
       {children}
     </section>
   );
 }
 
-export function MemoryFile({ text, loading, save, open, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, save, open, editing, onEdit, onToggle, ref, children }: {
   text: string;
   save?: MemorySaveStatus;
   loading: boolean;
   open: boolean;
+  editing: boolean;
+  onEdit?: (next: boolean) => void;
   onToggle: () => void;
   ref?: Ref<HTMLButtonElement>;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
-  const lines = text.split("\n").filter((line) => line.trim()).length;
   return (
     <MemoryFold
       ref={ref}
-      title={t("bot.memoryFile")}
+      title={<>{t("bot.memoryFile")}{!loading && <MemoryFileLines text={text} />}</>}
       hint={t("bot.memoryThisBotHelp")}
-      meta={!loading && lines > 0 && (!save || save === "idle") ? t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines }) : undefined}
-      status={save && <SaveState status={save} />}
+      status={(save || onEdit) && (
+        <>
+          {save && <SaveState status={save} />}
+          {onEdit && <MemoryEditButton editing={editing} onEdit={onEdit} />}
+        </>
+      )}
       open={open}
       onToggle={onToggle}
     >
       {children}
     </MemoryFold>
+  );
+}
+
+export function MemoryFileLines({ text }: { text: string }) {
+  const { t } = useI18n();
+  const lines = text.split("\n").filter((line) => line.trim()).length;
+  return lines > 0 ? <span className="font-normal text-ink-secondary"> · {t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines })}</span> : null;
+}
+
+export function MemoryEditButton({ editing, onEdit }: { editing: boolean; onEdit: (next: boolean) => void }) {
+  const { t } = useI18n();
+  return (
+    <button type="button" className="mm-action" onClick={() => onEdit(!editing)}>
+      {editing ? t("bot.memoryEditDone") : <><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</>}
+    </button>
   );
 }
 

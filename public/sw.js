@@ -1,7 +1,7 @@
 // Push worker. An open the network has not answered in SHELL_WAIT_MS gets the last app page and its
 // hashed assets; every network answer refreshes that copy. On a relay origin a page load that
 // cannot reach the PC at all gets offline.html.
-const OFFLINE_CACHE = "wink-offline-v1";
+const OFFLINE_CACHE = "wink-offline-v2";
 const OFFLINE_URL = "/offline.html";
 const SHELL_CACHE = "wink-shell-v1";
 const SHELL_URL = "/";
@@ -43,7 +43,7 @@ async function cachedShell() {
 }
 
 function offline() {
-  return RELAY_ORIGIN ? caches.match(OFFLINE_URL).then((page) => page ?? Response.error()) : Response.error();
+  return RELAY_ORIGIN ? caches.open(OFFLINE_CACHE).then((cache) => cache.match(OFFLINE_URL)).then((page) => page ?? Response.error()) : Response.error();
 }
 
 async function navigate(event, app) {
@@ -103,7 +103,11 @@ self.addEventListener("push", (event) => {
       vibrate: [200, 100, 200],
       icon: data.icon || "/app-icon-192.png?v=2",
       badge: "/app-icon-192.png?v=2",
-      data: { url: data.url || "/" },
+      data: { url: data.url || "/", chat: data.chat, at: data.at },
+    }).then(async () => {
+      for (const client of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
+        client.postMessage({ type: "orbit-push" });
+      }
     }),
   );
 });

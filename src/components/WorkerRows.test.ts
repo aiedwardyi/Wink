@@ -286,9 +286,10 @@ describe("WorkerChip", () => {
         gap: true,
         overlap: false,
         stacked: [],
-        phone: "relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex",
+        phone: "relative flex items-center gap-1 md:hidden md:p-1.5 @max-4xl/chathead:!flex",
       });
       expect(klass).toContain("md:flex @max-4xl/chathead:!hidden");
+      expect(phone.querySelector("svg")?.getAttribute("class")).toContain("md:size-[18px]");
     } finally {
       await unmount();
     }
@@ -714,7 +715,7 @@ describe("WorkerChip", () => {
 
   it("closes the open desktop list when the phone breakpoint flips", async () => {
     let flip: (() => void) | undefined;
-    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip = listener; } });
+    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip ??= listener; } });
     const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1)]);
     try {
       await act(async () => chip()!.click());

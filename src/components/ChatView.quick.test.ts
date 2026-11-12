@@ -96,15 +96,15 @@ describe("ChatView quick answers", () => {
     expect(actions.querySelector("[aria-label='Regenerate response']")).not.toBeNull();
   });
 
-  it("shows a typing row under a pending ask, also after the turn ended", async () => {
-    const { host, render } = await mount(bot([ask("q", 1)], true));
-    expect(row(host, "q")!.querySelector("[data-quick-typing]")?.textContent).toBe("");
-    await render(bot([ask("q", 1)], false));
-    expect(row(host, "q")!.querySelector("[data-quick-typing]")).not.toBeNull();
+  it("renders nothing under a pending ask", async () => {
+    const { host } = await mount(bot([ask("q", 1)], true));
+    expect(host.querySelector("[data-quick-typing]")).toBeNull();
+    expect(row(host, "q")!.querySelector(".items-start")).toBeNull();
   });
 
-  it("drops the typing row when the answer lands", async () => {
-    const { host } = await mount(bot([ask("q", 1), answer("a", "q", 2)], true));
+  it("still renders nothing under a pending ask after the turn ended", async () => {
+    const { host, render } = await mount(bot([ask("q", 1)], true));
+    await render(bot([ask("q", 1)], false));
     expect(host.querySelector("[data-quick-typing]")).toBeNull();
   });
 

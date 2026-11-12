@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { linkedFileGrant, serveLinkedFile, type LinkedMessage } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile, serveLinkedFolder, type LinkedMessage, type ServeLinkedFileOptions } from "./linked-files.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import {
   loadThreadSyncLedger,
@@ -362,6 +362,18 @@ describe("linked files", () => {
       const policy = (await open("index.html")).headers.get("content-security-policy") ?? "";
       expect(policy).toMatch(/^sandbox allow-scripts;/);
       expect(policy).not.toContain("allow-same-origin");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets only Wink's own page frame a linked page, for the Show pane", async () => {
+    const { server, open } = await linkedSite({ "index.html": "<p>hi</p>" });
+    try {
+      const policy = (await open("index.html")).headers.get("content-security-policy") ?? "";
+      const ancestors = /frame-ancestors ([^;]+)/.exec(policy)?.[1].split(" ") ?? [];
+      expect(ancestors).toHaveLength(2);
+      expect(ancestors.every((source) => /^https?:\/\/(127\.0\.0\.1|localhost):\d+$/.test(source))).toBe(true);
     } finally {
       await server.close();
     }
@@ -911,6 +923,106 @@ describe("linked files", () => {
     try {
       const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(filePath)}`, { headers: { Range: "bytes=0-0" } });
       expect([res.status, await res.json()]).toEqual([404, { error: "not found", deviceId: "other-pc" }]);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("linked folders", () => {
+  async function linkedFolder(link: (root: string) => string, overrides: Partial<ServeLinkedFileOptions> = {}) {
+    const root = temp("linked-folder-");
+    const folder = join(root, "showcase-1111");
+    mkdirSync(join(folder, "sub"), { recursive: true });
+    const files = { "older.png": "png", "page.html": "<p>page</p>", "notes.txt": "notes text", ".env": "secret", "desktop.ini": "x", "sub/deep.txt": "deep" };
+    let at = 1_700_000_000;
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(folder, name), text);
+      utimesSync(join(folder, name), at, at);
+      at += 60;
+    }
+    const options: ServeLinkedFileOptions = {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", text: `[showcase-1111](${link(folder)})` }],
+      writerDeviceId: () => null, rootsFor: () => [root], ...overrides,
+    };
+    const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, options));
+    const list = (path: string) => fetch(`${server.url}/api/threads/t1/linked-folder?path=${encodeURIComponent(path)}`);
+    const open = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+    return { root, folder, server, list, open };
+  }
+
+  it("a remote folder link lists its files", async () => {
+    const site = await linkedFolder((folder) => folder);
+    try {
+      const res = await site.list(site.folder);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      expect(await res.json()).toMatchObject({
+        files: [{ name: "notes.txt", size: 10, path: join(site.folder, "notes.txt") }, { name: "page.html", size: 11 }, { name: "older.png", size: 3 }],
+        more: 0,
+      });
+      expect((await site.list(`${site.folder}${sep}`)).status).toBe(200);
+      for (let i = 0; i < 202; i++) writeFileSync(join(site.folder, `bulk-${i}.txt`), "");
+      const capped = await (await site.list(site.folder)).json();
+      expect(capped).toHaveProperty("files.length", 200);
+      expect(capped).toHaveProperty("more", 5);
+    } finally {
+      await site.server.close();
+    }
+  });
+
+  it("a file inside a linked folder opens remotely", async () => {
+    const site = await linkedFolder((folder) => pathToFileURL(folder).href);
+    try {
+      const notes = await site.open(join(site.folder, "notes.txt"));
+      expect([notes.status, await notes.text()]).toEqual([200, "notes text"]);
+      expect(notes.headers.get("content-disposition")).toContain("attachment");
+      const page = await site.open(join(site.folder, "page.html"));
+      expect([page.status, await page.text()]).toEqual([200, "<p>page</p>"]);
+      for (const name of [".env", "desktop.ini", join("sub", "deep.txt"), join("sub", "..", ".env"), "missing.txt"]) {
+        expect((await site.open(join(site.folder, name))).status, name).toBe(404);
+      }
+    } finally {
+      await site.server.close();
+    }
+    const denied = await linkedFolder((folder) => folder, { bearerOk: false });
+    try {
+      expect((await denied.list(denied.folder)).status).toBe(401);
+    } finally {
+      await denied.server.close();
+    }
+  });
+
+  it("a folder outside the roots is refused", async () => {
+    const outside = temp("linked-folder-outside-");
+    writeFileSync(join(outside, "secret.txt"), "secret");
+    const site = await linkedFolder((folder) => folder, { rootsFor: () => [join(outside, "..", "nowhere")] });
+    try {
+      expect((await site.list(site.folder)).status).toBe(404);
+      expect((await site.open(join(site.folder, "notes.txt"))).status).toBe(404);
+    } finally {
+      await site.server.close();
+    }
+    const root = temp("linked-folder-alias-");
+    const alias = join(root, "alias");
+    symlinkSync(outside, alias, "junction");
+    mkdirSync(join(root, "unlinked"));
+    mkdirSync(join(root, ".private"));
+    writeFileSync(join(root, "unlinked", "a.txt"), "a");
+    writeFileSync(join(root, ".private", "a.txt"), "a");
+    const options: ServeLinkedFileOptions = {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", text: `[alias](${alias}) [private](${join(root, ".private")}) [root](${root})` }, { id: "m2", role: "user", text: `[mine](${join(root, "unlinked")})` }],
+      writerDeviceId: () => null, rootsFor: () => [root],
+    };
+    const server = await listen((req, res) => (req.url?.includes("/linked-folder") ? serveLinkedFolder : serveLinkedFile)(req, res, options));
+    try {
+      for (const folder of [alias, join(root, "unlinked"), join(root, ".private"), root, join(alias, "..", "unlinked")]) {
+        expect((await fetch(`${server.url}/api/threads/t1/linked-folder?path=${encodeURIComponent(folder)}`)).status, folder).toBe(404);
+      }
+      for (const file of [join(alias, "secret.txt"), join(root, "unlinked", "a.txt"), join(root, ".private", "a.txt")]) {
+        expect((await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`)).status, file).toBe(404);
+      }
     } finally {
       await server.close();
     }

@@ -16,4 +16,11 @@ describe("team room rows and open questions", () => {
     expect(isSentByPerson(host)).toBe(true);
     expect(scanQuestion([ask, host])).toBeNull();
   });
+
+  it("a call transcript line never closes it, a spoken answer sent to the bot does", () => {
+    const line = { role: "user", kind: "text", call: { id: "c-0123456789ab" } };
+    const answer = { role: "user", kind: "text", call: { id: "c-0123456789ab", ask: true as const } };
+    expect(scanQuestion([ask, line])).toBe(ask);
+    expect(scanQuestion([ask, line, answer])).toBeNull();
+  });
 });

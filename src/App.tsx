@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -24,6 +24,10 @@ import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { JoinedRoomView } from "@/components/JoinedRoomView";
+import { TeamRoomView } from "@/components/TeamRoomView";
+import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
 import { LazyView } from "@/components/LazyView";
@@ -32,6 +36,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
+import { closeShow, useAutoShow, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -39,13 +44,16 @@ import { altDigitSelectsPane, backquoteTogglesTerminal, workerPaneOrder } from "
 import { workerRuns } from "@/lib/worker-runs";
 import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
+import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushTarget } from "@/lib/web-push";
+import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
+import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
@@ -58,7 +66,7 @@ const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
-const VerifyWatchPanel = lazyView(() => import("@/components/VerifyWatch").then((m) => ({ default: m.VerifyWatchPanel })));
+const ShowPane = lazyView(() => import("@/components/ShowPane").then((m) => ({ default: m.ShowPane })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
 
@@ -94,8 +102,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useLayoutEffect(() => {
     latestState.current = state;
   }, [state]);
-  const unreadCount = unreadConversationCount(state.bots, state.groups) + terminalAttentionCount(state.terminalAttention);
-  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId));
+  const joinedRooms = useJoinedRooms();
+  const latestJoined = useRef(joinedRooms);
+  useLayoutEffect(() => {
+    latestJoined.current = joinedRooms;
+  }, [joinedRooms]);
+  const unreadCount = unreadConversationCount(state.bots, state.groups, joinedRooms) + terminalAttentionCount(state.terminalAttention);
+  const menuUnreadBadge = formatCollapsedUnreadBadge(collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms));
   const menuChats = [...state.bots, ...listedGroups(state.groups)];
   const menuExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
   const menuQuestion = anyChatNeedsYou(menuChats, menuExceptId);
@@ -136,9 +149,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
-  const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
+  const joinedId = joinedRoomIdOf(state.selectedId);
+  const bot = group || joinedId ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
+  const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
@@ -236,20 +251,25 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.pluginsOpen ||
     state.createBotOpen;
   const watch = useVerifyWatch();
+  const show = useShowItem();
   const watchChat = group ?? bot;
+  const showChat = group && isTeamRoom(group) ? undefined : watchChat;
+  const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
   const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
-    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner, watch.messageId)
+    ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined;
-  const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
+  const showing = show && showChat && show.threadId === showChat.threadId ? show : undefined;
+  const watchShown = usePresence(watch && watchChat && watchCard ? { watch: { card: watchCard, threadId: watchChat.threadId, live: watch.live } } : showing ? { item: showing } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
-  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : panel === "show" ? closeShow() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
-  useEffect(() => closeVerifyWatch(), [state.selectedId]);
+  useEffect(() => { closeVerifyWatch(); closeShow(); }, [state.selectedId]);
+  useAutoShow(showChat?.threadId, chatMessages, !phoneMenuVisible && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
-      <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
+      <ShowPane {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
     </LazyView>
   );
 
@@ -370,6 +390,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, []);
 
   useEffect(() => {
+    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload]);
+  }, [state.hydrated]);
+
+  useEffect(() => {
     const offAttention = window.ogb?.terminal?.onAttention?.(({ id: sessionId, botId, reason }) => {
       const current = latestState.current;
       const bot = current.bots.find((candidate) => candidate.id === botId);
@@ -434,6 +458,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
     if (!worker) return;
     const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "orbit-push") {
+        void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups]).catch(() => {});
+        return;
+      }
       if (event.data?.type !== "orbit-open" || typeof event.data.url !== "string") return;
       const target = webPushTarget(new URL(event.data.url, window.location.origin).search);
       if (!target) return;
@@ -444,6 +472,24 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
+  const readChats = [...state.bots, ...state.groups, ...joinedReadState(joinedRooms)].map((chat) => (chat.unread ? "" : `${chat.id}:${chat.readAt}`)).join(" ");
+  useEffect(() => {
+    if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups, ...joinedReadState(latestJoined.current)]).catch(() => {});
+  }, [readChats]);
+  // Reads on other devices show up here: no silent push, since Chrome bills each one and then shows its own alert.
+  useEffect(() => {
+    if (!webPushSupported()) return;
+    const sweep = () => {
+      if (document.visibilityState !== "visible") return;
+      void closeReadAlerts(async () => {
+        const { bots, groups } = await api("/api/bots?messages=0");
+        return [...bots, ...groups, ...joinedReadState(latestJoined.current)];
+      }).catch(() => {});
+    };
+    sweep();
+    document.addEventListener("visibilitychange", sweep);
+    return () => document.removeEventListener("visibilitychange", sweep);
+  }, []);
   const shown = group ?? bot;
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.
@@ -695,6 +741,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
+      ) : joinedId ? (
+        <JoinedRoomView key={joinedId} roomId={joinedId} />
+      ) : group && isTeamRoom(group) ? (
+        <TeamRoomView key={group.id} group={group} />
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
@@ -721,6 +771,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
                   <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
+                ) : webTerminal ? (
+                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} webBridge={webTerminal} />
                 ) : (
                   <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 )}

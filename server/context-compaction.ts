@@ -5,6 +5,7 @@ import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
+import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
 import type { ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
@@ -43,6 +44,13 @@ const SUMMARY_FLOOR_SHARE = 0.4;
 const SUMMARY_PREVIOUS_SHARE = 0.75;
 const FALLBACK_SUMMARY_NOTICE = "Model summary unavailable; full transcript retained by Wink.";
 const SUMMARY_TRIMMED = "[summary trimmed to fit]";
+const SUMMARY_MAX_CHARS = 32_000;
+const VALUES_CAP_TOKENS = 4_000;
+// The block's own room, taken from the tail so the summary text is never cut for it.
+const VALUES_ROOM_TOKENS = 2_400;
+const VALUES_ROOM_SHARE = 0.04;
+// A stand-in is rebuilt to fit, so there the block takes its share first.
+const VALUES_FALLBACK_SHARE = 0.4;
 const FALLBACK_EXCERPTS = 4;
 const FALLBACK_EXCERPT_TOKENS = 100;
 const CARD_TEXT_CHARS = 200;
@@ -314,6 +322,18 @@ function validSummary(raw: string, minTokens: number): string | null {
 function trimSummary(summary: string, summaryBudget: number): string {
   const fits = (head: string) => messageTokens(summaryMessage(`${head}\n${SUMMARY_TRIMMED}`, 0)) <= summaryBudget;
   return `${fittingHead(summary, fits).trimEnd()}\n${SUMMARY_TRIMMED}`;
+}
+
+function valuesRoomFor(lines: readonly TypedLine[], budgetTokens: number): number {
+  return lines.length ? Math.min(VALUES_ROOM_TOKENS, Math.floor(budgetTokens * VALUES_ROOM_SHARE)) : 0;
+}
+
+/** The text, then the values block in what the text leaves of maxTokens and of the row's length limit. */
+function withTypedValues(text: string, lines: readonly TypedLine[], maxTokens: number): string {
+  if (!lines.length) return text;
+  const room = Math.min(VALUES_CAP_TOKENS, maxTokens - messageTokens(summaryMessage(`${text}\n\n`, 0)));
+  const block = typedValuesBlock(lines, Math.min(room * 3, SUMMARY_MAX_CHARS - text.length - 2));
+  return block ? `${text}\n\n${block}` : text;
 }
 
 /** Pane notes are worker output: replayed as untrusted user-side data, never the bot's own words. */
@@ -992,6 +1012,9 @@ export type CompactionPlan =
       estimatedTokensBefore: number;
       transcript: ModelContextMessage[];
       deferredMail?: ContextCompactionV1["deferredMail"];
+      /** value lines of the covered rows; the block is rebuilt from them at every write */
+      typedLines: TypedLine[];
+      valuesRoom: number;
     }
   | {
       needed: false;
@@ -1035,7 +1058,7 @@ export function planCompaction(input: {
     return { needed: false, status: "unsupported", messageId: found.messageId, version: found.version };
   }
   const previous = found;
-  const previousSummary = previous ? redactSecretsInText(previous.value.summary) : "";
+  const storedSummary = previous ? redactSecretsInText(previous.value.summary) : "";
   const tailUnits = replayUnits(
     input.messages,
     input.excludeIds ?? new Set(),
@@ -1053,7 +1076,7 @@ export function planCompaction(input: {
     input.includeSpeakers ?? false,
   );
   const currentTranscript = [
-    ...(previous ? [summaryMessage(previousSummary, input.messages[previous.coveredIndex]!.at)] : []),
+    ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
     ...units.map(({ role, text }) => ({ role, text })),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
@@ -1068,7 +1091,9 @@ export function planCompaction(input: {
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
-  const tailBudget = budgetTokens - summaryBudget;
+  const typedLines = typedValueLines(input.messages, input.excludeIds);
+  const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
+  const tailBudget = budgetTokens - summaryBudget - valuesRoom;
   let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
   if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
@@ -1090,7 +1115,7 @@ export function planCompaction(input: {
   return {
     needed: true,
     previous,
-    previousSummary,
+    previousSummary: withoutTypedValues(storedSummary),
     old,
     tail,
     coveredThrough: input.messages[coveredThroughIndex]!,
@@ -1100,6 +1125,8 @@ export function planCompaction(input: {
     estimatedTokensBefore: Math.max(1, currentTokens),
     transcript: currentTranscript,
     ...(deferredMail.length ? { deferredMail } : {}),
+    typedLines: typedLines.filter((line) => line.index <= coveredThroughIndex),
+    valuesRoom,
   };
 }
 
@@ -1182,7 +1209,7 @@ function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, s
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary,
+    summary: withTypedValues(summary, plan.typedLines, plan.summaryBudget + plan.valuesRoom),
     coveredThroughId: plan.coveredThrough.id,
     firstKeptId: plan.tail.find((unit) => !plan.deferredMail?.some((row) => row.id === unit.id))?.id ?? null,
     contextWindow: plan.contextWindow,
@@ -1235,7 +1262,7 @@ export async function prepareModelContext(input: {
       ...(plan.previous ? { compactionId: plan.previous.messageId } : {}),
     };
   }
-  const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow } = plan;
+  const { previous, previousSummary, old, tail, coveredThrough, budgetTokens, summaryBudget, contextWindow, typedLines, valuesRoom } = plan;
   let summary = previousSummary;
   try {
     await input.beforeSummarize?.();
@@ -1246,24 +1273,28 @@ export async function prepareModelContext(input: {
     );
   }
   // A fallback on a fallback restarts from the last model summary, so notices never nest.
-  const fallbackFrom = (chain: string) => {
+  const fallbackFrom = (chain: string, reason: "no-summarizer" | SummaryCallResult) => {
     let previousText = chain;
     let history = old;
     if (isFallbackSummary(chain)) {
       const good = repairTarget(input.messages)?.good ?? null;
-      previousText = good ? redactSecretsInText(good.value.summary) : "";
+      previousText = good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "";
       history = spanUnits(input, good?.coveredIndex ?? -1, Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1), good?.value.deferredMail, plan.deferredMail);
     }
-    return fallbackSummary({
+    // Sizes the text only: compactionRecord rebuilds the block in what the text leaves of summaryBudget + valuesRoom, so the two never overflow it.
+    const block = typedValuesBlock(typedLines, Math.min(VALUES_CAP_TOKENS, Math.floor((summaryBudget + valuesRoom) * VALUES_FALLBACK_SHARE)) * 3);
+    const text = fallbackSummary({
       previousSummary: previousText,
       history,
       taskRecordText: input.taskRecordText,
-      summaryTokens: summaryBudget,
+      summaryTokens: block ? summaryBudget - Math.max(0, textTokens(block) + 1 - valuesRoom) : summaryBudget,
     });
+    console.info(`[summary-stand-in] ${JSON.stringify({ reason, contextWindow, coveredThroughId: coveredThrough.id })}`);
+    return text;
   };
   if (!input.summarize) {
     try {
-      summary = fallbackFrom(previousSummary);
+      summary = fallbackFrom(previousSummary, "no-summarizer");
     } catch (error) {
       return failedContext(
         `Context summarization failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1288,7 +1319,7 @@ export async function prepareModelContext(input: {
         `context compaction: summarizer failed (${redactSecretsInText(segment.error instanceof Error ? segment.error.message : String(segment.error))}); using deterministic fallback`,
       );
       try {
-        summary = fallbackFrom(segment.summary || previousSummary);
+        summary = fallbackFrom(segment.summary || previousSummary, segment.result);
       } catch (error) {
         return failedContext(
           `Context summarization failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1298,12 +1329,13 @@ export async function prepareModelContext(input: {
     }
   }
 
-  const transcript = [summaryMessage(summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
+  const record = compactionRecord(plan, summary);
+  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);
   }
-  const validated = readContextCompaction({ value: compactionRecord(plan, summary) });
+  const validated = readContextCompaction({ value: record });
   if (validated.status !== "valid") {
     return failedContext("Context summarization produced invalid durable state.", previous);
   }
@@ -1345,9 +1377,10 @@ export async function buildCompaction(input: {
   });
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
-  const transcript = [summaryMessage(segment.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
+  const record = compactionRecord(plan, segment.summary);
+  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
-  const validated = readContextCompaction({ value: compactionRecord(plan, segment.summary) });
+  const validated = readContextCompaction({ value: record });
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };
 }
 
@@ -1376,7 +1409,7 @@ export async function repairModelContext(input: {
   const segment = await summarizeSegment({
     messages: input.messages,
     previous: good,
-    previousSummary: good ? redactSecretsInText(good.value.summary) : "",
+    previousSummary: good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "",
     history,
     taskRecordText: input.taskRecordText,
     contextWindow,
@@ -1388,9 +1421,10 @@ export async function repairModelContext(input: {
   });
   if (segment.status === "too-large") return segment;
   if (segment.status === "error") return { status: "failed", result: segment.result };
+  const typedLines = typedValueLines(input.messages.slice(0, target.coveredIndex + 1), input.excludeIds);
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
-    summary: segment.summary,
+    summary: withTypedValues(segment.summary, typedLines, summaryBudget + valuesRoomFor(typedLines, budgetTokens)),
     coveredThroughId: target.value.coveredThroughId,
     firstKeptId: target.value.firstKeptId,
     contextWindow,

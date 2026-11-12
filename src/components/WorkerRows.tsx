@@ -403,8 +403,9 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
           {first && <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>}
           {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}
         </span>
-        <span data-worker-chip-phone className="relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex">
-          <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
+        {/* md: sizes apply when a narrow chat header unhides this compact form on desktop. */}
+        <span data-worker-chip-phone className="relative flex items-center gap-1 md:hidden md:p-1.5 @max-4xl/chathead:!flex">
+          <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary md:size-[18px]" />
           {listed.length >= 2 && <span aria-hidden className="text-[12px] tabular-nums text-ink-secondary">{listed.length}</span>}
           {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}
           <span aria-hidden className="absolute left-1/2 top-1/2 size-11 -translate-x-1/2 -translate-y-1/2" />

@@ -239,7 +239,7 @@ export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) =
   return lines.join("\n");
 }
 
-// Mirrors BROWSER-WAIT (browser-proxy.ts httpDeadlineMs): the host's own poll loop is
+// Mirrors the browser proxy's HTTP deadline: the host's own poll loop is
 // bounded by timeoutMs, so the HTTP deadline needs a margin above it to get the host's
 // timeout result instead of an abort here.
 function readDeadlineMs(route: { waitFor?: string; timeoutMs?: number }): number {

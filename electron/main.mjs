@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -114,6 +114,7 @@ const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./deskt
 const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
+const { setMainPermissions } = require("./main-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,8 @@ const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 const BRAND = readBrandOverride(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"));
 const WINDOW_ICON = BRAND?.iconPath ?? APP_ICON;
 const deviceWindows = new Map();
+const deviceOrigin = (contents) => [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents === contents)?.[0];
+const micAllowed = () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone"));
 const deviceLinkPages = new WeakMap();
 const deviceLoads = new WeakMap();
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
@@ -1215,7 +1218,7 @@ async function openDeviceWindow(rawHost, rawName) {
     }));
     const devices = win.webContents.session;
     const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
-    setDevicePermissions(devices);
+    setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
     // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
       if (statusCode !== 401 && !(statusCode === 403 && resourceType === "mainFrame")) return;
@@ -1748,7 +1751,7 @@ ipcMain.handle("desktop:open-file", async (_event, rawPath, rawBase) => {
 ipcMain.handle("desktop:open-peer-file", async (event, host, threadId, filePath) => {
   if (!trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())) throw new Error("Untrusted file caller");
   const devices = session.fromPartition(DEVICE_WINDOW_PARTITION);
-  setDevicePermissions(devices);
+  setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
   await openPeerLinkedFile(host, threadId, filePath, { tailnet: await localTailnet(), session: devices, createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
 });
 
@@ -1829,6 +1832,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
+  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -2006,6 +2010,11 @@ app.whenReady().then(async () => {
   if (!verifyProbe) registerCuaIpc();
   if (!verifyProbe) registerUpdaterIpc();
   if (!verifyProbe) errorReports.start();
+  setMainPermissions(session.defaultSession, {
+    contents: () => mainWindow?.webContents,
+    origin: rendererOrigin,
+    micAllowed,
+  });
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
   // The handler binds that request to the same frame/origin, rejects audio,

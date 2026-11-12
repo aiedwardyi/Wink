@@ -13,6 +13,8 @@
 //                     failures the provider already explained)
 //   FAKE_ACP_BILLING_PERCENT  weekly credit fill the billing call reports (default 42)
 //   FAKE_ACP_BILLING_END      ISO end of that weekly period (default now + 7 days)
+//                   | quiet-loop (a "wake" prompt calls no_reply_needed, then
+//                     again with text unless a session/cancel lands first)
 //                   | permission-twice (two sequential cards in one turn)
 //                   | permission-edits (two edits sharing a title, differing in rawInput)
 //                   | interleave (message → tool → message → tool → message)
@@ -60,6 +62,7 @@ import { homedir } from "node:os";
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 let runningPromptId: number | undefined;
+let quietLoop: ReturnType<typeof setTimeout> | undefined;
 // opencode-shaped surface: the session carries its own model catalog and the
 // model is chosen with session/set_config_option, because `opencode acp` takes
 // no -m. Off unless FAKE_ACP_MODELS is set, so every existing mode is byte-
@@ -552,6 +555,21 @@ function handle(msg: any) {
         runningPromptId = msg.id;
         return;
       }
+      if (mode === "quiet-loop" && JSON.stringify(msg.params?.prompt).includes("wake")) {
+        const quiet = (toolCallId: string) => {
+          out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId, title: "no_reply_needed" } } });
+          out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" } } });
+        };
+        quiet("q1");
+        runningPromptId = msg.id;
+        quietLoop = setTimeout(() => {
+          runningPromptId = undefined;
+          quiet("q2");
+          out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "No response requested." } } } });
+          result(msg.id, { stopReason: "end_turn" });
+        }, 500);
+        return;
+      }
       if (mode === "fail-after-text") {
         // Stream real text, THEN fail the turn — the shape of a crash
         // mid-answer. This is the one case where the routine-failed/done
@@ -573,7 +591,7 @@ function handle(msg: any) {
             ? { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 }, _meta: {} }
             : { stopReason: "end_turn", _meta: process.env.FAKE_ACP_PROMPT_META ? JSON.parse(process.env.FAKE_ACP_PROMPT_META) : { inputTokens: 10, outputTokens: 5 } },
         );
-        // SPEED-4: inject a late session/update after the prompt result so tests
+        // Inject a late session/update after the prompt result so tests
         // can prove wrong-session / isReplay filtering. Untagged same-session
         // late chunks are intentionally not distinguishable once the next turn
         // has armed promptSent — do not claim otherwise.
@@ -787,7 +805,8 @@ function handle(msg: any) {
       break;
     case "session/cancel":
       // the interrupted prompt resolves as cancelled
-      if (mode === "stop-replies" && runningPromptId !== undefined) {
+      if ((mode === "stop-replies" || mode === "quiet-loop") && runningPromptId !== undefined) {
+        clearTimeout(quietLoop);
         result(runningPromptId, { stopReason: "cancelled", _meta: { cancellationCategory: "UserRequested" } });
         runningPromptId = undefined;
       }

@@ -85,6 +85,8 @@
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
+//   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
+//                      stdin, then creates this file
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
 //   FAKE_CLAUDE_FORK_MODE / FAKE_CLAUDE_FORK_FIXTURE  what a --fork-session
@@ -247,6 +249,10 @@ let stdinEnded = false;
 let steerGateArmed = false;
 let onSteer: (() => void) | null = null;
 let lateSteerAnswered = false;
+if (process.env.FAKE_CLAUDE_EAGER_INIT) {
+  out({ type: "system", subtype: "init", session_id: sessionId, model });
+  writeFileSync(process.env.FAKE_CLAUDE_EAGER_INIT, "");
+}
 
 // Ownership-race fixture: after accepting the first prompt, stop consuming
 // stdin until the test creates this file. A large second write then leaves

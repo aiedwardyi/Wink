@@ -15,6 +15,8 @@ const PREAMBLE =
   "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
 const CAP_MS = 12_000;
+// a fork still reading or writing gets a fresh CAP_MS, up to this
+const MAX_MS = 25_000;
 const MAX_CHARS = 450;
 // An answered fork exits on its own once stdin ends; this only bounds a stuck one.
 const CLOSE_GRACE_MS = 5_000;
@@ -133,6 +135,7 @@ function viaFork(handle: SideHandle, threadId: string, started: number, attached
       if (ended) return;
       ended = true;
       clearTimeout(cap);
+      clearTimeout(hard);
       off();
       const done = handle
         .close(graceMs)
@@ -145,8 +148,14 @@ function viaFork(handle: SideHandle, threadId: string, started: number, attached
       void done.finally(() => closing.delete(done));
       resolve({ ...result, ms: Date.now() - started });
     };
-    const cap = setTimeout(() => end({ route: "handoff" }, 0), CAP_MS);
+    const stop = () => end({ route: "handoff" }, 0);
+    let cap = setTimeout(stop, CAP_MS);
+    const hard = setTimeout(stop, MAX_MS);
     const off = handle.onEvent((event) => {
+      if (event.type !== "session" && event.type !== "done") {
+        clearTimeout(cap);
+        cap = setTimeout(stop, CAP_MS);
+      }
       if (event.type === "session") {
         live.forkSessionId = event.id;
         record(live);

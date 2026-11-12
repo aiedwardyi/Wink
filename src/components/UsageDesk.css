@@ -31,6 +31,8 @@
 .usage-account-identity { display: contents; font-size: 13px; font-weight: 500; line-height: 22px; color: var(--color-ink); }
 .usage-control { grid-column: 2; grid-row: 1; }
 .usage-email { display: block; grid-column: 1 / -1; margin-top: -2px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; line-height: 1.35; color: var(--color-ink-secondary); }
+/* Connections shows the whole address. */
+[data-engine-row] .usage-email { white-space: normal; }
 .usage-name-button { display: inline-flex; justify-self: start; align-items: center; gap: 5px; max-width: 100%; border-radius: 3px; font-weight: 500; }
 .usage-name-button svg { flex: none; opacity: 0; color: var(--color-ink-secondary); }
 .usage-name-button:hover svg, .usage-name-button:focus-visible svg { opacity: 1; }
@@ -94,8 +96,8 @@ html[data-usage-dragging], html[data-usage-dragging] * { cursor: grabbing !impor
 .account-name-inline input { flex: 1 1 8ch; width: 8ch; min-width: 4ch; }
 .account-name-inline button { min-height: 24px; padding-inline: 3px; font-size: 11px; }
 .account-name-inline [role="alert"] { flex-basis: 100%; font-size: 11px; line-height: 1.35; }
-.usage-cap { padding: 6px 12px 8px; }
-.usage-cap button { min-height: 17px; font-size: 12px; }
+.usage-cap { padding: 0; }
+.usage-cap button { width: 100%; min-height: 17px; padding: 6px 12px 8px; font-size: 12px; }
 @container usage-group (width < 486px) {
   .usage-meter { column-gap: 6px; }
   .usage-figures { column-gap: 6px; }
@@ -107,7 +109,7 @@ html[data-usage-dragging], html[data-usage-dragging] * { cursor: grabbing !impor
   }
 }
 @media (width < 768px) {
-  .usage-desk { margin-inline: -8px; transition: margin-inline var(--motion-large) var(--ease-soft); }
+  .usage-desk, [data-settings-connections] { margin-inline: -8px; transition: margin-inline var(--motion-large) var(--ease-soft); }
   .usage-toolbar { transition: margin-bottom var(--motion-large) var(--ease-soft); }
   .usage-sections { transition: row-gap var(--motion-large) var(--ease-soft); }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) { margin-inline: 0; }

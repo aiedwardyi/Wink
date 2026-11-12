@@ -439,6 +439,16 @@ describe("quick route", () => {
     await vi.waitFor(() => expect(h.ask).toHaveBeenCalledTimes(2));
     expect((h.ask.mock.calls[1] as unknown[])[2]).toMatchObject({ text: "and which file is that in?", notes: expect.stringContaining(`Q: ${QUESTION}\nA: Port 8787.`) });
   });
+
+  it("gives a call ask the call lines before it", async () => {
+    const h = harness();
+    const call = { id: "c-0123456789ab" };
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Which port does the server use?", call });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...call, voice: true } });
+    await h.send({ text: QUESTION, call: { ...call, ask: true } });
+    await h.settled();
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nYou: Let me check.") });
+  });
 });
 
 describe("boot recovery", () => {

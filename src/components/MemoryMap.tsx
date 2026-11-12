@@ -4,7 +4,7 @@ import type { AppState, Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
-import { currentTask, NotedLines, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryFileLines, NotedLines, type MemoryTopic } from "./MemoryGroups";
 import { paintsGlow, smoothGlow } from "./MemoryMapGlow";
 import { AURA, fadePanel, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { TopicRows } from "./MemoryTopics";
@@ -81,7 +81,7 @@ function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTi
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, saveState, editing = false, onEditing, onStack }: {
+export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, saveState, fileAction, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
@@ -93,6 +93,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   /** the memory file editor; on the wide map it opens over the three kinds */
   editor?: ReactNode;
   saveState?: ReactNode;
+  fileAction?: ReactNode;
   editing?: boolean;
   onEditing?: (editing: boolean) => void;
   onStack?: (stacked: boolean) => void;
@@ -396,11 +397,14 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
             <div className="mm-sheet-head" data-mm-content="">
               <span className="mm-icon"><FileText size={16} aria-hidden="true" /></span>
               <span className="mm-label">
-                <span className="mm-name">{t("bot.memoryFile")}</span>
+                <span className="mm-name">{t("bot.memoryFile")}<MemoryFileLines text={text} /></span>
                 <span className="mm-hint">{t("bot.memoryThisBotHelp")}</span>
               </span>
               {saveState}
-              <button type="button" className="mm-action" onClick={() => onEditing?.(false)}>{t("bot.memoryEditDone")}</button>
+              {fileAction}
+              <button type="button" className="mm-close" onClick={() => onEditing?.(false)} aria-label={t("bot.memoryClosePanel", { name: t("bot.memoryFile") })}>
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
             <div className="mm-sheet-body mm-edit" data-mm-content="">{editor}</div>
           </section>

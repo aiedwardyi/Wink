@@ -55,6 +55,9 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
+import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
+import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   displaySidebarWidth,
@@ -99,16 +102,18 @@ import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
-import { ArchivedBotsPanel, BotListItem, GroupListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
+import { ArchivedBotsPanel, BotListItem, type MenuState, type SidebarRowDrag } from "./SidebarConversations";
 import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { DeviceSwitcher } from "./DeviceSwitcher";
+import { ChoosePcLink } from "./ChoosePcLink";
 import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
+import { useJoinedRooms } from "@/lib/joined-rooms";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -193,8 +198,9 @@ function RoomContextMenu({
   onMoveToSection: (groupId: string) => void;
 }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch } = useSidebarRooms();
   const group = state.groups.find((g) => g.id === menu.groupId);
+  const joined = joinedRoomIdOf(menu.groupId) !== null;
   const [renaming, setRenaming] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuHeight, setMenuHeight] = useState(240);
@@ -252,7 +258,7 @@ function RoomContextMenu({
         {group.pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
         {group.pinned ? t("chrome.unpin") : t("chrome.pin")}
       </button>
-      {renaming ? (
+      {!joined && (renaming ? (
         <div className="flex items-center gap-1 px-2 py-1">
           <input
             ref={renameRef}
@@ -304,7 +310,7 @@ function RoomContextMenu({
           <Pencil size={16} className="text-ink-secondary" />
           {t("chrome.renameChannel", { name: group.name })}
         </button>
-      )}
+      ))}
       <button
         onClick={() => {
           onClose();
@@ -316,7 +322,8 @@ function RoomContextMenu({
         {t("chrome.moveToContext")}
       </button>
 
-      <button
+      <TeamRoomSidebarActions group={group} onClose={onClose} />
+      {!joined && <button
         onClick={() => {
           dispatch({ type: "deleteGroup", groupId: group.id });
           onClose();
@@ -325,7 +332,7 @@ function RoomContextMenu({
       >
         <Trash2 size={16} />
         {t("chrome.deleteChannel")}
-      </button>
+      </button>}
     </div>,
     document.body,
   );
@@ -351,7 +358,7 @@ function SectionPicker({
   onAssign: (section: string) => void;
 }) {
   const { t } = useI18n();
-  const { state } = useStore();
+  const { state } = useSidebarRooms();
   const [name, setName] = useState("");
   const trimmed = name.trim();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -619,7 +626,7 @@ export function Sidebar({
   onUnfold?: () => void;
 }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch } = useSidebarRooms();
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -664,7 +671,8 @@ export function Sidebar({
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
   const sidebarOnRight = sidebarSide === "right";
-  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId) : 0;
+  const joinedRooms = useJoinedRooms();
+  const collapsedUnread = sidebarCollapsed ? collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms) : 0;
   const collapsedUnreadBadge = formatCollapsedUnreadBadge(collapsedUnread);
   const collapsedChats = [...state.bots, ...listedGroups(state.groups)];
   const collapsedExceptId = routineChatOnScreen(state) ? state.selectedId : undefined;
@@ -775,11 +783,11 @@ export function Sidebar({
     }
     applySidebarLayout(next);
   };
-  const onSidebarResizeEnd = (event: PointerEvent<HTMLDivElement>) => {
+  const onSidebarResizeEnd = (event?: PointerEvent<HTMLDivElement>) => {
     if (!resizeFrom.current) return;
     resizeFrom.current = null;
     setResizing(false);
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    event?.currentTarget.releasePointerCapture(event.pointerId);
     saveSidebarWidth(sidebarWidthRef.current);
     saveSidebarCollapsed(sidebarCollapsedRef.current);
   };
@@ -817,7 +825,18 @@ export function Sidebar({
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
+    // A release over a window-drag region or another window never reaches the handle.
+    const end = () => onSidebarResizeEnd();
+    const cancel = (event: KeyboardEvent) => event.key === "Escape" && onSidebarResizeCancel();
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", onSidebarResizeCancel);
+    window.addEventListener("blur", end);
+    window.addEventListener("keydown", cancel);
     return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", onSidebarResizeCancel);
+      window.removeEventListener("blur", end);
+      window.removeEventListener("keydown", cancel);
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
     };
@@ -1084,6 +1103,7 @@ export function Sidebar({
       bot,
     })),
   ];
+  items.sort((a, b) => Number(joinedRoomIdOf(a.id) !== null) - Number(joinedRoomIdOf(b.id) !== null));
   const itemByKey = new Map(items.map((item) => [item.key, item]));
   const naturalItemsBySection: Record<string, string[]> = {};
   for (const item of items) (naturalItemsBySection[item.sectionId] ??= []).push(item.key);
@@ -1531,6 +1551,7 @@ export function Sidebar({
         onPointerMove={onSidebarResizeMove}
         onPointerUp={onSidebarResizeEnd}
         onPointerCancel={onSidebarResizeCancel}
+        onLostPointerCapture={() => onSidebarResizeEnd()}
         onKeyDown={onSidebarResizeKeyDown}
         className={cn(
           "absolute inset-y-0 z-10 hidden w-1.5 cursor-col-resize touch-none hover:bg-accent/40 focus-visible:bg-accent/60",
@@ -1643,6 +1664,7 @@ export function Sidebar({
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
                   </button>
+                  <TeamRoomMenuItems onPick={() => setPlusOpen(false)} />
                   {showNewMenuExport() && <button
                     onClick={() => {
                       setPlusOpen(false);
@@ -1696,7 +1718,7 @@ export function Sidebar({
         </div>
       ) : (
         <div className="px-3 pt-2 pb-3">
-          <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
+          <div data-sidebar-search className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
             <Search size={16} className="text-ink-secondary" />
             <input
               ref={searchInputRef}
@@ -1794,6 +1816,7 @@ export function Sidebar({
 
       {/* Footer */}
       <div className={cn("min-w-0 overflow-x-hidden pb-3 pt-2", density === "icons" ? "px-2" : "px-3")} data-sidebar-footer>
+        <ChoosePcLink iconOnly={density === "icons"} />
         {density === "icons" && (
           <div className="flex min-h-10 items-center justify-center" data-sidebar-update>
             <UpdateButton />
@@ -1894,6 +1917,7 @@ export function Sidebar({
       {wizardPresence.value && (
         <GroupWizard closing={wizardPresence.closing} onClose={() => setWizard(false)} />
       )}
+      <TeamRoomDialogs />
       <Presence open={archivedBotsOpen}>
         {(closing) => (
           <ArchivedBotsPanel

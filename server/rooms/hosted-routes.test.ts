@@ -9,13 +9,11 @@ import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { addPerson, closeRoomsDb, roomById } from "./db.ts";
 
 let store: Store;
-let flag: boolean;
 const engines = new Map<string, string>();
 
 function routes() {
   return createGroupRoutes({
     store,
-    teamRooms: () => flag,
     instanceForBot: (bot: BotRecord) => ({ driverKind: engines.get(bot.id) }),
     checkedMemberIds: (value: unknown) => ({ ok: true, memberIds: value as string[] }),
     checkedGroupResponder: () => ({ kind: "everyone" }),
@@ -44,17 +42,12 @@ beforeEach(() => {
   closeRoomsDb();
   rmSync(DATA_DIR, { recursive: true, force: true });
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
-  flag = true;
 });
 afterEach(closeRoomsDb);
 
 describe("hosted group routes", () => {
-  it("creates a team room only with teamRooms on", async () => {
+  it("creates a team room", async () => {
     const wink = bot("Wink", "claudeAgent");
-    flag = false;
-    expect(await call(routes().create, { name: "Team", memberIds: [wink], hosted: true })).toEqual({ status: 409, body: { error: "team rooms are off" } });
-    expect(store.groups).toHaveLength(0);
-    flag = true;
     const created = await call(routes().create, { name: "Team", memberIds: [wink], hosted: true });
     expect(created.status).toBe(201);
     const group = store.group(created.body.group.id)!;
@@ -86,9 +79,21 @@ describe("hosted group routes", () => {
     const r = routes();
     const refused = { status: 409, body: { error: "a team room keeps one conversation" } };
     expect(await call(r.createTask, { title: "Next" }, [group.id])).toEqual(refused);
-    expect(await call((_req, res, m) => r.switchTask(res, m, new URL("http://x/")), {}, [group.id, group.threadId])).toEqual(refused);
     expect(await call(r.patchTask, { title: "Renamed" }, [group.id, group.threadId])).toEqual(refused);
     expect(await call((_req, res, m) => r.deleteTask(res, m), {}, [group.id, group.threadId])).toEqual(refused);
     expect(store.groupTasks(group.id)).toHaveLength(1);
+  });
+
+  it("opens an older task of a shared group to read, keeping the shared thread active", async () => {
+    const group = store.createGroup("Crew", [bot("Wink", "codex")]);
+    const old = group.threadId;
+    store.appendMessage(old, { role: "user", kind: "text", text: "private plan" });
+    store.createGroupTask(group.id);
+    const shared = store.patchGroup(group.id, { hosted: { roomId: "room-1" } })!;
+    const open = (threadId: string) => call((_req, res, m) => routes().switchTask(res, m, new URL("http://x/")), {}, [group.id, threadId]);
+    expect(await open(old)).toEqual({ status: 200, body: { group: expect.objectContaining({ id: group.id, threadId: old }) } });
+    expect((await open("nope")).status).toBe(404);
+    expect(store.group(group.id)!.threadId).toBe(shared.threadId);
+    expect(store.messagesFor(old).map((message) => message.text)).toEqual(["private plan"]);
   });
 });

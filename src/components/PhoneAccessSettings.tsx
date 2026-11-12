@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
+import { onThisPc } from "@/lib/devices-setup";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
-import { Section } from "./SettingsPrimitives";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { DeviceRow, DevicesSection } from "./DeviceRows";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 type RelayState = "off" | "enrolling" | "certifying" | "connected" | "reconnecting" | "rejected" | "cert-error";
 type RelayProblem = "superseded" | "revoked" | "ticket-expired" | "unknown-certificate";
@@ -31,16 +36,9 @@ interface Phone {
   lastSeenAt: number;
 }
 
-interface Pairing {
-  url: string;
-  code: string;
-  expiresAt: number;
-  /** Phones paired before this code, so a new one can be noticed. */
-  known: string[];
-}
-
 const STATUS_POLL_MS = 3_000;
-const PAIRING_POLL_MS = 2_000;
+// The sign-in page lists only PCs on its own relay base.
+const FRONT_DOOR = "wink.edwardyi.dev";
 
 const PROBLEM = {
   superseded: "settings.phoneAccess.problem.superseded",
@@ -61,32 +59,74 @@ const cnSwitch = (on: boolean) =>
 const cnKnob = (on: boolean) =>
   `absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white transition-all ${on ? "left-[21px]" : "left-[3px]"}`;
 const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-control/70 disabled:cursor-not-allowed disabled:opacity-50";
+const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent";
+const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
-function countdown(ms: number): string {
-  const seconds = Math.ceil(ms / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+type Google = { state: string; email?: string };
+type Saved = { status: RelayStatus | null; google: Google | null };
+const KEY = "omb-phone-relay";
+let last: Saved | null = null;
+let pending: Promise<unknown> | null = null;
+
+function saved(): Saved {
+  if (last) return last;
+  last = { status: null, google: null };
+  try {
+    const body = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null };
+  } catch {
+    /* A fresh fetch fills it in. */
+  }
+  return last;
 }
 
-/** Phone access from anywhere through the relay. Without a configured relay, only a setup code card. */
-export function PhoneAccessSettings({ request = api }: { request?: typeof api }) {
+function keep(next: Partial<Saved>) {
+  last = { ...saved(), ...next };
+  try {
+    localStorage.setItem(KEY, JSON.stringify(last));
+  } catch {
+    /* It still paints from memory this session. */
+  }
+}
+
+/** This PC's relay and Google state, fetched at idle so Devices paints them on its first open. */
+export function warmRelay(): Promise<unknown> {
+  if (!onThisPc()) return Promise.resolve();
+  pending ??= Promise.all([
+    api("/api/phone-relay/status").then((status: RelayStatus) => keep({ status }), () => {}),
+    api("/api/google-account").then((google: Google) => keep({ google }), () => {}),
+  ]).finally(() => { pending = null; });
+  return pending;
+}
+
+/** Tests only: forget the last state. */
+export function resetRelay(): void {
+  last = null;
+  pending = null;
+}
+
+/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. */
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
-  const [status, setStatus] = useState<RelayStatus | null>(null);
+  const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
+  const [refused, setRefused] = useState(false);
+  const [google, setGoogle] = useState<Google | null>(() => saved().google);
   const [phones, setPhones] = useState<Phone[]>([]);
-  const [pairing, setPairing] = useState<Pairing | null>(null);
-  const [paired, setPaired] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [asking, setAsking] = useState(false);
+  const [askCode, setAskCode] = useState(false);
   const [invite, setInvite] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const qrRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | undefined>(undefined);
 
-  const loadPhones = useCallback(
-    () =>
-      request("/api/phone/devices").then((body: { phones: Phone[] }) => {
-        setPhones(body.phones);
-        return body.phones;
-      }),
+  const loadGoogle = useCallback(
+    () => request("/api/google-account").then((body: Google) => {
+      keep({ google: body });
+      setGoogle(body);
+    }, () => {}),
     [request],
   );
 
@@ -96,47 +136,33 @@ export function PhoneAccessSettings({ request = api }: { request?: typeof api })
       request("/api/phone-relay/status")
         .then((body: RelayStatus) => {
           if (!live) return;
+          keep({ status: body });
           setStatus(body);
+          setRefused(false);
           setNow(Date.now());
         })
-        .catch(() => {});
+        .catch(() => {
+          if (live) setRefused(true);
+        });
     void load();
+    void loadGoogle();
     const timer = window.setInterval(load, STATUS_POLL_MS);
     return () => {
       live = false;
       window.clearInterval(timer);
+      window.clearTimeout(copiedTimer.current);
     };
-  }, [request]);
+  }, [request, loadGoogle]);
 
   const enabled = status?.enabled === true;
+  useEffect(() => onEnabled?.(enabled), [enabled, onEnabled]);
   useEffect(() => {
-    if (enabled) void loadPhones().catch(() => {});
-  }, [enabled, loadPhones]);
-
-  // While a code is up: tick its countdown and notice the phone that used it.
-  useEffect(() => {
-    if (!pairing) return;
-    const tick = window.setInterval(() => setNow(Date.now()), 1_000);
-    const poll = window.setInterval(() => {
-      void loadPhones()
-        .then((list) => {
-          const added = list.find((phone) => !pairing.known.includes(phone.id));
-          if (!added) return;
-          setPairing(null);
-          setPaired(added.name);
-        })
-        .catch(() => {});
-    }, PAIRING_POLL_MS);
-    return () => {
-      window.clearInterval(tick);
-      window.clearInterval(poll);
-    };
-  }, [pairing, loadPhones]);
-
-  // A new code opens at the bottom of Settings, below the fold.
-  useEffect(() => {
-    if (pairing) qrRef.current?.scrollIntoView({ block: "nearest" });
-  }, [pairing]);
+    if (!enabled) return;
+    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
+    load();
+    const timer = window.setInterval(load, STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [enabled, refresh, request]);
 
   // While a retry is scheduled: tick its countdown.
   const retrying = status?.state === "reconnecting" && status.nextRetryAt !== null;
@@ -146,7 +172,8 @@ export function PhoneAccessSettings({ request = api }: { request?: typeof api })
     return () => window.clearInterval(tick);
   }, [retrying]);
 
-  if (!status || (!status.configured && status.available !== true)) return null;
+  // Unknown until the first answer: the row paints at once, its switch held off.
+  const known = status !== null || refused;
 
   const run = async (work: () => Promise<void>, failure: (cause: unknown) => string) => {
     if (busy) return;
@@ -161,15 +188,15 @@ export function PhoneAccessSettings({ request = api }: { request?: typeof api })
     }
   };
 
-  const toggle = () =>
+  const save = (on: boolean) =>
     run(
-      async () => setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: !enabled }) })),
+      async () => setStatus(await request("/api/phone-relay", { method: "PUT", body: JSON.stringify({ enabled: on }) })),
       () => t("settings.phoneAccess.saveError"),
     );
   const setupError = (cause: unknown) => {
     const message = cause instanceof Error ? cause.message : String(cause);
-    const refused = REFUSED.get(message);
-    return refused ? t(refused) : t("settings.phoneAccess.setup.error", { message });
+    const known = REFUSED.get(message);
+    return known ? t(known) : t("settings.phoneAccess.setup.error", { message });
   };
   const join = () =>
     run(
@@ -179,28 +206,15 @@ export function PhoneAccessSettings({ request = api }: { request?: typeof api })
       },
       setupError,
     );
-  const setUp = () =>
+  const setUp = (then?: () => void) =>
     run(
       async () => {
         setStatus(await request("/api/phone-relay/setup", { method: "POST", body: JSON.stringify({ code: code.trim() }) }));
         setCode("");
+        then?.();
       },
       setupError,
     );
-  const addPhone = () =>
-    run(
-      async () => {
-        const body: Omit<Pairing, "known"> = await request("/api/phone/pairing", { method: "POST" });
-        setPaired(null);
-        setNow(Date.now());
-        setPairing({ ...body, known: phones.map((phone) => phone.id) });
-      },
-      () => t("settings.phoneAccess.pairError"),
-    );
-  const cancel = () => {
-    setPairing(null);
-    void request("/api/phone/pairing", { method: "DELETE" }).catch(() => {});
-  };
   const remove = (phone: Phone) =>
     run(
       async () => {
@@ -209,235 +223,200 @@ export function PhoneAccessSettings({ request = api }: { request?: typeof api })
       },
       () => t("settings.phoneAccess.removeError"),
     );
+  const signIn = async () => {
+    const result = await window.ogb?.googleAccount?.signIn().catch(() => null);
+    if (result?.ok) await loadGoogle();
+  };
+  const configured = status?.configured === true;
+  const confirm = () => {
+    if (askCode) return void setUp(() => setAsking(false));
+    setAsking(false);
+    void save(true);
+  };
+  const link = status?.host ? `https://${status.host}/` : null;
+  const door = status?.host?.endsWith(`.${FRONT_DOOR}`) === true;
+  const shown = door ? FRONT_DOOR : status?.host?.replace(/^(.{4}).{12}\./, "$1….");
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(door ? `https://${FRONT_DOOR}/` : link);
+      setCopied(true);
+      window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1200);
+    } catch {}
+  };
 
-  const setupForm = (
+  const codeField = (value: string, change: (value: string) => void) => (
+    <input
+      value={value}
+      onChange={(event) => {
+        change(event.target.value);
+        setError(null);
+      }}
+      aria-label={t("settings.phoneAccess.setup.code")}
+      placeholder={locale === "en" ? "Setup code" : t("settings.phoneAccess.setup.code")}
+      autoComplete="off"
+      spellCheck={false}
+      className={input}
+    />
+  );
+  const codeForm = (value: string, change: (value: string) => void, submit: () => void) => (
     <form
       data-phone-access-setup
-      className="flex gap-2"
+      className="mt-2 flex gap-2"
       onSubmit={(event) => {
         event.preventDefault();
-        if (code.trim()) void setUp();
+        if (value.trim()) submit();
       }}
     >
-      <input
-        value={code}
-        onChange={(event) => {
-          setCode(event.target.value);
-          setError(null);
-        }}
-        aria-label={t("settings.phoneAccess.setup.code")}
-        placeholder={locale === "en" ? "Setup code" : t("settings.phoneAccess.setup.code")}
-        autoComplete="off"
-        spellCheck={false}
-        className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent"
-      />
-      <button type="submit" disabled={busy || !code.trim()} className={button}>
+      {codeField(value, change)}
+      <button type="submit" disabled={busy || !value.trim()} className={button}>
         {t("settings.phoneAccess.setup.submit")}
       </button>
     </form>
   );
 
-  if (!status.configured) {
-    return (
-      <Section title={t("settings.phoneAccess.title")} subtitle={<span className="break-keep">{t("settings.phoneAccess.setup.help")}</span>}>
-        {setupForm}
-        {error ? (
-          <p role="alert" className="mt-2 text-[12.5px] text-danger">
-            {error}
-          </p>
-        ) : null}
-      </Section>
-    );
-  }
+  const signedOut = known && google !== null && ["signed-out", "needs-sign-in"].includes(google.state);
+  const unavailable = known && ((refused && !status) || status?.available === false || (!configured && status?.available !== true));
+  const toggle = (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      aria-label={t("settings.devices.reach")}
+      disabled={busy || !known || (!enabled && unavailable)}
+      onClick={() => {
+        if (enabled) return void save(false);
+        // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
+        setAskCode(!configured);
+        setAsking(true);
+      }}
+      className={cnSwitch(enabled)}
+    >
+      <span className={cnKnob(enabled)} />
+    </button>
+  );
+  const signInButton = window.ogb?.googleAccount ? (
+    <button type="button" onClick={() => void signIn()} className={ROW_BUTTON}>
+      {t("settings.devices.signIn")}
+    </button>
+  ) : null;
+  // Already on: keep the switch so turning it off never needs a sign-in.
+  const control = enabled || unavailable || !signedOut ? toggle : (signInButton ?? toggle);
+  const sub = enabled ? google?.email : unavailable ? t("settings.devices.reachUnavailable") : signedOut ? t("settings.devices.reachSignIn") : google?.email;
 
   const tag = localeTag(locale);
   const day = (ms: number) => new Date(ms).toLocaleDateString(tag, { month: "short", day: "numeric" });
-  const retryIn = status.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - now) / 1000)) : null;
+  const retryIn = status?.nextRetryAt ? Math.max(1, Math.ceil((status.nextRetryAt - now) / 1000)) : null;
+  const state = status?.state ?? "off";
   const stateText =
-    status.state === "reconnecting"
+    state === "reconnecting"
       ? retryIn
         ? t("settings.phoneAccess.state.retrying", { seconds: retryIn })
         : t("settings.phoneAccess.state.connecting")
-      : status.state === "cert-error"
+      : state === "cert-error"
         ? t("settings.phoneAccess.state.certError")
-        : status.state === "enrolling"
+        : state === "enrolling"
           ? t("settings.phoneAccess.setup.help")
-          : t(`settings.phoneAccess.state.${status.state}`);
-  const needsInvite = enabled && (status.state === "enrolling" || status.problem === "revoked" || status.problem === "ticket-expired");
+          : t(`settings.phoneAccess.state.${state}`);
+  const connected = enabled && state === "connected";
+  const needsInvite = enabled && (state === "enrolling" || status?.problem === "revoked" || status?.problem === "ticket-expired");
   // Off with an error: the relay client failed to load or start.
-  const failed = enabled && status.state === "off" && status.lastError !== null;
-  const left = pairing ? Math.max(0, pairing.expiresAt - now) : 0;
+  const failed = enabled && state === "off" && status?.lastError !== null;
 
   return (
-    <Section title={t("settings.phoneAccess.title")} subtitle={t("settings.phoneAccess.help")}>
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-4">
-          <div data-phone-access-state={status.state} className="min-w-0 text-[13px] leading-relaxed text-ink">
-            {stateText}
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label={t("settings.phoneAccess.toggle")}
-            disabled={busy}
-            onClick={() => void toggle()}
-            className={cnSwitch(enabled)}
-          >
-            <span className={cnKnob(enabled)} />
-          </button>
-        </div>
-
-        {enabled ? (
-          <p className="text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.keepAwake")}</p>
-        ) : null}
-
-        {enabled && status.state === "connected" && status.base ? (
-          <p data-phone-access-relay className="-mt-2 break-all text-[12px] text-ink-secondary">
-            {t("settings.phoneAccess.relay", { base: status.base })}
-          </p>
-        ) : null}
-
-        {enabled && !status.problem && status.lastError ? (
-          <p data-phone-access-error className="-mt-2 break-words text-[12px] text-ink-secondary">
-            {status.state === "connected" ? t("settings.phoneAccess.renewalError", { message: status.lastError }) : status.lastError}
-          </p>
-        ) : null}
-
-        {enabled && status.problem ? (
-          <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12.5px] leading-relaxed text-danger">
-            {t(PROBLEM[status.problem])}
-          </div>
-        ) : null}
-
-        {failed ? setupForm : null}
-
-        {needsInvite ? (
-          <form
-            className="flex gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (invite.trim()) void join();
-            }}
-          >
-            <input
-              value={invite}
-              onChange={(event) => {
-                setInvite(event.target.value);
-                setError(null);
-              }}
-              aria-label={t("settings.phoneAccess.setup.code")}
-              placeholder={locale === "en" ? "Setup code" : t("settings.phoneAccess.setup.code")}
-              autoComplete="off"
-              spellCheck={false}
-              className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 font-mono text-[13px] text-ink outline-none focus:border-accent"
-            />
-            <button type="submit" disabled={busy || !invite.trim()} className={button}>
-              {t("settings.phoneAccess.setup.submit")}
-            </button>
-          </form>
-        ) : null}
-
-        {enabled && status.state === "connected" && !pairing ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void addPhone()}
-            className="self-start rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
-          >
-            {t("settings.phoneAccess.addPhone")}
-          </button>
-        ) : null}
-
-        {pairing ? (
-          <div ref={qrRef} className="flex flex-col items-center rounded-xl bg-inset px-4 py-4 text-center">
-            {left > 0 ? (
-              <>
-                <div className="rounded-2xl bg-white p-3" aria-label={t("settings.phoneAccess.qrLabel")}>
-                  <QRCodeSVG value={pairing.url} size={168} level="M" bgColor="#ffffff" fgColor="#111111" />
+    <>
+      <DevicesSection
+        title={t("settings.devices.thisPc")}
+        data-this-pc=""
+        after={<>
+          {enabled && !connected ? <p data-phone-access-state={state} className={note}>{stateText}</p> : null}
+          {enabled && !status?.problem && status?.lastError ? (
+            <p data-phone-access-error className={note}>
+              {connected ? t("settings.phoneAccess.renewalError", { message: status.lastError }) : status.lastError}
+            </p>
+          ) : null}
+          {enabled && status?.problem ? (
+            <div role="alert" className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12.5px] leading-relaxed text-danger">
+              {t(PROBLEM[status.problem])}
+            </div>
+          ) : null}
+          {failed ? codeForm(code, setCode, () => void setUp()) : null}
+          {needsInvite ? codeForm(invite, setInvite, () => void join()) : null}
+          {error && !asking ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
+        </>}
+      >
+        <DeviceRow name={t("settings.devices.reach")} sub={sub} control={control} />
+        {enabled && link ? (
+          <div data-account-row="" className="min-w-0 border-hairline/70 [&+&]:border-t">
+            <div className="flex items-start gap-4">
+              <div data-relay-qr data-url={link} className="shrink-0 rounded-lg bg-white p-2 max-[379px]:[&>svg]:size-[88px]" aria-label={t("settings.devices.openAnywhere")}>
+                <QRCodeSVG value={link} size={104} level="M" bgColor="#ffffff" fgColor="#111111" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium leading-[18px] text-ink">{t("settings.devices.openAnywhere")}</div>
+                <div className="mt-1.5 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                  <span data-relay-link="" className="min-w-0 truncate text-[13px] text-ink">{shown}</span>
+                  <button type="button" onClick={() => void copy()} className={cn(ROW_BUTTON, "gap-1.5")}>
+                    {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+                    {copied ? t("settings.phoneLink.copied") : t("settings.phoneLink.copy")}
+                  </button>
                 </div>
-                <div data-pairing-code className="mt-3 font-mono text-[22px] tracking-[0.25em] text-ink">
-                  {pairing.code}
-                </div>
-                <p className="mt-1 text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.scan")}</p>
-                <p className="mt-1 text-[11.5px] text-ink-secondary">{t("settings.phoneAccess.expiresIn", { time: countdown(left) })}</p>
-              </>
-            ) : (
-              <p className="text-[13px] text-ink-secondary">{t("settings.phoneAccess.expired")}</p>
-            )}
-            <div className="mt-3 flex gap-2">
-              {left > 0 ? null : (
-                <button type="button" disabled={busy} onClick={() => void addPhone()} className={button}>
-                  {t("settings.phoneAccess.newCode")}
-                </button>
-              )}
-              <button type="button" onClick={cancel} className={button}>
-                {t("settings.phoneAccess.cancel")}
-              </button>
+                <div className="mt-1.5 break-keep text-[11px] leading-[1.35] text-ink-secondary">{t("settings.devices.openAnywhereHelp")}</div>
+              </div>
             </div>
           </div>
         ) : null}
+      </DevicesSection>
 
-        {paired ? <p className="text-[12.5px] text-success">{t("settings.phoneAccess.paired", { name: paired })}</p> : null}
-        {error ? (
-          <p role="alert" className="text-[12.5px] text-danger">
-            {error}
-          </p>
-        ) : null}
+      {pcs}
 
-        {enabled ? (
-          <div>
-            <div className="text-[12px] font-medium text-ink-secondary">{t("settings.phoneAccess.phones")}</div>
-            {phones.length ? (
-              <ul className="mt-1 flex flex-col">
-                {phones.map((phone) => (
-                  <li key={phone.id} className="flex items-center gap-3 py-1.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] text-ink">{phone.name}</div>
-                      <div className="text-[11.5px] text-ink-secondary">
-                        {t("settings.phoneAccess.phoneMeta", { paired: day(phone.createdAt), seen: day(phone.lastSeenAt) })}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void remove(phone)}
-                      aria-label={t("settings.phoneAccess.removeAria", { name: phone.name })}
-                      className={button}
-                    >
-                      {t("settings.phoneAccess.remove")}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="mt-1 text-[12.5px] text-ink-secondary">{t("settings.phoneAccess.noPhones")}</div>
-            )}
-          </div>
-        ) : null}
+      {enabled ? (
+        <DevicesSection title={t("settings.devices.signedInHere")} data-signed-in="">
+          {phones.length ? phones.map((phone) => (
+            <DeviceRow
+              key={phone.id}
+              name={phone.name}
+              sub={t("settings.phoneAccess.phoneMeta", { paired: day(phone.createdAt), seen: day(phone.lastSeenAt) })}
+              control={
+                <button type="button" disabled={busy} onClick={() => void remove(phone)} aria-label={t("settings.phoneAccess.removeAria", { name: phone.name })} className={ROW_BUTTON}>
+                  {t("settings.phoneAccess.remove")}
+                </button>
+              }
+            />
+          )) : <DeviceRow name={t("settings.devices.noneSignedIn")} />}
+        </DevicesSection>
+      ) : null}
 
-        {enabled && status.host ? (
-          <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
-            <summary className="cursor-pointer text-[13px] text-ink-secondary">{t("settings.advanced.title")}</summary>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
-              <dt className="text-ink-secondary">{t("settings.phoneAccess.address")}</dt>
-              <dd className="break-all font-mono text-ink">{status.host}</dd>
-              {status.certNotAfter ? (
-                <>
-                  <dt className="text-ink-secondary">{t("settings.phoneAccess.certificate")}</dt>
-                  <dd className="text-ink">{new Date(status.certNotAfter).toLocaleDateString(tag, { year: "numeric", month: "short", day: "numeric" })}</dd>
-                </>
-              ) : null}
-              {status.relayRttMs !== null ? (
-                <>
-                  <dt className="text-ink-secondary">{t("settings.phoneAccess.latency")}</dt>
-                  <dd className="text-ink">{status.relayRttMs} ms</dd>
-                </>
-              ) : null}
-            </dl>
-          </details>
-        ) : null}
-      </div>
-    </Section>
+      {asking ? (
+        <ConfirmDialog
+          title={t("settings.devices.reachConfirm")}
+          body={t("settings.devices.reachConfirmBody")}
+          confirmLabel={t("settings.devices.turnOn")}
+          cancelLabel={t("settings.phoneAccess.cancel")}
+          danger={false}
+          confirmDisabled={busy || (askCode && !code.trim())}
+          onConfirm={confirm}
+          onCancel={() => {
+            setAsking(false);
+            setError(null);
+          }}
+        >
+          {askCode ? (
+            <form
+              className="mt-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (code.trim()) confirm();
+              }}
+            >
+              <div className="flex">{codeField(code, setCode)}</div>
+              <p className="mt-2 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.setup.help")}</p>
+              {error ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
+            </form>
+          ) : null}
+        </ConfirmDialog>
+      ) : null}
+    </>
   );
 }

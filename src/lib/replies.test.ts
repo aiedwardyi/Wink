@@ -11,6 +11,7 @@ describe("reply display", () => {
     expect(replyAuthor({ ...base, role: "user", from: { botId: "c", name: "Career", color: "pink" } })).toBe("Career");
     expect(replyAuthor({ ...base, from: { botId: "b", name: "Scout", color: "green" } })).toBe("Scout");
     expect(replyAuthor(base, "Mochi")).toBe("Mochi");
+    expect(replyAuthor({ ...base, role: "user", author: { kind: "person", id: "mina", name: "Mina Park" } })).toBe("Mina Park");
   });
 
   it("turns saved images into a readable bounded snippet", () => {

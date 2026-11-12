@@ -1,5 +1,6 @@
 // Phone sign-in at the one registered Google origin. The PC-bound token
-// leaves this page only in the fragment of the PC it was bound to.
+// leaves this page only for the relay's PC list and the fragment of the PC
+// it was bound to; it works at that PC only with this browser's cookie.
 (() => {
   // 16 chars, lowercase base32, same alphabet as relay labels.
   const LABEL_RE = /^[a-z2-7]{16}$/;
@@ -104,6 +105,25 @@
     location.assign(`https://${label}.${config.base}/pair${suffix}`);
   }
 
+  function reachable(label) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      const finish = (online) => {
+        clearTimeout(timeout);
+        // Clearing src can fire onerror; detach handlers first.
+        image.onload = null;
+        image.onerror = null;
+        image.src = "";
+        resolve(online);
+      };
+      const timeout = setTimeout(() => finish(false), 2000);
+      image.onload = () => finish(true);
+      image.onerror = () => finish(false);
+      image.referrerPolicy = "no-referrer";
+      image.src = `https://${label}.${config.base}/app-icon.svg?probe=${Date.now()}`;
+    });
+  }
+
   function showList(pcs) {
     say("Choose a PC.");
     const list = $("list");
@@ -119,9 +139,13 @@
     }
   }
 
-  function choose(pcs) {
+  function choose(pcs, pick = false) {
     if (pcs.length === 0) {
       say(EMPTY);
+      return;
+    }
+    if (pick) {
+      showList(pcs);
       return;
     }
     if (pcs.length === 1) {
@@ -176,9 +200,10 @@
         slot.replaceChildren();
         gis.renderButton(slot, {
           type: "standard",
-          theme: "filled_black",
+          theme: matchMedia("(prefers-color-scheme: dark)").matches ? "filled_black" : "outline",
           size: "large",
           text: "signin_with",
+          shape: "rectangular",
           width: 300,
         });
       };
@@ -210,19 +235,26 @@
     });
   }
 
-  async function coldStart() {
+  async function coldStart(pick) {
+    const last = remembered();
+    const saved = LABEL_RE.test(last);
+    if (!pick && saved && await reachable(last)) {
+      go(last, "?g=1");
+      return;
+    }
     const token = await requestToken(randomNonce(), false);
     const listed = await loadPcs(token);
     if (!listed) {
       say(OFFLINE, "error");
       return;
     }
-    choose(listed);
+    choose(listed, pick || saved);
   }
 
   async function returnLeg(pc, m) {
-    const directoryToken = await requestToken(randomNonce(), true);
-    const listed = await loadPcs(directoryToken);
+    // One prompt: Google stays quiet on a second auto_select within minutes and asks for the account again.
+    const pcToken = await requestToken(await boundNonce(pc, m), true);
+    const listed = await loadPcs(pcToken);
     if (!listed) {
       say(OFFLINE, "error");
       return;
@@ -231,7 +263,6 @@
       say(NOT_YOURS, "error");
       return;
     }
-    const pcToken = await requestToken(await boundNonce(pc, m), true);
     go(pc, `#g=${encodeURIComponent(pcToken)}`);
   }
 
@@ -271,7 +302,7 @@
     const pc = params.get("pc");
     const m = params.get("m");
     if (pc === null && m === null) {
-      void coldStart().catch(() => say(GOOGLE_DOWN, "error"));
+      void coldStart(params.get("pick") === "1").catch(() => say(GOOGLE_DOWN, "error"));
       return;
     }
     if (pc === null || m === null || !LABEL_RE.test(pc) || !M_RE.test(m)) {

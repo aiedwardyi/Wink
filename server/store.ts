@@ -172,6 +172,7 @@ export interface Message {
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../shared/live-call.ts").CallTag;
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
@@ -196,6 +197,7 @@ export interface Message {
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
   roomEntryId?: string;
+  roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
   snagIds?: string[];
   reportIds?: string[];
@@ -248,6 +250,7 @@ export interface GroupTaskRecord {
  * The bulletin is the room's shared instructions — every member's turn gets
  * it as part of its system prompt. */
 export interface GroupRecord {
+  picture?: string;
   id: string;
   /** The active task's thread. Direct-message channels remain single-threaded. */
   threadId: ThreadId;
@@ -1092,7 +1095,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();

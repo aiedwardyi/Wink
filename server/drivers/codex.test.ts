@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import * as procs from "../procs.ts";
+import { createQuietEnd } from "../quiet-end.ts";
+import type { Message } from "../store.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { withSystemChanges } from "../turn-context.ts";
 import { CodexDriver } from "./codex.ts";
@@ -432,6 +434,30 @@ describe("CodexDriver turns (fake app-server)", () => {
       title: "web_search",
       verb: "WebSearch",
     });
+  });
+
+  it.each([
+    ["ends at the first no_reply_needed result as a clean finish", [], 1],
+    ["runs on past no_reply_needed when the user typed into the turn", [{ id: "m1", role: "user", kind: "text", text: "wake", at: Number.MAX_SAFE_INTEGER }], 2],
+  ] as const)("%s", async (_name, typed, calls) => {
+    const call = (id: string) => [
+      { method: "item/started", params: { item: { id, type: "mcpToolCall", server: "agents", tool: "no_reply_needed", arguments: {} } } },
+      { method: "item/completed", params: { item: { id, type: "mcpToolCall", server: "agents", tool: "no_reply_needed", status: "completed" } } },
+    ];
+    const fixture = join(scratch, "quiet-frames.json");
+    writeFileSync(fixture, JSON.stringify([...call("q1"), ...call("q2")]));
+    await create({ environment: { FAKE_CODEX_TOOL_FIXTURE: fixture, FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "No response requested." }]) } });
+    instance.adapter.onEvent(createQuietEnd(() => typed as unknown as Message[], () => instance.adapter));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+    const done = await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+    expect(done).toMatchObject({ ok: true, stopReason: null });
+    expect(recorder.events.filter((event) => event.type === "item.started" && event.title === "no_reply_needed")).toHaveLength(calls);
+    expect(recorder.events.some((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toBe(calls === 2);
+    expect(recorder.events.some((event) => event.type === "runtime.error")).toBe(false);
+    if (calls === 1) {
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello", resumeCursor: "codex-thread-1" });
+      await expect(recorder.until((event) => event.type === "turn.completed" && event.turnId === next.turnId)).resolves.toMatchObject({ ok: true });
+    }
   });
 
   it("turns on live web search for the app-server spawn and thread/start", async () => {

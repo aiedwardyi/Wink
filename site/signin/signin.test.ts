@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HTML = readFileSync(join(ROOT, "site/signin/index.html"), "utf8");
 const SCRIPT = readFileSync(join(ROOT, "site/signin/signin.js"), "utf8");
+const CSS = readFileSync(join(ROOT, "site/signin/signin.css"), "utf8");
 const MARKUP = HTML.slice(HTML.indexOf("<main>"), HTML.indexOf("</main>") + "</main>".length);
 
 const CLIENT = "test-client.apps.googleusercontent.com";
@@ -59,12 +60,15 @@ interface FetchCall {
 const inits: GisInit[] = [];
 const prompts: Array<(moment: GisMoment) => void> = [];
 const calls: FetchCall[] = [];
+const probes: string[] = [];
+const buttons: Array<{ theme: string; text: string; shape: string }> = [];
 let renders = 0;
 
 function installGoogle(gisError?: string): void {
   inits.length = 0;
   prompts.length = 0;
   renders = 0;
+  buttons.length = 0;
   vi.stubGlobal("google", {
     accounts: {
       id: {
@@ -72,8 +76,9 @@ function installGoogle(gisError?: string): void {
           if (gisError) throw new Error(gisError);
           inits.push(options);
         },
-        renderButton(): void {
+        renderButton(_slot: HTMLElement, options: { theme: string; text: string; shape: string }): void {
           renders += 1;
+          buttons.push(options);
         },
         prompt(listener: (moment: GisMoment) => void): void {
           prompts.push(listener);
@@ -99,12 +104,25 @@ function installFetch(body: Pc[] | "fail"): void {
   });
 }
 
-function open(url: string, body: Pc[] | "fail", gisError?: string): void {
+function open(url: string, body: Pc[] | "fail", gisError?: string, probe = "up"): void {
   document.body.innerHTML = MARKUP;
   history.replaceState(null, "", url);
   vi.stubGlobal("WINK_SIGNIN", { clientId: CLIENT, base: BASE });
   installGoogle(gisError);
   installFetch(body);
+  probes.length = 0;
+  vi.stubGlobal("Image", class {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    set src(value: string) {
+      if (!value) return;
+      probes.push(value);
+      queueMicrotask(() => {
+        if (probe === "up") this.onload?.();
+        else if (probe === "down") this.onerror?.();
+      });
+    }
+  });
   runInThisContext(SCRIPT);
 }
 
@@ -117,13 +135,10 @@ function hiddenMoment(): GisMoment {
   };
 }
 
-function fetchSaw(token: string): boolean {
-  return calls.some((call) => `${call.url} ${call.authorization} ${call.body}`.includes(token));
-}
-
 const pair = (label: string, suffix: string) => `https://${label}.${BASE}/pair${suffix}`;
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   localStorage.clear();
   document.body.innerHTML = "";
@@ -131,11 +146,47 @@ afterEach(() => {
 });
 
 describe("phone sign-in page", () => {
+  it.each(["light", "dark"])("shows the Wink mark in %s mode", (scheme) => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: scheme === "dark" && query === "(prefers-color-scheme: dark)" }));
+    open("/signin", []);
+    const logo = document.querySelector<HTMLImageElement>(".logo");
+    expect(logo).not.toBeNull();
+    expect(logo?.getAttribute("src")).toBe("/app-icon.svg");
+    expect(logo?.alt).toBe("Wink");
+    expect(logo?.width).toBe(48);
+    expect(logo?.height).toBe(48);
+    const workflow = readFileSync(join(ROOT, ".github/workflows/pages.yml"), "utf8");
+    expect(workflow).toContain('copyFileSync("public/app-icon.svg", "site/app-icon.svg")');
+  });
+
+  it.each([["light", "outline"], ["dark", "filled_black"]])("renders Google's button for %s mode", (scheme, theme) => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: scheme === "dark" && query === "(prefers-color-scheme: dark)" }));
+    open("/signin", []);
+    expect(buttons).toEqual([expect.objectContaining({ theme, text: "signin_with", shape: "rectangular" })]);
+    expect(inits).toHaveLength(1);
+    expect(prompts).toHaveLength(0);
+  });
+
+  it.each([["light", "wink-day"], ["dark", "precision"]])("uses Wink's %s colors for the OS preference", (scheme, skin) => {
+    const styles = readFileSync(join(ROOT, "src/styles.css"), "utf8");
+    const tokens = styles.match(new RegExp(`\\[data-skin="${skin}"\\] \\{([^}]+)\\}`))![1]!;
+    const match = scheme === "light" ? CSS.match(/:root \{([^}]+)\}/) : CSS.match(/@media \(prefers-color-scheme: dark\) \{\s*:root \{([^}]+)\}/);
+    expect(match).not.toBeNull();
+    const page = match![1]!;
+    expect(page).toContain(`color-scheme: ${scheme};`);
+    for (const name of ["app", "inset", "hairline", "ink", "ink-secondary", "accent", "danger"]) {
+      const color = tokens.match(new RegExp(`--color-${name}: ([^;]+);`))![1]!;
+      expect(page).toContain(`--${name}: ${color};`);
+    }
+    const app = tokens.match(/--color-app: ([^;]+);/)![1]!;
+    expect(HTML).toContain(`<meta name="theme-color" content="${app}" media="(prefers-color-scheme: ${scheme})" />`);
+  });
+
   it("ships a strict page with no inline script", () => {
     expect(HTML).toContain("script-src 'self' https://accounts.google.com/gsi/client");
     expect(HTML).toContain("connect-src https://relay.wink.edwardyi.dev");
     expect(HTML).not.toMatch(/<script(?![^>]*\bsrc=)/);
-    expect(HTML).not.toContain("unsafe-inline");
+    expect(HTML.match(/script-src ([^;]+);/)![1]).not.toContain("unsafe-inline");
     const workflow = readFileSync(join(ROOT, ".github/workflows/pages.yml"), "utf8");
     expect(workflow).toContain("branches: [review-base]");
     expect(workflow).toContain('"site/**"');
@@ -149,13 +200,13 @@ describe("phone sign-in page", () => {
     expect(workflow).toContain('requested || "wink.edwardyi.dev"');
   });
 
-  it("allows the GSI connect target and only the relay besides it", () => {
+  it("allows Google and relay requests, with PC images limited to the relay base", () => {
     const policy =
-      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self'; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+      "default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' https://*.wink.edwardyi.dev; connect-src https://relay.wink.edwardyi.dev https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
     expect(HTML).toContain(policy);
     const relay = "https://relay.example.dev";
-    const shipped = HTML.replaceAll("https://relay.wink.edwardyi.dev", relay);
-    expect(shipped).toContain(policy.replaceAll("https://relay.wink.edwardyi.dev", relay));
+    const shipped = HTML.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev");
+    expect(shipped).toContain(policy.replaceAll("https://relay.wink.edwardyi.dev", relay).replaceAll("https://*.wink.edwardyi.dev", "https://*.example.dev"));
     expect(shipped).not.toContain("https://relay.wink.edwardyi.dev");
   });
 
@@ -205,19 +256,48 @@ describe("phone sign-in page", () => {
     expect(localStorage.getItem(LAST_PC)).toBe(LABEL_A);
   });
 
-  it("skips the list when the remembered PC is still signed in", async () => {
+  it("returns to the remembered PC without asking Google or loading the directory", async () => {
     localStorage.setItem(LAST_PC, LABEL_B);
     open("/signin", [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },
     ]);
-    inits[0]?.callback({ credential: DIR_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(inits).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(probes).toHaveLength(1);
+    expect(new URL(probes[0]!).pathname).toBe("/app-icon.svg");
+    expect(new URL(probes[0]!).searchParams.has("probe")).toBe(true);
     expect(document.querySelectorAll("#list button")).toHaveLength(0);
   });
 
-  it("asks again when the remembered PC is gone", async () => {
-    localStorage.setItem(LAST_PC, "cccccccccccccccc");
+  it.each(["down", "timeout"])("shows the PC list when the remembered PC probe fails (%s)", async (probe) => {
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }], undefined, probe);
+    await vi.advanceTimersByTimeAsync(1999);
+    if (probe === "timeout") expect(inits).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(inits).toHaveLength(1);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(location.href).not.toContain("/pair");
+    expect(document.querySelector<HTMLAnchorElement>("#pick")?.getAttribute("href")).toBe("/?pick=1");
+  });
+
+  it.each([1, 2])("always lists %s PCs with pick=1 despite a remembered PC", async (count) => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    const pcs = [{ label: LABEL_B, name: "Zed" }, { label: LABEL_A, name: "Ada" }].slice(0, count);
+    open("/?pick=1", pcs);
+    expect(inits).toHaveLength(1);
+    expect(probes).toHaveLength(0);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(count));
+    expect(location.href).not.toContain("/pair");
+  });
+
+  it.each(["", "short", "aaaaaaaaaaaaaaaa.evil", "AAAAAAAAAAAAAAAA"])("discovers PCs when the remembered label is invalid (%s)", async (label) => {
+    localStorage.setItem(LAST_PC, label);
     open("/signin", [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },
@@ -227,47 +307,45 @@ describe("phone sign-in page", () => {
     expect(location.href).not.toContain("/pair");
   });
 
-  it("forwards the return leg only to a listed label, and never fetches the PC token", async () => {
+  it("asks Google once on the return leg and forwards that token only to a listed label", async () => {
     const expected = createHash("sha256").update(`wink-gpair/1\0${LABEL_B}\0${M}`).digest("base64url");
     expect(expected).toBe(NONCE);
     open(`/signin?pc=${LABEL_B}&m=${M}`, [
       { label: LABEL_A, name: "Ada" },
       { label: LABEL_B, name: "Zed" },
     ]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(inits[0]?.nonce).toBe(NONCE);
     expect(inits[0]?.auto_select).toBe(true);
     expect(prompts).toHaveLength(1);
     expect(renders).toBe(0);
-    inits[0]?.callback({ credential: DIR_TOKEN });
-    await vi.waitFor(() => expect(inits).toHaveLength(2));
-    expect(inits[1]?.nonce).toBe(NONCE);
-    expect(inits[1]?.auto_select).toBe(true);
-    expect(renders).toBe(0);
-    inits[1]?.callback({ credential: PC_TOKEN });
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, `#g=${PC_TOKEN}`)));
+    expect(inits).toHaveLength(1);
+    expect(prompts).toHaveLength(1);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.authorization).toBe(`Bearer ${DIR_TOKEN}`);
-    expect(fetchSaw(PC_TOKEN)).toBe(false);
-    expect(location.href).not.toContain(DIR_TOKEN);
+    expect(calls[0]?.authorization).toBe(`Bearer ${PC_TOKEN}`);
   });
 
   it("shows the button when auto_select does not fire", async () => {
     open(`/signin?pc=${LABEL_B}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
     prompts[0]?.(hiddenMoment());
     expect(renders).toBe(1);
-    inits[0]?.callback({ credential: DIR_TOKEN });
-    await vi.waitFor(() => expect(prompts).toHaveLength(2));
-    prompts[1]?.(hiddenMoment());
-    expect(renders).toBe(2);
-    inits[1]?.callback({ credential: PC_TOKEN });
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, `#g=${PC_TOKEN}`)));
-    expect(fetchSaw(PC_TOKEN)).toBe(false);
+    expect(prompts).toHaveLength(1);
+    expect(renders).toBe(1);
   });
 
   it("does not forward a return leg to a PC that is not listed", async () => {
     open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_B, name: "Zed" }]);
-    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]?.callback({ credential: PC_TOKEN });
     await vi.waitFor(() => expect(document.getElementById("status")?.textContent).toBe("That PC is not signed in to this Google account."));
+    expect(document.getElementById("status")?.className).toBe("status error");
     expect(inits).toHaveLength(1);
+    expect(prompts).toHaveLength(1);
     expect(location.href).not.toContain("/pair");
     expect(calls).toHaveLength(1);
   });

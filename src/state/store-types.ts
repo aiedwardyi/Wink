@@ -99,6 +99,7 @@ export interface Message {
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
   streamWhole?: number;
@@ -121,6 +122,10 @@ export interface Message {
   sendId?: string;
   /** rooms: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: MausColor };
+  /** Team rooms: the room log entry this line mirrors, its author and files. */
+  author?: { kind: "host" | "person" | "bot"; id: string; name: string };
+  roomEntryId?: string;
+  roomFiles?: Array<{ id: string; name: string; type: string; bytes: number; deleted?: boolean }>;
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
@@ -141,6 +146,7 @@ export type GroupDefaultResponder =
 
 /** A room: several bots + you in one shared thread. */
 export interface Group {
+  picture?: string | null;
   id: string;
   threadId: string;
   name: string;
@@ -177,6 +183,9 @@ export interface Group {
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
+  /** A team room this PC hosts; `room` is its live roster. */
+  hosted?: { roomId: string };
+  room?: { name: string; people: Array<{ id: string; name: string }> } | { missing: true };
 }
 
 /** One of a channel's independent conversations. The channel's threadId

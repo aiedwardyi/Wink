@@ -120,6 +120,98 @@ describe("account lifecycle", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toBeNull();
   });
 
+  it.each(["identity", "email", "stored identity"])("rejects a new account with an existing %s", async (match) => {
+    const f = await fixture();
+    const existing = await f.add();
+    f.statuses.set(existing.id, { state: "available", authenticated: true, accountIdentity: existing.identity, account: "same@example.test" });
+    if (match === "stored identity") vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockRejectedValue(new Error("probe unavailable"));
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true,
+      accountIdentity: match === "email" ? "another-identity" : existing.identity, account: " SAME@EXAMPLE.TEST " });
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.accounts.get(existing.id)).toEqual(existing);
+    expect(f.start.mock.calls.some(([, , args]) => args.includes("logout"))).toBe(false);
+  });
+
+  it("rejects a new account matching the base login", async () => {
+    const f = await fixture();
+    f.statuses.set("claude", { state: "available", authenticated: true, account: "base@example.test" });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "base-identity", account: "base@example.test" });
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot).toHaveLength(0);
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: "claude" });
+  });
+
+  it("rechecks account changes without blocking them on duplicate probes", async () => {
+    const f = await fixture();
+    const existing = await f.add();
+    const stale: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: existing.identity, account: "old@example.test" };
+    let entered!: () => void;
+    const started = new Promise<void>((done) => { entered = done; });
+    let releaseProbe!: () => void;
+    const probe = new Promise<ProviderSnapshot>((done) => { releaseProbe = () => done(stale); });
+    vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockImplementationOnce(() => { entered(); return probe; });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("claude");
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "incoming", account: "same@example.test" });
+    release();
+    await started;
+    const changed: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: "changed", account: "same@example.test" };
+    f.statuses.set(existing.id, changed);
+    let observed = false;
+    const observation = f.controller.observe(existing.id, changed).then(() => { observed = true; });
+    try { await vi.waitFor(() => expect(observed).toBe(true), { timeout: 1000 }); }
+    finally {
+      releaseProbe();
+      await observation;
+      await f.controller.settled(added.id);
+    }
+    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
+  });
+
+  it("preserves existing duplicates through sign-in recovery", async () => {
+    const f = await fixture();
+    const first = await f.add();
+    const second = await f.add();
+    const snapshot: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: first.identity, account: "same@example.test" };
+    f.statuses.set(first.id, snapshot);
+    f.statuses.set(second.id, snapshot);
+    await f.controller.signIn(second.id);
+    await f.controller.settled(second.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([first.id, second.id]);
+    expect(f.accounts.get(second.id)?.identity).toBe(first.identity);
+    expect(f.registry.accountBlocked(second.id)).toBe(false);
+  });
+
+  it("allows the same email on different engines and waits for the add decision", async () => {
+    const f = await fixture();
+    const existing = await f.add();
+    const snapshot: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: existing.identity, account: "same@example.test" };
+    f.statuses.set(existing.id, snapshot);
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const added = await f.controller.add("codex");
+    f.statuses.set(added.id, snapshot);
+    expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body.state).toBe("pending");
+    release();
+    await f.controller.settled(added.id);
+    expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id, added.id]);
+    expect(f.accounts.get(added.id)?.state).toBe("ready");
+    f.state(undefined);
+    expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body.state).toBe("complete");
+  });
+
   it("handles failed base sign-in snapshots", async () => {
     const f = await fixture();
     f.registry.blockAccount("claude", true);

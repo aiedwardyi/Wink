@@ -7,17 +7,14 @@ export const ROW_BUTTON = "relative inline-flex h-7 shrink-0 items-center justif
 export function Card({
   title,
   subtitle,
-  band = false,
   children,
 }: {
   title?: string;
   subtitle?: string;
-  /** On a phone the card runs edge to edge inside the sheet, its rows in line with the close button, so a list page keeps its width. */
-  band?: boolean;
   children?: React.ReactNode;
 }) {
   return (
-    <div className={cn("rounded-xl bg-card p-4", band && "max-md:-mx-5 max-md:rounded-none max-md:px-3.5")}>
+    <div className="rounded-xl bg-card p-4">
       {title && <div className="text-[15px] font-medium text-ink">{title}</div>}
       {subtitle && (
         <div className={cn("text-[13px] leading-relaxed text-ink-secondary", title && "mt-0.5")}>{subtitle}</div>

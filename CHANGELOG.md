@@ -2,6 +2,118 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.254] - 2026-11-12
+
+### Added
+- Room alerts on phone and desktop, with a bell to mute each room.
+- On a voice call, Wink reads answers, questions and worker updates aloud.
+- Group menu has People and Copy invite code; room rows drag to reorder.
+
+### Changed
+- Questions and orders you say on a call always reach the bot, or the voice says they weren't sent.
+- The model dial moves one model per wheel click at any zoom, and once per trackpad flick.
+- The Claude icon matches the other logos in size.
+- The Team page hides your own card; bar tips float over the page instead of stretching it.
+
+### Fixed
+- Your spoken answer to a question card on a call reaches the bot; "say the question again" repeats it.
+- A teammate's PC waking up gets one alert per room, not dozens.
+- Closing terminal panes no longer crashes the app.
+- Bots no longer get flagged for note edits they didn't make.
+- New worker panes no longer flash an old launch line.
+
+## [1.0.253] - 2026-11-11
+
+### Added
+- Team rooms on your phone, with unread counts and each room's last line.
+- One invite code per team room; teammates show under their own Wink name.
+- Drop files into team rooms; the message box grows as you type, and drafts stay.
+- A welcome card the first time you start a voice call.
+
+### Changed
+- The Devices page leads with one link; the setup code and Tailscale fold away.
+- Settings, bot details and Devices open fast the first time.
+- The first reply after a quiet spell comes faster.
+- Voice calls stay quiet while you type and speak in your app language.
+- Call captions sit on their own row above the message box and wrap.
+- Browser sign-in remembers you and shows the Wink logo and Google button.
+- Team snag notes read plainly and skip your own PC.
+
+### Fixed
+- End on a voice call never stops the bot, and one spoken yes does one thing.
+- Phone volume keys now change the call voice.
+- Removed teammates can't rejoin with the room code.
+- Phone alerts close once their chat is read.
+- Opening a linked folder from another PC works.
+- The same account can't be added twice; the empty credit row is gone.
+- The sidebar resize cursor no longer sticks after a drag.
+- Startup device picks stay on Tailscale.
+- Phone sign-in asks for your Google account once.
+- Prepared Claude sessions no longer pile up past the memory cap or outlive a deleted bot.
+
+## [1.0.252] - 2026-11-11
+
+### Added
+- Team rooms are on for everyone: share your room code and teammates join right away.
+
+### Changed
+- Long chats keep the numbers and values you typed, word for word, when they summarize. PINs and keys stay out.
+- Quick answers while your bot is busy come faster and no longer cut off mid-lookup.
+
+## [1.0.251] - 2026-11-11
+
+### Added
+- Voice calls in the desktop app: the phone button now shows in the chat header.
+
+### Changed
+- The memory file reads as plain text, with an Edit button at the top right.
+- The model picker uses a light look on light skins.
+- Quick answers now reply to greetings and quick pings while your bot is busy, and the waiting dots are gone.
+
+### Fixed
+- Voice calls work in another PC's window, and End works after a call fails.
+- "Live now" reads indigo on light skins.
+- The compact worker chip matches the size of its neighbors.
+- The folder field explains itself when there is no Browse button.
+- The whole "Show more" row is clickable.
+
+## [1.0.250] - 2026-11-11
+
+### Added
+- Devices: one "Connect from my devices" switch per PC, a QR code for your phone right on the page, and a green check on each PC you can reach.
+- Opening Wink in Chrome on a computer now gives you a real terminal: typing, arrow keys, copy and Korean all work.
+
+### Changed
+- Connections uses the same account cards as Usage.
+
+### Fixed
+- The Claude mascot's eyes and feet stay even at 125%, 150% and 175% screen scaling.
+
+## [1.0.249] - 2026-11-11
+
+### Added
+- Voice calls with your bot: tap the phone icon at the top right of a chat. The chat stays quiet during the call, and one call card with a summary and the transcript stays after.
+- Open Wink on your other PCs from Chrome with Google sign-in, no Tailscale needed.
+- Bot Details and Workers share one panel on the right, and the bot list folds while it's open.
+- The bot's avatar in the chat header says it opens Bot Details and memory.
+- Activity squares ripple when you tap them.
+
+### Changed
+- A shorter welcome line on first run: "Give a bot a job. Check in from anywhere."
+- New bots start with an empty name.
+- Softer hover on chat header icons, a violet Muscle Memory icon, a darker Live now and a smoother memory glow.
+
+### Fixed
+- Wink's background checks no longer flash a terminal window on Windows.
+- Bots with nothing to say stay quiet: no stray lines and no status flicker.
+- The What's New card stays put until you close it.
+- Dragging on the Usage page no longer grows the list, and the hand closes when you press.
+- Browser connections to another PC stay alive between requests, and browser setup is clearer.
+- The refresh icon finishes its turn before stopping.
+- Quick answers work again after an ask card you typed past.
+- A message blocked by a Grok hook names the hook.
+- Code that reads a secret is no longer masked as one.
+
 ## [1.0.248] - 2026-11-10
 
 ### Added
@@ -843,6 +955,9 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.251]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.251
+[1.0.250]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.250
+[1.0.249]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.249
 [1.0.248]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.248
 [1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
 [1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246

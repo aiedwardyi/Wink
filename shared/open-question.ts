@@ -1,11 +1,13 @@
 // What still waits on the person, read from the transcript alone. The UI and
 // the server's Quick answers gate share it so a closed card reads closed in both.
+import { isVoiceLine, type CallTag } from "./live-call.ts";
 
 interface Row {
   role: string;
   kind: string;
   from?: unknown;
   author?: { kind: string };
+  call?: CallTag;
   card?: { askUser?: true; requestId?: string; answered?: string; dismissed?: boolean };
 }
 
@@ -19,6 +21,11 @@ export function isSentByPerson(message: Row): boolean {
   return message.role === "user" && message.kind === "text" && !message.from && (!message.author || message.author.kind === "host");
 }
 
+/** A call's transcript line is not an answer: only what went to the bot is. */
+export function answersQuestion(message: Row): boolean {
+  return isSentByPerson(message) && !isVoiceLine(message);
+}
+
 /** A live approval or engine-native question still waiting on the person. */
 export function isOpenRequest(message: Row): boolean {
   return message.kind === "options" && Boolean(message.card?.requestId) && !message.card?.answered && !message.card?.dismissed;
@@ -30,7 +37,7 @@ export function scanQuestion<T extends Row>(messages: readonly T[]): T | null {
   // newest marked card can be open (a newer one supersedes it).
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
-    if (isSentByPerson(message)) return null;
+    if (answersQuestion(message)) return null;
     if (isAskUserCard(message)) return message.card!.dismissed || message.card!.answered ? null : message;
   }
   return null;

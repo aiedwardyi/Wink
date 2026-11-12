@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
 import { ArrowUp, Clock, Mic, Paperclip, Square, TerminalSquare, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
@@ -76,6 +76,7 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { useI18n } from "@/lib/i18n";
 import { pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useCatchingUp } from "@/lib/use-catching-up";
 import { ReplyQuote } from "./ReplyQuote";
@@ -201,6 +202,7 @@ export function Composer({
   composerRef,
   locked = false,
   focusBlocked = false,
+  call,
 }: {
   bot?: Bot;
   group?: Group;
@@ -216,6 +218,8 @@ export function Composer({
   /** New rooms keep the composer inert until their setup is saved or skipped. */
   locked?: boolean;
   focusBlocked?: boolean;
+  /** A live call's controls and caption, placed in the frame's grid. */
+  call?: (box: { closing: boolean }) => ReactNode;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -413,6 +417,7 @@ export function Composer({
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [terminalSendPreview, setTerminalSendPreview] = useState<TerminalSendPreview | null>(null);
   const sendPreview = usePresence(terminalSendPreview);
+  const callSlot = usePresence(call, MOTION_LARGE_MS);
   const [terminalSendBusy, setTerminalSendBusy] = useState(false);
   const [terminalSendError, setTerminalSendError] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
@@ -547,7 +552,7 @@ export function Composer({
   // queue), but stay off the transcript until drain — the chips here are
   // the pending rows so they cannot become the active leaf mid-turn.
   // Persist the full FIFO (not one draft slot) so unmount cannot drop
-  // ADV-QUEUE-1..n after a mid-queue peel.
+  // the later queued lines after a mid-queue peel.
   const [queued, setQueued] = useState<QueuedGroupSend[]>(() =>
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
@@ -1111,7 +1116,7 @@ export function Composer({
             }}
           />
           {!sendBlocked && (
-            <div className="col-start-1 row-start-2 mt-1 flex items-center gap-1">
+            <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -1123,6 +1128,7 @@ export function Composer({
               </button>
             </div>
           )}
+          {callSlot.mounted && callSlot.value?.({ closing: callSlot.closing })}
           <textarea
           ref={setComposerRef}
           data-orbit-composer=""
@@ -1234,10 +1240,11 @@ export function Composer({
               : busyChrome.placeholder
           }
           aria-label={t("composer.messageAria", { name: group ? group.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-1 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
+            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
           />
-        <div className="col-start-3 row-start-2 mt-1 flex items-center gap-1">
-          {busy && !locked && (
+        <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
+          {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
+          {busy && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
               if (group) stopRoom(group.id);
@@ -1263,7 +1270,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!sendBlocked && !busy && !hasContent && capabilities.dictation.available && (
+        {!sendBlocked && !busy && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}

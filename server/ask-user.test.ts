@@ -128,7 +128,7 @@ describe("closed ask_user card note", () => {
     activeMessages, userMessage, text: userMessage.text, closedAskNotes, currentPrompt: userMessage.text,
     turnStartedByUser: () => true, opts: undefined, supportsWorkspaceFiles: () => false, instance: {}, threadSyncV2: null,
     mailForTurn: () => [], store: {}, threadId: "t1", paneNoteIds: [], modelContextWindow: 200_000, paneTokens: 0,
-    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], bot: { id: "bot-a" },
+    accountNotices: { forTurn: () => ({ text: "" }) }, paneNotes: [], routineCards: [], quickAnswers: [], callLines: [], bot: { id: "bot-a" },
   });
 
   it("tells the bot its open card closed when the user typed past it", () => {

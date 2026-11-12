@@ -1,3 +1,10 @@
+import { z } from "zod";
+
+const snagHeaderSchema = z.object({
+  pc: z.string().max(200), person: z.string().max(200), worker: z.string().max(40),
+  event: z.enum(["stalled", "note-lost", "wake-failed", "reply-unwoken"]), minutes: z.int().min(0).max(100_000), count: z.int().positive(),
+});
+
 // A stored pane note, split into what a person reads and what only the bot needs.
 export type PaneNoteStatus = "done" | "failed" | "blocked";
 export type PaneNoteAlert = { kind: "stalled"; minutes: number } | { kind: "waiting" } | { kind: "finished" } | { kind: "restarted"; panes: string[] } | { kind: "limit"; engine: string; reset: string };
@@ -9,6 +16,7 @@ export type PaneNote = {
   status: PaneNoteStatus | null;
   /** Wink's own watcher notes; their text is instructions to the bot. */
   alert: PaneNoteAlert | null;
+  snag?: z.infer<typeof snagHeaderSchema>;
   body: string;
 };
 
@@ -27,6 +35,7 @@ const RESTARTED_PANE = /^- (?:(.+) )?\[pane ([0-9a-f]{1,8})\] in /;
 // the reset text may hold parens, e.g. "3pm (Asia/Seoul)"
 const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so far stays in /;
 const TRUNCATED = /\n\[truncated\]$/;
+const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
 
 /** Works on a stored note or on the raw text a pane posted. */
 export function parsePaneNote(text: string): PaneNote {
@@ -35,6 +44,13 @@ export function parsePaneNote(text: string): PaneNote {
   const truncated = TRUNCATED.test(rest);
   if (truncated) rest = rest.replace(TRUNCATED, "");
   const note: PaneNote = { pane8: prefix?.[1] ?? null, label: prefix?.[2] ?? null, nick: null, status: null, alert: null, body: "" };
+  const snag = TEAM_SNAG.exec(rest);
+  if (snag) {
+    try {
+      const parsed = snagHeaderSchema.safeParse(JSON.parse(snag[1]!));
+      if (parsed.success) return { ...note, snag: parsed.data, body: rest.slice(snag[0].length).trim() };
+    } catch {}
+  }
   const stalled = STALLED.exec(rest);
   if (stalled) return { ...note, alert: { kind: "stalled", minutes: Number(stalled[1]) } };
   if (WAITING.test(rest)) return { ...note, alert: { kind: "waiting" } };

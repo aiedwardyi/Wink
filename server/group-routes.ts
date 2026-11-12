@@ -10,8 +10,11 @@ import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
+import { roomFile } from "./rooms/files.ts";
+import { createPeopleOnlyRoom, PEOPLE_ONLY_LINE, peopleOnlyRoom, peopleOnlyRoster } from "./rooms/people-only.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -40,7 +43,6 @@ type GroupRouteDeps = {
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
   releaseInterruptedBot: (botId: string, threadId: string) => void;
-  teamRooms: () => boolean;
 };
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
@@ -66,12 +68,25 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     flushInterruptedTask,
     closeOpenApprovals,
     releaseInterruptedBot,
-    teamRooms,
   } = deps;
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => {
     const bot = store.bot(id)!;
     return { name: bot.name, driverKind: (deps.instanceForBot ? deps.instanceForBot(bot) : registry.get(bot.modelSelection.instanceId))?.driverKind };
   }), people);
+  /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
+  const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
+    const busy = store.bot(botId);
+    const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
+    if (busy) {
+      const epoch = bumpTurnEpoch(busy.id) - 1;
+      markThreadInterrupted(threadId, busy.id, epoch);
+      flushInterruptedTask(threadId, busy.id, "stop");
+    }
+    await instance?.adapter.interruptTurn(threadId).catch(() => {});
+    closeOpenApprovals(threadId);
+    if (ended) await ended().catch(() => {});
+    if (busy) releaseInterruptedBot(busy.id, threadId);
+  };
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
     store.groupTasks(group.id).some((task) =>
@@ -96,13 +111,17 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "channel must be a JSON object" });
       }
-      const roster = checkedMemberIds(body.memberIds);
+      if (body.peopleOnly !== undefined && (body.peopleOnly !== true || body.hosted !== true)) {
+        return json(res, 400, { error: "peopleOnly must be true, on a hosted room" });
+      }
+      const roster = body.peopleOnly ? peopleOnlyRoster(body.memberIds) : checkedMemberIds(body.memberIds);
       if (!roster.ok) return json(res, 400, { error: roster.error });
       const { memberIds } = roster;
       if (body.name !== undefined && typeof body.name !== "string") {
         return json(res, 400, { error: "channel name must be a string" });
       }
-      const name = body.name?.trim() || `${store.bot(memberIds[0])!.name} & co.`;
+      const name = body.name?.trim() || (memberIds.length ? `${store.bot(memberIds[0])!.name} & co.` : "");
+      if (!name) return json(res, 400, { error: "a people-only room needs a name" });
       if (name.length > 100) return json(res, 400, { error: "channel name must be at most 100 characters" });
       let section: string | undefined;
       if (body.section !== undefined && body.section !== null) {
@@ -131,10 +150,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         setup = { bulletin: requested.bulletin, defaultResponder: responder, completed: true };
       }
       if (body.hosted !== undefined && body.hosted !== true) return json(res, 400, { error: "hosted must be true" });
-      if (body.hosted && !teamRooms()) return json(res, 409, { error: "team rooms are off" });
       const refusal = body.hosted ? roomBots(memberIds) : null;
       if (refusal) return json(res, 400, { error: refusal });
-      const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: createRoom(name).id } : undefined);
+      const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: (body.peopleOnly ? createPeopleOnlyRoom : createRoom)(name).id } : undefined);
       return json(res, 201, { group: { ...publicGroupState(group), messages: [] } });
     },
     setup: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -201,7 +219,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
-      if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
+      if (group.hosted) {
+        // The shared thread stays active; an older task opens to read only.
+        if (!store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such channel task" });
+        const view = { ...group, threadId: m[2] };
+        return json(res, 200, { group: url.searchParams.get("messages") === "0" ? publicGroupState(view) : groupWithThread(view) });
+      }
       if (channelTaskBlocked(group)) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
@@ -285,6 +308,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
+        if (existing.hosted && peopleOnlyRoom(existing.hosted.roomId)) return json(res, 409, { error: PEOPLE_ONLY_LINE });
         const roster = checkedMemberIds(body.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
@@ -305,6 +329,12 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         const checked = validateBotCwd(body.cwd);
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.cwd ?? undefined;
+      }
+      if (body.picture !== undefined) {
+        if (!existing.hosted) return json(res, 400, { error: "not a team room" });
+        const file = typeof body.picture === "string" ? roomFile(existing.hosted.roomId, body.picture) : null;
+        if (body.picture !== null && !file?.type.startsWith("image/")) return json(res, 400, { error: "picture must be a room image id" });
+        patch.picture = file?.id;
       }
       // one pinned message per room; null/"" clears. The id is not
       // validated against the transcript here - a pin whose message was
@@ -424,18 +454,17 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
+      const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, group.threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
-      if (busy) {
-        const epoch = bumpTurnEpoch(busy.id) - 1;
-        markThreadInterrupted(group.threadId, busy.id, epoch);
-        flushInterruptedTask(group.threadId, busy.id, "stop");
+      const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;
+      if (busy) await stopMember(group.threadId, busy.id, ended);
+      else {
+        closeOpenApprovals(group.threadId);
+        void ended?.();
       }
-      await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
-      closeOpenApprovals(group.threadId);
-      if (busy) releaseInterruptedBot(busy.id, group.threadId);
       return json(res, 200, { ok: true });
     },
+    stopMember,
     patchCard: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such group" });

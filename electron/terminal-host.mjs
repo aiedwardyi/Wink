@@ -371,8 +371,13 @@ function commandHash(command) {
 }
 
 // Wrap the existing reader without loading a module; Write-Error preserves a failed $? for the user's prompt.
+// Get-Module guard: calling the cmdlet would autoload PSReadLine. Separate tries: 2.0 has no PredictionSource.
 export function workerShellArgs(id, noProfile = false) {
-  const script = `$global:OrbitPrompt = $function:prompt
+  const script = `if (Get-Module PSReadLine) {
+  try { Set-PSReadLineOption -PredictionSource None } catch {}
+  try { Set-PSReadLineOption -HistorySaveStyle SaveNothing } catch {}
+}
+$global:OrbitPrompt = $function:prompt
 $global:OrbitReadLine = $null
 $global:OrbitHash = $null
 function global:prompt {
