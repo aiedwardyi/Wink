@@ -10,6 +10,7 @@ const syllables = ["ka", "lo", "mi", "ne", "ru", "so", "ti", "va", "be", "du"];
 const word = (n: number) => [n % 10, Math.floor(n / 10) % 10, Math.floor(n / 100) % 10].map((i) => syllables[i]).join("") + "x";
 const fact = (i: number) => `- ${word(i)} stores the ${word(i + 300)} ledger near ${word(i + 600)} harbor with ${word(i + 900)} lanterns (noted 2026-09-01)`;
 const memory = (count: number) => `${Array.from({ length: count }, (_, i) => fact(i)).join("\n")}\n`;
+const clauses = (count: number) => `${Array.from({ length: count }, (_, i) => `- ${word(i)} stores the ${word(i + 300)} ledger; ${word(i + 600)} keeps the ${word(i + 900)} lantern (noted 2026-09-01)`).join("\n")}\n`;
 const remember = (n: number, extra = "") => ({ text: `Remember that ${word(n)} lives beside the ${word(n + 1)} pier with ${word(n + 2)} boats.${extra}`, at: now - 3_600_000 + n, kind: "remember" as const });
 const filed = (header: { counts?: { filed: number } } | object) => "counts" in header ? header.counts!.filed : 0;
 const night = (text: string, input: Partial<CleanInput> = {}, changes?: () => unknown[]) => cleanFiles({ memory: text, history: null, typed: new Set(), now, ...sleepEngines(changes), ...input });
@@ -33,6 +34,26 @@ describe("memory cleanup latent walls", () => {
     expect(second).toMatchObject({ ok: true });
     if (!second.ok) return;
     expect(user.filter((line) => !rememberCovered(line.text, second.memory))).toHaveLength(Math.max(0, waiting.length - 2));
+  });
+
+  it("lands a heavy night by leaving its oldest remember for the next night, synthetic replies", async () => {
+    const text = clauses(280);
+    const user = [0, 10].map((n) => remember(n, " ".padEnd(220, "z")));
+    const first = await night(text, { user });
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) return;
+    expect(user.map((line) => rememberCovered(line.text, first.memory))).toEqual([false, true]);
+    expect(filed(first.header)).toBeGreaterThanOrEqual(3);
+    expect(Buffer.byteLength(first.memory)).toBeLessThan(Buffer.byteLength(text));
+    const second = await night(first.memory, { history: appendBlock("", first.block), user });
+    expect(second).toMatchObject({ ok: true });
+    if (second.ok) expect(rememberCovered(user[0]!.text, second.memory)).toBe(true);
+  });
+
+  it("never leaves a heavy night's newest remember for the next night, synthetic replies", async () => {
+    const long = remember(0, ` Then ${word(7)} sails at dawn to the ${word(8)} reef for ${word(9)} nets.`.repeat(6));
+    const result = await night(clauses(280), { user: [long] });
+    expect(result).toMatchObject({ ok: false, stage: "validate", detail: expect.stringContaining("infeasible-remembers:") });
   });
 
   it("writes a remember over 300 bytes as bullets of at most 300 bytes", async () => {

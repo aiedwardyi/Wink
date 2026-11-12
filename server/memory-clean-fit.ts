@@ -1,6 +1,6 @@
 import { changeIds, keptList, stagedCandidate, type CleanSource } from "./memory-clean-plan.ts";
-import type { Change, CleanFile, CleanInput } from "./memory-clean-types.ts";
-import { contentWords, FILE_FLOOR, filedPointer, GROWTH_MAX, openLine, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
+import type { Change, CleanFile, CleanInput, SleepLine } from "./memory-clean-types.ts";
+import { contentWords, FILE_FLOOR, filedPointer, GROWTH_MAX, openLine, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
 
 export const PLANNED = "Filed by plan";
 // over the light limits a night files at least this many lines, so it always makes progress
@@ -15,8 +15,33 @@ type Slot = { n: number; topic: string; row: number; ids: number[]; bytes: numbe
 const bare = (line: string) => line.replace(/\r$/, "").replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\s*\(noted \d{4}-\d\d-\d\d\)/g, "").trim();
 export const subjectOf = (line: string) => bare(line).split(/:\s| - /)[0]!.trim();
 
-/** Code files enough lines to fit every cap with no model op, so a night never waits on the model doing sums; model ops ride on top only while the fit holds. */
+/** Floor first: when the floor can't land with tonight's remembers, the oldest one written waits a night with every older one, never the newest. */
 export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<CleanFile, unknown>, runId: string, at: number) {
+  const all = input.user ?? [];
+  const source = sources.find((item) => item.file === "MEMORY.md")!;
+  const first = floorFit(input, all, sources, lists, runId, at);
+  const forced = (user: readonly SleepLine[]) => {
+    const result = prepareChangeList({ file: source.file, text: source.text, list: { version: 1, file: source.file, changes: [] }, typed: input.typed, user, side: input.side?.file });
+    return result.ok ? result.forced : 0;
+  };
+  // validate writes remembers newest first, so holding from the oldest end shrinks tonight's room one remember at a time
+  const order = all.filter((line) => line.kind === "remember").reverse().sort((a, b) => b.at - a.at);
+  let room = forced(all);
+  for (let keep = order.length - 1; !first.lands && room && keep > 0; keep--) {
+    const held = new Set(order.slice(keep));
+    const user = all.filter((line) => !held.has(line));
+    const bytes = forced(user);
+    if (!bytes) break;
+    if (bytes === room) continue;
+    room = bytes;
+    const fit = floorFit({ ...input, user }, all, sources, lists, runId, at);
+    if (fit.lands) return { ...fit, user };
+  }
+  return { ...first, user: all };
+}
+
+/** Code files enough lines to fit every cap with no model op, so a night never waits on the model doing sums; model ops ride on top only while the fit holds. */
+function floorFit(input: CleanInput, all: readonly SleepLine[], sources: CleanSource[], lists: Map<CleanFile, unknown>, runId: string, at: number) {
   const source = sources.find((item) => item.file === "MEMORY.md")!;
   const validate = (list: unknown) => keptList({ file: source.file, text: source.text, list, typed: input.typed, user: input.user, side: input.side?.file });
   const { result, list, dropped } = validate(lists.get(source.file) ?? { version: 1, file: source.file, changes: [] });
@@ -30,8 +55,9 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
   const before = Buffer.byteLength(source.text);
   const over = before > FILE_FLOOR || lines.length > 140;
   const guarded = protectedLines(source.text, input.typed);
-  const asked = (input.user ?? []).filter((line) => line.kind === "remember");
-  const heard = new Set((input.user ?? []).flatMap((line) => [...contentWords(line.text)]));
+  // held remembers too: a filed line that covers one would be written again the next night
+  const asked = all.filter((line) => line.kind === "remember");
+  const heard = new Set(all.flatMap((line) => [...contentWords(line.text)]));
   const month = `notes-${new Date(at).toISOString().slice(0, 7)}`;
   const plain = (line: string) => line.replace(/\r$/, "");
   const bytes = (line: string) => Buffer.byteLength(plain(line)) + 1;
@@ -77,7 +103,9 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
   // rows of the model's file ops kept on top of the floor
   const filings: Array<{ ids: number[]; text: string; topic: string }> = [];
   let grow = (_skip: Set<number>) => false;
+  let lands = true;
   if (pool.length && own && (base.ok || base.errors.every((error) => CURABLE.includes(error.reason)))) {
+    lands = false;
     const sum = (key: "touchedLines" | "changedChars") => base.budgets.reduce((n, item) => n + item[key], 0);
     const grown = base.budgets.reduce((n, item) => n + item.finalBytes - item.beforeBytes, 0);
     // a topic's last pointer row takes this night's labels while it stays within 300 bytes, as validate extends it
@@ -132,7 +160,7 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
     // the sums are close, not exact; a few real stagings settle the last line
     for (let tries = 0; tries < 6 && added.length; tries++) {
       const staged = stage(planOps(slots));
-      if (passes(staged)) break;
+      if (passes(staged)) { lands = true; break; }
       const reasons = staged.flatMap((item) => item.ok ? [] : item.errors.map((error) => error.reason));
       if (reasons.length && reasons.every((reason) => CURABLE.includes(reason))) {
         let more = false;
@@ -179,7 +207,7 @@ export function fitPlan(input: CleanInput, sources: CleanSource[], lists: Map<Cl
     }
   }
   const final = planOps(slots);
-  return { list: listOf([...kept, ...final]), ids: new Set(final.flatMap(changeIds)), rejected };
+  return { list: listOf([...kept, ...final]), ids: new Set(final.flatMap(changeIds)), rejected, lands };
 }
 
 const planOps = (slots: Slot[]): Change[] => slots.filter((slot) => slot.ids.length).map((slot) => ({ op: "file", ids: slot.ids, topic: slot.topic, reason: PLANNED }));

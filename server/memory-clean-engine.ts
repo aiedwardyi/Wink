@@ -94,7 +94,8 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
     let plan = fitPlan(input, sources, lists, runId, at);
     lists.set("MEMORY.md", plan.list);
     let repaired = false;
-    let candidate = stagedCandidate(input, sources, lists, runId, at);
+    const staged = () => stagedCandidate({ ...input, user: plan.user }, sources, lists, runId, at);
+    let candidate = staged();
     for (;;) {
       if (candidate.ok) {
         const outside = [...candidate.parsed].find(([file, list]) => {
@@ -125,7 +126,7 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
         given = lists.get("MEMORY.md");
         plan = fitPlan(input, sources, lists, runId, at);
         lists.set("MEMORY.md", plan.list);
-        candidate = stagedCandidate(input, sources, lists, runId, at);
+        candidate = staged();
         continue;
       }
       if (!candidate.entries.length) return { ok: false, stage: "nothing", detail: "No changes", tokens };
@@ -136,7 +137,7 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
         // a model op the judge rejects drops alone; the code plan already fits without it
         for (const [file, list] of candidate.parsed) lists.set(file, { ...list, changes: list.changes.filter((change) => !rejected.some((entry) => entry.header.file === file &&
           (change.op === "learn" ? entry.header.op === "learn" && entry.header.quote === change.quote : changeIds(change).some((id) => entry.header.at.includes(id))))) });
-        candidate = stagedCandidate(input, sources, lists, runId, at);
+        candidate = staged();
         if (!candidate.ok) return { ok: false, stage: "validate", detail: "source-coverage", tokens };
         if (!candidate.entries.length) return { ok: false, stage: "nothing", detail: "No changes", tokens };
       }
