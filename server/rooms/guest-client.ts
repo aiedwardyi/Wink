@@ -24,6 +24,7 @@ import {
   joinedSentName,
   joinedSummary,
   keepJoinedPicture,
+  markJoinedFilesDeleted,
   readJoined,
   resetJoined,
   removeJoined,
@@ -36,7 +37,7 @@ import {
   type JoinedState,
 } from "./joined.ts";
 import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
-import { cachedJoinedFile, keepJoinedFile, removeJoinedFiles } from "./joined-files.ts";
+import { cachedJoinedFile, dropJoinedFiles, keepJoinedFile, removeJoinedFiles } from "./joined-files.ts";
 import { NAME_MAX } from "./names.ts";
 
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
@@ -90,6 +91,7 @@ const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries:
 const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
   z.object({ kind: z.literal("state"), state: stateSchema }),
+  z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000) }),
   z.object({ kind: z.literal("reset") }),
   z.object({ kind: z.literal("ended") }),
 ]);
@@ -609,6 +611,9 @@ export class GuestClient {
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
+    } else if (parsed.kind === "deleted") {
+      await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
+      if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

@@ -135,6 +135,10 @@ export function roomFilesState(roomId: string) {
   return { deleted: deleted.map((file) => file.id), error: roomFilesFolder().error };
 }
 
+/** Newest first, capped so the frame stays under a teammate's frame limit. */
+export const deletedRoomFiles = (roomId: string): string[] =>
+  (withDb((db) => db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT 5000").all(roomId)) as Array<{ id: string }>).map((file) => file.id);
+
 export async function deleteRoomFile(roomId: string, id: string): Promise<void> {
   const release = holdRoomFiles();
   try {

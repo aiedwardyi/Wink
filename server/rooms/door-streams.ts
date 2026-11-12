@@ -33,7 +33,12 @@ export interface DoorState {
   myAsks: never[];
 }
 
-export type DoorFrame = { kind: "entry"; entry: DoorEntry } | { kind: "state"; state: DoorState } | { kind: "reset" } | { kind: "ended" };
+export type DoorFrame =
+  | { kind: "entry"; entry: DoorEntry }
+  | { kind: "state"; state: DoorState }
+  | { kind: "deleted"; ids: string[] }
+  | { kind: "reset" }
+  | { kind: "ended" };
 
 export interface DoorStream {
   roomId: string;

@@ -214,6 +214,23 @@ export function addJoinedEntries(roomId: string, entries: readonly JoinedEntry[]
   });
 }
 
+/** Flags the host's deleted files on every held entry; the count of entries changed. */
+export function markJoinedFilesDeleted(roomId: string, ids: readonly string[]): number {
+  const gone = new Set(ids);
+  return transaction((database) => {
+    const rows = database.prepare("SELECT seq, body FROM entries WHERE room_id = ? AND json_extract(body, '$.files') IS NOT NULL").all(roomId) as Array<{ seq: number; body: string }>;
+    const update = database.prepare("UPDATE entries SET body = ? WHERE room_id = ? AND seq = ?");
+    let changed = 0;
+    for (const row of rows) {
+      const entry = JSON.parse(row.body) as JoinedEntry;
+      if (!entry.files?.some((file) => gone.has(file.id) && !file.deleted)) continue;
+      update.run(JSON.stringify({ ...entry, files: entry.files.map((file) => (gone.has(file.id) ? { ...file, deleted: true } : file)) }), roomId, row.seq);
+      changed += 1;
+    }
+    return changed;
+  });
+}
+
 /** Drops the local copy, so the next connect starts from a snapshot. Translations stay: an entry id never changes text. */
 export function resetJoined(roomId: string): void {
   transaction((database) => {

@@ -18,6 +18,10 @@ export async function removeJoinedFiles(roomId: string): Promise<void> {
   await rm(roomDir(roomId), { recursive: true, force: true });
 }
 
+export async function dropJoinedFiles(roomId: string, ids: readonly string[]): Promise<void> {
+  await Promise.all(ids.map((id) => rm(join(roomDir(roomId), id), { force: true })));
+}
+
 /** The held copy, when it is all there. */
 export function cachedJoinedFile(roomId: string, file: JoinedFile): string | null {
   const path = join(roomDir(roomId), file.id);
