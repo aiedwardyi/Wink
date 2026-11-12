@@ -180,7 +180,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await openRoom();
     for (const id of ["original", "own"]) {
       await menu(id);
-      expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["Reply", "Copy"]);
+      expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["Pin as notice"] : []), "Reply", "Copy"]);
       await click($("[data-menu-copy]"));
     }
     expect(writeText.mock.calls).toEqual([["PR #1304 머지했어요"], ["Ready"]]);
@@ -232,7 +232,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await act(async () => vi.advanceTimersByTime(499));
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => vi.advanceTimersByTime(1));
-    expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["답장", "복사", "텍스트 선택"]);
+    expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["공지로 등록"] : []), "답장", "복사", "텍스트 선택"]);
     await act(async () => { window.dispatchEvent(new Event("orbit:close-message-menu")); });
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => { row.dispatchEvent(event); vi.advanceTimersByTime(500); });
@@ -545,7 +545,7 @@ describe("Team rooms for a teammate", () => {
     });
     await openPlus();
     await click(button("Join with code"));
-    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
     expect(document.querySelectorAll('[role="dialog"] button')).toHaveLength(0);
     await paste(box, `  ${CODE}\n`);
     expect(asked("POST", "/api/joined/join").map((call) => call.body)).toEqual([{ code: CODE }]);
@@ -568,7 +568,7 @@ describe("Team rooms for a teammate", () => {
     });
     await openPlus();
     await click(button("Join with code"));
-    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
     await paste(box, "hello there");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("That code doesn't work.");
     expect(asked("POST", "/api/joined/join")).toHaveLength(0);
@@ -671,7 +671,7 @@ describe("Team rooms for a teammate", () => {
     await openPlus();
     expect(button("새 팀 채팅방")).toBeUndefined();
     await click(button("코드로 참여"));
-    const box = $<HTMLInputElement>('input[aria-label="코드를 붙여 넣으세요"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="채팅방 코드 1"]')!;
     await paste(box, "아무거나");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("사용할 수 없는 코드예요.");
   });

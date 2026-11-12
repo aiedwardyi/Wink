@@ -730,7 +730,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onTerminalAttention={openTerminalAttention}
         folded={slotShown}
         onUnfold={() => slotPanels.forEach(closeSlot)}
-        rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
       {noEngines ? (
         <LazyView fallback={<BootFallback />}>

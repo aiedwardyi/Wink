@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.spyOn(HTMLTextAreaElement.prototype, "offsetHeight", "get").mockReturnValue(42);
   vi.stubGlobal("ResizeObserver", class {
     constructor(callback: () => void) { resized = callback; }
-    observe() {}
+    observe() { resized(); }
     disconnect() {}
   });
   host = document.body.appendChild(document.createElement("div"));

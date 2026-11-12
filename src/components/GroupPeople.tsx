@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { removeFromRoom, roomPeople, shareErrorKey, shareGroup } from "@/lib/team-rooms";
+import { removeFromRoom, roomPeople, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
 import { useStore, type Group } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
@@ -13,7 +13,7 @@ export function GroupPeople({ group }: { group: Group }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const shared = Boolean(group.hosted && group.room && "people" in group.room);
-  const [code, setCode] = useState<string | null>(null);
+  const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [busy, setBusy] = useState(shared);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const alive = useRef(true);
@@ -26,7 +26,7 @@ export function GroupPeople({ group }: { group: Group }) {
     if (!alive.current) return;
     setBusy(false);
     if (!("code" in result)) return setProblem(shareErrorKey(result));
-    setCode(result.code);
+    setCode({ code: result.code, short: result.short });
     dispatch({ type: "groupPatched", group: result.group });
   };
 
@@ -55,7 +55,7 @@ export function GroupPeople({ group }: { group: Group }) {
   return (
     <section data-group-people aria-label={t("teamRoom.people")} className="mb-3">
       <div className="mb-1.5 px-3 text-[12.5px] font-medium text-ink-secondary">{t("teamRoom.people")}</div>
-      {code ? <RoomCode code={code} /> : (
+      {code ? <RoomCode {...code} /> : (
         <button
           type="button"
           data-group-invite

@@ -61,6 +61,7 @@ export function createPhoneRelay(options: PhoneRelayOptions, deps: PhoneRelayDep
     accountReady: () => runtime.accountReady(),
     sendSnag: (snag) => runtime.sendSnag(snag),
     sendActive: () => runtime.sendActive(),
+    mintRoomCode: () => runtime.mintRoomCode(),
   };
 }
 
@@ -209,6 +210,10 @@ class RelayRuntime {
 
   sendSnag(snag: TeamSnag): Promise<boolean> {
     return this.client?.sendSnag(snag) ?? Promise.resolve(false);
+  }
+
+  mintRoomCode(): Promise<{ code: string; exp: number } | null> {
+    return this.client?.mintRoomCode() ?? Promise.resolve(null);
   }
 
   sendActive(): void {

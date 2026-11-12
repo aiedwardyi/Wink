@@ -118,12 +118,12 @@ async function watchShort(reduced = false) {
   return { host, root, to: (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); }) };
 }
 
-it("plays a 22-line check that took 2 s for at least 5 s, then holds on the result", async () => {
+it("plays a 22-line check that took 2 s for about 4 s, then holds on the result", async () => {
   const { host, root, to } = await watchShort();
-  await to(4_900);
+  await to(3_700);
   expect(host.querySelector("[data-current]")?.textContent).toBe("Checking page 1 of 1");
   expect(host.querySelector(".verify-watch-again")).toBeNull();
-  await to(4_000);
+  await to(1_300);
   expect(host.querySelector("[data-current]")?.textContent).toBe("1 problem");
   expect(host.querySelector(".verify-doc-line mark")?.textContent).toBe("recieve");
   expect(host.querySelectorAll(".verify-watch-cursor")).toHaveLength(0);

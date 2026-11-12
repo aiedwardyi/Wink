@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { accountLaunch } from "./account-policy.ts";
 import { DATA_DIR } from "./config.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
-import { workerReportText } from "./drivers/terminal-proxy.ts";
+import { TOOLS, workerReportText } from "./drivers/terminal-proxy.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createUsageBoard } from "./usage-board.ts";
@@ -61,6 +61,12 @@ function powershell(command: string, env: NodeJS.ProcessEnv) {
 }
 
 describe("OpenAI credit Codex account", () => {
+  it("does not recommend OpenAI credit in the worker description", () => {
+    const description = TOOLS.find((tool) => tool.name === "terminal_spawn")!.description;
+    expect(description).not.toContain("CODEX_HOME='OpenAI credit'");
+    expect(description).toContain("Accounts marked unavailable in Usage cannot run Codex workers");
+  });
+
   it("names the key's env var in argv and puts the key only in the child env", () => {
     const account = credit?.codexCredit(DATA_DIR, { codex: { driver: "codex" } }, KEY)?.account;
     expect(account).toEqual({ id: "codex-credit", of: "codex", home: join(DATA_DIR, "codex-credit"), generation: 1 });
@@ -107,6 +113,13 @@ describe("OpenAI credit Codex account", () => {
     expect(readFileSync(join(f.home, "AGENTS.md"), "utf8")).toBe("fixture guide");
     const plain = await f.prepare({ ...f.input, command: "codex 'task'" });
     expect(plain && "environment" in plain ? plain.environment?.[ENV] : undefined).toBeUndefined();
+  });
+
+  it.each([true, false])("skips marked OpenAI credit with account routing %s", async (enabled) => {
+    const f = setup(enabled);
+    mkdirSync(f.home, { recursive: true });
+    writeFileSync(join(f.home, ".wink-codex-promo.json"), '{"generation":1}');
+    await expect(f.prepare(f.input)).rejects.toThrow();
   });
 
   it("drops the account, its resume and its Usage row when the key is removed", async () => {

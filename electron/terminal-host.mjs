@@ -10,6 +10,7 @@ import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
 import { workerResumeStatus } from "./worker-resume.mjs";
+import { watchCodexPromo } from "./codex-promo.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -698,6 +699,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     for (const session of new Set([...sessions.values(), ...exitNotes])) {
       const exited = exitNotes.has(session);
       if ((session.retired || session.exitCode !== null) && !exited) continue;
+      if (watchCodexPromo(session, at, postNote)) continue;
       if (!session.mail) session.finished = [];
       for (const finished of session.finished) {
         if (at < finished.retryAt) continue;

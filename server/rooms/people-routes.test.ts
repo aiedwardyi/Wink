@@ -116,7 +116,9 @@ function openStream(roomId: string, key: string, device?: string): Promise<Strea
         while ((cut = text.indexOf("\n\n")) >= 0) {
           const block = text.slice(0, cut);
           text = text.slice(cut + 2);
-          if (block.startsWith("data: ")) stream.frames.push(JSON.parse(block.slice(6)));
+          if (!block.startsWith("data: ")) continue;
+          const frame = JSON.parse(block.slice(6)) as DoorFrame;
+          if (frame.kind !== "reactions") stream.frames.push(frame);
         }
       });
       res.on("error", () => {});

@@ -22,11 +22,22 @@ import { FileAttachmentRow } from "./FileAttachmentRow";
 import { JumpToLatest } from "./JumpToLatest";
 import { MediaViewerProvider, useMediaViewer } from "./MediaViewerProvider";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
+import { ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
+import { RoomNotice } from "./RoomNotice";
 
-export function TeamRoomRow({ line, mine, named, newDay = false, base, authorName, canTranslate = false, quote, onJump, onMenu, onReply }: {
+/** No `set` hides Pin; `canUnpin` covers the current notice only. */
+export interface RoomNoticeControl {
+  entryId?: string;
+  text?: string;
+  canUnpin: boolean;
+  set?: (entryId: string | null) => void;
+}
+
+export function TeamRoomRow({ line, mine, named, newDay = false, base, authorName, canTranslate = false, quote, onJump, onMenu, onReply, notice, reactionNames, onReact }: {
   line: RoomLine; mine: boolean; named: boolean; newDay?: boolean; base: string; authorName?: string; canTranslate?: boolean; quote?: RoomLine;
   onJump: (id: string) => void; onMenu: (request: MessageMenuRequest) => void; onReply: (message: Message) => void;
+  notice?: RoomNoticeControl; reactionNames?: ReadonlyMap<string, string>; onReact?: (message: Message, emoji: string) => void;
 }) {
   const { t, locale } = useI18n();
   const viewer = useMediaViewer();
@@ -34,7 +45,10 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
   const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
   const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
-  const target = { threadId: base, message: roomMessage(line), copyText: line.text, user: mine, pinned: false, canPin: false };
+  const entryId = line.entryId ?? line.id;
+  const pinned = notice?.entryId === entryId;
+  const message = roomMessage(line);
+  const target = { threadId: base, message, copyText: line.text, user: mine, pinned, canPin: Boolean(notice?.set) && (!pinned || notice!.canUnpin), notice: true };
   // The row's file list is rebuilt every render; keying on it would re-register in a loop.
   const pictureKey = JSON.stringify(pictures);
   useEffect(() => {
@@ -138,6 +152,9 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
             </div>
           </div>
         </div>
+        {onReact
+          ? <ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={(emoji) => onReact(message, emoji)} className={cn("static mt-1 max-w-full translate-y-0", !mine && "ml-8")} />
+          : line.reactions?.length ? <div className={cn("pointer-events-none", !mine && "ml-8")}><ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={() => {}} className="static mt-1 max-w-full translate-y-0" /></div> : null}
         <TimestampLabel at={line.at} />
       </div>
     </div>
@@ -145,7 +162,10 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
 }
 
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply }: { lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void }) {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply, onReact, reactionNames, notice }: {
+  lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void;
+  onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl;
+}) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
   const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
@@ -215,7 +235,14 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   }, [fill]);
   return (
     <MediaViewerProvider threadId={base} messages={media}>
-      {menu?.kind === "message" && <MessageMenu {...menu} onReply={onReply} onPin={() => {}} onClose={() => setMenu(null)} />}
+      {menu?.kind === "message" && <MessageMenu
+        {...menu}
+        onReply={onReply}
+        onPin={(message) => notice?.set?.(notice.entryId === (message.roomEntryId ?? message.id) ? null : message.roomEntryId ?? message.id)}
+        onReact={onReact && ((emoji) => onReact(menu.target.message, emoji))}
+        onClose={() => setMenu(null)}
+      />}
+      {notice?.entryId && <RoomNotice base={base} line={lines.find((line) => (line.entryId ?? line.id) === notice.entryId)} text={notice.text} onJump={jump} />}
       {menu?.kind === "selection" && <SelectionMenu {...menu} onClose={() => setMenu(null)} />}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -259,7 +286,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
             const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
             const quote = line.replyToId ? byId.get(line.replyToId) : undefined;
             const newDay = !before || new Date(before.at).toDateString() !== new Date(line.at).toDateString();
-            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} newDay={newDay} onReply={onReply} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} />;
+            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} newDay={newDay} onReply={onReply} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} notice={notice} reactionNames={reactionNames} onReact={onReact} />;
           })}
         </div>
       </div>

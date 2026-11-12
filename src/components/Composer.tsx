@@ -933,6 +933,18 @@ export function Composer({
     };
   }, [recording, editText, sendBlocked]);
 
+  const [winTip, setWinTip] = useState(0);
+  useEffect(() => {
+    if (!winTip) return;
+    const timer = setTimeout(() => setWinTip(0), 5000);
+    return () => clearTimeout(timer);
+  }, [winTip]);
+  const winDictate = capabilities.host.platform === "win32";
+  const showWinTip = () => {
+    inputRef.current?.focus();
+    setWinTip((n) => n + 1);
+  };
+
   const toggleMic = () => {
     if (sendBlocked) return;
     if (!capabilities.dictation.available || !window.ogb) {
@@ -947,6 +959,9 @@ export function Composer({
     <div className="pointer-events-none relative px-5 pb-3">
       {/* No fill or hairline on this wrapper — those were the black frame
           in the pill's top corners. The dock overlays the transcript. */}
+      {winTip > 0 && (
+        <p role="status" className="pointer-events-auto mb-2 px-1 text-[12px] text-ink-secondary">{t("composer.winDictateHint")}</p>
+      )}
       {speechError && (
         <div className="pointer-events-auto mb-2 w-full rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
@@ -1363,6 +1378,16 @@ export function Composer({
                 : "text-ink-secondary hover:bg-raised hover:text-ink",
             )}
             title={recording ? t("composer.stopDictationEsc") : t("composer.dictate")}
+          >
+            <Mic size={18} />
+          </button>
+        )}
+        {!sendBlocked && !busy && !hasContent && !callSlot.mounted && winDictate && !capabilities.dictation.available && (
+          <button
+            onClick={showWinTip}
+            aria-label={t("composer.dictate")}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            title={t("composer.dictate")}
           >
             <Mic size={18} />
           </button>

@@ -2,7 +2,8 @@
 // LOCAL_ONLY_PREFIXES), so no relay caller reaches them; no reply carries the guest key.
 import type { GuestClient, GuestResult } from "./guest-client.ts";
 
-const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read))?$/;
+const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice))?$/;
+const REACT = /^\/api\/joined\/rooms\/([\w-]{1,64})\/entries\/([\w-]{1,64})\/reactions$/;
 
 type Reply = { status: number; body: unknown };
 
@@ -17,7 +18,7 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read">, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice">, body: () => Promise<unknown>,
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
   client.start();
@@ -27,9 +28,11 @@ export async function joinedRoute(
     const code = field(await body(), "code");
     return typeof code === "string" ? reply(await client.join(code), "room") : { status: 400, body: { error: "bad-code" } };
   }
+  const reaction = REACT.exec(path);
+  if (reaction) return method === "POST" ? reply(await client.react(reaction[1]!, reaction[2], field(await body(), "emoji")), "marks") : notFound;
   const route = ROOM.exec(path);
   if (!route) return notFound;
-  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | undefined];
+  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | undefined];
   if (!action) {
     if (method === "DELETE") return reply(await client.remove(roomId), "removed");
     const room = method === "GET" ? client.room(roomId) : null;
@@ -40,5 +43,6 @@ export async function joinedRoute(
   if (action === "rejoin") return reply(await client.rejoin(roomId, field(await body(), "code")), "room");
   const fields = await body();
   if (action === "read") return reply(client.read(roomId, field(fields, "seq")), "room");
+  if (action === "notice") return reply(await client.notice(roomId, field(fields, "entryId") ?? null), "result");
   return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId"), field(fields, "fileIds")), "entry");
 }

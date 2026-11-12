@@ -1,4 +1,5 @@
 import { redactSecretsInText } from "./redact.ts";
+import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 
 // Building the text a driver actually receives. Three situations force an
@@ -44,6 +45,8 @@ export interface TurnContextInput {
   recovering?: boolean;
   /** the request this turn must answer; the transcript excludes it on a plain send */
   currentRequestText?: string;
+  /** the asks list for a turn the record does not ride */
+  asksText?: string;
 }
 
 export interface TaskRecordContext {
@@ -54,6 +57,7 @@ export interface TaskRecordContext {
   artifacts?: Array<{ ref: string; label: string }>;
   blockers: Array<{ note: string }>;
   nextAction: string;
+  asks?: TaskAsk[];
 }
 
 /** Does this engine need the thread replayed to it? True when a DIFFERENT
@@ -472,6 +476,10 @@ export interface TaskRecordBlockOptions {
   latestUserText?: string;
   /** A request no completion settled; it takes the recovery shape too. */
   unsettledRequest?: string;
+  /** Clock stale asks are judged by. */
+  now?: number;
+  /** A status-style turn lists every open ask, not the oldest few. */
+  allAsks?: boolean;
 }
 
 function compactValue(value: string, maxCharacters: number): string {
@@ -523,6 +531,16 @@ function taskRecordProgressFields(record: TaskRecordContext): Array<readonly [st
 export function taskRecordBlock(
   record: TaskRecordContext,
   maxCharacters = 6_000,
+  options?: TaskRecordBlockOptions,
+): string {
+  const fields = taskRecordFields(record, maxCharacters, options);
+  const asks = asksBlock(record.asks, options?.now ?? Date.now(), options?.allAsks);
+  return asks ? `${fields}\n${asks}` : fields;
+}
+
+function taskRecordFields(
+  record: TaskRecordContext,
+  maxCharacters: number,
   options?: TaskRecordBlockOptions,
 ): string {
   const unsettled = (options?.unsettledRequest ?? "").trim();
@@ -587,7 +605,7 @@ export function buildTurnContext(input: TurnContextInput): {
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
-  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText } = input;
+  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "" } = input;
   const resume = !rewound && !fresh && !recycled;
   const replay = !resume && !replaysNatively && transcript.length > 0;
   // The caller already sized its block for the model window and knows this
@@ -605,7 +623,7 @@ export function buildTurnContext(input: TurnContextInput): {
   );
   const record = durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
     ? durableRecord
-    : "";
+    : asksText;
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
   return {

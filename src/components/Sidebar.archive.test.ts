@@ -24,9 +24,13 @@ type ApiResult = {
   configured?: boolean;
   syncChats?: boolean;
   folder?: string | null;
-  bot?: { id: string; hidden: boolean; name: string };
+  bot?: Partial<Bot> & { id: string; name: string };
+  bots?: TrashRow[];
+  emptied?: number;
   devices?: [];
 };
+
+type TrashRow = { id: string; name: string; color: "green"; daysLeft: number };
 
 type ApiCall = { path: string; method: string; body: string };
 
@@ -35,6 +39,7 @@ let sync = { configured: false, syncChats: false };
 let syncAnswer: Promise<void> | null = null;
 let bots: Bot[] = [];
 let groups: Group[] = [];
+let trash: TrashRow[] = [];
 const dispatched: Array<{ type: string; botId?: string; id?: string; patch?: unknown }> = [];
 
 function bot(id: string, name: string, hidden: boolean): Bot {
@@ -70,6 +75,18 @@ vi.mock("@/state/store", async (importOriginal) => {
       if (path === "/api/profile-sync") return { configured: sync.configured, syncChats: sync.syncChats, folder: sync.configured ? "D:/Orbit" : null };
       if (path === "/api/devices") return { devices: [] };
       if (path.startsWith("/api/bots/") && init?.method === "PATCH") return { bot: { id: "bo", hidden: false, name: "Bo" } };
+      if (path === "/api/bot-trash") return { bots: trash };
+      const restored = path.match(/^\/api\/bot-trash\/([\w-]+)\/restore$/);
+      if (restored && init?.method === "POST") {
+        const row = trash.find((candidate) => candidate.id === restored[1]);
+        trash = trash.filter((candidate) => candidate.id !== restored[1]);
+        return { bot: bot(restored[1]!, row?.name ?? restored[1]!, false) };
+      }
+      if (path === "/api/bot-trash/empty" && init?.method === "POST") {
+        const emptied = trash.length;
+        trash = [];
+        return { emptied };
+      }
       return {};
     },
     useStore: () => ({
@@ -153,6 +170,7 @@ afterEach(() => {
   syncAnswer = null;
   bots = [];
   groups = [];
+  trash = [];
   localStorage.setItem("omb-locale", "en");
 });
 
@@ -234,12 +252,16 @@ describe("New menu with the phone drawer", () => {
 
 describe("bot archive from its menu", () => {
   it("offers Archive in the menu and keeps restore behind the archived entry", () => {
-    expect(en["chrome.deleteBotBody"]).toBe("This deletes {name}, all its chats, its memory and the files in its folder. This cannot be undone.");
-    expect(en["chrome.deleteBotBodyAllPcs"]).toBe(
-      "This deletes {name}, all its chats, its memory and the files in its folder on all your PCs. This cannot be undone.",
+    expect(en["chrome.deleteBotBody"]).toBe(
+      "{name} moves to Recently deleted with its chats, memory and files. You can restore it for 30 days. After that it is deleted for good.",
     );
-    expect(ko["chrome.deleteBotBody"]).toBe("{name}의 모든 대화, 메모리, 폴더 안 파일까지 삭제합니다. 되돌릴 수 없습니다.");
-    expect(ko["chrome.deleteBotBodyAllPcs"]).toBe("{name}의 모든 대화, 메모리, 폴더 안 파일까지 모든 PC에서 삭제합니다. 되돌릴 수 없습니다.");
+    expect(en["chrome.deleteBotBodyAllPcs"]).toBe(
+      "{name} moves to Recently deleted on all your PCs, with its chats, memory and files. You can restore it for 30 days. After that it is deleted for good.",
+    );
+    expect(ko["chrome.deleteBotBody"]).toBe("{name} 봇을 대화, 메모리, 파일과 함께 '최근 삭제한 봇'으로 옮깁니다. 30일 동안 복원할 수 있고, 그 뒤에는 완전히 삭제됩니다.");
+    expect(ko["chrome.deleteBotBodyAllPcs"]).toBe(
+      "{name} 봇을 대화, 메모리, 파일과 함께 모든 PC에서 '최근 삭제한 봇'으로 옮깁니다. 30일 동안 복원할 수 있고, 그 뒤에는 완전히 삭제됩니다.",
+    );
     expect(sidebar).toContain('t("chrome.archive")');
     expect(ko["chrome.archive"]).toBe("보관");
     expect(sidebar).toContain("archivedBots.length > 0");
@@ -354,7 +376,7 @@ describe("bot archive from its menu", () => {
         buttonByText("Delete", document.querySelector("[data-bot-menu]") ?? document).click();
       });
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("This deletes Ada, all its chats, its memory and the files in its folder. This cannot be undone.");
+        expect(document.body.textContent).toContain("Ada moves to Recently deleted with its chats, memory and files.");
       });
       expect(document.body.textContent).not.toContain("on all your PCs");
     } finally {
@@ -370,7 +392,7 @@ describe("bot archive from its menu", () => {
         buttonByText("삭제", document.querySelector("[data-bot-menu]") ?? document).click();
       });
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("Ada의 모든 대화, 메모리, 폴더 안 파일까지 모든 PC에서 삭제합니다.");
+        expect(document.body.textContent).toContain("Ada 봇을 대화, 메모리, 파일과 함께 모든 PC에서 '최근 삭제한 봇'으로 옮깁니다.");
       });
     } finally {
       await act(async () => second.root.unmount());
@@ -390,11 +412,146 @@ describe("bot archive from its menu", () => {
       await act(async () => {
         buttonByText("Delete", document.querySelector("[data-bot-menu]") ?? document).click();
       });
-      expect(document.body.textContent).toContain("This deletes Ada, all its chats, its memory and the files in its folder. This cannot be undone.");
+      expect(document.body.textContent).toContain("Ada moves to Recently deleted with its chats, memory and files.");
       await act(async () => answer?.());
       await vi.waitFor(() => {
         expect(document.body.textContent).toContain("on all your PCs");
       });
+    } finally {
+      await act(async () => view.root.unmount());
+    }
+  });
+});
+
+const trashRow = (id: string, name: string, daysLeft: number): TrashRow => ({ id, name, color: "green", daysLeft });
+const dialog = () => document.querySelector("[role='dialog']") as HTMLElement;
+
+async function openRecentlyDeleted() {
+  await act(async () => buttonByText("New or share").click());
+  await vi.waitFor(() => expect(buttonByText("Recently deleted")).toBeTruthy());
+  await act(async () => buttonByText("Recently deleted").click());
+  await vi.waitFor(() => expect(dialog()?.textContent).toContain("Bots stay here for 30 days."));
+}
+
+describe("Recently deleted", () => {
+  it("pins the trash strings in en and ko", () => {
+    expect([en["chrome.recentlyDeleted"], ko["chrome.recentlyDeleted"]]).toEqual(["Recently deleted", "최근 삭제한 봇"]);
+    expect([en["chrome.botTrashed"], ko["chrome.botTrashed"]]).toEqual(["{name} moved to Recently deleted", "{name} 최근 삭제한 봇으로 이동됨"]);
+    expect([en["chrome.emptyNow"], ko["chrome.emptyNow"]]).toEqual(["Empty now", "지금 비우기"]);
+    expect([en["chrome.deleteForGood"], ko["chrome.deleteForGood"]]).toEqual(["Delete for good", "완전히 삭제"]);
+    expect([en["chrome.trashDaysLeftOne"], ko["chrome.trashDaysLeftOne"]]).toEqual(["1 day left", "1일 남음"]);
+  });
+
+  it("hides the row at zero and shows it with its count under Archived bots", async () => {
+    bots = [bot("ada", "Ada", false), bot("bo", "Bo", true)];
+    trash = [trashRow("atlas", "Atlas", 23)];
+    const first = await renderSidebar();
+    try {
+      await act(async () => buttonByText("New or share").click());
+      await vi.waitFor(() => expect(buttonByText("Recently deleted").textContent).toBe("Recently deleted1"));
+      const labels = [...document.querySelectorAll("button")].map((node) => node.textContent ?? "");
+      expect(labels.findIndex((text) => text.startsWith("Recently deleted"))).toBe(labels.findIndex((text) => text.startsWith("Archived bots")) + 1);
+    } finally {
+      await act(async () => first.root.unmount());
+    }
+    trash = [];
+    const second = await renderSidebar();
+    try {
+      await act(async () => buttonByText("New or share").click());
+      await act(() => new Promise<void>((done) => setTimeout(done, 20)));
+      expect([...document.querySelectorAll("button")].some((node) => node.textContent?.includes("Recently deleted"))).toBe(false);
+    } finally {
+      await act(async () => second.root.unmount());
+    }
+  });
+
+  it("lists twelve bots with days left, shortens a long name and keeps every Restore", async () => {
+    bots = [bot("ada", "Ada", false)];
+    const long = "A bot with a very long name that cannot fit on one phone line at all";
+    trash = [trashRow("b0", long, 23), trashRow("b1", "Nova", 1), ...Array.from({ length: 10 }, (_, i) => trashRow(`c${i}`, `Bot ${i}`, 30))];
+    const view = await renderSidebar();
+    try {
+      await openRecentlyDeleted();
+      const panel = dialog();
+      expect(panel.textContent).toContain("12 deleted");
+      expect(panel.textContent).toContain("23 days left");
+      expect(panel.textContent).toContain("1 day left");
+      expect([...panel.querySelectorAll("button")].filter((node) => node.textContent === "Restore")).toHaveLength(12);
+      const name = [...panel.querySelectorAll("div")].find((node) => node.textContent === long)!;
+      expect(name.className).toContain("truncate");
+    } finally {
+      await act(async () => view.root.unmount());
+    }
+  });
+
+  it("restores one bot, selects it and says it is restored", async () => {
+    bots = [bot("ada", "Ada", false)];
+    trash = [trashRow("atlas", "Atlas", 23), trashRow("nova", "Nova", 1)];
+    const view = await renderSidebar();
+    try {
+      await openRecentlyDeleted();
+      await act(async () => buttonByText("Restore", dialog()).click());
+      expect(calls.some((call) => call.path === "/api/bot-trash/atlas/restore" && call.method === "POST")).toBe(true);
+      expect(dispatched).toContainEqual(expect.objectContaining({ type: "botPatched" }));
+      expect(dispatched).toContainEqual({ type: "select", id: "atlas" });
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Atlas restored"));
+      await vi.waitFor(() => expect(dialog()?.textContent).toContain("1 deleted"));
+    } finally {
+      await act(async () => view.root.unmount());
+    }
+  });
+
+  it("asks before Empty now with Cancel focused, then empties and closes", async () => {
+    bots = [bot("ada", "Ada", false)];
+    trash = [trashRow("atlas", "Atlas", 23), trashRow("nova", "Nova", 1)];
+    const view = await renderSidebar();
+    try {
+      await openRecentlyDeleted();
+      await act(async () => buttonByText("Empty now", dialog()).click());
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Empty Recently deleted?"));
+      expect(document.body.textContent).toContain("This deletes 2 bots for good, with all their chats, their memory and the files in their folders.");
+      expect(document.activeElement?.textContent).toBe("Cancel");
+      expect(calls.some((call) => call.path === "/api/bot-trash/empty")).toBe(false);
+      await act(async () => buttonByText("Delete for good").click());
+      expect(calls.some((call) => call.path === "/api/bot-trash/empty" && call.method === "POST")).toBe(true);
+      await act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+      expect(document.body.textContent).not.toContain("Bots stay here for 30 days.");
+    } finally {
+      await act(async () => view.root.unmount());
+    }
+  });
+
+  it("moves a deleted bot to Recently deleted with an Undo note", async () => {
+    bots = [bot("ada", "Ada", false), bot("bo", "Bo", false)];
+    const view = await renderSidebar();
+    try {
+      await openMenu("Ada");
+      await act(async () => buttonByText("Delete", document.querySelector("[data-bot-menu]")!).click());
+      await act(async () => buttonByText("Delete", dialog()).click());
+      expect(dispatched).toContainEqual({ type: "deleteBot", botId: "ada" });
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Ada moved to Recently deleted"));
+      trash = [trashRow("ada", "Ada", 30)];
+      await act(async () => buttonByText("Undo").click());
+      expect(calls.some((call) => call.path === "/api/bot-trash/ada/restore" && call.method === "POST")).toBe(true);
+      expect(dispatched).toContainEqual({ type: "select", id: "ada" });
+    } finally {
+      await act(async () => view.root.unmount());
+    }
+  });
+
+  it("reads in Korean", async () => {
+    localStorage.setItem("omb-locale", "ko");
+    bots = [bot("ada", "Ada", false)];
+    trash = [trashRow("atlas", "Atlas", 23)];
+    const view = await renderSidebar();
+    try {
+      await act(async () => buttonByText("새로 만들기 또는 공유").click());
+      await vi.waitFor(() => expect(buttonByText("최근 삭제한 봇")).toBeTruthy());
+      await act(async () => buttonByText("최근 삭제한 봇").click());
+      await vi.waitFor(() => expect(dialog()?.textContent).toContain("봇은 30일 동안 여기에 보관됩니다."));
+      expect(dialog().textContent).toContain("삭제한 봇 1개");
+      expect(dialog().textContent).toContain("23일 남음");
+      expect(buttonByText("지금 비우기", dialog())).toBeTruthy();
     } finally {
       await act(async () => view.root.unmount());
     }
