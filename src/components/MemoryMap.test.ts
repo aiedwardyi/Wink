@@ -111,9 +111,9 @@ describe("MemoryMap", () => {
     await mount({ bot: asked(["building", "waiting-for-user", "open", "done"]) });
     const live = host.querySelector(".mm-live")!;
     const box = live.querySelector(".mm-asks")!;
-    expect([...live.querySelectorAll(".mm-sec-name")].map((each) => each.textContent)).toEqual(["Working Memory", "Asks · 3 open", "Just Learned"]);
+    expect([...live.querySelectorAll(".mm-sec-name")].map((each) => each.textContent)).toEqual(["Working Memory", "To Do · 3 open", "Just Learned"]);
     const rows = [...box.querySelectorAll(".mm-asks-open li")];
-    expect(rows.map((row) => row.textContent)).toEqual(["Ask 0building", "Ask 1waiting for you", "Ask 2to do"]);
+    expect(rows.map((row) => row.textContent)).toEqual(["Ask 0building", "Ask 1waiting for you", "Ask 2open"]);
     expect(rows.map((row) => row.getAttribute("data-status"))).toEqual(["building", "waiting-for-user", "open"]);
   });
 
@@ -121,7 +121,7 @@ describe("MemoryMap", () => {
     const asks = [{ text: "Ship it?", at: 1, status: "open", kind: "question" }, { text: "Fix login", at: 2, status: "open" }];
     const questioned = { ...bot, tasks: [{ threadId: "t", taskState: { goal: "g", plan: [], nextAction: "", updatedAt: 1, asks } }] } as unknown as Bot;
     await mount({ bot: questioned });
-    expect([...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent)).toEqual(["Ship it?question for you", "Fix loginto do"]);
+    expect([...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent)).toEqual(["Ship it?question for you", "Fix loginopen"]);
     await act(async () => root.unmount());
     applyLocale("ko");
     await mount({ bot: questioned });
@@ -140,7 +140,7 @@ describe("MemoryMap", () => {
 
   it("says so in one line when nothing was asked, and when all are done", async () => {
     await mount({ bot: asked([]) });
-    expect(host.querySelector(".mm-asks")!.textContent).toBe("AsksWhat you asked forNothing asked yet.");
+    expect(host.querySelector(".mm-asks")!.textContent).toBe("To DoWhat you asked forNothing asked yet.");
     await act(async () => root.unmount());
     await mount({ bot: asked(["done"]) });
     expect(host.querySelector(".mm-asks .mm-empty")!.textContent).toBe("All done.");
@@ -149,14 +149,37 @@ describe("MemoryMap", () => {
   it("shows the asks in Korean", async () => {
     applyLocale("ko");
     await mount({ bot: asked(["waiting-for-user", "done"]) });
-    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("요청 · 1개 남음");
+    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("할 일 · 1개 남음");
     expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0확인 기다림");
     expect(host.querySelector(".mm-asks-done-toggle")!.textContent).toBe("1개 완료");
   });
 
-  it("scrolls a long ask list inside its box in gray tones only", () => {
-    expect(rule(".mm-asks-list")).toMatch(/max-height: \d+px;/);
-    expect(rule(".mm-asks-list")).toContain("overflow-y: auto;");
+  it("shows the first 3 open asks, then all of them in place, en and ko", async () => {
+    await mount({ bot: asked([...Array(11).fill("open"), "building", "done"]) });
+    const shown = () => [...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent);
+    const more = host.querySelector<HTMLButtonElement>(".mm-asks-more")!;
+    expect(host.querySelector(".mm-asks .mm-sec-name")!.textContent).toBe("To Do · 12 open");
+    expect(shown()).toEqual(["Ask 0open", "Ask 1open", "Ask 2open"]);
+    expect(more.textContent).toBe("Show all 12");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => more.click());
+    expect(shown()).toHaveLength(12);
+    expect(more.textContent).toBe("Show less");
+    await act(async () => root.unmount());
+    applyLocale("ko");
+    await mount({ bot: asked(["open", "open", "open", "building"]) });
+    expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ask 0시작 전");
+    expect(host.querySelector(".mm-asks-more")!.textContent).toBe("4개 모두 보기");
+  });
+
+  it("keeps three or fewer open asks without a Show all row", async () => {
+    await mount({ bot: asked(["open", "building", "waiting-for-user"]) });
+    expect(host.querySelectorAll(".mm-asks-open li")).toHaveLength(3);
+    expect(host.querySelector(".mm-asks-more")).toBeNull();
+  });
+
+  it("lets the Live card do the only scrolling, in gray tones only", () => {
+    expect(rule(".mm-asks-list")).not.toMatch(/max-height|overflow/);
     const asks = css.split("\n").filter((line) => line.startsWith(".mm-asks")).join("\n");
     expect(asks).not.toMatch(/--mm-(cyan|indigo|violet|pale|live-ink)|--color-(accent|success)/);
   });
