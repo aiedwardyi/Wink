@@ -284,6 +284,22 @@ const TOOLS = [
             required: ["ref", "label"],
           },
         },
+        asks: {
+          type: "array",
+          maxItems: 20,
+          description: "The user's asks, at most 20 per call. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 12, pattern: "\\S", description: "Wink's id for the ask, like A3. Omit to add a new one." },
+              ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
+              status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
+              ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
+            },
+            required: ["status"],
+          },
+        },
       },
     },
   },
@@ -588,6 +604,13 @@ interface TaskStateArtifact {
   label: string;
 }
 
+interface TaskStateAsk {
+  id?: string;
+  ask?: string;
+  status: string;
+  ref?: string;
+}
+
 interface TaskStateToolArgs {
   pause_automatic_wakes?: boolean;
   goal?: string;
@@ -596,6 +619,7 @@ interface TaskStateToolArgs {
   next_action?: string;
   blockers?: TaskStateBlocker[];
   artifacts?: TaskStateArtifact[];
+  asks?: TaskStateAsk[];
 }
 
 function hasBlankTaskText(args: TaskStateToolArgs): boolean {
@@ -605,6 +629,7 @@ function hasBlankTaskText(args: TaskStateToolArgs): boolean {
     ...(args.plan ?? []).map((item) => item.step),
     ...(args.blockers ?? []).map((item) => item.note),
     ...(args.artifacts ?? []).flatMap((item) => [item.ref, item.label]),
+    ...(args.asks ?? []).flatMap((item) => [item.id, item.ask]),
   ];
   if (values.some((value) => value !== undefined && !value.trim())) return true;
   // An empty next_action clears it. Whitespace-only does not.
@@ -689,7 +714,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: `${heading}\n${lines.join("\n")}` };
   }
   if (name === "update_task_state") {
-    const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "pause_automatic_wakes"] as const;
+    const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "asks", "pause_automatic_wakes"] as const;
     const allowed = `allowed: ${supported.join(", ")}.`;
     const unknown = Object.keys(args).filter((key) => !(supported as readonly string[]).includes(key));
     if (unknown.length) {
@@ -701,7 +726,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (args.pause_automatic_wakes !== undefined && args.pause_automatic_wakes !== true) {
       return { text: "pause_automatic_wakes only accepts true; the next user message resumes wake-ups.", isError: true };
     }
-    const notArray = (["plan", "blockers", "artifacts"] as const).find((key) => args[key] !== undefined && !Array.isArray(args[key]));
+    const notArray = (["plan", "blockers", "artifacts", "asks"] as const).find((key) => args[key] !== undefined && !Array.isArray(args[key]));
     if (notArray) return { text: `update_task_state ${notArray} must be an array.`, isError: true };
     if (hasBlankTaskText(args)) {
       return { text: "update_task_state text fields cannot be blank.", isError: true };
@@ -715,6 +740,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       next_action: args.next_action,
       blockers: args.blockers,
       artifacts: args.artifacts,
+      asks: args.asks,
       pause_automatic_wakes: args.pause_automatic_wakes,
     };
     const r = await api("/api/internal/task-state", { method: "POST", body: JSON.stringify(body) });

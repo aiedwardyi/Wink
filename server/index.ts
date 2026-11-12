@@ -241,6 +241,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
+import { asksNudge, isStatusTurn, TASK_ASKS_PROMPT } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import * as tts from "./tts/index.ts";
@@ -4886,11 +4887,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // A Resume card carries no request of its own, so it falls back to the turn
   // the interruption cut short, unless the unsettled request already names it.
   let recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : latestUser?.text) || "";
+  const statusTurn = commsDepth === 0 && isStatusTurn(text);
   let durableTaskRecordText = taskRecord
     ? taskRecordBlock(
       taskRecord,
       Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-      recovering || unsettled ? { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled } : undefined,
+      { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn },
     )
     : "";
   const catalogWindow = knownCatalogContextWindow(instance.models, model);
@@ -4970,7 +4972,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       recoveryLatestUserText = (opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : lastUserInstruction(messages.filter((message) => !skipTranscript.has(message.id)))?.text) || "";
       durableTaskRecordText = taskRecord
         ? taskRecordBlock(taskRecord, Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-            recovering || unsettled ? { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled } : undefined)
+            { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn })
         : "";
       sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
       reactions.delivered = task.reactionsDelivered;
@@ -5202,6 +5204,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text) : "",
   });
   const resumeFallback = buildResumeFallback({
     text: turnPrompt,
@@ -5573,7 +5576,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation."
         : "";
       const taskStatePrompt = integrations.agents
-        ? " Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn."
+        ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
       const showImagePrompt = canMessage ? ` ${slimStaticText(SHOW_IMAGE_GUIDANCE, instance.driverKind)}` : "";
@@ -6459,7 +6462,7 @@ async function runClaimedGroupMemberTurn(
     ? taskRecordBlock(
       taskRecord,
       Math.max(512, Math.floor(modelContextWindow * 0.15) * 3),
-      recovering ? { recovering: true, latestUserText: latestUser?.text ?? "" } : undefined,
+      { recovering, latestUserText: latestUser?.text ?? "", allAsks: isStatusTurn(latestUser?.text ?? "") },
     )
     : "";
   const prepared = await prepareModelContext({
@@ -6518,7 +6521,7 @@ async function runClaimedGroupMemberTurn(
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
-    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : null,
+    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
     prepared.transcript.map((message) => message.text).join("\n"),
     ...roomMail.map((part) => part.text),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
@@ -6621,7 +6624,7 @@ async function runClaimedGroupMemberTurn(
     canMessage &&
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
     integrations.agents &&
-      "Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn.",
+      `Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`,
     canMessage && reactionToolGuidance(),
     canMessage && SHOW_IMAGE_GUIDANCE,
   ]

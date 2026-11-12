@@ -236,7 +236,7 @@ describe("unsettled request", () => {
   it("reads the packet from before this send, and a Resume card names it once", () => {
     expect(indexSource).toContain('const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, earlierMessages);');
     expect(indexSource).toContain('(opts?.cardContinuation ? "" : text.trim()) || (unsettled ? "" : latestUser?.text) || ""');
-    const options = "recovering || unsettled ? { recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled } : undefined";
+    const options = "{ recovering, latestUserText: recoveryLatestUserText, unsettledRequest: unsettled, allAsks: statusTurn }";
     expect(indexSource.split(options)).toHaveLength(3);
   });
 });

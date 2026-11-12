@@ -7,6 +7,7 @@ import { composeUserTurnPrompt } from "./replies.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryBuild } from "./summary-build.ts";
 import { summaryInstance } from "./summary-instance.ts";
+import { asksNudge, isStatusTurn } from "./task-asks.ts";
 import * as turnContext from "./turn-context.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
@@ -93,10 +94,10 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
     const userMessage = store.appendMessage(THREAD, { role: "user", kind: "text", text: "next request" });
     const skipTranscript = new Set([userMessage.id]);
     const result = await runSend({
-      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance,
+      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn,
       store, task, instance, model, instanceId: "claude", threadId: THREAD, bot, summaryBuild: build,
       cfg: {}, accounts: { snapshot: [] }, process: { env: {} }, instanceConfigs: () => ({ claude: { environment: env } }),
-      text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined,
+      text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined, commsDepth: 0,
       latencySendId: "send", taskPacketForWrite: () => undefined, persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
       unsettledRequest: () => "", lastUserInstruction: () => undefined, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
     });
