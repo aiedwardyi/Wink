@@ -18,7 +18,7 @@ export default function ShowPdf({ src, onReady, onFail }: { src: string; onReady
   done.current = { onReady, onFail };
 
   useEffect(() => {
-    const task = getDocument({ url: src, isEvalSupported: false });
+    const task = getDocument({ url: src, isEvalSupported: false, cMapUrl: "/pdfjs/cmaps/", cMapPacked: true });
     let alive = true;
     task.promise.then(loaded => { if (alive) setDoc(loaded); }, () => { if (alive) done.current.onFail(); });
     return () => { alive = false; void task.destroy(); };
