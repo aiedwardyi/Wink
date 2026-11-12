@@ -263,6 +263,8 @@ describe("ManageMembersPanel people", () => {
     expect(people().querySelector("[data-team-room-code]")!.textContent).toContain(CODE);
     expect(people().textContent).toContain("Seo-yeon Park");
     await act(async () => people().querySelector<HTMLButtonElement>('button[aria-label="Remove Seo-yeon Park"]')!.click());
+    expect(calls).toHaveLength(1);
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Remove").at(-1)!.click());
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(calls).toEqual([
       { method: "POST", path: "/api/groups/group-1/share" },
