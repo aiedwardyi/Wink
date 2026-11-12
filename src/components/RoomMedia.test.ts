@@ -120,3 +120,22 @@ it("a bot chat's Media keeps the native menu", async () => {
   expect(menuItem()).toBeNull();
   expect(host.querySelector("[data-show-media]")!.textContent).not.toContain("used /");
 });
+
+it("Delete on a tile far down a long grid removes exactly that file", async () => {
+  const shots = Array.from({ length: 300 }, (_, n) => ({ id: id(100 + n), name: `shot-${n}.png`, type: "image/png", bytes: 10, at: 300 - n, sender: "Mina" }));
+  room.files = shots;
+  await open(roomSource);
+  const scroller = host.querySelector<HTMLElement>(".show-media-scroll")!;
+  await act(async () => { scroller.scrollTop = 12_000; scroller.dispatchEvent(new Event("scroll")); });
+  await settle();
+  const key = [...host.querySelectorAll<HTMLElement>("[data-media-grid] [data-media-key]")].at(-1)!.dataset.mediaKey!;
+  expect(shots.findIndex((shot) => shot.id === key)).toBeGreaterThan(250);
+  rightClick(host.querySelector(`[data-media-key="${key}"]`)!);
+  await settle();
+  expect(menuItem()?.textContent).toBe("Delete");
+  await act(async () => menuItem()!.click());
+  await act(async () => confirmButton().click());
+  await settle();
+  expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([`DELETE /api/rooms/r1/files/${key}`]);
+  expect(host.querySelector(`[data-media-key="${key}"]`)).toBeNull();
+});

@@ -15,7 +15,6 @@ import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HOLD_MS, HOLD_SLOP, MENU_CLASS } from "./MessageMenu";
 
-const PICTURES = "[data-media-grid] > button";
 const EDGE = 8;
 
 /** The room's `/files` answer; a failed list has no sizes. */
@@ -34,14 +33,8 @@ const watch = (watcher: () => void) => {
 export const useRoomFilesRemoved = () => useSyncExternalStore(watch, () => removed);
 
 function fileAt(frame: HTMLElement, files: readonly MediaFile[], target: EventTarget | null): MediaFile | undefined {
-  const tile = target instanceof Element ? target.closest<HTMLElement>(`${PICTURES}, [data-media-file]`) : null;
-  if (!tile || !frame.contains(tile)) return;
-  const picture = tile.matches(PICTURES);
-  const index = [...frame.querySelectorAll(picture ? PICTURES : "[data-media-file]")].indexOf(tile);
-  const file = files.filter((each) => Boolean(each.image) === picture)[index];
-  // Tiles carry no id, so a list that drew in another order must not delete the wrong file; tooltips blank `title`.
-  const same = picture ? tile.querySelector("img")?.getAttribute("src") === file?.src : tile.textContent === file?.name;
-  return same ? file : undefined;
+  const tile = target instanceof Element ? target.closest<HTMLElement>("[data-media-key]") : null;
+  return tile && frame.contains(tile) ? files.find((file) => file.key === tile.dataset.mediaKey) : undefined;
 }
 
 export function RoomFilesNotice({ list }: { list: RoomFiles }) {
