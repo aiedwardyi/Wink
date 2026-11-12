@@ -30,7 +30,7 @@ export const LIVE_TOOLS = [
     description: "Propose work you will do with full access to the user's PC and projects (open, find, run, check, fix, send, look up a file), for the user to confirm. Nothing starts until they say yes; the result says sent, queued, declined or expired.",
     parameters: {
       type: "OBJECT",
-      properties: { order: { type: "STRING", description: "The user's request as an instruction, in their words and language, e.g. \"Fix the login page bug.\"" } },
+      properties: { order: { type: "STRING", description: "The user's request as they would say it to you, in their words and language, never your offer or reply, e.g. \"Fix the login page bug.\"" } },
       required: ["order"],
     },
   },

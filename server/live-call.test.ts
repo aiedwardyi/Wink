@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
-import { CALL_ID, LIVE_MODEL, LIVE_URL } from "../shared/live-call.ts";
+import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
 import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
@@ -113,6 +113,12 @@ describe("call token", () => {
     expect(brief).toContain("A vague order gets one short question first");
     expect(brief).not.toMatch(/ask whether to send|Juno has/);
     expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
+  });
+
+  it("order is the user's request to the voice, never its offer", () => {
+    const order = LIVE_TOOLS[0]!.parameters.properties.order!.description;
+    expect(order).toContain("as they would say it to you");
+    expect(order).toContain("never your offer or reply");
   });
 
   it("brief routes PC actions to the bot", async () => {

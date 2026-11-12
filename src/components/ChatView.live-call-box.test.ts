@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
+import { applyLocale } from "@/lib/i18n";
 import { LiveCall } from "@/lib/live-call/controller";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
@@ -184,10 +185,26 @@ describe("live call in the message box", () => {
       expect(order.closest("[data-fold]")).not.toBeNull();
       expect(frame(host).contains(order)).toBe(false);
       expect(order.querySelector("[data-live-call-time-left]")).not.toBeNull();
-      expect(order.textContent).toContain("Send: Fix the login page bug?");
+      expect([...order.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["Ask Atlas to do this?", "Fix the login page bug."]);
+      expect(order.querySelector("p + p")!.className).toContain("font-medium");
       await act(async () => [...order.querySelectorAll("button")].find((b) => b.textContent === "Yes")!.click());
       await vi.waitFor(() => expect(posts.some((path) => path.endsWith("/api/bots/atlas/messages"))).toBe(true));
     } finally {
+      await unmount();
+    }
+  });
+
+  it("asks in Korean which bot gets the order", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const engine = await connect(host);
+      applyLocale("ko");
+      await act(async () => engine.events.toolCall([{ id: "t1", name: "propose_work", args: { order: "체크리스트를 워드 파일로 만들어 줘" } }]));
+      const order = host.querySelector<HTMLElement>("[data-live-call-order]")!;
+      expect([...order.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["Atlas에게 이렇게 요청할까요?", "체크리스트를 워드 파일로 만들어 줘"]);
+      expect(pick(order, "예")).toBeDefined();
+    } finally {
+      applyLocale("en");
       await unmount();
     }
   });
