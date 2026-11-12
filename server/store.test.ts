@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { postAskUser } from "./ask-user.ts";
+import * as atomic from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -721,6 +722,41 @@ describe("Store", () => {
     copy.goal = "mutated outside the store";
     expect(store.taskPacket(bot.threadId)?.goal).toBe("Prepare the weekly report");
     expect(new Store(selection).taskPacket(bot.threadId)).toEqual(saved);
+  });
+
+  it("stages a send's task packet for every reader and settles it after dispatch", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId));
+    const changes: unknown[] = [];
+    store.onChange((change) => changes.push(change));
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    const staged = store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { instructionId: "message-2", updatedAt: 200 }), { staged: true });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(changes).toContainEqual({ type: "task.packet", threadId: bot.threadId });
+    expect(store.taskPacket(bot.threadId)).toEqual(staged);
+    expect(new Store(selection).taskPacket(bot.threadId)).toEqual(staged);
+
+    store.settleTaskPacket(bot.threadId);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(join(DATA_DIR, "task-state", `${bot.threadId}.json`), "utf8"))).toEqual(staged);
+    write.mockRestore();
+  });
+
+  it("recovers the staged record when the app crashed right after the send", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId));
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { instructionId: "message-2", goal: "Ship the release notes", updatedAt: 200 }), { staged: true });
+    store.setActivity(bot.id, "working");
+
+    const recovered = new Store(selection);
+
+    const record = { flushReason: "crash", instructionId: "message-2", goal: "Ship the release notes" };
+    expect(recovered.taskPacket(bot.threadId)).toMatchObject(record);
+    expect(JSON.parse(readFileSync(join(DATA_DIR, "task-state", `${bot.threadId}.json`), "utf8"))).toMatchObject(record);
   });
 
   it("owns a room task packet through one of its members", () => {

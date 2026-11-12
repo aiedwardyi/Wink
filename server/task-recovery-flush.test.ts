@@ -351,6 +351,17 @@ describe("turn completion disposition after stop", () => {
     expect(indexSource.slice(send, spent)).not.toContain("clearResumeCursors");
   });
 
+  it("stages the send's record before dispatch and settles it when the dispatch ends", () => {
+    const claimed = indexSource.indexOf("async function startClaimedTurn(");
+    const staged = indexSource.indexOf("persistTaskPacket(packet, { staged: true });", claimed);
+    const dispatch = indexSource.indexOf("const started = await dispatchAdapterTurn(", claimed);
+    const settle = indexSource.indexOf("store.settleTaskPacket(threadId);", claimed);
+    expect(staged).toBeGreaterThan(claimed);
+    expect(staged).toBeLessThan(dispatch);
+    expect(settle).toBeGreaterThan(indexSource.indexOf("return live.adapter.sendTurn({", dispatch));
+    expect(indexSource.split("{ staged: true }")).toHaveLength(2);
+  });
+
   it("keeps a routine turn fired in a chat out of that chat's recovery and completion", () => {
     expect(indexSource).toContain("const routineTurn = Boolean(opts?.cardContinuation && opts?.automationSource);");
     expect(indexSource).toContain("const recovering = !routineTurn && isRecoveringPacket(priorTaskPacket);");

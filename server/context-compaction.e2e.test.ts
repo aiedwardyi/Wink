@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { readTaskResumePacket } from "./task-state.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { PRE_COMPACT_TOOL_ROUND_LIMIT } from "./turn-context.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
@@ -154,8 +155,9 @@ describe("context compaction e2e", () => {
     });
     return { status: response.status, body: await response.json() };
   };
-  const storedTaskPacket = (threadId: string) =>
-    JSON.parse(readFileSync(join(home, ".orbit", "task-state", `${threadId}.json`), "utf8"));
+  // what a restart reads: a send's record is staged until its dispatch ends
+  const storedTaskPacket = (threadId: string): any =>
+    readTaskResumePacket(threadId, { dir: join(home, ".orbit", "task-state") });
   const botById = async (botId: string) =>
     (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === botId);
   /** Drive update_task_state the way the agents-proxy does, with the token the turn handed it. */

@@ -2721,12 +2721,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-function persistTaskPacket(packet: TaskResumePacket): TaskResumePacket | null {
+function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
   pendingTaskPackets.delete(packet.threadId);
   try {
-    return store.writeTaskPacket(packet);
+    return store.writeTaskPacket(packet, opts);
   } catch (error) {
     console.error("task state: write failed", error);
     return null;
@@ -4864,7 +4864,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           now: userMessage.at,
           turnsAtWrite: task.usage?.turns ?? 0,
         });
-    persistTaskPacket(packet);
+    persistTaskPacket(packet, { staged: true });
   }
 
   // Model context follows the active branch only. The durable transcript is
@@ -5849,6 +5849,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       releaseStarting();
       logSummaryWait();
       settleTrace?.();
+      store.settleTaskPacket(threadId);
     }
   })().finally(() => {
     if (!reservation) return;
