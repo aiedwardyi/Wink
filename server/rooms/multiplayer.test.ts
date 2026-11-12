@@ -91,11 +91,11 @@ describe("a teammate's line in a shared bot group", () => {
     expect(hostedSend(group, said(sora), "@Edward lunch?").ask).toBeNull();
   });
 
-  it("posts an untagged line as plain chat while the only bot has their last request", () => {
-    expect(hostedSend(group, said(sora), "what's left?").ask).toMatchObject({ botId: wink });
-    const plain = hostedSend(group, said(sora), "lunch at 12?");
-    expect(plain.ask).toBeNull();
-    expect(plain.entry.text).toBe("lunch at 12?");
+  it("queues an untagged line behind their last request when the group has one bot", () => {
+    expect(hostedSend(group, said(sora), "hey").ask).toMatchObject({ botId: wink });
+    const next = hostedSend(group, said(sora), "can you check the login page?");
+    expect(next.ask).toMatchObject({ botId: wink, state: "queued", entryId: next.entry.id });
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
     expect(() => hostedSend(group, said(sora), "@Wink and this")).toThrow(expect.objectContaining({ status: 429, message: "wait for your last request to finish" }));
   });
 
