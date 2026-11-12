@@ -206,6 +206,9 @@ contextBridge.exposeInMainWorld("ogb", {
    *  the same readable reason as openFile. */
   fileMenu: (filePath, base) =>
     invoke("desktop:file-menu", filePath, base),
+  /** Copies a local file to where the save dialog points. */
+  saveFile: (filePath) =>
+    invoke("desktop:save-file", filePath),
   /** Opens a chat's linked file from the other PC that has it. */
   openPeerFile: (host, threadId, filePath) =>
     invoke("desktop:open-peer-file", host, threadId, filePath),

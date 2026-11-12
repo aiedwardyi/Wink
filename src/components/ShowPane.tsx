@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { Download, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
-import { closeShow, lastShown, linkedFileSrc, showItem, showMedia, showName, type ShowItem } from "@/lib/show-pane";
+import { closeShow, lastShown, linkedFileSrc, saveFile, showItem, showMedia, showName, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closeVerifyWatch } from "@/lib/verify-watch";
 import { ShowMedia } from "./ShowMedia";
@@ -101,11 +101,12 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
         <Icon size={14} aria-hidden="true" className="show-frame-icon" />
         <span className="show-frame-name" title={item.path}>{name}</span>
         {item.kind === "page" && <button type="button" className="verify-watch-icon" onClick={reload} aria-label={t("show.reload")} title={t("show.reload")}><RefreshCw size={14} /></button>}
+        <button type="button" className="verify-watch-icon" onClick={() => saveFile(src, name, item.src ? undefined : item.path)} aria-label={t("show.save")} title={t("show.save")}><Download size={14} /></button>
         <button type="button" className="verify-watch-icon" onClick={open} aria-label={t("show.open")} title={t("show.open")}><ExternalLink size={14} /></button>
       </div>
       <div className="show-stage" data-ready={ready || undefined}>
         {failed
-          ? <div className="verify-watch-banner" role="status">{t("show.failed")}</div>
+          ? <div className="verify-watch-banner" role="status">{t("show.failed")} <button type="button" data-show-fallback className="ml-1 underline" onClick={open}>{t("show.open")}</button></div>
           : item.kind === "image"
             ? <img src={src} alt={name} onLoad={() => setReady(true)} onError={() => setFailed(true)} />
             : item.kind === "pdf"

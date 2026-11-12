@@ -4,7 +4,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { SERVER_TIMEOUTS, currentEarlyListen } from "./early-listen.ts";
+import { EARLY_MIME, SERVER_TIMEOUTS, currentEarlyListen } from "./early-listen.ts";
 import { homedir, hostname as osHostname } from "node:os";
 import { extname, join } from "node:path";
 
@@ -453,17 +453,7 @@ import { restoreStartupAccounts } from "./startup-accounts.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".woff2": "font/woff2",
-};
+const MIME = EARLY_MIME;
 
 ensureDirs();
 const whatsNew = openWhatsNew(DATA_DIR, process.env.OMB_APP_VERSION ?? "");
