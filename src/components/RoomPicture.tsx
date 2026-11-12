@@ -20,7 +20,7 @@ export function RoomPicture({ src, size = 32, retry }: { src?: string; size?: nu
   );
 }
 
-export function TeamRoomPicture({ group }: { group: TeamRoom }) {
+export function TeamRoomPicture({ group, size }: { group: TeamRoom; size?: number }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [open, setOpen] = useState(false);
@@ -90,7 +90,7 @@ export function TeamRoomPicture({ group }: { group: TeamRoom }) {
   return (
     <div ref={wrapper} className="relative shrink-0">
       <button ref={trigger} data-room-picture-button type="button" aria-label={t("teamRoom.picture")} aria-expanded={open} aria-haspopup="menu" disabled={saving} onClick={() => { setProblem(null); setOpen(!open); }} className="rounded-lg focus-visible:outline-accent disabled:opacity-50">
-        <RoomPicture src={roomPictureUrl(base, group.picture)} />
+        <RoomPicture src={roomPictureUrl(base, group.picture)} size={size} />
       </button>
       <input ref={input} data-room-picture-input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="sr-only" tabIndex={-1} aria-hidden="true" onChange={(event) => { const file = event.target.files?.[0]; if (file) void save(file); }} />
       {open && (

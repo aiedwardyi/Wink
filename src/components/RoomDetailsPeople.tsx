@@ -90,51 +90,52 @@ export function HostPeople({ group }: { group: Group }) {
 
   return (
     <>
-      {code ? <RoomCode key={code.code} {...code} /> : !(shared && busy) && (
-        <button
-          type="button"
-          data-group-invite
-          onClick={() => void invite(true)}
-          disabled={busy}
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-accent hover:bg-raised/50 disabled:opacity-40"
-        >
-          <UserPlus size={15} />
-          {t("teamRoom.invite")}
-        </button>
-      )}
+      <ul className={DETAILS_BOX} aria-label={t("teamRoom.people")}>
+        <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} />
+        {people.map((person) => (
+          <PersonRow key={person.id} name={person.name}>
+            <button
+              type="button"
+              onClick={() => setRemoving(person)}
+              aria-label={t("teamRoom.removeNamed", { name: person.name })}
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
+            >
+              {t("teamRoom.remove")}
+            </button>
+          </PersonRow>
+        ))}
+        {shared && people.length === 0 && <li className={`${DETAILS_ROW} text-[13px] text-ink-secondary`}>{t("teamRoom.nobody")}</li>}
+        {removed.map((person) => (
+          <PersonRow key={person.id} name={person.name} gone>
+            <button
+              type="button"
+              onClick={() => void letBack(person.id)}
+              aria-label={t("teamRoom.letBackNamed", { name: person.name })}
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent hover:bg-raised"
+            >
+              {t("teamRoom.letBack")}
+            </button>
+          </PersonRow>
+        ))}
+        {!code && !(shared && busy) && (
+          <li className={DETAILS_ROW}>
+            <button
+              type="button"
+              data-group-invite
+              onClick={() => void invite(true)}
+              disabled={busy}
+              className="flex w-full items-center gap-2.5 text-left text-[14px] font-medium text-accent hover:brightness-110 disabled:opacity-40"
+            >
+              <UserPlus size={18} />
+              {t("teamRoom.invite")}
+            </button>
+          </li>
+        )}
+      </ul>
+      {code && <div className="mt-3"><RoomCode key={code.code} {...code} /></div>}
       {codeChanged && <p role="status" className="mt-1 px-3 text-[12.5px] text-ink-secondary">{t("teamRoom.codeChanged")}</p>}
       {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t(problem)}</p>}
       {problem === "teamRoom.phoneOff" && <button type="button" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "companion" })} className="mt-1 px-3 text-[12.5px] font-medium text-accent hover:underline">{t("teamRoom.openPhoneAccess")}</button>}
-      {shared && (
-        <ul className={`${DETAILS_BOX} mt-3`} aria-label={t("teamRoom.people")}>
-          <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} />
-          {people.map((person) => (
-            <PersonRow key={person.id} name={person.name}>
-              <button
-                type="button"
-                onClick={() => setRemoving(person)}
-                aria-label={t("teamRoom.removeNamed", { name: person.name })}
-                className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
-              >
-                {t("teamRoom.remove")}
-              </button>
-            </PersonRow>
-          ))}
-          {people.length === 0 && <li className={`${DETAILS_ROW} text-[13px] text-ink-secondary`}>{t("teamRoom.nobody")}</li>}
-          {removed.map((person) => (
-            <PersonRow key={person.id} name={person.name} gone>
-              <button
-                type="button"
-                onClick={() => void letBack(person.id)}
-                aria-label={t("teamRoom.letBackNamed", { name: person.name })}
-                className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent hover:bg-raised"
-              >
-                {t("teamRoom.letBack")}
-              </button>
-            </PersonRow>
-          ))}
-        </ul>
-      )}
       {confirm.mounted && confirm.value && (
         <ConfirmDialog
           closing={confirm.closing}

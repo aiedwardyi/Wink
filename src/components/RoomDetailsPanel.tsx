@@ -1,6 +1,6 @@
 // Room details: People, Bots and the room itself, in the slot and look of Bot details.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, LogOut, X } from "lucide-react";
+import { ChevronRight, LogOut, Pencil, X } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { cn } from "@/lib/cn";
@@ -10,7 +10,7 @@ import { hapticTick } from "@/lib/phone-swipe";
 import { nextRename } from "@/lib/rename";
 import { nextBulletin } from "@/lib/room-bulletin";
 import { useRoomDetailsTarget, type RoomDetailsSection } from "@/lib/room-details";
-import { joinedRoomBase, joinedSelection, roomPictureUrl, type TeamRoom } from "@/lib/team-rooms";
+import { joinedRoomBase, joinedSelection, roomPeople, roomPictureUrl, type TeamRoom } from "@/lib/team-rooms";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Presence } from "@/lib/use-presence";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -72,9 +72,9 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
     };
   }, [closing, dispatch]);
 
-  const section = (id: RoomDetailsSection, label: string, children: ReactNode) => (
-    <section ref={(node) => void (sections.current[id] = node)} data-room-details-section={id} aria-label={label} className="scroll-mt-4">
-      <h3 className="mb-1.5 px-1 text-[12.5px] font-medium text-ink-secondary">{label}</h3>
+  const section = (id: RoomDetailsSection | "leave", label: string, children: ReactNode, titled = true) => (
+    <section ref={(node) => void (id !== "leave" && (sections.current[id] = node))} data-room-details-section={id} aria-label={label} className="scroll-mt-4">
+      {titled && <h3 className="mb-1.5 px-1 text-[12.5px] font-medium text-ink-secondary">{label}</h3>}
       {children}
     </section>
   );
@@ -93,14 +93,15 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-5 pt-2">
         {group ? (
           <>
-            {section("people", t("teamRoom.people"), <HostPeople group={group} />)}
-            {!group.dm && section("bots", t("chrome.bots"), <RoomDetailsBots group={group} />)}
-            {section("room", t("room.section"), <HostRoom group={group} />)}
+            {section("room", t("room.section"), <HostRoom group={group} />, false)}
+            {section("people", `${t("teamRoom.people")} (${1 + roomPeople(group).length})`, <HostPeople group={group} />)}
+            {!group.dm && section("bots", `${t("chrome.bots")} (${group.memberIds.length})`, <RoomDetailsBots group={group} />)}
           </>
         ) : joined && (
           <>
-            {joined.state && section("people", t("teamRoom.people"), <JoinedPeople room={joined} />)}
-            {section("room", t("room.section"), <JoinedRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} picture={roomPictureUrl(joinedRoomBase(joined.roomId), joined.state?.picture)} retry={joined.link} canLeave={joined.status === "joined"} />)}
+            {section("room", t("room.section"), <JoinedRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} picture={roomPictureUrl(joinedRoomBase(joined.roomId), joined.state?.picture)} retry={joined.link} canLeave={joined.status === "joined"} />, false)}
+            {joined.state && section("people", `${t("teamRoom.people")} (${1 + joined.state.people.length})`, <JoinedPeople room={joined} />)}
+            {joined.status === "joined" && section("leave", t("teamRoom.leave"), <LeaveRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} />, false)}
           </>
         )}
       </div>
@@ -111,72 +112,92 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
 function HostRoom({ group }: { group: Group }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
-  const [name, setName] = useState(group.name);
+  const [name, setName] = useState<string | null>(null);
   const [bulletin, setBulletin] = useState(group.bulletin);
-  const editing = useRef<"name" | "bulletin" | null>(null);
+  const editing = useRef(false);
   // an open draft outranks an incoming patch: resyncing under the cursor loses the edit
-  useEffect(() => void (editing.current !== "name" && setName(group.name)), [group.name]);
-  useEffect(() => void (editing.current !== "bulletin" && setBulletin(group.bulletin)), [group.bulletin]);
+  useEffect(() => void (!editing.current && setBulletin(group.bulletin)), [group.bulletin]);
   const saveName = () => {
-    editing.current = null;
-    const next = nextRename(group.name, name);
+    const next = name === null ? null : nextRename(group.name, name);
     if (next) dispatch({ type: "patchGroup", groupId: group.id, patch: { name: next } });
-    else setName(group.name);
+    setName(null);
   };
   const saveBulletin = () => {
-    editing.current = null;
+    editing.current = false;
     const next = nextBulletin(group.bulletin, bulletin);
     if (next !== null) dispatch({ type: "patchGroup", groupId: group.id, patch: { bulletin: next } });
   };
   return (
-    <div className={cn(DETAILS_BOX, "overflow-visible")}>
-      <div className={cn(DETAILS_ROW, "flex items-center gap-3")}>
-        {hostedRoom(group) && <TeamRoomPicture group={group} />}
-        <input
-          aria-label={t("bot.name")}
-          className={DETAILS_INPUT}
-          value={name}
-          onFocus={() => (editing.current = "name")}
-          onChange={(event) => setName(event.target.value)}
-          onBlur={saveName}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.nativeEvent.isComposing) event.currentTarget.blur();
-          }}
-        />
+    <>
+      <div className="flex items-center gap-3 px-1">
+        {hostedRoom(group) && <TeamRoomPicture group={group} size={48} />}
+        {name === null ? (
+          <>
+            <span className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">{group.name}</span>
+            <button type="button" onClick={() => setName(group.name)} aria-label={t("rename.aria")} title={t("rename.aria")} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink">
+              <Pencil size={15} />
+            </button>
+          </>
+        ) : (
+          <input
+            autoFocus
+            aria-label={t("bot.name")}
+            className={DETAILS_INPUT}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={saveName}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter") saveName();
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setName(null);
+              }
+            }}
+          />
+        )}
       </div>
-      <label className={cn(DETAILS_ROW, "block")}>
-        <div className="mb-1.5 text-[14px] font-medium text-ink">{t("room.bulletinTitle")}</div>
-        <FitTextarea
-          className={cn(DETAILS_INPUT, "min-h-[72px]")}
-          placeholder={t("room.bulletinPlaceholder")}
-          value={bulletin}
-          onFocus={() => (editing.current = "bulletin")}
-          onChange={(event) => setBulletin(event.target.value)}
-          onBlur={saveBulletin}
-        />
-      </label>
-      {group.hosted && <AlertsRow chat={group.id} />}
-    </div>
+      <div className={cn(DETAILS_BOX, "mt-4")}>
+        <div className={DETAILS_ROW}>
+          <FitTextarea
+            rows={1}
+            aria-label={t("room.bulletinTitle")}
+            className={DETAILS_INPUT}
+            placeholder={t("room.instructionsHint")}
+            value={bulletin}
+            onFocus={() => (editing.current = true)}
+            onChange={(event) => setBulletin(event.target.value)}
+            onBlur={saveBulletin}
+          />
+        </div>
+        {group.hosted && <AlertsRow chat={group.id} />}
+      </div>
+    </>
   );
 }
 
 function JoinedRoom({ roomId, name, picture, retry, canLeave }: { roomId: string; name: string; picture?: string; retry?: unknown; canLeave: boolean }) {
+  return (
+    <>
+      <div className="flex items-center gap-3 px-1">
+        <RoomPicture src={picture} size={48} retry={retry} />
+        <span className="min-w-0 flex-1 truncate text-[17px] font-semibold text-ink">{name}</span>
+      </div>
+      {canLeave && <div className={cn(DETAILS_BOX, "mt-4")}><AlertsRow chat={joinedSelection(roomId)} /></div>}
+    </>
+  );
+}
+
+function LeaveRoom({ roomId, name }: { roomId: string; name: string }) {
   const { t } = useI18n();
   const [leaving, setLeaving] = useState(false);
   return (
     <>
       <div className={DETAILS_BOX}>
-        <div className={cn(DETAILS_ROW, "flex items-center gap-3")}>
-          <RoomPicture src={picture} retry={retry} />
-          <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{name}</span>
-        </div>
-        {canLeave && <AlertsRow chat={joinedSelection(roomId)} />}
-        {canLeave && (
-          <button type="button" onClick={() => setLeaving(true)} className={cn(DETAILS_ROW, "flex w-full items-center gap-2 text-left text-[14px] text-danger hover:bg-danger/5")}>
-            <LogOut size={16} />
-            {t("teamRoom.leave")}
-          </button>
-        )}
+        <button type="button" onClick={() => setLeaving(true)} className={cn(DETAILS_ROW, "flex w-full items-center gap-2 text-left text-[14px] text-danger hover:bg-danger/5")}>
+          <LogOut size={16} />
+          {t("teamRoom.leave")}
+        </button>
       </div>
       <Presence open={leaving}>
         {(closing) => (

@@ -39,6 +39,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 const section = (id: string) => host.querySelector<HTMLElement>(`[data-room-details-section="${id}"]`)!;
 const button = (label: string) => [...document.querySelectorAll("button")].find((each) => each.textContent === label || each.getAttribute("aria-label") === label)!;
+const order = () => [...host.querySelectorAll("[data-room-details-section]")].map((each) => each.getAttribute("data-room-details-section"));
+const headings = () => [...host.querySelectorAll("h3")].map((each) => each.textContent);
+const removeButtons = () => [...section("bots").querySelectorAll<HTMLButtonElement>("[data-room-bot] button")];
 const confirm = (label: string) => act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button, [role="alertdialog"] button')].filter((each) => each.textContent === label).at(-1)!.click());
 
 async function open(props: { group?: Group; joinedId?: string }, answer: (path: string, method: string) => Response = () => json({}), locale: "en" | "ko" = "en") {
@@ -72,13 +75,33 @@ afterEach(async () => {
 
 describe("Room details", () => {
   it.each([
-    ["en", "Room Details", "People", "Bots", "Room", "+ New bot"],
-    ["ko", "채팅방 세부 정보", "참여자", "봇", "채팅방", "+ 새 봇"],
-  ] as const)("titles the panel and its sections in %s", async (locale, title, people, bots, room, newBot) => {
-    await open({ group }, undefined, locale);
+    ["en", "Room Details", "People (2)", "Bots (1)", "Add instructions for every bot…", "+ Add bot"],
+    ["ko", "채팅방 세부 정보", "참여자 (2)", "봇 (1)", "모든 봇에게 줄 지침 추가…", "+ 봇 추가"],
+  ] as const)("reads top down like group info in %s: room, people, bots", async (locale, title, people, bots, placeholder, addBot) => {
+    mock.state.bots = [bot("b1", "Wink"), bot("b2", "Ada")];
+    await open({ group: shared([{ id: "p1", name: "Mina" }]) }, () => json({ code: "old-code" }), locale);
     expect(host.querySelector("aside[data-room-details]")!.textContent).toContain(title);
-    expect([...host.querySelectorAll("h3")].map((each) => each.textContent)).toEqual([people, bots, room]);
-    expect(host.querySelector("[data-manage-create-bot]")!.textContent).toBe(newBot);
+    expect(order()).toEqual(["room", "people", "bots"]);
+    expect(headings()).toEqual([people, bots]);
+    const instructions = section("room").querySelector("textarea")!;
+    expect(instructions.placeholder).toBe(placeholder);
+    expect(instructions.getAttribute("rows")).toBe("1");
+    expect(section("room").querySelector('[role="switch"]')).not.toBeNull();
+    expect(host.querySelector("[data-room-add-bot]")!.textContent).toBe(addBot);
+  });
+
+  it("renames the room in place from the pencil, and saves on Enter", async () => {
+    await open({ group: { ...group, name: "Channel" } });
+    expect(section("room").querySelector("input")).toBeNull();
+    await act(async () => button("Rename").click());
+    const name = section("room").querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "Studio");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { name: "Studio" } });
+    expect(section("room").querySelector("input")).toBeNull();
   });
 
   it("sits in Bot details' slot: 400px on desktop, full width on a phone", async () => {
@@ -90,13 +113,17 @@ describe("Room details", () => {
 });
 
 describe("Bots", () => {
-  it("draws one row per bot with a switch, no checkbox column", async () => {
-    mock.state.bots = [bot("b1", "Wink"), bot("b2", "research Desk v2 / Seoul HQ")];
-    await open({ group: { ...group, memberIds: ["b1"] } });
-    const switches = [...section("bots").querySelectorAll<HTMLButtonElement>('[role="switch"]')];
-    expect(switches.map((each) => [each.getAttribute("aria-label"), each.getAttribute("aria-checked")])).toEqual([["Wink", "true"], ["research Desk v2 / Seoul HQ", "false"]]);
-    expect(section("bots").querySelector('[role="checkbox"]')).toBeNull();
-    await act(async () => switches[1]!.click());
+  it("lists only the bots in the room, and Add bot opens the picker with every bot", async () => {
+    mock.state.bots = [bot("b1", "Wink"), bot("b2", "research Desk v2 / Seoul HQ"), bot("b3", "Ada")];
+    await open({ group: { ...group, memberIds: ["b1", "b3"] } });
+    expect([...section("bots").querySelectorAll("[data-room-bot]")].map((row) => row.getAttribute("data-room-bot"))).toEqual(["b1", "b3"]);
+    expect(section("bots").querySelector('[role="switch"], [role="checkbox"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
+    const picks = [...section("bots").querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
+    expect(picks.map((each) => [each.textContent, each.getAttribute("aria-checked")])).toEqual([["Wink", "true"], ["research Desk v2 / Seoul HQ", "false"], ["Ada", "true"]]);
+    await act(async () => picks[1]!.click());
+    expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { memberIds: ["b1", "b3", "b2"] } });
+    await act(async () => removeButtons()[1]!.click());
     expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { memberIds: ["b1", "b2"] } });
   });
 
@@ -109,7 +136,8 @@ describe("Bots", () => {
   it.each([["shared", true], ["plain", false]] as const)("taking the last bot out of a %s group: %s", async (kind, allowed) => {
     mock.state.bots = [bot("b1", "Wink")];
     await open({ group: kind === "shared" ? shared([]) : { ...group, memberIds: ["b1"] } }, () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
-    const toggle = section("bots").querySelector<HTMLButtonElement>('[role="switch"]')!;
+    const toggle = removeButtons()[0]!;
+    expect(toggle.getAttribute("aria-label")).toBe("Remove Wink");
     expect(toggle.disabled).toBe(!allowed);
     expect(section("bots").textContent!.includes("A group needs at least one bot.")).toBe(!allowed);
     await act(async () => toggle.click());
@@ -133,6 +161,7 @@ describe("Bots", () => {
       bodies.push(JSON.parse(String(init?.body)));
       return json({ bot: created }, 201);
     });
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
     await act(async () => host.querySelector<HTMLButtonElement>("[data-manage-create-bot]")!.click());
     const name = host.querySelector<HTMLInputElement>('input[id^="group-wizard-name-"]')!;
     const selects = [...host.querySelectorAll("select")];
@@ -144,7 +173,7 @@ describe("Bots", () => {
       Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(selects[1], "codex-pro");
       selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const add = [...host.querySelectorAll("button")].find((each) => !each.hasAttribute("data-manage-create-bot") && (each.textContent?.includes("Add bot") || each.textContent?.includes("봇 추가")))!;
+    const add = [...host.querySelectorAll("button")].find((each) => !each.hasAttribute("data-manage-create-bot") && !each.hasAttribute("data-room-add-bot") && (each.textContent?.includes("Add bot") || each.textContent?.includes("봇 추가")))!;
     await act(async () => add.click());
     await settle();
     expect(bodies[0]).toEqual({ name: "research Desk v2 / Seoul HQ", modelSelection: { instanceId: "codex-1", model: "codex-pro" }, section: "Work" });
@@ -256,7 +285,7 @@ describe("People", () => {
     const body = section("people").parentElement!;
     expect(body.className.split(" ")).toEqual(expect.arrayContaining(["min-h-0", "flex-1", "overflow-y-auto"]));
     expect(section("people").querySelectorAll("li")).toHaveLength(41);
-    expect(section("bots").querySelectorAll('[role="switch"]')).toHaveLength(15);
+    expect(removeButtons()).toHaveLength(15);
   });
 });
 
@@ -269,7 +298,10 @@ describe("a joined room", () => {
   it("lists the host and people, has no Bots or code, and Leave asks first", async () => {
     mock.joined = [joined];
     await open({ joinedId: "j1" });
-    expect([...host.querySelectorAll("h3")].map((each) => each.textContent)).toEqual(["People", "Room"]);
+    expect(order()).toEqual(["room", "people", "leave"]);
+    expect(headings()).toEqual(["People (3)"]);
+    expect(section("room").textContent).toContain("Studio");
+    expect(section("room").querySelector("input, textarea, [data-room-picture-button]")).toBeNull();
     expect(section("people").textContent).toContain("EdwardHost");
     expect(section("people").textContent).toContain("Seo-yeon Park");
     expect(section("people").querySelector("[data-group-invite], [data-team-room-code]")).toBeNull();

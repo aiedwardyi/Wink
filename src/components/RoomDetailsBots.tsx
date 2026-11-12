@@ -1,4 +1,4 @@
-// Room details' Bots: one row per bot, a switch for in or out, applied at once.
+// Room details' Bots: the bots in the room, and Add bot for the rest, applied at once.
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
@@ -7,7 +7,8 @@ import { useI18n } from "@/lib/i18n";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 
 import { BotAvatar } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW, DetailsSwitch } from "./BotDetailsRows";
+import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
+import { BotPickerList } from "./BotPickerList";
 import { NewBotRow, type NewRow } from "./GroupWizard";
 
 export function RoomDetailsBots({ group }: { group: Group }) {
@@ -15,6 +16,7 @@ export function RoomDetailsBots({ group }: { group: Group }) {
   const { state, dispatch, refreshInstances } = useStore();
   const [rows, setRows] = useState<NewRow[]>([]);
   const [addedNew, setAddedNew] = useState(0);
+  const [adding, setAdding] = useState(false);
   const nextRowKey = useRef(1);
   const memberIds = useRef(group.memberIds);
   memberIds.current = group.memberIds;
@@ -28,6 +30,7 @@ export function RoomDetailsBots({ group }: { group: Group }) {
     () => state.bots.filter((b) => !b.hidden || group.memberIds.includes(b.id)),
     [state.bots, group.memberIds],
   );
+  const inRoom = bots.filter((b) => group.memberIds.includes(b.id));
   // A shared group with no bots stays open as a people-only room.
   const lastLocked = !group.hosted && group.memberIds.length === 1;
 
@@ -63,43 +66,64 @@ export function RoomDetailsBots({ group }: { group: Group }) {
 
   return (
     <>
-      {bots.length > 0 ? (
-        <ul className={DETAILS_BOX} aria-label={t("chrome.bots")}>
-          {bots.map((b) => {
-            const on = group.memberIds.includes(b.id);
-            return (
-              <li key={b.id} data-room-bot={b.id} className={`${DETAILS_ROW} flex items-center gap-3 py-2.5`}>
-                <BotAvatar bot={b} state="happy" size={28} />
-                <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{b.name}</span>
-                <DetailsSwitch on={on} label={b.name} disabled={on && lastLocked} className="disabled:opacity-40" onToggle={() => setMember(b.id, !on)} />
-              </li>
-            );
-          })}
-        </ul>
-      ) : <p className="px-1 text-[13px] text-ink-secondary">{t("chrome.createBotFirst")}</p>}
+      <ul className={DETAILS_BOX} aria-label={t("chrome.bots")}>
+        {inRoom.map((b) => (
+          <li key={b.id} data-room-bot={b.id} className={`${DETAILS_ROW} flex items-center gap-3 py-2.5`}>
+            <BotAvatar bot={b} state="happy" size={28} />
+            <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{b.name}</span>
+            <button
+              type="button"
+              onClick={() => setMember(b.id, false)}
+              disabled={lastLocked}
+              aria-label={t("room.removeBot", { name: b.name })}
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-secondary"
+            >
+              {t("teamRoom.remove")}
+            </button>
+          </li>
+        ))}
+        <li className={DETAILS_ROW}>
+          <button type="button" data-room-add-bot aria-expanded={adding} onClick={() => setAdding(!adding)} className="w-full text-left text-[14px] font-medium text-accent hover:brightness-110">
+            + {t("groupWizard.addBot")}
+          </button>
+        </li>
+      </ul>
       {lastLocked && <p className="mt-1.5 px-1 text-[12px] text-ink-secondary">{t("room.needsBot")}</p>}
-      {rows.map((row, rowIndex) => (
-        <NewBotRow
-          key={row.key}
-          row={row}
-          preferIndex={addedNew + rowIndex}
-          instances={state.instances}
-          onPatch={(patch) => patchRow(row.key, patch)}
-          onAdd={(pick) => void addBot(row, pick)}
-        />
-      ))}
-      <button
-        type="button"
-        data-manage-create-bot
-        onClick={() => {
-          const key = nextRowKey.current++;
-          setRows((prev) => [...prev, { key, name: "", instanceId: null, model: null, saving: false, error: null }]);
-        }}
-        className="mt-2 px-1 text-[13px] font-medium text-accent hover:brightness-110"
-      >
-        {t("groupWizard.newBot")}
-      </button>
-      {group.memberIds.length > 0 && <p className="mt-2 px-1 text-[12.5px] text-ink-secondary">{groupResponseHint(group, bots.filter((bot) => group.memberIds.includes(bot.id)), t)}</p>}
+      {adding && (
+        <div className={`${DETAILS_BOX} mt-2 p-2`}>
+          <BotPickerList
+            bots={bots}
+            picked={new Set(group.memberIds)}
+            emptyHint={t("chrome.createBotFirst")}
+            onToggle={(id) => {
+              const on = group.memberIds.includes(id);
+              if (!on || !lastLocked) setMember(id, !on);
+            }}
+          />
+          {rows.map((row, rowIndex) => (
+            <NewBotRow
+              key={row.key}
+              row={row}
+              preferIndex={addedNew + rowIndex}
+              instances={state.instances}
+              onPatch={(patch) => patchRow(row.key, patch)}
+              onAdd={(pick) => void addBot(row, pick)}
+            />
+          ))}
+          <button
+            type="button"
+            data-manage-create-bot
+            onClick={() => {
+              const key = nextRowKey.current++;
+              setRows((prev) => [...prev, { key, name: "", instanceId: null, model: null, saving: false, error: null }]);
+            }}
+            className="mt-1 px-2 py-1 text-[13px] font-medium text-accent hover:brightness-110"
+          >
+            {t("groupWizard.newBot")}
+          </button>
+        </div>
+      )}
+      {group.memberIds.length > 0 && <p className="mt-2 px-1 text-[12.5px] text-ink-secondary">{groupResponseHint(group, inRoom, t)}</p>}
     </>
   );
 }
