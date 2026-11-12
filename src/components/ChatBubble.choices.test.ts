@@ -70,7 +70,7 @@ describe("a question that is only choices", () => {
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Copy message"]')).not.toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
-    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions] [data-emoji="👍"]')).not.toBeNull();
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });
@@ -92,7 +92,7 @@ describe("a question that is only choices", () => {
     expect(host.querySelector('[data-mid="q1"]')).not.toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
-    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions] [data-emoji="👍"]')).not.toBeNull();
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });

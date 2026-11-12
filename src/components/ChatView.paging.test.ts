@@ -712,7 +712,7 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "messagePatched", threadId: "thread-a", message: { ...row(2500), text: "patched;" } }));
     expect(host.querySelector('[data-mid="m2500"]')!.textContent).toContain("patched;");
     await act(async () => store.dispatch({ type: "toggleReaction", threadId: "thread-a", messageId: "m2499", emoji: "🎉", message: row(2499) }));
-    expect(host.querySelector('[data-mid="m2499"]')!.textContent).toContain("🎉");
+    expect(host.querySelector('[data-mid="m2499"] [data-emoji="🎉"]')).not.toBeNull();
   });
 
   it("drops a jump window when switching bots and reopens at the newest message", async () => {
@@ -830,10 +830,10 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "focusMessage", threadId: "thread-a", messageId: "m2500" }));
     await vi.waitFor(() => expect(host.querySelector('[data-mid="m2500"]')).not.toBeNull());
     await act(async () => store.dispatch({ type: "toggleReaction", threadId: "thread-a", messageId: "m2499", emoji: "🎉", message: row(2499) }));
-    expect(host.querySelector('[data-mid="m2499"]')!.textContent).toContain("🎉");
+    expect(host.querySelector('[data-mid="m2499"] [data-emoji="🎉"]')).not.toBeNull();
     thread[2499] = { ...row(2499), reactions: [{ emoji: "🎉", by: "user" }] } as Message;
     await snapshot([bot(thread.slice(-200), true)]);
-    await vi.waitFor(() => expect(host.querySelector('[data-mid="m2499"]')!.textContent).toContain("🎉"));
+    await vi.waitFor(() => expect(host.querySelector('[data-mid="m2499"] [data-emoji="🎉"]')).not.toBeNull());
     expect(calls.filter((call) => call.includes("around=m2500"))).toHaveLength(2);
   });
 

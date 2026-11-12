@@ -20,6 +20,7 @@ import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeopl
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
 import * as roomDoor from "./door.ts";
 import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
+import { deleteRoomFile } from "./files.ts";
 import { hostedRoomView } from "./guards.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomCode, roomInvites, shortRoomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
@@ -921,6 +922,18 @@ describe("files", () => {
     expect((await upload(a.hosted.roomId, mina.key, "after remove")).status).toBe(401);
     revokeGuestKeys(a.hosted.roomId, pat.personId);
     expect((await call(path, { key: pat.key })).status).toBe(401);
+  });
+
+  it("tell a teammate who was away which files the host deleted", async () => {
+    const group = peopleRoom();
+    const roomId = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const up = await upload(roomId, mina.key, "old notes");
+    await deleteRoomFile(roomId, up.body.file.id);
+    const stream = await openStream(roomId, mina.key, 0);
+    const frames = await stream.until((all) => all.some((frame) => frame.kind === "deleted"));
+    expect(frames.find((frame) => frame.kind === "deleted")).toEqual({ kind: "deleted", ids: [up.body.file.id] });
+    await shut(stream);
   });
 
   it("ride on a send to every reader; someone else's file, an empty line and a reused sendId are refused", async () => {

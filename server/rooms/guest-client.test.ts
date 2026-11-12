@@ -1,6 +1,7 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
@@ -9,7 +10,7 @@ import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
-import { addJoinedEntries, closeJoinedDb, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
 
 const BASE = "wink.test";
@@ -98,6 +99,13 @@ describe("room codes", () => {
     expect(c.rooms()[0]).toMatchObject({ unread: 203, lastEntry: lines.at(-1) });
     expect(c.room("r1")).toMatchObject({ unread: 203, lastEntry: lines.at(-1) });
     expect(c.room("r1")?.entries).toHaveLength(200);
+  });
+
+  it("answers the name a join would send, for the join screen to prefill", async () => {
+    const c = guest({ joiner: () => ({ name: "DESKTOP-4F2K", device: PC }) });
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    expect(await joinedRoute("GET", "/api/joined/name", c, async () => null)).toEqual({ status: 200, body: { name: "DESKTOP-4F2K" } });
+    expect((await joinedRoute("POST", "/api/joined/name", c, async () => null))?.status).toBe(404);
   });
 
   it("clears only observed entries through the local read route and broadcasts", async () => {
@@ -478,6 +486,27 @@ describe("room alerts on a teammate", () => {
     await until(() => c.room("r1")?.entries.length === 61);
     await sleep(250);
     expect(alert.mock.calls).toEqual([ping("line 60"), ping("live")]);
+  });
+});
+
+describe("deleted files", () => {
+  it("marks a file the host deleted while this PC was away and drops its local copy", async () => {
+    const file = { id: "f".repeat(24), name: "notes.txt", type: "text/plain", bytes: 5, sha256: "0".repeat(64) };
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    addJoinedEntries("r1", [{ seq: 1, id: "e1", at: 1, author: { kind: "host", id: "host", name: "Edward" }, text: "", files: [file] }], 1);
+    const cached = join(DATA_DIR, "joined-files", "r1", file.id);
+    mkdirSync(join(DATA_DIR, "joined-files", "r1"), { recursive: true });
+    writeFileSync(cached, "hello");
+    route = (req, res) => {
+      quietDoor(req, res);
+      if (req.url?.includes("/stream")) res.write(`data: ${JSON.stringify({ kind: "deleted", ids: [file.id] })}
+
+`);
+    };
+    guest().start();
+    await until(() => !existsSync(cached));
+    expect(joinedEntries("r1", 5)[0]!.files).toEqual([{ ...file, deleted: true }]);
   });
 });
 

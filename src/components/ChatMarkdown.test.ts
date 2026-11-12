@@ -902,6 +902,7 @@ describe("relative file links", () => {
     const cards = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card]")];
     beforeEach(async () => {
       Object.defineProperty(window, "ogb", { configurable: true, value: { openFile: vi.fn() } });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
       host = document.createElement("div");
       document.body.append(host);
       root = createRoot(host);
@@ -911,6 +912,7 @@ describe("relative file links", () => {
       await act(async () => root.unmount());
       host.remove();
       Reflect.deleteProperty(window, "ogb");
+      vi.unstubAllGlobals();
       applyLocale("en");
     });
 
@@ -972,7 +974,7 @@ describe("relative file links", () => {
       await act(async () => host.querySelector<HTMLButtonElement>("[data-show-card]")!.click());
       expect(host.querySelector("[data-show-card]")!.hasAttribute("data-showing")).toBe(true);
       expect(openFile).not.toHaveBeenCalled();
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -1233,6 +1235,15 @@ describe("relative file links", () => {
     it("says which PC has it when the fetch fails or the desktop app is older", async () => {
       expect(await click({ openFile: missing(), openPeerFile: vi.fn().mockRejectedValue(new Error("That file could not be opened")) })).toBe("This file is on Home.");
       expect(await click({ openFile: missing() })).toBe("This file is on Home.");
+    });
+
+    it("runs the same check from a file card, and says why it can't open", async () => {
+      const pdf = "C:/Users/a/report.pdf";
+      const openPeerFile = vi.fn().mockResolvedValue(undefined);
+      expect(await click({ openFile: missing(), openPeerFile }, { link: pdf })).toBeUndefined();
+      expect(openPeerFile).toHaveBeenCalledWith("home.example", "t1", pdf);
+      expect(await click({ openFile: missing(), openPeerFile: vi.fn() }, { link: pdf, offline: true })).toBe("This file is on Home.");
+      expect(await click({ openFile: missing() }, { link: pdf, writer: false })).toBe("That file no longer exists");
     });
 
     it("keeps the reason that PC refused with", async () => {

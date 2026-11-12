@@ -17,7 +17,7 @@ import { ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { linkedFileSrc, showKind } from "@/lib/show-pane";
+import { linkedFileSrc, showItem, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
@@ -403,7 +403,7 @@ const FILE_LINK_MESSAGES = new Map<string, MessageKey>([
 // (http://127.0.0.1:8799<path>, a second chat UI in the browser), and an
 // <a href="file://…"> would still reach setWindowOpenHandler on a middle or
 // modifier click. The shell decides whether to open or only reveal the file.
-function DesktopFileLink({ filePath, base, threadId, children }: { filePath: string; base?: string; threadId?: string; children?: ReactNode }) {
+function DesktopFileLink({ filePath, base, threadId, card, children }: { filePath: string; base?: string; threadId?: string; card?: boolean; children?: ReactNode }) {
   const { t } = useI18n();
   const [reason, setReason] = useState("");
   const [onPc, setOnPc] = useState("");
@@ -463,9 +463,16 @@ function DesktopFileLink({ filePath, base, threadId, children }: { filePath: str
     fileMenu(filePath, base).catch((error) => setReason(error instanceof Error ? error.message : "That file could not be opened"));
   };
 
+  // A file this PC doesn't have would only fail in the pane; open it the link's way instead.
+  const show = async (thread: string) => {
+    const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
+    if (res && !res.ok && res.status !== 416) await open();
+    else showItem({ threadId: thread, path: filePath, kind: showKind(filePath)! });
+  };
+
   return (
     <>
-      <button
+      {card && threadId ? <ShowCard threadId={threadId} path={filePath} onOpen={() => void show(threadId)} /> : <button
         ref={ref}
         type="button"
         onClick={() => void open()}
@@ -475,7 +482,7 @@ function DesktopFileLink({ filePath, base, threadId, children }: { filePath: str
         className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent"
       >
         {children}
-      </button>
+      </button>}
       {onPc
         ? <span data-file-on-pc className="block break-keep [overflow-wrap:anywhere]">{t("chat.fileLink.onOtherPc", { name: onPc })}</span>
         : reason && <span className={`ml-1.5 text-[12px] ${desktop ? "text-danger" : "text-ink-secondary"}`}>{reasonKey ? t(reasonKey) : reason}</span>}
@@ -594,8 +601,7 @@ function LocalFileLink({
 }) {
   const streaming = useContext(StreamingContext);
   if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
-  if (window.ogb && threadId && showKind(filePath)) return <ShowCard threadId={threadId} path={filePath} />;
-  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId}>{children}</DesktopFileLink>;
+  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && showKind(filePath))}>{children}</DesktopFileLink>;
 }
 
 // Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content

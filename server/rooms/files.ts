@@ -19,7 +19,7 @@ export const IMAGE_MAX_BYTES = 100 * 1024 ** 2;
 export const DOCUMENT_MAX_BYTES = 1024 ** 3;
 export const ROOM_DISK_BYTES = 100 * 1024 ** 3;
 export const MAX_MESSAGE_FILES = 50;
-const UPLOADS = 50;
+const UPLOADS = MAX_MESSAGE_FILES * 4;
 const UPLOAD_WINDOW_MS = 10 * 60_000;
 const UNSENT_MS = 24 * 60 * 60_000;
 const HEAD_BYTES = 16;
@@ -134,6 +134,10 @@ export function roomFilesState(roomId: string) {
   const deleted = withDb((db) => db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ?").all(roomId)) as Array<{ id: string }>;
   return { deleted: deleted.map((file) => file.id), error: roomFilesFolder().error };
 }
+
+/** Newest first, capped so the frame stays under a teammate's frame limit. */
+export const deletedRoomFiles = (roomId: string): string[] =>
+  (withDb((db) => db.prepare("SELECT id FROM room_file_deletions WHERE room_id = ? ORDER BY rowid DESC LIMIT 5000").all(roomId)) as Array<{ id: string }>).map((file) => file.id);
 
 export async function deleteRoomFile(roomId: string, id: string): Promise<void> {
   const release = holdRoomFiles();

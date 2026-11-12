@@ -6,11 +6,11 @@ import { Copy, Files, KeyRound, LogIn, LogOut, Trash2, UsersRound } from "lucide
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { request } from "@/lib/api-request";
 import { forgetJoinedRoom, noteJoinedRoom, useJoinedRooms } from "@/lib/joined-rooms";
-import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { Presence } from "@/lib/use-presence";
-import { useStore, type Group } from "@/state/store";
+import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TeamRoomFiles } from "./TeamRoomFiles";
@@ -167,18 +167,37 @@ const INPUT = "w-full rounded-lg border border-hairline/60 bg-inset px-3 py-2 te
 /** A valid code joins the moment it lands: no Enter, no button. */
 function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: () => void; rejoin?: { roomId: string; name: string } }) {
   const { t } = useI18n();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
+  const [askName] = useState(() => !rejoin && !state.config?.profile?.name?.trim());
+  const [name, setName] = useState("");
+  const [guessed, setGuessed] = useState(!askName);
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const busy = useRef(false);
+  const waiting = useRef<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const join = async (value: string) => {
     if (busy.current) return;
+    waiting.current = value;
+    if (!guessed) return;
+    const typed = askName ? typedRoomName(name) : "";
+    if (askName && !typed) return setProblem("teamRoom.nameRequired");
+    waiting.current = null;
     busy.current = true;
     setJoining(true);
     setProblem(null);
+    if (typed) {
+      try {
+        dispatch({ type: "configStatus", config: await api("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name: typed } }) }) });
+      } catch {
+        busy.current = false;
+        setJoining(false);
+        setProblem("settings.profile.saveError");
+        return;
+      }
+    }
     const result = rejoin ? await rejoinRoom(rejoin.roomId, value) : await joinRoom(value);
     if ("room" in result) {
       noteJoinedRoom(result.room);
@@ -200,7 +219,13 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     else setProblem(pasted && value.trim() ? "teamRoom.badCode" : null);
   };
 
-  useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>("[data-join-boxes] input"))?.focus(), []);
+  useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>(askName ? "[data-join-name]" : "[data-join-boxes] input"))?.focus(), []);
+  useEffect(() => {
+    if (askName) void request("/api/joined/name").then((body) => setName((typed) => typed || String(body?.name ?? ""))).catch(() => {}).finally(() => setGuessed(true));
+  }, []);
+  useEffect(() => {
+    if (guessed && waiting.current) void join(waiting.current);
+  }, [guessed]);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
@@ -209,6 +234,21 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
       {rejoin && <>
         <div title={rejoin.name} className="mb-2 truncate text-[13px] text-ink-secondary">{rejoin.name}</div>
         <p className="mb-3 text-[12.5px] text-ink-secondary">{t("teamRoom.rejoinCodeHint")}</p>
+      </>}
+      {askName && <>
+        <input
+          data-join-name
+          value={name}
+          readOnly={joining}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && waiting.current) void join(waiting.current);
+          }}
+          aria-label={t("teamRoom.joinName")}
+          placeholder={t("teamRoom.joinName")}
+          className={INPUT}
+        />
+        <p className="mb-3 mt-1 text-[12px] text-ink-secondary">{t("teamRoom.nameEverywhere")}</p>
       </>}
       {rejoin ? <input
         ref={input}

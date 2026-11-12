@@ -28,6 +28,7 @@ import {
   type LineReactions,
 } from "./door-streams.ts";
 import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
+import { deletedRoomFiles } from "./files.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, shortCodeTarget, type JoinResult } from "./invites.ts";
 import { hostedSend } from "./send.ts";
 import { recordRoomJoin } from "./share.ts";
@@ -360,6 +361,9 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
   writeFrame(open, { kind: "state", state: doorState(group, person) });
   for (const frame of reactionFrames(group)) writeFrame(open, frame);
+  // A teammate who was away missed the reset a delete sends.
+  const deleted = deletedRoomFiles(roomId);
+  if (deleted.length) writeFrame(open, { kind: "deleted", ids: deleted });
   const head = recentRoomEntries(roomId, 1)[0]?.seq ?? 0;
   if (after > head || head - after > REPLAY_ENTRIES) {
     writeFrame(open, { kind: "reset" });

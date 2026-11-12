@@ -65,6 +65,7 @@ import { TurnRail } from "./TurnRail";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
+import { ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
@@ -1568,6 +1569,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             <Search size={18} />
           </button>
           )}
+          <ShowPaneButton threadId={bot.threadId} />
 
           {/* Before the chip: the phone header fits the chip as its last control. */}
           <button

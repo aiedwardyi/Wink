@@ -120,7 +120,7 @@ describe("ChatView settled rows", () => {
       const reacted = bubbleHooks(view.host);
       expect(reacted.get("b1")).not.toBe(before.get("b1"));
       for (const id of ["u1", "u2", "b2"]) expect(reacted.get(id), id).toBe(before.get(id));
-      expect(view.host.querySelector('[data-mid="b1"] [data-message-reactions]')?.textContent).toContain("👍");
+      expect(view.host.querySelector('[data-mid="b1"] [data-message-reactions] [data-emoji="👍"]')).not.toBeNull();
 
       await act(async () => harness.dispatch!({ type: "updateBot", botId: "memo", patch: { pinnedMessageId: "u1" } }));
       const pinned = bubbleHooks(view.host);

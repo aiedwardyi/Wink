@@ -18,11 +18,12 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice">, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "name" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice">, body: () => Promise<unknown>,
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
   client.start();
   if (path === "/api/joined/rooms") return method === "GET" ? { status: 200, body: { rooms: client.rooms() } } : notFound;
+  if (path === "/api/joined/name") return method === "GET" ? { status: 200, body: { name: client.name() } } : notFound;
   if (path === "/api/joined/join") {
     if (method !== "POST") return notFound;
     const code = field(await body(), "code");
