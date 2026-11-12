@@ -745,7 +745,7 @@ const MessagesList = memo(function MessagesList({
           const first = item.messages[0];
           const forceOpen = found || item.messages.some((step) => step.id === focusedId);
           return (
-            <div key={item.id} className="contents" data-run={item.id} {...logLine(skin === "logfile", first.at, item.messages)}>
+            <div key={item.id} className="contents" data-run={item.id} data-settled={i < items.length - 1 ? "" : undefined} {...logLine(skin === "logfile", first.at, item.messages)}>
               {newDay && <DaySeparator at={first.at} />}
               {item.kind === "memory" ? (
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
@@ -872,7 +872,7 @@ const MessagesList = memo(function MessagesList({
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
         const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
-          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
+          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
             {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
@@ -1350,12 +1350,20 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   // viewport to the end. Re-pinning only arms future content; Jump to latest
   // and this effect on new rows do the scrolling. The one exception is the
   // user's own send, which re-anchors via onSend even from scrollback.
-  useEffect(() => {
+  // Each scrollHeight read lays out the transcript: commits pin once per frame, streamed text via the resize observer.
+  const pinFrame = useRef(0);
+  const pinBottom = useCallback(() => {
+    cancelAnimationFrame(pinFrame.current);
+    pinFrame.current = 0;
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
-  }, [bot.id, messages.length, streaming, reasoning, turnSignal, bot.busy, composerDock.pad]);
+  }, []);
+  useEffect(() => {
+    if (!pinFrame.current) pinFrame.current = requestAnimationFrame(pinBottom);
+  }, [pinBottom, bot.id, messages.length, bot.busy, composerDock.pad]);
+  useEffect(() => () => cancelAnimationFrame(pinFrame.current), []);
 
   // Late layout, images and viewport changes fire no scroll event, so the pill and fill read geometry here too.
   const [newestBelow, setNewestBelow] = useState(false);
@@ -1372,18 +1380,14 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     const content = contentRef.current;
     if (!content) return;
     const observer = new ResizeObserver(() => {
-      const el = scrollRef.current;
-      if (el && followRef.current) {
-        el.scrollTo({ top: el.scrollHeight });
-        previousScrollTop.current = el.scrollTop;
-      }
+      pinBottom();
       measure();
     });
     observer.observe(content);
     // a growing composer shrinks the viewport; re-pin before paint
     if (scrollRef.current) observer.observe(scrollRef.current);
     return () => observer.disconnect();
-  }, [measure]);
+  }, [measure, pinBottom]);
 
   // A plain tail too short to scroll pages older rows in until it fills or the thread runs out.
   // A widening window still to commit is not short of rows.

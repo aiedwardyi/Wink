@@ -172,6 +172,12 @@
   justify-content: flex-end;
 }
 
+/* Rows are display:contents wrappers, so their children carry the containment. */
+[data-settled] > * {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 80px;
+}
+
 /* These skins zero the bot padding the chips pull up into. */
 :is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
   padding-bottom: 0.875rem;
