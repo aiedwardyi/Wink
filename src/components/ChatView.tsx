@@ -78,6 +78,7 @@ import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPri
 import { CallButton, CallOverlay } from "./CallView";
 import { CallCard } from "./CallCard";
 import { lazyView } from "@/lib/stale-build";
+import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
@@ -344,7 +345,7 @@ function ScreenFrame({ src, caption }: { src: string; caption?: string }) {
       <img
         src={src}
         alt={caption || "Bot's screen"}
-        className="w-fit max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40"
+        className={cn("rounded-2xl border border-hairline/40", CHAT_IMAGE)}
       />
       {caption && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{caption}</p>}
     </div>

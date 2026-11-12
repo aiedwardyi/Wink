@@ -75,6 +75,7 @@ import { useTranslationAvailable } from "@/lib/room-translate";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { useSearchFindSeed } from "@/lib/chat-find";
 import { useFindCurrentId } from "@/lib/chat-find";
@@ -546,7 +547,7 @@ export const Transcript = memo(function Transcript({
               <img
                 src={m.png ? `data:${m.mime ?? "image/png"};base64,${m.png}` : screenImageUrl(group.threadId, m.id)}
                 alt={m.text || t("chrome.screenFrame")}
-                className="w-fit max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40"
+                className={cn("rounded-2xl border border-hairline/40", CHAT_IMAGE)}
               />
               {m.text && <p className="max-w-[min(42rem,78%)] px-1 text-[13px] text-ink-secondary">{m.text}</p>}
             </div>
