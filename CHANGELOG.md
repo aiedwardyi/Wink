@@ -2,6 +2,23 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.256] - 2026-11-12
+
+### Added
+- A Media tab in the right pane shows every picture and file from a bot chat or room, and a header button opens and closes the pane.
+- On phone, swipe a room line right to reply or left to translate.
+- Joining a room with no profile name asks for one first; members still rename themselves in People.
+
+### Changed
+- New outline icons for reactions.
+- Old-pane cleanup runs in the background, so it no longer holds Wink up.
+
+### Fixed
+- Group fixes from today's audit: bots get full messages with their pictures and files, the host sees teammates' pictures and files, the room box clears at send, and replies no longer fail.
+- Room files, file cards from another PC, and jumping to an old message land right.
+- A teammate's name can no longer break into a room bot's prompt.
+- A restored bot opens with its chat; the pinned notice keeps its text; the 6-box code works with a Korean keyboard.
+
 ## [1.0.255] - 2026-11-12
 
 ### Added
