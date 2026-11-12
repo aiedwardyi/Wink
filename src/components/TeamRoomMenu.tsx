@@ -240,7 +240,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
             setProblem(null);
           }}
           onDone={(value) => void join(value)}
-          onLong={(value) => (looksLikeRoomCode(value) ? void join(value) : setProblem("teamRoom.badCode"))}
+          onOther={(value) => (looksLikeRoomCode(value) ? void join(value) : setProblem("teamRoom.badCode"))}
         />
       </div>}
       <p role={problem ? "alert" : "status"} className={problem ? "mt-2 text-[12.5px] text-danger" : "mt-2 min-h-[1.25rem] text-[12.5px] text-ink-secondary"}>

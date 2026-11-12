@@ -14,15 +14,15 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount(onDone = vi.fn(), onLong = vi.fn()) {
+async function mount(onDone = vi.fn(), onOther = vi.fn()) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   function Host() {
     const [value, setValue] = useState("");
-    return createElement(CodeBoxes, { value, onChange: setValue, onDone, onLong, label: "Code" });
+    return createElement(CodeBoxes, { value, onChange: setValue, onDone, onOther, label: "Code" });
   }
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(async () => root!.render(createElement(Host)));
-  return { boxes: [...document.querySelectorAll("input")], onDone, onLong };
+  return { boxes: [...document.querySelectorAll("input")], onDone, onOther };
 }
 
 const value = (boxes: HTMLInputElement[]) => boxes.map((box) => box.value).join("");
@@ -78,11 +78,13 @@ describe("6-box code input", () => {
     expect(onDone).toHaveBeenCalledWith("ABCDEF");
   });
 
-  it("hands a pasted long code over whole", async () => {
-    const { boxes, onLong, onDone } = await mount();
+  it("hands a long code or other text over whole instead of filling the boxes", async () => {
+    const { boxes, onOther, onDone } = await mount();
     const long = `wkr1:abcdefghijklmnop.wink.test:inv1.wki_${"s".repeat(43)}`;
     await paste(boxes[2]!, long);
-    expect(onLong).toHaveBeenCalledWith(long);
+    await paste(boxes[0]!, "hello there");
+    expect(onOther.mock.calls).toEqual([[long], ["hello there"]]);
+    expect(value(boxes)).toBe("");
     expect(onDone).not.toHaveBeenCalled();
   });
 

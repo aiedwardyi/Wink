@@ -55,7 +55,10 @@ export class RoomCodeStore {
     for (const entry of this.held.values()) if (entry.label === label) mine++;
     if (mine >= ROOM_CODES_PER_LABEL) return null;
     let code = newCode();
-    while (this.held.has(code)) code = newCode();
+    for (let tries = 1; this.held.has(code); tries++) {
+      if (tries >= 20) return null;
+      code = newCode();
+    }
     const entry = { code, label, exp: this.now() + ROOM_CODE_TTL_MS };
     this.held.set(code, entry);
     void this.save();

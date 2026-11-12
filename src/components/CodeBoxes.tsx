@@ -3,17 +3,18 @@ import { useEffect, useRef } from "react";
 
 export const SHORT_CODE_LENGTH = 6;
 const KEEP = /[^2-9A-HJ-NP-Z]/g;
+const PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
 
 export const shortCodeChars = (text: string) => text.toUpperCase().replace(KEEP, "");
 
 export const BOX = "size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold text-ink";
 
-export function CodeBoxes({ value, onChange, onDone, onLong, label, disabled }: {
+export function CodeBoxes({ value, onChange, onDone, onOther, label, disabled }: {
   value: string;
   onChange(value: string): void;
   onDone(code: string): void;
-  /** A pasted long code, handed over whole. */
-  onLong(code: string): void;
+  /** A paste that isn't a short code, such as a long one, handed over whole. */
+  onOther(text: string): void;
   label: string;
   disabled?: boolean;
 }) {
@@ -61,8 +62,9 @@ export function CodeBoxes({ value, onChange, onDone, onLong, label, disabled }: 
           onPaste={(e) => {
             e.preventDefault();
             const text = e.clipboardData.getData("text/plain").trim();
-            if (text.startsWith("wkr1:")) return onLong(text);
-            put(0, shortCodeChars(text));
+            const chars = text.toUpperCase().replace(/[\s-]/g, "");
+            if (PASTED.test(chars)) put(0, chars);
+            else onOther(text);
           }}
           onKeyDown={(e) => {
             if (e.key !== "Backspace") return;

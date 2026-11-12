@@ -209,6 +209,7 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   if (!body.ok) return bodyError(res, body.status);
   const fields = record(body.value);
   const text = fields?.code;
+  // An unknown short code becomes an empty one, so joinRoom still spends the join limit on it.
   const short = typeof text === "string" && SHORT.test(text) ? (shortCodeTarget(text) ?? { id: "", secret: "" }) : null;
   const parts = short || typeof text !== "string" ? null : CODE.exec(text);
   if (!short && (!parts || parts[1] !== relayHost)) return send(res, 400, { error: "bad-code" });

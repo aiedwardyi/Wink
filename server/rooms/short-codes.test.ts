@@ -48,6 +48,15 @@ describe("short room codes", () => {
     expect(await shortRoomCode(roomId, minter())).toBeNull();
   });
 
+  it("drops a code minted while a Remove retired the room code", async () => {
+    const person = addPerson(roomId, "Mina", "chat", []);
+    expect(await shortRoomCode(roomId, async () => {
+      barRoomPerson(roomId, person.id);
+      return { code: "ABCDEF", exp: Date.now() + DAY };
+    })).toBeNull();
+    expect(shortCodeTarget("ABCDEF")).toBeNull();
+  });
+
   it("caps a relay expiry at seven days", async () => {
     await shortRoomCode(roomId, async () => ({ code: "ABCDEF", exp: Date.now() + 365 * DAY }));
     vi.setSystemTime(clock + 7 * DAY + 1);

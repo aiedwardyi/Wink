@@ -545,7 +545,7 @@ describe("Team rooms for a teammate", () => {
     });
     await openPlus();
     await click(button("Join with code"));
-    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
     expect(document.querySelectorAll('[role="dialog"] button')).toHaveLength(0);
     await paste(box, `  ${CODE}\n`);
     expect(asked("POST", "/api/joined/join").map((call) => call.body)).toEqual([{ code: CODE }]);
@@ -568,7 +568,7 @@ describe("Team rooms for a teammate", () => {
     });
     await openPlus();
     await click(button("Join with code"));
-    const box = $<HTMLInputElement>('input[aria-label="Paste the code"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
     await paste(box, "hello there");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("That code doesn't work.");
     expect(asked("POST", "/api/joined/join")).toHaveLength(0);
@@ -671,7 +671,7 @@ describe("Team rooms for a teammate", () => {
     await openPlus();
     expect(button("새 팀 채팅방")).toBeUndefined();
     await click(button("코드로 참여"));
-    const box = $<HTMLInputElement>('input[aria-label="코드를 붙여 넣으세요"]')!;
+    const box = $<HTMLInputElement>('input[aria-label="채팅방 코드 1"]')!;
     await paste(box, "아무거나");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("사용할 수 없는 코드예요.");
   });

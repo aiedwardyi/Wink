@@ -175,12 +175,12 @@ export async function shortRoomCode(roomId: string, mint: () => Promise<{ code: 
     .get(roomId, id, Date.now() + SHORT_CODE_REFRESH_MS) as { code: string } | undefined;
   if (live) return live.code;
   const minted = await mint();
-  if (!minted || !ROOM_CODE_RE.test(minted.code)) return null;
+  // A Remove during the mint retired the code it was minted for.
+  if (!minted || !ROOM_CODE_RE.test(minted.code) || minted.exp <= Date.now() || roomCode(roomId).id !== id) return null;
   const database = db();
-  const code = roomCode(roomId);
   database.prepare("DELETE FROM short_codes WHERE expires_at <= ?").run(Date.now());
   database.prepare("INSERT OR REPLACE INTO short_codes (code, room_id, code_id, expires_at) VALUES (?, ?, ?, ?)")
-    .run(minted.code, roomId, code.id, Math.min(minted.exp, Date.now() + INVITE_TTL_MS));
+    .run(minted.code, roomId, id, Math.min(minted.exp, Date.now() + INVITE_TTL_MS));
   return minted.code;
 }
 
