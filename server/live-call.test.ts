@@ -50,7 +50,7 @@ describe("call token", () => {
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet in Korean.");
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
   });
 
   it("sends the saved voice and language in the Live setup", async () => {
@@ -61,7 +61,7 @@ describe("call token", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
     expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
-    expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean.");
+    expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
   });
 
   it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
@@ -135,7 +135,7 @@ describe("call token", () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Greet in Korean.");
+    expect(brief).toContain("Greet in Korean in a few casual words.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -145,9 +145,29 @@ describe("call token", () => {
     const brief = setup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Never mention a bot, a helper, the chat or sending.");
     expect(brief).toContain("\"Want me to open your Desktop folder?\"");
-    expect(brief).toContain("A vague order gets one short question first");
+    expect(brief).toContain("Unsure which they mean: ask them one short question");
     expect(brief).not.toMatch(/ask whether to send|Juno has/);
     expect(setup.tools[0].functionDeclarations[0].description).not.toMatch(/bot/i);
+  });
+
+  it("brief talks like a person on the phone, not a script", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("Talk like a friend on the phone");
+    expect(brief).toContain("never open with Understood, Got it, Certainly or I will");
+    expect(brief).toContain("never repeat their request back");
+    expect(brief).toContain("Greet in English in a few casual words.");
+  });
+
+  it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
+    const h = harness();
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain("anything they want you to use, change or remember is work too");
+    expect(brief).toContain("Never answer an order with a promise like \"I'll keep that\": offer it and call propose_work.");
+    expect(brief).toContain("Unsure which they mean: ask them one short question");
+    expect(brief).not.toContain("A vague order gets one short question first");
   });
 
   it("order is the user's request to the voice, never its offer", () => {
