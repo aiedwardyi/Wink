@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
 import { Card } from "./SettingsPrimitives";
+import { usageStatsSwitched } from "@/lib/usage-stats";
 
 export function ErrorReportsRow() {
   const { t } = useI18n();
@@ -40,7 +41,10 @@ export function ErrorReportsRow() {
         api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !enabled }) }),
       ]);
       if (results[0].status === "fulfilled") consent.current.reports = !enabled;
-      if (results[1].status === "fulfilled") consent.current.usage = !enabled;
+      if (results[1].status === "fulfilled") {
+        consent.current.usage = !enabled;
+        usageStatsSwitched(results[1].value?.capture === true, results[1].value?.period);
+      }
       if (results.some((result) => result.status === "rejected")) throw new Error("Consent update failed");
       setEnabled(!enabled);
     } catch {

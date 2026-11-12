@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { useStore, type AppState } from "@/state/store";
+import { trackScreen } from "./usage-stats";
 
 const FIND_HIGHLIGHT = "orbit-find";
 const CURRENT_HIGHLIGHT = "orbit-find-current";
@@ -237,6 +238,7 @@ export function useSearchFindSeed(threadId: string) {
     });
   }, []);
   const openFind = useCallback(() => setFindOpen(true), []);
+  useEffect(() => { if (findOpen) trackScreen("find"); }, [findOpen]);
 
   return { findOpen, findSeed, closeFind, toggleFind, openFind };
 }

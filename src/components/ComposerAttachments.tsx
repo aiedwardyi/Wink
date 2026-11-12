@@ -20,6 +20,7 @@ import {
 import { usePresence } from "@/lib/use-presence";
 import { AttachmentPreviewDialog, previewImage, type PreviewImage } from "./AttachmentPreview";
 import { FileDropOverlay } from "./FileDropOverlay";
+import { trackScreen } from "@/lib/usage-stats";
 
 /** Electron 32 removed File.path; only the preload can name a file. */
 export function pathForFile(file: File): string {
@@ -132,7 +133,7 @@ export function ComposerAttachments({
               <Chip key={a.id} kind="IMAGE" title={a.name} onRemove={() => onRemove(a.id)}>
                 <button
                   type="button"
-                  onClick={() => setPreview(previewImage(a.path))}
+                  onClick={() => { trackScreen("attachment-preview"); setPreview(previewImage(a.path)); }}
                   className="flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                   aria-label={`Preview ${a.name}`}
                 >

@@ -1,3 +1,5 @@
+import { trackOpen } from "./usage-stats";
+
 // Where a phone page's open spends its time, from a notification tap or a plain launch.
 export const COLD_OPEN_PATH = "/api/diag/cold-open";
 export const COLD_OPEN_TIMEOUT_MS = 30_000;
@@ -218,7 +220,9 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     pending = null;
     clearTimeout(open.timer);
     try {
-      page.send(JSON.stringify(record(open, chatPaint)));
+      const sent = record(open, chatPaint);
+      page.send(JSON.stringify(sent));
+      trackOpen(sent);
     } catch {
       // Timing is best effort; it never surfaces.
     }

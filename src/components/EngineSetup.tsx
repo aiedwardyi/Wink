@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { accountReady } from "@/lib/accounts";
 import { ConnectionError } from "@/lib/error-text";
+import { trackFeature, trackOnboard } from "@/lib/usage-stats";
 
 type Platform = "darwin" | "win32" | "linux";
 
@@ -268,6 +269,8 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
 
   const start = async () => {
     if (waiting || busy) return;
+    trackOnboard("signin", instance.driverKind);
+    trackFeature("engine.signin", { kind: instance.driverKind });
     const request = ++generation.current;
     cancelled.current = false;
     setWaiting(true);

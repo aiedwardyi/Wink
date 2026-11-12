@@ -4,7 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { trackOnboard } from "@/lib/usage-stats";
 import { Onboarding } from "./Onboarding";
+
+vi.mock("@/lib/usage-stats", async (original) => ({ ...(await original<typeof import("@/lib/usage-stats")>()), trackOnboard: vi.fn() }));
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 let roots: Root[] = [];
@@ -14,6 +17,7 @@ afterEach(async () => {
   roots = [];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.mocked(trackOnboard).mockClear();
   document.body.innerHTML = "";
 });
 
@@ -40,6 +44,7 @@ describe("Onboarding engine check", () => {
     expect(onDone).toHaveBeenCalledOnce();
     expect(host.textContent).toBe("");
     expect(fetch).toHaveBeenCalledWith("/api/bots?messages=0");
+    expect(trackOnboard).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("keeps setup on a fresh browser (phone %s)", async (phone) => {
@@ -48,6 +53,7 @@ describe("Onboarding engine check", () => {
     const host = await renderWith(200, onDone, { instances: [], bots: [] });
     expect(host.textContent).toContain("Welcome to Wink");
     expect(onDone).not.toHaveBeenCalled();
+    expect(trackOnboard).toHaveBeenCalledExactlyOnceWith("welcome");
   });
 
   it("keeps desktop setup even when bots exist", async () => {

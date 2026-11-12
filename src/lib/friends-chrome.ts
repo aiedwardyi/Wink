@@ -58,7 +58,3 @@ export function showTerminalAlerts(): boolean {
 export function showTerminalColors(): boolean {
   return false;
 }
-
-export function showUsageStats(): boolean {
-  return false;
-}

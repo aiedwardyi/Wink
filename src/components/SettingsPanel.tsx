@@ -50,6 +50,7 @@ import { SaveStatus } from "./SaveStatus";
 import { STACK_BELOW, useStage } from "./MemoryMapStage";
 // the map's CSS comes with Bot details, so a Memory tab open never waits on a stylesheet
 import "./MemoryMap.css";
+import { trackFeatureOnce } from "@/lib/usage-stats";
 
 // One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
 // bot) while the last is still up, and must not replay the slide-in.
@@ -371,6 +372,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
 
   const edit = (next: string) => {
     setText(next);
+    trackFeatureOnce("memory.edit");
     editMemory(botId, next);
     if (conflict) return;
     setStatus("saving");

@@ -87,6 +87,7 @@ import { useCatchingUp } from "@/lib/use-catching-up";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { trackFeature } from "@/lib/usage-stats";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -325,6 +326,7 @@ export function Composer({
       let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
       const kept = next.filter((a) => a.kind !== "upload" || room-- > 0);
       if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
+      if (kept.length) trackFeature("attach.add", { n: kept.length });
       flushSync(() => editAttachments((prev) => [...prev, ...kept]));
       for (const upload of uploads) {
         if (kept.some((a) => a.id === upload.id)) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id));

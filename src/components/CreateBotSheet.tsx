@@ -8,6 +8,7 @@ import { defaultModelSelection } from "@/lib/default-engine";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { BotAvatar } from "./Avatar";
 import { useI18n } from "@/lib/i18n";
+import { trackFeature } from "@/lib/usage-stats";
 
 export function CreateBotSheet({
   required,
@@ -102,6 +103,7 @@ export function CreateBotSheet({
         method: "POST",
         body: JSON.stringify(payload),
       });
+      trackFeature("bot.create");
       dispatch({ type: "botAdded", bot: result.bot, focusComposer: !onCreated, activate: !onCreated });
       onCreated?.(result.bot);
     } catch (cause) {

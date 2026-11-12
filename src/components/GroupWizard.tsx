@@ -17,6 +17,7 @@ import {
   wizardModelOptions,
   type EnginePick,
 } from "@/lib/group-wizard";
+import { trackFeature } from "@/lib/usage-stats";
 
 export interface NewRow {
   key: number;
@@ -111,6 +112,7 @@ export function GroupWizard({
     // No bots: a people group, hosted from the start.
     if (!memberIds.length) {
       createTeamRoom(title).then(({ group }) => {
+        trackFeature("room.create", { n: 0 });
         dispatch({ type: "groupPatched", group });
         dispatch({ type: "select", id: group.id });
         onClose();

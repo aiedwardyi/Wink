@@ -58,6 +58,7 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
@@ -158,7 +159,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
-  const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
+  const openTerminal = useCallback(() => {
+    if (!botId) return;
+    trackScreen("terminal");
+    trackFeature("terminal.open");
+    setTerminalViews((views) => ({ ...views, [botId]: true }));
+  }, [botId]);
   const openTerminalPane = useCallback((sessionId: string) => {
     openTerminal();
     if (botId) setPaneFocus({ sessionId, botId });
@@ -300,7 +306,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         e.preventDefault();
         const current = (document.documentElement.dataset.skin as SkinId) || readSkin();
         const next = nextSkin(current);
-        applySkin(next);
+        applySkin(next, "hotkey");
         setThemeToast(SKINS.find((skin) => skin.id === next)?.name ?? next);
         return;
       }

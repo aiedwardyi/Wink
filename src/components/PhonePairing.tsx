@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
+import { trackFeature } from "@/lib/usage-stats";
 
 interface Pairing {
   url: string;
@@ -67,6 +68,7 @@ export function PhonePairing({ request = api, onPaired, onClose }: { request?: t
           const added = list.find((phone) => !pairing.known.includes(phone.id));
           if (!added || !live.current) return;
           setPairing(null);
+          trackFeature("phone.pair");
           setPaired(added.name);
           onPaired();
         })

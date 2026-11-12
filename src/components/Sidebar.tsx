@@ -114,6 +114,7 @@ import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
 import { useJoinedRooms } from "@/lib/joined-rooms";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -646,10 +647,13 @@ export function Sidebar({
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
+  useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
+  useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  useEffect(() => { if (archivedBotsOpen) trackScreen("archived"); }, [archivedBotsOpen]);
   const [trashOpen, setTrashOpen] = useState(false);
   const [trashBots, setTrashBots] = useState<TrashedBot[]>([]);
   const [exportingTeam, setExportingTeam] = useState(false);
@@ -1009,6 +1013,7 @@ export function Sidebar({
   }, [deleteTarget]);
 
   const exportAllBots = async () => {
+    trackFeature("export");
     setExportingTeam(true);
     setTeamFeedback(null);
     try {

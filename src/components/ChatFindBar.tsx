@@ -7,6 +7,7 @@ import type { SearchHit } from "@/lib/search-hit";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { api, useStore } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { trackFeatureOnce } from "@/lib/usage-stats";
 
 const PAGE = 100;
 
@@ -73,6 +74,7 @@ export function ChatFindBar({
           hitsQueryRef.current = trimmed;
           freshRef.current = true;
           setHits(Array.isArray(body?.hits) ? body.hits : []);
+          trackFeatureOnce("find.use");
           setMore(body?.more === true);
         })
         .catch((error) => {

@@ -39,7 +39,7 @@ import { useSkin } from "@/lib/skins";
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
-import { showTerminalAlerts, showTerminalColors, showUsageStats } from "@/lib/friends-chrome";
+import { showTerminalAlerts, showTerminalColors } from "@/lib/friends-chrome";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -50,6 +50,7 @@ import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
 import { ActivityCard } from "./ActivityCard";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
+import { trackSetting } from "@/lib/usage-stats";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -166,6 +167,7 @@ function ToolCallsRow() {
         method: "PATCH",
         body: JSON.stringify({ features: { showToolCalls: !enabled } }),
       });
+      trackSetting("toolCalls", enabled ? "on" : "off", enabled ? "off" : "on");
       dispatch({ type: "configStatus", config });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("settings.toolCalls.saveError"));
@@ -230,6 +232,7 @@ function DetailedRepliesRow() {
         method: "PATCH",
         body: JSON.stringify({ features: { detailedReplies: !enabled } }),
       });
+      trackSetting("longerReplies", enabled ? "on" : "off", enabled ? "off" : "on");
       dispatch({ type: "configStatus", config });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("settings.detailedReplies.saveError"));
@@ -672,7 +675,7 @@ export function SettingsModal({
                 <UpdatesRow />
                 <RoomFilesFolderRow />
                 <ErrorReportsRow />
-                {showUsageStats() && <AnalyticsRow />}
+                {!window.ogb && <AnalyticsRow />}
                 <button
                   type="button"
                   aria-expanded={preferencesOpen}

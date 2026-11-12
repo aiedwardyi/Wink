@@ -24,6 +24,7 @@ import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
 import { RoomPicture, TeamRoomPicture } from "./RoomPicture";
 import { SaveStatus } from "./SaveStatus";
 import { JoinedBots } from "./RoomTeamBots";
+import { trackFeature } from "@/lib/usage-stats";
 
 const hostedRoom = (group: Group): group is TeamRoom => Boolean(group.hosted);
 
@@ -231,6 +232,7 @@ function LeaveRoom({ roomId, name }: { roomId: string; name: string }) {
             onCancel={() => setLeaving(false)}
             onConfirm={() => {
               setLeaving(false);
+              trackFeature("room.leave");
               void request(`${joinedRoomBase(roomId)}/leave`, { method: "POST" }).catch(() => {});
             }}
           />
