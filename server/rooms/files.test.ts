@@ -186,9 +186,14 @@ describe("room file limits", () => {
 
   it("allow several full messages of uploads per person per 10 minutes", async () => {
     const room = createRoom("Team").id;
-    for (let i = 0; i < MAX_MESSAGE_FILES * 4; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
-    expect(await upload(room, Buffer.from("one more"), {}, "p1")).toMatchObject({ status: 429, json: { error: "too many files at once, try again in a few minutes" } });
-    expect((await upload(room, Buffer.from("someone else"), {}, "p2")).status).toBe(200);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      for (let i = 0; i < MAX_MESSAGE_FILES * 4; i++) expect((await upload(room, Buffer.from(`note ${i}`), {}, "p1")).status).toBe(200);
+      expect(await upload(room, Buffer.from("one more"), {}, "p1")).toMatchObject({ status: 429, json: { error: "too many files at once, try again in a few minutes" } });
+      expect((await upload(room, Buffer.from("someone else"), {}, "p2")).status).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
