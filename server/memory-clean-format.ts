@@ -56,7 +56,7 @@ const runBase = {
 };
 const runSchema = z.union([
   z.object({ v: z.literal(1), ...runBase, merged: time, replaced: time, moved: time }),
-  z.object({ v: z.literal(2), ...runBase, through: time, counts: z.object({ kept: time, merged: time, forgot: time, learned: time, filed: time }) }),
+  z.object({ v: z.literal(2), ...runBase, through: time, counts: z.object({ kept: time, merged: time, forgot: time, learned: time, filed: time }), held: time.optional() }),
 ]);
 const entrySchema = z.object({
   file: cleanFileSchema, op: z.enum(["merge", "replace", "retire", "split", "remind", "learn", "own", "file"]),
@@ -182,7 +182,7 @@ export function mergeParkedCopy({ file, kept, parked, history }: MergeParkedInpu
     return result;
   }
   if (!history) return null;
-  const archived = new Set(parseHistory(history).flatMap((run) => run.entries.filter((entry) => entry.header.file === file).flatMap((entry) => entry.lines)));
+  const archived = new Set(parseHistory(history).filter((run) => !run.undo).flatMap((run) => run.entries.filter((entry) => entry.header.file === file).flatMap((entry) => entry.lines)));
   const present = new Set(kept.split("\n"));
   const lines = parked.split("\n");
   if (!lines.some((line) => line.trim() && archived.has(line) && !present.has(line))) return null;

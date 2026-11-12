@@ -61,10 +61,10 @@ describe("recall scope", () => {
   it("keeps a side-file pair's recall prompts inside the scope and out of history", async () => {
     const { recallScope } = await load();
     const memory = ["# Memory", ...Array.from({ length: 120 }, (_, i) => `- ${(i + 2) % 30 ? "" : "Never "}m${String(i + 2).padStart(4, "0")} ${"memo ".repeat(5)}`)].join("\n") + "\n";
-    const side = ["# Queue", ...Array.from({ length: 400 }, (_, i) => `- ${(i + 2) % 50 ? "" : "Never "}q${String(i + 2).padStart(4, "0")} ${"task ".repeat(39)}`)].join("\n") + "\n";
+    const side = ["# Queue", ...Array.from({ length: 400 }, (_, i) => `- ${(i + 2) % 50 ? "" : "Never "}q${String(i + 2).padStart(4, "0")} ${"done ".repeat(39)}`)].join("\n") + "\n";
     expect(Buffer.byteLength(memory)).toBeLessThan(16000);
     expect(Buffer.byteLength(side)).toBeGreaterThan(48000);
-    const lists = { "MEMORY.md": [{ op: "merge", ids: [2, 3], text: "- m0002 m0003 merged", reason: "Same subject" }], "memory/queued.md": [retire(2), retire(3), retire(4)] } satisfies Partial<Record<CleanFile, Change[]>>;
+    const lists = { "MEMORY.md": [{ op: "merge", ids: [2, 3], text: "- m0002 m0003 memo", reason: "Same subject" }], "memory/queued.md": [retire(2), retire(3), retire(4)] } satisfies Partial<Record<CleanFile, Change[]>>;
     const engine = calls(lists);
     const history = `HISTORY-MARKER ${"h".repeat(200_000)}`;
     expect(await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history, typed: new Set(), ...engine })).toMatchObject({ ok: true });
@@ -77,12 +77,12 @@ describe("recall scope", () => {
       expect(outside.filter((line) => prompt.includes(line))).toEqual([]);
     }
     expect(engine.prompts("answers")[0]).not.toContain("HISTORY-MARKER");
-    expect(engine.prompts("answers")[0]).toContain("- m0002 m0003 merged");
+    expect(engine.prompts("answers")[0]).toContain("- m0002 m0003 memo");
   });
 });
 
 describe("recall grading", () => {
-  const input = (engine: ReturnType<typeof calls>) => ({ memory: "- kept\n- old\n", history: null, typed: new Set<string>(), ...engine });
+  const input = (engine: ReturnType<typeof calls>) => ({ memory: "- kept\n- old done\n", history: null, typed: new Set<string>(), ...engine });
 
   it("grades exact and null pairs in code", async () => {
     const { gradeByCode } = await load();
@@ -136,7 +136,7 @@ describe("recall grading", () => {
 
   it("grades a key quoted from its line in code and sends only the rest to the grade call", async () => {
     const engine = calls({ "MEMORY.md": [retire(2)] }, ["Tern 2.3 shipped to 40 users", "it is value 1", ...keys.slice(2)], ["40", ...keys.slice(1)]);
-    expect(await cleanFiles({ ...input(engine), memory: "- kept\n- old\n- Tern 2.3 shipped to 40 users on 2026-10-02\n" })).toMatchObject({ ok: true });
+    expect(await cleanFiles({ ...input(engine), memory: "- kept\n- old done\n- Tern 2.3 shipped to 40 users on 2026-10-02\n" })).toMatchObject({ ok: true });
     expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 1?", expected: "value 1", actual: "it is value 1" }]]);
   });
 
@@ -175,7 +175,7 @@ describe("recall grading", () => {
 
   it("bounds work from a 300 KB side snapshot without truncating the file", async () => {
     const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(3)] });
-    const side = { file: "memory/queued.md" as const, text: `- kept\n- old\n${"- task line\n".repeat(25_000)}` };
+    const side = { file: "memory/queued.md" as const, text: `- kept\n- old done\n${"- task line\n".repeat(25_000)}` };
     const result = await cleanFiles({ ...input(engine), side });
     expect(result).toMatchObject({ ok: true });
     expect(result.ok && result.side?.text).toBe(side.text.replace("- task line\n", ""));
@@ -197,11 +197,11 @@ describe("recall grading", () => {
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
     const [asking] = missed.engine.prompts("questions");
     expect(asking).toContain('"filedTo":"memory/trips.md"');
-    expect(asking).not.toContain("- memory/trips.md: trip 0 stop harbor; trip 1 stop harbor; trip 2 stop harbor");
+    expect(asking).not.toContain("- memory/trips.md: trip\n");
     expect(asking).toContain("Derive routing questions only from the original entity and relation");
     const [answers] = missed.engine.prompts("answers");
-    expect(answers).toContain("- memory/trips.md: trip 0 stop harbor; trip 1 stop harbor; trip 2 stop harbor");
-    expect(answers).not.toContain("trip 1 stop at harbor 1");
+    expect(answers).toContain("- memory/trips.md: trip\n");
+    expect(answers).toContain("trip 1 stop at harbor 1");
     expect(missed.engine.prompts("grade")).toHaveLength(0);
     const found = await run("memory/trips.md");
     expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }, { file: "memory/notes-2026-11.md" }] });

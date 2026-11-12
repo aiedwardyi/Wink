@@ -28,9 +28,10 @@ const changeSchema = z.discriminatedUnion("op", [
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
 const lessonsHeading = (line: string) => /^#{1,6}\s+(?:lessons?|교훈)\s*$/i.test(line.replace(/\r$/, ""));
+const ENDED = /\b(?:ended|done|finished|completed?|cancell?ed|closed|resolved|expired|former(?:ly)?|used to|retired|stopped|quit|no longer)\b|끝났|완료|취소|종료/i;
 export const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보류/i.test(line);
 // "don't forget" asks to remember; it negates nothing
-const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text.replace(/\b(?:don['’]t|do not) forget\b/gi, ""));
+const negated = (text: string) => /\b(?:not|never|cannot|no(?![,.!])|stopped)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text.replace(/\b(?:don['’]t|do not) forget\b/gi, ""));
 const NOTED = /\s*\(noted (\d{4}-\d{2}-\d{2})\)/gi;
 const undated = (text: string) => text.replace(NOTED, "");
 const CLAUSES = /;|(?<=[.!?])\s+(?=[A-Z가-힣])|\s+and\s+(?=[A-Z가-힣])/;
@@ -66,6 +67,15 @@ export function quotedLine(quote: string, user: readonly SleepLine[], kind?: Sle
   return said.length < 4 ? undefined : user.find((line) => (!kind || line.kind === kind) && squash(line.text).includes(said));
 }
 
+const wordChar = /[\p{L}\p{N}]/u;
+// "ann" is not in "anna", nor "12" in "1234"
+const holds = (text: string, part: string) => {
+  for (let at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + 1)) {
+    if (!(wordChar.test(part[0] ?? "") && wordChar.test(text[at - 1] ?? "")) && !(wordChar.test(part.at(-1) ?? "") && wordChar.test(text[at + part.length] ?? ""))) return true;
+  }
+  return false;
+};
+
 export function rememberCovered(line: string, text: string): boolean {
   const body = line.replace(/^(?:(?:please|also|and|fyi|oh|ok|okay)\s+)*(?:remember|don't forget|do not forget|keep in mind|make a note|기억해|기억하세요)\s*[:,-]?\s*/i, "").replace(/^(?:that|the)\s+/i, "");
   const rows = text.split("\n");
@@ -74,7 +84,7 @@ export function rememberCovered(line: string, text: string): boolean {
     let joined = "";
     for (const row of rows.slice(i, i + 8)) {
       joined = `${joined} ${row.replace(/^\s*[-*+]\s+/, "")}`.trim();
-      if (squash(joined).includes(squash(body))) return negated(body) === negated(joined);
+      if (holds(squash(joined), squash(body))) return negated(body) === negated(joined);
       if (joined.length > body.length + 300) break;
     }
     return false;
@@ -97,7 +107,17 @@ export function rememberRows(text: string): string[] | null {
   return rows;
 }
 
-export const forcedEntry = (entry: ArchiveEntry) => entry.header.op === "own" && !entry.header.at.length && entry.reason === "Asked to remember";
+/** A nested line, a parent, or a bullet under a section heading other than a leading title or Notes: it means nothing alone in a topic file. */
+export function sectionLine(lines: readonly string[], n: number): boolean {
+  const indent = (text = "") => /^\s*/.exec(text)![0].length;
+  if (indent(lines[n - 1]) || lines[n]?.trim() && indent(lines[n]) > indent(lines[n - 1])) return true;
+  for (let i = n - 2; i >= 0; i--) {
+    if (/^#{1,6}\s/.test(lines[i]!)) return !/^#\s/.test(lines[i]!) && !/^#{1,6}\s+notes\s*$/i.test(lines[i]!.replace(/\r$/, ""));
+  }
+  return false;
+}
+
+export const forcedEntry =(entry: ArchiveEntry) => entry.header.op === "own" && !entry.header.at.length && entry.reason === "Asked to remember";
 
 export function sizeFits(old: string, text: string): boolean {
   const before = Buffer.byteLength(old);
@@ -150,7 +170,10 @@ function sameSubject(older: string, newer: string, base: string): boolean {
   const plain = (line: string) => line.replace(/\(noted \d{4}-\d{2}-\d{2}\)/gi, "");
   const facts = (line: string) => new Set(factTokens(plain(line), base).filter((token) => !/^(?:\d{1,2}|(?:19|20)\d\d|\d{4}-\d\d-\d\d)$/.test(token)).map((token) => token.toLowerCase()));
   const newFacts = facts(newer);
-  if ([...facts(older)].some((token) => newFacts.has(token))) return true;
+  // a shared name is one entity, not one relation: "phone for X" is not "birthday of X"
+  const relation = (line: string) => contentWords(plain(line), true);
+  const shared = [...relation(older)].some((word) => relation(newer).has(word)) || !relation(older).size || !relation(newer).size;
+  if ((shared || openLine(older)) && [...facts(older)].some((token) => newFacts.has(token))) return true;
   if (openLine(older)) return false;
   const a = contentWords(plain(older));
   const b = contentWords(plain(newer));
@@ -222,43 +245,36 @@ function newer(a: string, b: string, olderId: number, newerId: number): boolean 
   return oldDate !== null && newDate !== null ? newDate > oldDate : newerId > olderId;
 }
 
-/** Pointer that names every clause and three held facts of the filed lines in their own words and order, on one line when it fits. */
+// the words before a clause's value: "Birthday is November 16" -> "Birthday"
+const subjectPart = (part: string, base: string) => {
+  const text = part.replace(/^\s*[-*]\s+/, "").trim();
+  const cut = /:\s|\s[-=]\s|\s(?:is|are|was|were|am)\s/i.exec(text);
+  if (cut) return text.slice(0, cut.index);
+  const words = text.split(/\s+/);
+  const at = words.findIndex((word, i) => i > 0 && factTokens(word, base).length > 0);
+  return at > 0 ? words.slice(0, at).join(" ") : text;
+};
+
+/** Pointer that names each filed clause by its subject, never its value, on one line when it fits. */
 export function filedPointer(text: string, ids: number[], topic: string, k = 3): string {
   const lines = text.split("\n");
-  const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, text)))];
   const labels = ids.flatMap((n) => undated(lines[n - 1]!).split(CLAUSES).map((part) => {
     const wanted = clauseWords(part);
     const got = new Set<string>();
-    const all = part.split(/\s+/).map((raw) => raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""));
-    const words = new Map<number, string>();
-    for (const [at, word] of all.entries()) {
+    const words: string[] = [];
+    for (const raw of subjectPart(part, text).split(/\s+/)) {
       if (got.size >= Math.min(k, wanted.size)) break;
+      const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
       const stems = [...contentWords(word)].filter((stem) => wanted.has(stem) && !got.has(stem));
-      const name = word.length > 1 && /\p{Lu}/u.test(word) && held.some((token) => word.includes(token));
       // path words stay out, so a pointer line never files
-      if ((!stems.length && !name) || /[A-Za-z]{40,}/.test(word) || pointerLine(word) || [...words.values()].includes(word)) continue;
-      words.set(at, word);
+      if ((!stems.length && !(word.length > 1 && /\p{Lu}/u.test(word))) || /[A-Za-z]{40,}/.test(word) || pointerLine(word) || words.includes(word)) continue;
+      words.push(word);
       stems.forEach((stem) => got.add(stem));
     }
-    return { line: lines[n - 1]!, part, all, words };
+    return words.join(" ");
   }));
-  const pointer = () => `- ${topic}: ${[...new Set(labels.map((label) => [...label.words].sort(([a], [b]) => a - b).map(([, word]) => word).join(" ")).filter(Boolean))].join("; ")}`;
-  const number = /^\d+(?:[.,:]\d+)*$/;
-  const unit = /^\p{L}{1,3}$/u;
-  for (const token of [...held].sort((a, b) => Buffer.byteLength(a) - Buffer.byteLength(b))) {
-    const pointed = pointer().toLowerCase();
-    if (held.filter((item) => pointed.includes(item.toLowerCase())).length >= Math.min(3, held.length)) break;
-    const label = labels.find((item) => item.part.includes(token)) ?? labels.findLast((item) => item.line.includes(token));
-    if (!label || pointed.includes(token.toLowerCase()) || token.includes(";") || pointerLine(token)) continue;
-    const kept = new Map(label.words);
-    const at = label.all.findIndex((word) => word.includes(token) && !pointerLine(word));
-    const offset = label.part.indexOf(token);
-    if (at < 0) label.words.set(offset < 0 ? label.all.length : label.part.slice(0, offset).split(/\s+/).length - 1, token);
-    // a number keeps its unit, so the pointer never pairs facts the line keeps apart
-    else for (const i of [at, ...number.test(label.all[at]!) && unit.test(label.all[at + 1] ?? "") ? [at + 1] : unit.test(label.all[at]!) && number.test(label.all[at - 1] ?? "") ? [at - 1] : []]) label.words.set(i, label.all[i]!);
-    if (secretLike(pointer())) label.words = kept;
-  }
-  return k > 2 && Buffer.byteLength(pointer()) > 300 ? filedPointer(text, ids, topic, 2) : pointer();
+  const pointer = `- ${topic}: ${[...new Set(labels.filter(Boolean))].join("; ")}`;
+  return k > 2 && Buffer.byteLength(pointer) > 300 ? filedPointer(text, ids, topic, 2) : pointer;
 }
 
 export function prepareChangeList(input: ValidateInput): ValidateResult {
@@ -313,7 +329,7 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     while (change.op === "file") {
       const prefix = `- memory/${change.topic}.md: `;
       pointer = change.pointer ?? filedPointer(input.text, ids, prefix.slice(2, -2));
-      const row = lines.findLastIndex((line) => line.startsWith(prefix)) + 1;
+      const row = lines.findLastIndex((line) => line.startsWith(prefix) && !input.typed.has(lineHash(line))) + 1;
       const text = row ? `${lines[row - 1]!.replace(/\r$/, "")}; ${pointer.slice(prefix.length)}` : "";
       if (!row || !pointer.startsWith(prefix)) break;
       if (!used.has(row) && Buffer.byteLength(text) <= 300) { extend = { row, text }; used.add(row); break; }
@@ -337,7 +353,7 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       if (!source || factTokens(bullet(change.text)).some((token) => !said.includes(token.toLowerCase()))) { fail("not-quoted", index); return; }
       const words = [...contentWords(change.text)];
       const heard = contentWords(source.text);
-      if (words.filter((word) => heard.has(word)).length < 0.6 * words.length || negated(change.text) !== negated(change.quote)) { fail("not-quoted", index); return; }
+      if (words.filter((word) => heard.has(word)).length < 0.6 * words.length || negated(change.text) !== negated(source.text)) { fail("not-quoted", index); return; }
       const lesson = change.lesson === true;
       const line = `${bullet(change.text)} (noted ${day(source.at)})${cr}`;
       if (Buffer.byteLength(line.replace(/\r$/, "")) > 300) fail("too-long", index);
@@ -362,16 +378,19 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       if (Buffer.byteLength(input.text) <= FILE_FLOOR && lines.length <= 140) fail("op-not-allowed", index);
       if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(change.topic) || !isMemoryTopicName(`${change.topic}.md`) || isHistory(topic) || /^memory-history/.test(change.topic) || topic === input.side) fail("op-not-allowed", index);
       if (!filePointers(pointer, topic) || secretLike(pointer)) fail("pointer", index);
-      const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, input.text)))];
-      const pointed = pointer.toLowerCase();
+      const label = pointer.replace(PATHS, "").toLowerCase();
       const words = contentWords(pointer);
-      // every filed line needs its subject in the pointer, or MEMORY.md alone can't find it
-      const named = (line: string) => factTokens(undated(line), input.text).some((token) => pointed.includes(token.toLowerCase())) || [...contentWords(undated(line))].some((word) => words.has(word));
-      const relations = (line: string) => undated(line).split(CLAUSES).every((part) => {
-        const content = [...clauseWords(part)];
-        return !content.length || content.filter((word) => words.has(word)).length >= Math.min(2, content.length);
+      const subjects = ids.flatMap((n) => undated(lines[n - 1]!).split(CLAUSES).map((part) => subjectPart(part, input.text)));
+      // every filed clause needs its subject in the pointer, or MEMORY.md alone can't find it
+      const named = subjects.every((subject) => {
+        const content = [...clauseWords(subject)];
+        const tokens = factTokens(subject, input.text);
+        return content.length ? content.filter((word) => words.has(word)).length >= Math.min(2, content.length) : !tokens.length || tokens.some((token) => label.includes(token.toLowerCase()));
       });
-      if (held.filter((token) => pointed.includes(token.toLowerCase())).length < Math.min(3, held.length) || ids.some((n) => !named(lines[n - 1]!) || !relations(lines[n - 1]!))) fail("pointer", index);
+      // a label never carries a value: a value cut short reads as the whole fact
+      const shown = new Set(subjects.flatMap((subject) => factTokens(subject, input.text)));
+      const leaked = ids.some((n) => !pointerLine(lines[n - 1]!) && factTokens(undated(lines[n - 1]!), input.text).some((token) => !shown.has(token) && holds(label, token.toLowerCase())));
+      if (!named || leaked) fail("pointer", index);
       filedBytes += ids.reduce((n, id) => n + Buffer.byteLength(lines[id - 1]!.replace(/\r$/, "")) + 1, 0);
       if (filedBytes > FILE_MAX_BYTES) fail("cap-file", index);
       const known = topics.find((item) => item.file === topic);
@@ -381,8 +400,9 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     }
     for (const n of ids) {
       const line = lines[n - 1]!;
-      if ((change.op === "retire" || change.op === "file") && openLine(line)) fail("protected", index);
+      if ((change.op === "retire" || change.op === "file") && openLine(line) || change.op === "file" && sectionLine(lines, n)) fail("protected", index);
       const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => changedIds(op).includes(i + 1)));
+      if (change.op === "retire" && !exactCopy && !ENDED.test(line) && !openLine(line) && !pointerLine(line) && !protectedIds.has(n)) fail("fact-lost", index);
       // a rule or pointer line may merge, and a pointer line may file, when every rule word and path stays in the new line
       const into = change.op === "merge" ? change.text : change.op === "file" && !ruleWords(line).length ? pointer : null;
       const loose = into !== null && !hardIds.has(n) && ruleWords(line).every((word) => ruleWords(into).includes(word)) && [...line.matchAll(PATHS)].every(([path]) => into.includes(path));
@@ -395,8 +415,12 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
     if (change.op === "merge") {
       const kept = factTokens(change.text, input.text);
       const words = contentWords(change.text);
-      const lost = (line: string) => [...contentWords(line, true)].filter((word) => !words.has(word)).length > 1;
-      if (ids.some((n) => factTokens(undated(lines[n - 1]!), input.text).some((token) => !kept.includes(token)) || lost(lines[n - 1]!)) || ids.some((n) => negated(lines[n - 1]!)) !== negated(change.text)) fail("fact-lost", index);
+      const sources = ids.map((n) => lines[n - 1]!);
+      const heard = new Set(sources.flatMap((line) => [...contentWords(line)]));
+      const lost = (line: string) => [...contentWords(line, true)].some((word) => !words.has(word));
+      // a merge holds its sources' tokens and words, no new ones
+      const added = kept.some((token) => !sources.some((line) => line.includes(token))) || [...words].some((word) => !heard.has(word));
+      if (added || ids.some((n) => factTokens(undated(lines[n - 1]!), input.text).some((token) => !kept.includes(token)) || lost(lines[n - 1]!)) || ids.some((n) => negated(lines[n - 1]!)) !== negated(change.text)) fail("fact-lost", index);
       wrote = [change.text + (lines[ids[0]! - 1]!.endsWith("\r") ? "\r" : "")];
       counts.merged += ids.length;
     } else if (change.op === "replace") {
@@ -414,7 +438,13 @@ export function prepareChangeList(input: ValidateInput): ValidateResult {
       const marker = /^(\s*(?:[-*+]|\d+[.)])\s+)/.exec(line)?.[1] ?? "";
       wrote = [marker + change.keep.join(" ") + (line.endsWith("\r") ? "\r" : "")];
       counts.moved++;
-    } else if (change.op === "remind") { wrote = [change.text + (lines[change.id - 1]!.endsWith("\r") ? "\r" : "")]; counts.moved++; }
+    } else if (change.op === "remind") {
+      const line = lines[change.id - 1]!;
+      const heard = contentWords(line);
+      if (factTokens(change.text, input.text).some((token) => !line.includes(token)) || [...contentWords(change.text)].some((word) => !heard.has(word))) fail("not-verbatim", index);
+      wrote = [change.text + (line.endsWith("\r") ? "\r" : "")];
+      counts.moved++;
+    }
     else if (change.op === "file") wrote = (filePointers(pointer, `memory/${change.topic}.md`) ?? []).map((line) => line + cr);
     else counts.moved++;
     for (const n of ids) removed.add(n);

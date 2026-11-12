@@ -12,10 +12,10 @@ const ASKED = /\?\s*$|\b(?:i|you)\s+(?:don['’]t|do not|didn['’]t|can['’]t|
 const CORRECTION = /^(no|nope|wrong|actually|not quite)\b|\b(that's wrong|that is wrong|that's not right|not what i|i said|i meant|correction|instead of)\b|아니야|아니요|아니라|틀렸|잘못|그게 아니/i;
 
 /** The user's own lines since `through`, remember and correction lines first; a never-slept bot reads 7 days. */
-export function sleepInput(messages: readonly Message[], through: number | null, now: number): { user: SleepLine[]; through: number } {
+export function sleepInput(messages: readonly Message[], through: number | null, now: number, held?: number): { user: SleepLine[]; through: number } {
   const since = through ?? now - 7 * DAY;
-  // remember requests come from the whole week past the cap; one already written is skipped by coverage
-  const asked = Math.min(since, now - 7 * DAY);
+  // remember requests come from the whole week past the cap, and back to the oldest one a night held; one already written is skipped by coverage
+  const asked = Math.min(since, now - 7 * DAY, held === undefined ? Infinity : held - 1);
   const lines: SleepLine[] = [];
   let newest = 0;
   messages.forEach((message, i) => {

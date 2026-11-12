@@ -15,7 +15,7 @@ type FileInfo = { beforeBytes: number; afterBytes: number; beforeHash: string; a
 export type SleepCounts = { kept: number; merged: number; forgot: number; learned: number; filed: number };
 export type RunHeader =
   | { v: 1; runId: string; at: number; files: Partial<Record<CleanFile, FileInfo>>; merged: number; replaced: number; moved: number }
-  | { v: 2; runId: string; at: number; through: number; files: Partial<Record<CleanFile, FileInfo>>; counts: SleepCounts };
+  | { v: 2; runId: string; at: number; through: number; files: Partial<Record<CleanFile, FileInfo>>; counts: SleepCounts; held?: number };
 export type EntryHeader = {
   file: CleanFile; op: Change["op"]; at: number[]; prev: string[]; wrote: string[];
   after?: number; quote?: string; lesson?: boolean; topic?: CleanFile; owned?: string[];
@@ -28,6 +28,7 @@ export type HistoryRun = { header: RunHeader; entries: ArchiveEntry[]; undo: Und
 export type MemoryCleanState = { version: 1; bots: Record<string, BotCleanState> };
 export type BotCleanState = {
   lastRun?: { runId: string; at: number; files: CleanFile[] };
+  lastAttempt?: { at: number; tokens: number; hash: string };
   sideHashes?: Partial<Record<CleanFile, string>>;
   typed?: string[];
 };

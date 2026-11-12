@@ -36,7 +36,7 @@ function calls(changes: Change[] = [retire(2)]) {
 describe("cleanFiles recall", () => {
   it.each(["fenced", "plain-fence", "numeric", "boolean", "prose"])("parses %s answers and rejects invalid arrays", async (kind) => {
     const engine = calls();
-    const input = { memory: "- kept\n- old\n", history: null, typed: new Set<string>(), ...engine };
+    const input = { memory: "- kept\n- old done\n", history: null, typed: new Set<string>(), ...engine };
     for (const answer of ["[]", JSON.stringify(Array(19).fill(null)), '{"answers":[]}', JSON.stringify(Array(18).fill({ value: 1 })), `\`\`\`json\n${JSON.stringify({ answers: Array(18).fill(null) })}\n\`\`\``]) {
       engine.recall.mockResolvedValue(answer);
       expect(await cleanFiles(input)).toMatchObject({ ok: false, stage: "recall" });
@@ -63,7 +63,7 @@ describe("cleanFiles recall", () => {
     const reply = engine.propose.getMockImplementation()!;
     engine.propose.mockImplementation(async (prompt, options) => prompt.startsWith(`[memory-clean:${tag}]`) ? shape(await reply(prompt, options) as string) : reply(prompt, options));
     engine.recall.mockImplementation(async (prompt) => sleepReply(prompt) ?? JSON.stringify(["it is value 0", ...questions().slice(1).map((q) => q.answer)]));
-    expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: true });
+    expect(await cleanFiles({ memory: "- kept\n- old done\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: true });
     expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:grade]"))).toHaveLength(1);
   });
 
@@ -76,7 +76,7 @@ describe("cleanFiles recall", () => {
 
   it.each(["propose", "side", "organize", "questions", "answers", "grade"])("enforces the budget before %s", async (stage) => {
     const engine = calls();
-    const memory = stage === "propose" ? "x".repeat(600_000) : "- kept\n- old\n";
+    const memory = stage === "propose" ? "x".repeat(600_000) : "- kept\n- old done\n";
     const side = stage === "side" ? { file: "memory/topic.md" as const, text: "x".repeat(600_000) } : undefined;
     const previous = { organize: "propose", questions: "organize", answers: "questions", grade: "answers" }[stage as "organize"];
     let spent = 0;
@@ -99,10 +99,10 @@ describe("cleanFiles recall", () => {
   it("archives raw lines and uses blind fresh answers with a signal on every call", async () => {
     const engine = calls();
     const signal = new AbortController().signal;
-    const result = await cleanFiles({ memory: "- Never delete\r\n- old\r\n- kept\r\n", history: null, typed: new Set(), ...engine, signal, now: NOW });
+    const result = await cleanFiles({ memory: "- Never delete\r\n- old done\r\n- kept\r\n", history: null, typed: new Set(), ...engine, signal, now: NOW });
     expect(result).toMatchObject({ ok: true, recall: { asked: 18, passed: 18, wrong: 0 } });
     if (!result.ok) return;
-    expect(parseHistory(result.block)[0]?.entries[0]?.lines).toEqual(["- old\r"]);
+    expect(parseHistory(result.block)[0]?.entries[0]?.lines).toEqual(["- old done\r"]);
     expect(result.memory.split(POINTER_LINE)).toHaveLength(2);
     expect(engine.recall.mock.calls[0]![0]).not.toContain('"answer":');
     for (const [, opts] of [...engine.propose.mock.calls, ...engine.recall.mock.calls]) expect(opts).toMatchObject({ signal, timeoutMs: 120000 });
@@ -117,26 +117,26 @@ describe("cleanFiles recall", () => {
     if (mode === "malformed") engine.recall.mockResolvedValue("bad");
     if (mode === "coverage") engine.propose.mockResolvedValueOnce(JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] })).mockResolvedValueOnce("[]");
     if (mode === "absent") engine.recall.mockResolvedValue(JSON.stringify(Array(18).fill("invented")));
-    expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: false, stage: "recall" });
+    expect(await cleanFiles({ memory: "- kept\n- old done\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: false, stage: "recall" });
   });
 
   it("aborts during a text call", async () => {
     const controller = new AbortController();
     const engine = calls();
     engine.propose.mockImplementationOnce(async () => { controller.abort(); return "{}"; });
-    expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine, signal: controller.signal })).toMatchObject({ ok: false, stage: "aborted" });
+    expect(await cleanFiles({ memory: "- kept\n- old done\n", history: null, typed: new Set(), ...engine, signal: controller.signal })).toMatchObject({ ok: false, stage: "aborted" });
     expect(engine.recall).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["- before\n- old\n- after\n", [retire(2)]],
-    ["- before\r\n\r\n- old\r\n\r\n- after\r\n", [retire(3)]],
-    ["- old", [retire(1)]],
-    ["- old\r\n", [retire(1)]],
+    ["- before\n- old done\n- after\n", [retire(2)]],
+    ["- before\r\n\r\n- old done\r\n\r\n- after\r\n", [retire(3)]],
+    ["- old done", [retire(1)]],
+    ["- old done\r\n", [retire(1)]],
     ["- before\n- one\n- two\n- after", [{ op: "merge", ids: [2, 3], text: "- one two", reason: "Duplicate" }]],
     ["- before\n- one\n- middle\n- two\n- after", [{ op: "merge", ids: [4, 2], text: "- one two", reason: "Duplicate" }]],
     ["- port 8443\n- port 9443\n", [{ op: "replace", id: 1, newer: 2, reason: "Current" }]],
-    [`- before\n- old\n${POINTER_LINE}\n`, [retire(2)]],
+    [`- before\n- old done\n${POINTER_LINE}\n`, [retire(2)]],
   ] as Array<[string, Change[]]>)("undo recovers exact original bytes: %s", async (memory, changes) => {
     const { undoText } = await import("./memory-clean-undo.ts");
     const engine = calls(changes);
@@ -148,7 +148,7 @@ describe("cleanFiles recall", () => {
 
   it("rotates a full archive, repoints once and undoes the pointer", async () => {
     const { undoText } = await import("./memory-clean-undo.ts");
-    const memory = `- kept\n- old\n${POINTER_LINE}\n`;
+    const memory = `- kept\n- old done\n${POINTER_LINE}\n`;
     const result = await cleanFiles({ memory, history: "한".repeat(82_000), typed: new Set(), ...calls(), now: NOW });
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
@@ -385,6 +385,7 @@ describe("memory cleanup service", () => {
     expect(await service.undo(bot.id, "absent")).toEqual({ ok: false, error: "no-run" });
     busy = true; expect(await service.undo(bot.id, "absent")).toEqual({ ok: false, error: "busy" }); busy = false;
     await run(); const first = service.summary(bot.id).run!.runId;
+    writeMemoryFile(bot.id, memoryFileRaw(bot.id).replace("- kept 0\r\n", "- kept 0 done\r\n"));
     await run(); const newest = service.summary(bot.id).run!.runId;
     expect(newest).not.toBe(first);
     expect(await service.undo(bot.id, first)).toEqual({ ok: false, error: "not-newest" });

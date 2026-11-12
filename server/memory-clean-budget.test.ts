@@ -4,7 +4,7 @@ import { callTokens, cleanFiles, NIGHT_TOKENS, SEEDS } from "./memory-clean-engi
 import type { TextCall } from "./memory-clean-types.ts";
 import { sleepReply } from "./testing/sleep-verdicts.ts";
 
-const lines = Array.from({ length: 139 }, (_, i) => `- task ${i} ${"memo ".repeat(20)}`);
+const lines = Array.from({ length: 139 }, (_, i) => `- done ${i} ${"memo ".repeat(20)}`);
 const memory = lines.join("\n").padEnd(15_999, "x") + "\n";
 const questions = Array.from({ length: 18 }, (_, i) => ({
   kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i === 0 ? "five" : i === 1 ? "6 days" : i < 16 ? `value ${i}` : null,

@@ -190,7 +190,7 @@ describe("memory sync", () => {
     expect(parked(b)).toEqual([]);
   });
 
-  it("merges an already parked copy and publishes both the edit and its deletion", () => {
+  it("leaves an already parked copy for the bot", () => {
     const [a, b] = pcs();
     seed("base\n", a, b);
     edit(a, "retired\nnew\n");
@@ -201,22 +201,12 @@ describe("memory sync", () => {
     receive(a, b);
     sync(b);
     expect(parked(b)).toEqual(["retired\nnew\n"]);
-    const name = readdirSync(join(b.workspace, "memory")).find((file) => file.includes(".conflict-"))!;
     edit(b, "archive\n", "memory/memory-history.md");
-    const before = b.ledger.clock!;
     const mergeParked = vi.fn(() => "cleaned\nnew\n");
     syncBotMemory(b.folder, "bot-1", b.workspace, b.ledger, { host: b.host, now: 10_000, mergeParked });
-    expect(mergeParked).toHaveBeenCalledWith({ file: "MEMORY.md", kept: "cleaned\n", parked: "retired\nnew\n", history: "archive\n" });
-    expect(read(b)).toBe("cleaned\nnew\n");
-    expect(parked(b)).toEqual([]);
-    const snapshot = JSON.parse(capture(b));
-    expect(snapshot.files[`memory/${name}`].text).toBeNull();
-    expect(snapshot.files["MEMORY.md"].text).toBe(read(b));
-    expect(snapshot.files["MEMORY.md"].vv[b.ledger.device!]).toBeGreaterThan(before);
-    receive(b, a);
-    sync(a);
-    expect(read(a)).toBe(read(b));
-    expect(parked(a)).toEqual([]);
+    expect(mergeParked).not.toHaveBeenCalled();
+    expect(read(b)).toBe("cleaned\n");
+    expect(parked(b)).toEqual(["retired\nnew\n"]);
   });
 
   it("keeps today's parking when the helper returns null, with missing history", () => {

@@ -126,9 +126,9 @@ describe("memory cleanup edges", () => {
   });
 
   it.each(["merge", "replace", "retire"])("requires independent source coverage for %s", async (op) => {
-    const memory = "- Ada owns 2 cats\n- Bob owns 3 dogs\n- user Ada lives in Seoul\n- user Ada works in Busan\n";
+    const memory = "- Ada owns 2 cats\n- Bob owns 3 dogs\n- user Ada lives in Seoul\n- user Ada lives in Busan\n- Ada trip ended\n";
     const changes: Change[] = op === "merge" ? [{ op, ids: [1, 2], text: "- Ada owns 3 dogs; Bob owns 2 cats", reason: "Pets" }]
-      : op === "replace" ? [{ op, id: 3, newer: 4, reason: "Current" }] : [retire(1)];
+      : op === "replace" ? [{ op, id: 3, newer: 4, reason: "Current" }] : [retire(5)];
     const input = fixture(memory, changes);
     const seen: string[] = [];
     const result = await cleanFiles({ ...input, recall: async (prompt, opts) => {
@@ -204,17 +204,17 @@ describe("memory cleanup edges", () => {
   });
 
   it("counts both files toward the character cap and the pointer toward the line cap, dropping MEMORY.md ops past them", async () => {
-    const chars = await cleanFiles(fixture(`- kept\n- ${"a".repeat(4100)}\n`, [retire(2)], { text: `- kept\n- ${"b".repeat(4100)}\n`, changes: [retire(2)] }));
+    const chars = await cleanFiles(fixture(`- kept\n- done ${"a".repeat(4100)}\n`, [retire(2)], { text: `- kept\n- done ${"b".repeat(4100)}\n`, changes: [retire(2)] }));
     expect(chars).toMatchObject({ ok: true });
     expect(chars.ok && [chars.memory.includes("a".repeat(4100)), chars.side!.text.includes("b".repeat(4100))]).toEqual([true, false]);
-    const text = Array.from({ length: 21 }, (_, i) => `- old ${i}`).join("\n");
+    const text = Array.from({ length: 21 }, (_, i) => `- old ${i} done`).join("\n");
     const lines = await cleanFiles(fixture(text, Array.from({ length: 20 }, (_, i) => retire(i + 1)), { text, changes: Array.from({ length: 20 }, (_, i) => retire(i + 1)) }));
     const left = (text?: string) => text?.split("\n").filter((line) => line.startsWith("- old ")).length ?? 21;
     expect(!lines.ok || 42 - left(lines.memory) - left(lines.side?.text) + 1 <= 40).toBe(true);
   });
 
   it("allows forty touched lines when the history pointer already exists", () => {
-    const text = Array.from({ length: 41 }, (_, i) => `- old ${i}`).join("\n");
+    const text = Array.from({ length: 41 }, (_, i) => `- old ${i} done`).join("\n");
     expect(validateChangeList({ file: "MEMORY.md", text: `${text}\n${POINTER_LINE}`, typed: new Set(), list: {
       version: 1, file: "MEMORY.md", changes: Array.from({ length: 40 }, (_, i) => retire(i + 1)),
     } })).toMatchObject({ ok: true });
@@ -232,17 +232,17 @@ describe("memory cleanup edges", () => {
 
   it("preserves a custom history pointer without replacing its facts", async () => {
     const pointer = "- memory/memory-history.md: Eddie's 2026 archive and current links (pinned)";
-    const result = await cleanFiles(fixture(`- kept\n- old\n${pointer}\n`));
+    const result = await cleanFiles(fixture(`- kept\n- old done\n${pointer}\n`));
     expect(result).toMatchObject({ ok: true });
     if (result.ok) expect(result.memory).toContain(pointer);
   });
 
   it("restores a removed line when its old neighbor was edited", async () => {
-    const result = await cleanFiles(fixture("- before\n- old\n- after\n"));
+    const result = await cleanFiles(fixture("- before\n- old done\n- after\n"));
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     const restored = undoText("MEMORY.md", result.memory.replace("- before", "- user edited before"), parseHistory(result.block)[0]!);
-    expect(restored).toMatchObject({ text: "- user edited before\n- old\n- after\n", restored: 1, skipped: 0 });
+    expect(restored).toMatchObject({ text: "- user edited before\n- old done\n- after\n", restored: 1, skipped: 0 });
   });
 
   it("keeps an unchanged merge when its edited neighbor prevents restoration", async () => {
@@ -275,10 +275,10 @@ describe("memory cleanup edges", () => {
   });
 
   it("keeps a marker-looking archived source inside its whole history block", async () => {
-    const second = await cleanFiles(fixture("- kept\n- old\n"));
+    const second = await cleanFiles(fixture("- kept\n- old done\n"));
     if (!second.ok) throw new Error("Fixture failed");
     const inner = `<!-- mc-run ${JSON.stringify(second.header)} -->`;
-    const first = await cleanFiles(fixture(`- kept\n${inner}\n`));
+    const first = await cleanFiles(fixture(`- kept\n${inner}\n${inner}\n`));
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     const merged = mergeParkedCopy({ file: "memory/memory-history.md", kept: second.block, parked: first.block, history: second.block });
@@ -287,8 +287,8 @@ describe("memory cleanup edges", () => {
   });
 
   it("merges undo records even when they follow a later run", async () => {
-    const first = await cleanFiles(fixture("- kept\n- old\n"));
-    const second = await cleanFiles(fixture("- kept\n- other\n"));
+    const first = await cleanFiles(fixture("- kept\n- old done\n"));
+    const second = await cleanFiles(fixture("- kept\n- other done\n"));
     if (!first.ok || !second.ok) throw new Error("Fixture failed");
     const undo = `<!-- mc-undo ${JSON.stringify({ v: 1, runId: first.runId, at: Date.now(), restored: 1, skipped: 0 })} -->\n`;
     const merged = mergeParkedCopy({ file: "memory/memory-history.md", kept: first.block + second.block, parked: first.block + second.block + undo, history: first.block });
@@ -332,11 +332,11 @@ describe("memory cleanup edges", () => {
     const detail = (i: number) => `- detail ${i} ${"x".repeat(280)}`;
     const big = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 58 }, (_, i) => detail(i))].join("\n") + "\n";
     const small = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 8 }, (_, i) => detail(i))].join("\n") + "\n";
-    const file = (ids: number[], topic = "details") => ({ op: "file", ids, topic, pointer: `- memory/${topic}.md: early details 0 and 1`, reason: "Detail" });
+    const file = (ids: number[], topic = "details") => ({ op: "file", ids, topic, pointer: `- memory/${topic}.md: early detail lines`, reason: "Detail" });
     const check = (text: string, change: unknown) => validateChangeList({ file: "MEMORY.md", text, typed: new Set(), list: { version: 1, file: "MEMORY.md", changes: [change] } });
     const filed = check(big, file([3, 4]));
     expect(filed).toMatchObject({ ok: true, topics: [{ file: "memory/details.md", lines: [detail(0), detail(1)] }] });
-    expect(filed.ok && filed.text.split("\n").slice(0, 4)).toEqual(["- memory/details.md: early details 0 and 1", "- Never deploy on Fridays", "- deploy pending review", detail(2)]);
+    expect(filed.ok && filed.text.split("\n").slice(0, 4)).toEqual(["- memory/details.md: early detail lines", "- Never deploy on Fridays", "- deploy pending review", detail(2)]);
     expect(check(small, file([3, 4]))).toMatchObject({ ok: false, errors: [{ reason: "op-not-allowed" }] });
     for (const id of [1, 2]) expect(check(big, file([id, 3]))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "protected" })]) });
     expect(check(big, file([3], "memory-history"))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "op-not-allowed" })]) });
@@ -416,7 +416,7 @@ describe("memory cleanup edges", () => {
     expect(result.memory).not.toContain("- old plan done");
   });
 
-  it("writes a pointer in the filed lines' own words and order, a number with its unit, on one line when it fits", async () => {
+  it("writes a pointer in the filed lines' own words and order, subjects only, on one line when it fits", async () => {
     const kept = Array.from({ length: 148 }, (_, i) => `- kept ${i}`);
     const memory = [
       "- Lag gates (my miss 10-26): max-of-3 fails on noise. Gate on p95 + dropped frames, and allow max within one refresh (4.2 ms at 240 Hz) or run more rounds.",
@@ -430,7 +430,7 @@ describe("memory cleanup edges", () => {
       const result = await cleanFiles({ ...fixture(memory, [{ op: "file", ids, topic, pointer: `- memory/${topic}.md: ${topic}`, reason: "Detail" }]), typed: new Set(kept.map(lineHash)) });
       return result.ok ? result.memory.split("\n").filter((row) => row.startsWith(`- memory/${topic}.md: `)) : [];
     };
-    expect(await rows([1], "gates")).toEqual(["- memory/gates.md: gates miss max-of-3 fails; Gate p95 dropped frames 240 Hz"]);
+    expect(await rows([1], "gates")).toEqual(["- memory/gates.md: Lag gates miss; Gate"]);
     expect(await rows([2, 3, 4], "rules")).toHaveLength(1);
   });
 

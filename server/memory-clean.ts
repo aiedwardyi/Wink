@@ -22,11 +22,13 @@ export { factTokens, validateChangeList } from "./memory-clean-validate.ts";
 
 const DAY = 86_400_000;
 const QUIET_MS = 10 * 60_000;
+const RETRY_MS = 20 * 3_600_000;
 const STATE_FILE = "memory-clean.json";
 const time = z.number().finite().nonnegative();
 const stateSchema = z.object({
   version: z.literal(1), bots: z.record(z.string(), z.object({
     lastRun: z.object({ runId: z.string(), at: time, files: z.array(cleanFileSchema) }).optional(),
+    lastAttempt: z.object({ at: time, tokens: time, hash: z.string() }).optional(),
     sideHashes: z.record(cleanFileSchema, z.string()).optional(), typed: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(2000).optional(),
   })),
 });
@@ -34,8 +36,10 @@ const stateSchema = z.object({
 function readState(dataDir: string): MemoryCleanState {
   try { return stateSchema.parse(JSON.parse(readFileSync(join(dataDir, STATE_FILE), "utf8"))) as MemoryCleanState; }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("[memory-clean] invalid local state");
-    return { version: 1, bots: {} };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, bots: {} };
+    // saving over an unreadable file would drop its typed protections
+    console.warn("[memory-clean] invalid local state");
+    throw error;
   }
 }
 
@@ -72,7 +76,7 @@ export function recordTypedLines(botId: string, before: string, after: string, d
 }
 
 export function typedHashes(botId: string, dataDir = DATA_DIR): string[] {
-  return [...(readState(dataDir).bots[botId]?.typed ?? [])];
+  try { return [...(readState(dataDir).bots[botId]?.typed ?? [])]; } catch { return []; }
 }
 
 export function ownLines(botId: string, add: readonly string[], remove: readonly string[] = [], dataDir = DATA_DIR): void {
@@ -110,7 +114,13 @@ export type MemoryCleanDeps = {
 };
 
 function readFile(path: string): string | null {
-  try { return readFileSync(path, "utf8"); } catch (error) {
+  try {
+    const bytes = readFileSync(path);
+    const text = bytes.toString("utf8");
+    // a lossy decode would be written back, backup included
+    if (!Buffer.from(text).equals(bytes)) throw new Error(`Not UTF-8: ${path}`);
+    return text;
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
@@ -160,6 +170,8 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     const base = readMemoryFile(botId);
     const memory = readFile(join(workspaceDir(botId), "MEMORY.md"));
     if (memory === null) return;
+    // a paid night that did not land is not paid for again on the same memory within 20 hours
+    if (state.lastAttempt?.hash === hashText(memory) && now() - state.lastAttempt.at < RETRY_MS) return;
     const historyFile = (/memory\/memory-history(?:-\d+)?\.md/.exec(memory)?.[0] ?? HISTORY_FILE) as CleanFile;
     const history = readFile(join(workspaceDir(botId), historyFile));
     const named = memory.match(/memory\/[\w][\w .-]*?\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/g) ?? [];
@@ -171,12 +183,14 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     const engine = await deps.engine(botId);
     if (!engine || controller.signal.aborted || epoch !== runEpoch || !quiet(botId)) return;
     const localTyped = typedHashes(botId, deps.dataDir);
-    const newest = histories(botId).at(-1)?.run.header;
+    // an undone night gives back the lines it read
+    const newest = histories(botId).filter((item) => !item.run.undo).at(-1)?.run.header;
     const thread = deps.store.bot(botId);
-    const input = sleepInput(thread ? deps.store.messagesFor(thread.threadId) : [], newest ? newest.v === 2 ? newest.through : newest.at : null, now());
+    const input = sleepInput(thread ? deps.store.messagesFor(thread.threadId) : [], newest ? newest.v === 2 ? newest.through : newest.at : null, now(), newest?.v === 2 ? newest.held : undefined);
     const topicText = (file: CleanFile) => readFile(join(workspaceDir(botId), file));
     const result = await cleanFiles({ memory, side, history, typed: new Set([...localTyped, ...home.typed]), user: input.user, through: input.through, topic: topicText, ...engine, now: now(), signal: controller.signal });
     console.info(`[memory-clean] ${botId} ${result.ok ? "slept" : result.stage} tokens ${result.tokens ?? 0}`);
+    if (result.tokens) update(botId, (state) => { state.lastAttempt = { at: now(), tokens: result.tokens!, hash: hashText(memory) }; });
     if (!result.ok) return;
     if (controller.signal.aborted || runEpoch !== epoch || !quiet(botId)) return;
     const currentEngine = await deps.engine(botId);
@@ -189,10 +203,11 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     const target = /memory\/memory-history(?:-\d+)?\.md/.exec(result.memory)?.[0] as CleanFile;
     const targetPath = join(workspaceDir(botId), target);
     let targetText = history ?? "";
+    let existing: string | null = null;
     if (target !== historyFile) {
-      const existing = readFile(targetPath);
-      if (existing !== null) return;
-      targetText = `Previous history: ${historyFile}\n\n`;
+      // an undone night can leave its rotation target behind
+      existing = readFile(targetPath);
+      targetText = existing ?? `Previous history: ${historyFile}\n\n`;
     }
     if (parseHistory(targetText).some((item) => item.header.runId === result.runId)) return;
     backup(deps.dataDir, botId, result.runId, result.header.at, [["MEMORY.md", memory], [historyFile, history], ...(side ? [[side.file, side.text] as const] : []), ...result.topics.map((topic) => [topic.file, topic.before] as const)]);
@@ -203,7 +218,7 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     const put = (path: string, before: string | null, text: string) => { writeFileAtomic(path, text, { mode: 0o600 }); wrote.push({ path, before, text }); };
     let landed = false;
     try {
-      put(targetPath, target === historyFile ? history : null, archived);
+      put(targetPath, target === historyFile ? history : existing, archived);
       if (readMemoryFile(botId).revision !== base.revision || readFile(targetPath) !== archived || (side && readFile(join(workspaceDir(botId), side.file)) !== side.text)) return;
       if (result.side) put(join(workspaceDir(botId), result.side.file), side!.text, result.side.text);
       if (readFile(targetPath) !== archived || (result.side && readFile(join(workspaceDir(botId), result.side.file)) !== result.side.text)) return;
@@ -227,6 +242,7 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (bot) deps.store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: "Tidied memory, nothing lost", tidy: { runId: result.runId } } });
     update(botId, (state) => {
       state.lastRun = { runId: result.runId, at: result.header.at, files: Object.keys(result.header.files) as CleanFile[] };
+      delete state.lastAttempt;
       if (result.side) (state.sideHashes ??= {})[result.side.file] = hashText(result.side.text);
     });
   };
@@ -260,24 +276,26 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
       const baseRevision = readMemoryFile(botId).revision;
       const changes = Object.keys(found.run.header.files).map((file) => {
         const path = join(workspaceDir(botId), file);
-        const before = readFile(path);
+        // a topic or side file the user deleted reads as empty
+        const before = readFile(path) ?? (file === "MEMORY.md" ? null : "");
         if (before === null) throw new Error("Missing cleanup file");
         return { file, path, before, ...undoText(file as CleanFile, before, found.run) };
-      });
+      }).sort((a, b) => Number(b.file === "MEMORY.md") - Number(a.file === "MEMORY.md"));
+      const current = (path: string) => readFile(path) ?? "";
       const restored = changes.reduce((n, file) => n + file.restored, 0);
       const skipped = changes.reduce((n, file) => n + file.skipped, 0);
-      if (deps.busy() || readMemoryFile(botId).revision !== baseRevision || readFile(join(workspaceDir(botId), found.file)) !== found.text || changes.some((file) => readFile(file.path) !== file.before)) return { ok: false, error: "busy" };
-      const at = now();
-      const archived = appendBlock(found.text, undoBlock({ v: 1, runId, at, restored, skipped }));
-      writeFileAtomic(join(workspaceDir(botId), found.file), archived, { mode: 0o600 });
+      if (deps.busy() || readMemoryFile(botId).revision !== baseRevision || readFile(join(workspaceDir(botId), found.file)) !== found.text || changes.some((file) => current(file.path) !== file.before)) return { ok: false, error: "busy" };
+      // the undone marker goes last, so a failed write leaves the run undoable
       for (const file of changes) {
-        if (readFile(file.path) !== file.before || readFile(join(workspaceDir(botId), found.file)) !== archived) return { ok: false, error: "busy" };
+        if (current(file.path) !== file.before || readFile(join(workspaceDir(botId), found.file)) !== found.text) return { ok: false, error: "busy" };
         if (file.file === "MEMORY.md") {
           ownLines(botId, found.run.entries.flatMap((entry) => entry.lines.filter((line) => line.trim()).map(lineHash)), found.run.entries.flatMap((entry) => entry.header.owned ?? []), deps.dataDir);
           if (saveMemoryFile(botId, file.text, baseRevision, true).conflict) return { ok: false, error: "busy" };
-        } else if (!file.text && found.run.header.files[file.file as CleanFile]?.beforeBytes === 0) rmSync(file.path, { force: true });
+        } else if (!file.text && (!file.before || found.run.header.files[file.file as CleanFile]?.beforeBytes === 0)) rmSync(file.path, { force: true });
         else writeFileAtomic(file.path, file.text, { mode: 0o600 });
       }
+      const at = now();
+      writeFileAtomic(join(workspaceDir(botId), found.file), appendBlock(found.text, undoBlock({ v: 1, runId, at, restored, skipped })), { mode: 0o600 });
       const bot = deps.store.bot(botId);
       const row = bot && deps.store.messagesFor(bot.threadId).find((message) => message.tool?.tidy?.runId === runId);
       if (bot && row?.tool) deps.store.patchMessage(bot.threadId, row.id, { tool: { ...row.tool, spoken: "Memory cleanup undone", tidy: { runId, undoneAt: at } } });

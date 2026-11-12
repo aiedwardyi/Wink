@@ -1,6 +1,7 @@
+import { lineHash } from "./memory-clean-format.ts";
 import { changeIds, keptList, stagedCandidate, type CleanSource } from "./memory-clean-plan.ts";
 import type { Change, CleanFile, CleanInput, SleepLine } from "./memory-clean-types.ts";
-import { contentWords, FILE_FLOOR, filedPointer, GROWTH_MAX, openLine, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
+import { contentWords, FILE_FLOOR, filedPointer, GROWTH_MAX, openLine, prepareChangeList, protectedLines, rememberCovered, sectionLine } from "./memory-clean-validate.ts";
 
 export const PLANNED = "Filed by plan";
 // over the light limits a night files at least this many lines, so it always makes progress
@@ -75,7 +76,7 @@ function floorFit(input: CleanInput, all: readonly SleepLine[], sources: CleanSo
     || !!a.three && a.three === b.three)) ? [a.id] : []));
   // lines the user has not talked about this week go first, then the oldest, then the largest
   let pool = lines.flatMap((line, i) => {
-    if (!over || !line.trim() || /^#/.test(line) || !bullet(line) && bullet(lines[i + 1]) || paired.has(i + 1) || guarded.has(i + 1) || bytes(line) > GROWTH_MAX || openLine(line)
+    if (!over || !line.trim() || /^#/.test(line) || !bullet(line) && bullet(lines[i + 1]) || sectionLine(lines, i + 1) || paired.has(i + 1) || guarded.has(i + 1) || bytes(line) > GROWTH_MAX || openLine(line)
       || asked.some((item) => rememberCovered(item.text, line))) return [];
     const words = [...contentWords(line)];
     return [{ id: i + 1, hot: words.filter((word) => heard.has(word)).length / Math.max(1, words.length), noted: /\(noted (\d{4}-\d\d-\d\d)\)/.exec(line)?.[1] ?? "", bytes: bytes(line) }];
@@ -112,7 +113,7 @@ function floorFit(input: CleanInput, all: readonly SleepLine[], sources: CleanSo
     const open = (from: number): Slot | undefined => {
       for (let n = from; n < 26; n++) {
         const topic = n ? `${month}-${String.fromCharCode(97 + n)}` : month;
-        const row = lines.findLastIndex((line) => line.startsWith(`- memory/${topic}.md: `)) + 1;
+        const row = lines.findLastIndex((line) => line.startsWith(`- memory/${topic}.md: `) && !input.typed.has(lineHash(line))) + 1;
         const text = row ? plain(lines[row - 1]!) : "";
         if (!row || Buffer.byteLength(text) < 260) return { n, topic, row, ids: [], bytes: 0, text };
       }

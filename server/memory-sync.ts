@@ -283,7 +283,8 @@ function dropMergedCopies(workspace: string, files: Iterable<string>, mergeParke
     const main = readText(join(workspace, source), source);
     if (!main) continue;
     const body = parked.startsWith(PARKED_NOTE) ? parked.slice(parked.indexOf("\n") + 1) : parked;
-    const text = mergeParked?.({ file: source, kept: main, parked: body, history: readRaw(join(workspace, "memory/memory-history.md")) });
+    // a stale memory copy waits for the bot: lines a later night archived would come back
+    const text = /^memory\/memory-history/.test(source) ? mergeParked?.({ file: source, kept: main, parked: body, history: readRaw(join(workspace, "memory/memory-history.md")) }) : null;
     if (text != null) {
       writeText(join(workspace, source), text);
       merged.set(source, text);
