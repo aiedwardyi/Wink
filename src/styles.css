@@ -173,7 +173,7 @@
 }
 
 /* Rows are display:contents wrappers, so their children carry the containment. */
-[data-settled] > * {
+[data-orbit-transcript] [data-settled] > * {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 80px;
 }
