@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MspMuseAgentDriver, MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./muse.ts";
+import { MspMuseAgentDriver, MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS, museServeArgs } from "./muse.ts";
 import { classifyMuseError, museDefaultCli } from "../acp/muse.ts";
 import { setWslGateForTests } from "../../wsl-gate.ts";
 import { defaultModelEffort } from "../../../shared/model-effort.ts";
@@ -18,6 +18,24 @@ describe("classifyMuseError MSP turn errors", () => {
     expect(classifyMuseError({ code: "AUTH_REQUIRED" })).toBe("invalid_credentials");
     expect(classifyMuseError({ code: "QUOTA_EXCEEDED" })).toBe("quota_or_region_restriction");
     expect(classifyMuseError({ code: -32601 })).toBeUndefined();
+  });
+});
+
+describe("museServeArgs", () => {
+  const off = ["-c", "run.reminder_roster.agents=[]"];
+
+  it("turns the reminder agents off from 1.4.15 on a native CLI", () => {
+    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", false)).toEqual(off);
+    expect(museServeArgs("Muse Code 1.5.0 (1.5.0-R1.1)", false)).toEqual(off);
+    expect(museServeArgs("Muse Code 2.0.1", false)).toEqual(off);
+  });
+
+  it("leaves older, unknown and WSL CLIs on a plain serve", () => {
+    expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", false)).toEqual([]);
+    expect(museServeArgs("Muse Code 1.3.20", false)).toEqual([]);
+    expect(museServeArgs("", false)).toEqual([]);
+    expect(museServeArgs(null, false)).toEqual([]);
+    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", true)).toEqual([]);
   });
 });
 
