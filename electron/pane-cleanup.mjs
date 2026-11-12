@@ -692,7 +692,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     }
     const written = async () => {
       if (now() - changed < DAY_MS) return true;
-      for (const file of (await git(target, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory"])).split(" ").filter(Boolean)) {
+      for (const file of (await git(target, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory"])).split("\0").filter(Boolean)) {
         if (await writtenSince(path.join(target, file), now() - DAY_MS, context.stats)) return true;
       }
       return false;
