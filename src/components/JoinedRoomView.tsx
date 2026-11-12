@@ -28,6 +28,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const paging = useRef<number | null>(null);
   const room = useJoinedRoom(roomId, limit, beforeOlder);
   const entries = room?.entries;
+  const hostBots = room?.state?.bots;
+  const teamBots = room?.state?.teamBots;
+  const bots = useMemo(() => (teamBots?.length ? [...(hostBots ?? []), ...teamBots] : hostBots), [hostBots, teamBots]);
+  const myBots = room?.myBots;
+  // Only this PC's own room bots answer this PC; the host's bots answer everyone.
+  const askable = useMemo(() => [...(hostBots ?? []), ...(teamBots ?? []).filter((bot) => myBots?.some((mine) => mine.id === bot.id))], [hostBots, teamBots, myBots]);
   const first = entries?.[0]?.seq;
   const loadOlder = useCallback((beforeCommit: () => void) => {
     // Held per oldest row, so a scroll before the bigger page lands asks once; nothing more stops it.
@@ -41,7 +47,6 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       })
       .catch(() => { paging.current = null; });
   }, [roomId, first]);
-  const bots = room?.state?.bots;
   const meId = room?.me.id;
   const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
   const people = room?.state?.people;
@@ -106,7 +111,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         {joined ? (
           <>
             {status !== null && <div role="status" className="mb-2 px-5 text-center text-[13px] text-ink-secondary">{status}</div>}
-            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={room?.state?.bots} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
+            {status === null && myBots?.map((bot) => {
+              const botName = teamBots?.find((candidate) => candidate.id === bot.id)?.name ?? "";
+              const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
+              return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
+            })}
+            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}
       </div>

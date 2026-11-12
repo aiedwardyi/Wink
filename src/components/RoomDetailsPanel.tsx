@@ -10,7 +10,7 @@ import { hapticTick } from "@/lib/phone-swipe";
 import { nextRename } from "@/lib/rename";
 import { nextBulletin } from "@/lib/room-bulletin";
 import { useRoomDetailsTarget, type RoomDetailsSection } from "@/lib/room-details";
-import { joinedRoomBase, joinedSelection, roomPeople, roomPictureUrl, type TeamRoom } from "@/lib/team-rooms";
+import { joinedRoomBase, joinedSelection, roomPeople, roomPictureUrl, roomTeamBots, type TeamRoom } from "@/lib/team-rooms";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Presence } from "@/lib/use-presence";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -22,6 +22,7 @@ import { useRoomAlerts } from "./RoomAlertsBell";
 import { RoomDetailsBots } from "./RoomDetailsBots";
 import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
 import { RoomPicture, TeamRoomPicture } from "./RoomPicture";
+import { JoinedBots } from "./RoomTeamBots";
 
 const hostedRoom = (group: Group): group is TeamRoom => Boolean(group.hosted);
 
@@ -95,12 +96,13 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
           <>
             {section("room", t("room.section"), <HostRoom group={group} />, false)}
             {section("people", `${t("teamRoom.people")} (${1 + roomPeople(group).length})`, <HostPeople group={group} />)}
-            {!group.dm && section("bots", `${t("chrome.bots")} (${group.memberIds.length})`, <RoomDetailsBots group={group} />)}
+            {!group.dm && section("bots", `${t("chrome.bots")} (${group.memberIds.length + roomTeamBots(group).length})`, <RoomDetailsBots group={group} />)}
           </>
         ) : joined && (
           <>
             {section("room", t("room.section"), <JoinedRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} picture={roomPictureUrl(joinedRoomBase(joined.roomId), joined.state?.picture)} retry={joined.link} canLeave={joined.status === "joined"} />, false)}
             {joined.state && section("people", `${t("teamRoom.people")} (${1 + joined.state.people.length})`, <JoinedPeople room={joined} />)}
+            {joined.state?.teamBots && section("bots", `${t("chrome.bots")} (${(joined.state.bots?.length ?? 0) + joined.state.teamBots.length})`, <JoinedBots room={joined} />)}
             {joined.status === "joined" && section("leave", t("teamRoom.leave"), <LeaveRoom roomId={joined.roomId} name={joined.state?.roomName ?? ""} />, false)}
           </>
         )}

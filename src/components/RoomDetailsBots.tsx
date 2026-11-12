@@ -4,12 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
 import { groupResponseHint } from "@/lib/group-routing";
 import { useI18n } from "@/lib/i18n";
+import { roomPeople, roomTeamBots } from "@/lib/team-rooms";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 
 import { BotAvatar } from "./Avatar";
 import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
 import { BotPickerList } from "./BotPickerList";
 import { NewBotRow, type NewRow } from "./GroupWizard";
+import { TeammateBotRows } from "./RoomTeamBots";
 
 export function RoomDetailsBots({ group }: { group: Group }) {
   const { t } = useI18n();
@@ -17,6 +19,7 @@ export function RoomDetailsBots({ group }: { group: Group }) {
   const [rows, setRows] = useState<NewRow[]>([]);
   const [addedNew, setAddedNew] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [problem, setProblem] = useState(false);
   const nextRowKey = useRef(1);
   const memberIds = useRef(group.memberIds);
   memberIds.current = group.memberIds;
@@ -82,12 +85,14 @@ export function RoomDetailsBots({ group }: { group: Group }) {
             </button>
           </li>
         ))}
+        {group.hosted && <TeammateBotRows roomId={group.hosted.roomId} bots={roomTeamBots(group)} people={roomPeople(group)} onProblem={() => setProblem(true)} />}
         <li className={DETAILS_ROW}>
           <button type="button" data-room-add-bot aria-expanded={adding} onClick={() => setAdding(!adding)} className="w-full text-left text-[14px] font-medium text-accent hover:brightness-110">
             + {t("groupWizard.addBot")}
           </button>
         </li>
       </ul>
+      {problem && <p role="alert" className="mt-1 px-1 text-[12.5px] text-danger">{t("errors.request")}</p>}
       {lastLocked && <p className="mt-1.5 px-1 text-[12px] text-ink-secondary">{t("room.needsBot")}</p>}
       {adding && (
         <div className={`${DETAILS_BOX} mt-2 p-2`}>

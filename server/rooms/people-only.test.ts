@@ -106,7 +106,7 @@ describe("people-only room create", () => {
     expect(group.memberIds).toEqual([]);
     expect(group.hosted.roomId).toBeTruthy();
     expect(peopleOnlyRoom(group.hosted.roomId)).toBe(true);
-    expect(hostedRoomView(group.hosted)).toEqual({ name: "Team", people: [], joins: [] });
+    expect(hostedRoomView(group.hosted)).toEqual({ name: "Team", people: [], joins: [], teamBots: [] });
   });
 
   it("refuses bots, a missing name and a room that isn't hosted", async () => {

@@ -61,7 +61,9 @@ import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
+import { myRoomBotThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
+import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
@@ -1990,13 +1992,17 @@ function threadSyncTarget(threadId: string): { botId: string; botSyncId: string 
   const bot = store.botByThread(threadId);
   if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId)) return null;
   const botSyncId = chatSyncBotId(profileSyncSettings, bot.id);
-  // a routine run is not the user chat; synced, another PC would follow it
-  if (!botSyncId || routineThreadIds().has(threadId)) return null;
+  // a routine run or a joined room's task is not the user chat; synced, another PC would follow it
+  if (!botSyncId || routineThreadIds().has(threadId) || myRoomBotThreads().has(threadId)) return null;
   return { botId: bot.id, botSyncId };
 }
 
 function routineThreadIds(): Set<string> {
   return new Set(routines?.listRuns().flatMap((run) => (run.threadId ? [run.threadId] : [])));
+}
+
+function sideThreadIds(): Set<string> {
+  return new Set([...routineThreadIds(), ...myRoomBotThreads()]);
 }
 
 const pendingSyncFollows = new Set<string>();
@@ -2006,8 +2012,8 @@ function followPendingSyncImports(): void {
   for (const botId of pendingSyncFollows) {
     if (botHasActiveTurn(botId)) continue;
     pendingSyncFollows.delete(botId);
-    if (threadSyncGate.enabled) store.applySyncImport(() => { store.followNewestTask(botId, routineThreadIds()); });
-    else store.followNewestTask(botId, routineThreadIds());
+    if (threadSyncGate.enabled) store.applySyncImport(() => { store.followNewestTask(botId, sideThreadIds()); });
+    else store.followNewestTask(botId, sideThreadIds());
   }
 }
 
@@ -2125,7 +2131,7 @@ function initializeThreadSyncV2() {
     enabled: () => profileSyncSettings.syncChats,
     target: (threadId) => {
       const bot = store.botByThread(threadId);
-      if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId) || routineThreadIds().has(threadId)) return null;
+      if (!bot || !store.taskByThread(bot.id, threadId) || store.groupByThread(threadId) || sideThreadIds().has(threadId)) return null;
       const botSyncId = profileSyncSettings.botMap[bot.id];
       return botSyncId ? { botId: bot.id, botSyncId } : null;
     },
@@ -2138,7 +2144,7 @@ function initializeThreadSyncV2() {
     project: clientMessage,
     imported: (botId) => {
       if (botHasActiveTurn(botId)) pendingSyncFollows.add(botId);
-      else store.followNewestTask(botId, routineThreadIds());
+      else store.followNewestTask(botId, sideThreadIds());
     },
     maintenance: () => {
       const pending = syncProfiles();
@@ -6042,10 +6048,10 @@ botTrash = new ServerBotTrash(store, routines);
 botTrash.start();
 emptyExpiredTrash();
 setInterval(emptyExpiredTrash, 6 * 60 * 60_000).unref?.();
-// One chat per bot: open each idle bot on its newest user chat, never a routine run.
-const routineThreads = routineThreadIds();
+// One chat per bot: open each idle bot on its newest user chat, never a routine run or room task.
+const sideThreads = sideThreadIds();
 for (const bot of store.bots) {
-  if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, routineThreads);
+  if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, sideThreads);
 }
 routines.start();
 
@@ -6326,12 +6332,31 @@ configureRoomAsks({
 });
 configureRoomDoor({ store, hostName: () => cfg.profile?.name?.trim() || "The host", onPeopleChanged: (group) => broadcast({ kind: "group", group: publicGroupState(group) }) });
 sweepRoomFiles(store.groups);
-const guestClient = new GuestClient({
+const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
+  client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args) },
+  bot: (botId) => store.bot(botId),
+  hasTask: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
+  createTask: (botId, title) => {
+    const task = store.createTask(botId, title, false);
+    const bot = store.bot(botId);
+    if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
+    return task;
+  },
+  startTurn: (botId, threadId, prompt, typed) => startTurn(botId, prompt, { threadId, transcriptText: typed }),
+  messagesFor: (threadId) => store.messagesFor(threadId),
+  changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+});
+const guestClient: GuestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
   ownRoom: (code) => ownRoomGroup(code, store.groups),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  onSent: (roomId, entry) => setImmediate(() => myRoomBotTurns.sent(roomId, entry)),
+  botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
   alert: roomAlert,
+});
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed") void myRoomBotTurns.settled(event.threadId, event.ok);
 });
 try {
   dropOwnJoins(store.groups);
@@ -8560,7 +8585,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams);
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);

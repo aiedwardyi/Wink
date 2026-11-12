@@ -142,6 +142,14 @@ describe("hostedSend", () => {
   it("refuses someone who isn't in the room", () => {
     expect(() => hostedSend(group, { kind: "person", id: "stranger" }, "hi")).toThrow(expect.objectContaining({ status: 404 }));
   });
+
+  it("never wakes the only bot for a reply to a teammate's own bot", () => {
+    const solo = store.createGroup("Solo", [wink], false, undefined, undefined, { roomId: createRoom("Solo").id }) as HostedGroup;
+    const mina = addPerson(solo.hosted.roomId, "Mina", "chat", ["Wink"]);
+    const pete = appendRoomEntry(solo.hosted.roomId, { author: { kind: "bot", id: "tb-AAAAAAAAAAAAAAAA", name: "Pete-Coder", owner: mina.id }, text: "chart's ready" });
+    expect(hostedSend(solo, { kind: "person", id: mina.id }, "thanks, now the totals", pete.id).ask).toBeNull();
+    expect(hostedSend(solo, { kind: "person", id: mina.id }, "lunch?").ask).toMatchObject({ botId: wink });
+  });
 });
 
 describe("room alerts on the host", () => {

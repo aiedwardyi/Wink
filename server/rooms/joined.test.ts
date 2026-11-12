@@ -14,8 +14,10 @@ import {
   joinedKey,
   joinedRoom,
   joinedRooms,
+  myRoomBots,
   resetJoined,
   saveJoined,
+  saveMyRoomBot,
   setJoinedState,
   type JoinedEntry,
   type JoinedState,
@@ -100,6 +102,17 @@ describe("joined.db", () => {
     expect(joinedRoom("r1")).toMatchObject({ status: "removed" });
     expect(joinedEntries("r1", 10)).toHaveLength(1);
     expect(JSON.stringify(joinedRooms())).not.toContain(KEY);
+  });
+
+  it("keeps this PC's bots when the host takes the same person back, not a new one", () => {
+    saveJoined("r1", HOST, { id: "p0", name: "Old" }, KEY);
+    saveJoined("r1", HOST, ME, KEY);
+    saveMyRoomBot("r1", "tb-AAAAAAAAAAAAAAAA", "local-pete");
+    endJoined("r1", "left");
+    saveJoined("r1", HOST, ME, KEY);
+    expect(myRoomBots("r1").map((bot) => bot.botId)).toEqual(["local-pete"]);
+    saveJoined("r1", HOST, { id: "p2", name: "Mina" }, KEY);
+    expect(myRoomBots("r1")).toEqual([]);
   });
 });
 

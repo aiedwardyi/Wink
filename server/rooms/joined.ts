@@ -1,6 +1,7 @@
 // joined.db: team rooms this PC joined on someone else's PC. Never groups, so
-// no bot, routine or continuation here ever sees host content. The guest key
-// lives only in this file and is dropped once the room ends.
+// no bot, routine or continuation here sees host content, except this PC's own
+// bot in the room, and only when this PC's person asks it. The guest key lives
+// only in this file and is dropped once the room ends.
 import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +12,7 @@ export interface JoinedEntry {
   seq: number;
   id: string;
   at: number;
-  author: { kind: "host" | "person" | "bot"; id: string; name: string };
+  author: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
@@ -43,6 +44,16 @@ export interface JoinedState {
   me: { id: string; name: string };
   people: Array<{ id: string; name: string }>;
   bots: Array<{ id: string; name: string; color: string }>;
+  /** Only from a host that takes teammates' bots. */
+  teamBots?: Array<{ id: string; name: string; color: string; owner: string }>;
+}
+
+/** One of this PC's bots in a joined room: the host's id for it, and its hidden room task. */
+export interface MyRoomBot {
+  id: string;
+  botId: string;
+  threadId: string | null;
+  seenSeq: number;
 }
 
 /** `removed` and `left` rooms are read-only. */
@@ -127,6 +138,14 @@ function open(): DatabaseSync {
       marks TEXT NOT NULL,
       PRIMARY KEY (room_id, entry_id)
     );
+    CREATE TABLE IF NOT EXISTS my_room_bots (
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      bot_id TEXT NOT NULL,
+      thread_id TEXT,
+      seen_seq INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (room_id, id)
+    );
     CREATE TABLE IF NOT EXISTS pictures (
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -189,6 +208,9 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+    // The host keeps a returning person's bots, so this PC keeps its record of them.
+    const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
+    if (before?.person_id !== me.id) database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
     database.prepare(`
       INSERT OR REPLACE INTO joined (room_id, relay_host, person_id, person_name, key, status, state, version, cursor, joined_at)
       VALUES (?, ?, ?, ?, ?, 'joined', NULL, 0, 0, ?)
@@ -387,7 +409,31 @@ export function removeJoined(roomId: string): boolean {
       database.prepare("DELETE FROM sent_names WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
       database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+      database.prepare("DELETE FROM my_room_bots WHERE room_id = ?").run(roomId);
     }
     return removed;
   });
+}
+
+export function myRoomBots(roomId: string): MyRoomBot[] {
+  const rows = db().prepare("SELECT id, bot_id, thread_id, seen_seq FROM my_room_bots WHERE room_id = ? ORDER BY rowid").all(roomId) as
+    Array<{ id: string; bot_id: string; thread_id: string | null; seen_seq: number }>;
+  return rows.map((row) => ({ id: row.id, botId: row.bot_id, threadId: row.thread_id, seenSeq: row.seen_seq }));
+}
+
+export function saveMyRoomBot(roomId: string, id: string, botId: string): void {
+  db().prepare("INSERT OR REPLACE INTO my_room_bots (room_id, id, bot_id) VALUES (?, ?, ?)").run(roomId, id, botId);
+}
+
+export function dropMyRoomBot(roomId: string, id: string): void {
+  db().prepare("DELETE FROM my_room_bots WHERE room_id = ? AND id = ?").run(roomId, id);
+}
+
+export function setMyRoomBotTurn(roomId: string, id: string, threadId: string, seenSeq: number): void {
+  db().prepare("UPDATE my_room_bots SET thread_id = ?, seen_seq = MAX(seen_seq, ?) WHERE room_id = ? AND id = ?").run(threadId, seenSeq, roomId, id);
+}
+
+/** Every room task thread on this PC, so chat sync leaves them alone. */
+export function myRoomBotThreads(): Set<string> {
+  return new Set((db().prepare("SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
 }

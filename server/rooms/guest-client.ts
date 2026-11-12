@@ -26,6 +26,9 @@ import {
   joinedSentName,
   joinedSummary,
   keepJoinedPicture,
+  dropMyRoomBot,
+  myRoomBots,
+  saveMyRoomBot,
   markJoinedFilesDeleted,
   readJoined,
   resetJoined,
@@ -77,7 +80,7 @@ const entrySchema = z.object({
   seq: z.number().int().positive(),
   id,
   at: z.number(),
-  author: z.object({ kind: z.enum(["host", "person", "bot"]), id, name }),
+  author: z.object({ kind: z.enum(["host", "person", "bot"]), id, name, owner: id.optional() }),
   text: z.string().max(20_000),
   replyToId: id.optional(),
   files: z.array(fileSchema).max(MAX_FILES).optional(),
@@ -93,6 +96,7 @@ const stateSchema = z.object({
   me: personSchema,
   people: z.array(personSchema).max(100),
   bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
+  teamBots: z.array(z.object({ id, name, color: z.string().max(64), owner: id })).max(200).optional(),
 });
 const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
@@ -118,6 +122,8 @@ export interface JoinedView {
   lastEntry?: JoinedEntry;
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
+  /** This PC's own bots the room still lists, by the host's id. */
+  myBots: Array<{ id: string; botId: string; working?: boolean; error?: string }>;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: true;
 }
@@ -133,6 +139,10 @@ export interface GuestClientDeps {
   /** The group this PC hosts behind `code`, so the host never joins its own room. */
   ownRoom?(code: string): string | null;
   onChange?(roomId: string): void;
+  /** A line this PC sent, as the host stored it. */
+  onSent?(roomId: string, entry: JoinedEntry): void;
+  /** What this PC's bots in the room are doing now. */
+  botTurn?(roomId: string, id: string): { working?: boolean; error?: string } | undefined;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
@@ -416,6 +426,52 @@ export class GuestClient {
     }
   }
 
+  /** Adds one of this PC's bots to the room; the host mints its room id. */
+  async addBot(roomId: string, botId: string, name: string, color: string): Promise<GuestResult<{ id: string }>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots`, creds.key, JSON.stringify({ name: [...name].slice(0, NAME_MAX).join(""), color }));
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return reply;
+    }
+    const bot = z.object({ bot: z.object({ id }) }).safeParse(reply.value);
+    if (!bot.success) return unavailable();
+    saveMyRoomBot(roomId, bot.data.bot.id, botId);
+    this.changed(roomId);
+    return { ok: true, value: bot.data.bot };
+  }
+
+  async removeBot(roomId: string, id: string): Promise<GuestResult<boolean>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bots/${id}/remove`, creds.key, "{}");
+    if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
+    if (!reply.ok && reply.status !== 404) return reply;
+    dropMyRoomBot(roomId, id);
+    this.changed(roomId);
+    return { ok: true, value: true };
+  }
+
+  /** Posts this PC's bot answer under the bot's room name. */
+  async botSend(roomId: string, id: string, text: string, replyToId?: string): Promise<GuestResult<JoinedEntry>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(409, "this room is read-only");
+    const body = JSON.stringify({ botId: id, text: text.slice(0, 20_000), ...(replyToId ? { replyToId } : {}), sendId: randomBytes(18).toString("base64url") });
+    let reply: GuestResult<unknown> = unavailable();
+    for (let tries = 0; tries < SEND_TRIES && !reply.ok && reply.status === 503; tries++) {
+      reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/bot-send`, creds.key, body);
+    }
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return reply;
+    }
+    const entry = z.object({ entry: entrySchema }).safeParse(reply.value);
+    if (!entry.success) return unavailable();
+    if (addJoinedEntries(roomId, [entry.data.entry])) this.changed(roomId);
+    return { ok: true, value: entry.data.entry };
+  }
+
   /** Streams `body` to the door, which sniffs and caps it. The caller owns uploadId and resends it on retry; no retry here, the body is spent. */
   async upload(roomId: string, body: Buffer | Readable, name: string, uploadId: string, length?: string): Promise<GuestResult<JoinedFile> & { uploadId?: string }> {
     if (!joinedRoom(roomId)) return failed(404, "not found");
@@ -525,6 +581,7 @@ export class GuestClient {
     const entry = z.object({ entry: entrySchema }).safeParse(reply.value);
     if (!entry.success) return { ...unavailable(), sendId: chosen };
     if (addJoinedEntries(roomId, [entry.data.entry])) this.changed(roomId);
+    this.deps.onSent?.(roomId, entry.data.entry);
     return { ok: true, value: entry.data.entry, sendId: chosen };
   }
 
@@ -552,7 +609,11 @@ export class GuestClient {
   private view(room: JoinedRoom): JoinedView {
     const link = room.status === "joined" ? (this.syncs.get(room.roomId)?.link ?? "offline") : null;
     const sync = this.syncs.get(room.roomId);
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
+    const listed = new Set(room.state?.teamBots?.filter((bot) => bot.owner === room.me.id).map((bot) => bot.id));
+    const myBots = room.status === "joined" && listed.size
+      ? myRoomBots(room.roomId).filter((bot) => listed.has(bot.id)).map(({ id, botId }) => ({ id, botId, ...this.deps.botTurn?.(room.roomId, id) }))
+      : [];
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
