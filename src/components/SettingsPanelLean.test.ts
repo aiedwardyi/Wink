@@ -1317,6 +1317,29 @@ describe("SettingsPanel memory autosave", () => {
     expect(readMemoryFile("bot-offline").text).toBe("important synced notes");
   });
 
+  it("opens no editor until the first read lands", async () => {
+    const serve = vi.mocked(fetch).getMockImplementation()!;
+    const reads: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) =>
+      String(url).endsWith("/bot-slow/memory") && !init?.method ? new Promise<Response>((resolve) => reads.push(() => resolve(serve(url, init)))) : serve(url, init));
+    const measured = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? 1200 : 0; });
+    const edit = () => host.querySelector<HTMLButtonElement>(".mm-sheet button.mm-action")!;
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, id: "bot-slow", threadId: "t-bot-slow" } })));
+    });
+    await act(async () => tab(host, "Memory").click());
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="long"]')!.click());
+    await act(async () => edit().click());
+    expect(host.querySelector('textarea[aria-label="Memory"]')).toBeNull();
+    await act(async () => reads.forEach((reply) => reply()));
+    await wait(0);
+    await act(async () => edit().click());
+    expect(box().readOnly).toBe(false);
+    expect(box().value).toBe("notes for bot-slow");
+    measured.mockRestore();
+  });
+
   it("treats a 409 without the latest memory as a failed write", async () => {
     held = true;
     await render("bot-bad-409");

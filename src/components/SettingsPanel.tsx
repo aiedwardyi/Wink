@@ -255,6 +255,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const autoNotes = memoryNotesEnabled(state.config, bot);
   const [botId] = useState(bot.id);
   const [loading, setLoading] = useState(true);
+  const [mapReady, setMapReady] = useState(Boolean(loadedMap));
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [text, setText] = useState("");
@@ -297,7 +298,8 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   };
   const editFile = (next: boolean) => {
     openFile(next);
-    if (next) startEdit(true);
+    // the file can open while memory loads, but an edit typed then would save over it
+    if (next && !loading) startEdit(true);
     if (next && !wide) setToFile((count) => count + 1);
   };
   // waits for the fold: until it has grown the page may be too short to bring the file up
@@ -391,7 +393,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     void load();
     // a phone keeps the lazy render, so its first tab frame stays light, but never waits on the network
     void import("./MemoryMap").then((m) => {
-      if (window.innerWidth >= STACK_BELOW) loadedMap = m.MemoryMap;
+      if (window.innerWidth >= STACK_BELOW) { loadedMap = m.MemoryMap; setMapReady(true); }
       if (window.requestIdleCallback) window.requestIdleCallback(m.warmGlow, { timeout: 2000 });
       else m.warmGlow();
     }).catch(() => {});
@@ -460,7 +462,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
         value={text}
         placeholder={t("bot.memoryPlaceholder")}
         aria-label={t("bot.memory")}
-        readOnly={loadFailed}
+        readOnly={loading || loadFailed}
         onChange={(e) => edit(e.target.value)}
         onFocus={() => void refresh()}
         onBlur={() => void flushMemory(botId)}
@@ -480,7 +482,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   return (
     <div ref={card} className="relative flex flex-col gap-3">
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
-      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (loadedMap || !loading || loadFailed) && (
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
           <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
