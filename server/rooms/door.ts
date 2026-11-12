@@ -247,8 +247,9 @@ async function pinNotice(req: IncomingMessage, res: ServerResponse, roomId: stri
     return send(res, 200, { notice: null });
   }
   if (typeof entryId !== "string") return send(res, 400, { error: "bad request" });
-  if (!/^[\w-]{1,64}$/.test(entryId) || !roomEntry(roomId, entryId)) return send(res, 404, { error: "no such message in this room" });
-  const notice = { entryId, by, at: Date.now() };
+  const entry = /^[\w-]{1,64}$/.test(entryId) ? roomEntry(roomId, entryId) : null;
+  if (!entry) return send(res, 404, { error: "no such message in this room" });
+  const notice = { entryId, by, at: Date.now(), text: entry.text };
   door!.deps.store.patchGroup(call.group.id, { notice });
   send(res, 200, { notice });
 }

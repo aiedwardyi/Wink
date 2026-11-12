@@ -83,7 +83,7 @@ const marksSchema = z.array(z.object({ emoji: z.string().max(16), by: z.string()
 const stateSchema = z.object({
   version: z.number().int().nonnegative(),
   picture: fileSchema.shape.id.optional(),
-  notice: z.object({ entryId: id, by: z.string().max(80), at: z.number() }).optional(),
+  notice: z.object({ entryId: id, by: z.string().max(80), at: z.number(), text: z.string().max(20_000).optional() }).optional(),
   roomName: z.string().max(200),
   instructions: z.string().max(20_000),
   host: name,

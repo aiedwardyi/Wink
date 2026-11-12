@@ -7,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import { createGroupRoutes } from "../group-routes.ts";
 import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { addPerson, closeRoomsDb, roomById } from "./db.ts";
+import { writeRoomEntry } from "./mirror.ts";
 
 let store: Store;
 const engines = new Map<string, string>();
@@ -92,5 +93,13 @@ describe("hosted group routes", () => {
     expect((await open("nope")).status).toBe(404);
     expect(store.group(group.id)!.threadId).toBe(shared.threadId);
     expect(store.messagesFor(old).map((message) => message.text)).toEqual(["private plan"]);
+  });
+
+  it("keeps the pinned line's text on the notice", async () => {
+    const created = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex")], hosted: true });
+    const group = store.group(created.body.group.id)! as GroupRecord & { hosted: { roomId: string } };
+    const { entry } = writeRoomEntry(store, group, { author: { kind: "host", id: "host", name: "Edward" }, text: "금요일 점심 12시" });
+    expect((await call(routes().patch, { notice: entry.id }, [group.id])).status).toBe(200);
+    expect(store.group(group.id)!.notice).toMatchObject({ entryId: entry.id, by: "host", text: "금요일 점심 12시" });
   });
 });
