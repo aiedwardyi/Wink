@@ -256,7 +256,7 @@ describe("bubble swipe rules", () => {
 
   it("springs back over 260 ms and swallows the click after a sideways drag", async () => {
     await render();
-    const animate = vi.fn();
+    const animate = vi.fn(() => ({ finished: Promise.resolve() }));
     bubble().animate = animate as unknown as HTMLElement["animate"];
     await drag(100, 130, 200);
     await act(async () => { touch("touchend", 0); });
@@ -275,7 +275,7 @@ describe("bubble swipe rules", () => {
   it("a new touch cancels the running spring", async () => {
     await render();
     const cancel = vi.fn();
-    bubble().animate = vi.fn(() => ({ cancel })) as unknown as HTMLElement["animate"];
+    bubble().animate = vi.fn(() => ({ cancel, finished: Promise.resolve() })) as unknown as HTMLElement["animate"];
     await drag(100, 130, 200);
     await act(async () => { touch("touchend", 0); });
     await act(async () => { touch("touchstart", 100); });

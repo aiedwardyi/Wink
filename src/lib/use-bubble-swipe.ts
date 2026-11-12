@@ -54,6 +54,8 @@ export function useBubbleSwipe({ row, bubble, canReply, canTranslate, onReply, o
         [{ transform: `translateX(${offset}px)` }, { transform: "translateX(0)" }],
         { duration: SWIPE_MOTION_MS, easing: SWIPE_SPRING },
       );
+      // cancel() rejects finished
+      spring.finished.catch(() => {});
     };
     const sides = () => ({ right: latest.current.canReply, left: latest.current.canTranslate });
     const end = (fire: boolean) => {
