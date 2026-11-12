@@ -117,8 +117,9 @@ export function shouldFocusComposerOnTranscriptClick(
   if (container && !(target instanceof Node && container.contains(target))) return false;
   if (click.shiftKey || click.ctrlKey || click.metaKey || click.altKey) return false;
   if (!selectionCollapsed) return false;
-  if (target instanceof Element && target.closest(TRANSCRIPT_CLICK_BLOCK)) return false;
-  return true;
+  // A keyboard-scrollable transcript is itself a [tabindex] match; only widgets inside it block.
+  const blocker = target instanceof Element ? target.closest(TRANSCRIPT_CLICK_BLOCK) : null;
+  return !blocker || blocker === container;
 }
 
 let scheduledFrame: number | null = null;

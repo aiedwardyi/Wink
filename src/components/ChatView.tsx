@@ -2,10 +2,11 @@ import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
+import { DaySeparator } from "./DaySeparator";
+import { JumpToLatest } from "./JumpToLatest";
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
-  ArrowDown,
   Check,
   ChevronDown,
   ChevronRight,
@@ -127,26 +128,6 @@ const JOIN_TRIES = 3;
 const JOIN_RETRY_MS = 1000;
 /** Chat sync notices share this lead; Retry there would re-run the last turn. */
 const SYNC_NOTICE = "error: This chat also changed on another PC.";
-
-/** "Today" / "Yesterday" / "Mon, Aug 11" — real dates, not a hardcoded label. */
-function dayLabel(at: number, t: (key: import("@/lib/i18n").MessageKey) => string, locale: import("@/lib/i18n").LocaleId): string {
-  const d = new Date(at);
-  const now = new Date();
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-  if (diffDays === 0) return t("chat.today");
-  if (diffDays === 1) return t("chat.yesterday");
-  return d.toLocaleDateString(localeTag(locale), { weekday: "short", month: "short", day: "numeric" });
-}
-
-function DaySeparator({ at }: { at: number }) {
-  const { t, locale } = useI18n();
-  return (
-    <div className="py-3 text-center text-[13px] text-ink-secondary">
-      {dayLabel(at, t, locale)} {formatTime(at, localeTag(locale))}
-    </div>
-  );
-}
 
 function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }) {
   const { t, locale } = useI18n();
@@ -1886,15 +1867,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
       {/* Reading scrollback — one tap back to the end, streaming or not */}
       {latestShown && (
-        <button
-          data-jump-latest
-          onClick={jumpToLatest}
-          aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
-          style={{ bottom: composerDock.height }}
-        >
-          <ArrowDown size={13} /> {t("chat.jumpToLatest")}
-        </button>
+        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
       )}
 
       {/* Keyed by task: each conversation keeps its own draft and a failed

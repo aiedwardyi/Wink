@@ -180,7 +180,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await openRoom();
     for (const id of ["original", "own"]) {
       await menu(id);
-      expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["Reply", "Copy"]);
+      expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["Pin as notice"] : []), "Reply", "Copy"]);
       await click($("[data-menu-copy]"));
     }
     expect(writeText.mock.calls).toEqual([["PR #1304 머지했어요"], ["Ready"]]);
@@ -197,7 +197,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
       Object.defineProperty(picker, "files", { value: [new File(["notes"], "reply.txt", { type: "text/plain" })], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await click(button("Send"));
+    await click(button("Send message"));
     const path = side === "host" ? "/api/rooms/r1/send" : "/api/joined/rooms/r9/send";
     await vi.waitFor(() => expect(asked("POST", path)[0]?.body).toMatchObject({ text: "Reply text", replyToId: side === "host" ? "e-original" : "original", fileIds: ["quoted-file"] }));
     expect(button("Cancel reply")).toBeUndefined();
@@ -208,7 +208,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     const original = $("[data-mid=original]")!;
     const scrollIntoView = vi.fn();
     Object.assign(original, { scrollIntoView });
-    await click($("[data-mid=quoted] button"));
+    await click($('[data-mid=quoted] button[title="Jump to original message"]'));
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
     await menu();
     await click($("[data-menu-reply]"));
@@ -232,7 +232,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     await act(async () => vi.advanceTimersByTime(499));
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => vi.advanceTimersByTime(1));
-    expect([...document.querySelectorAll("[data-message-menu] button")].map((el) => el.textContent)).toEqual(["답장", "복사", "텍스트 선택"]);
+    expect([...document.querySelectorAll("[data-message-menu] [role=menuitem]:not([data-menu-expand])")].map((el) => el.textContent)).toEqual([...(side === "host" ? ["공지로 등록"] : []), "답장", "복사", "텍스트 선택"]);
     await act(async () => { window.dispatchEvent(new Event("orbit:close-message-menu")); });
     expect($("[data-message-menu]")).toBeNull();
     await act(async () => { row.dispatchEvent(event); vi.advanceTimersByTime(500); });
@@ -382,7 +382,7 @@ describe("Team rooms for the host", () => {
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     expect($('[data-team-room="host"]')).not.toBeNull();
     const main = $('[data-team-room="host"]')!;
-    expect(main.querySelector("[data-orbit-composer]")).toBeNull();
+    expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
     expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "People", "Attach a file"]);
@@ -506,7 +506,7 @@ describe("Team rooms for the host", () => {
       Object.defineProperty(picker, "files", { value: [picture], configurable: true });
       picker.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await click(button("Send"));
+    await click(button("Send message"));
     await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/send")).toHaveLength(2));
     expect(calls.find((call) => call.path.startsWith("/api/rooms/r1/files?"))!.path).toContain("name=shot.png");
     expect(asked("POST", "/api/rooms/r1/send")[1]!.body).toMatchObject({ text: "", fileIds: ["U".repeat(24)] });
@@ -648,8 +648,8 @@ describe("Team rooms for a teammate", () => {
     await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
     await vi.waitFor(() => expect($('[data-team-room="joined"]')?.getAttribute("data-team-room-phase")).toBe("live"));
     const main = $('[data-team-room="joined"]')!;
-    expect(main.querySelector("[data-orbit-composer]")).toBeNull();
-    const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
+    expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
+    const labels = [...main.querySelectorAll("button")].filter((each) => !each.closest("[data-mid]")).map((each) => each.getAttribute("aria-label") ?? each.textContent);
     expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["People", "Turn off alerts for this room", "Leave", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Settings|Manage members|Find in conversation|approve|model/i);
     await click(button("People"));

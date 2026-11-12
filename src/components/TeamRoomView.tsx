@@ -69,7 +69,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         notice={{ entryId: noticeEntry, canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} replyTo={replyTo} onClearReply={clearReply} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} replyTo={replyTo} onClearReply={clearReply} />}
       </div>
     </main>
   );

@@ -304,4 +304,25 @@ describe("ManageMembersPanel people", () => {
     expect(calls).toEqual([{ method: "POST", path: "/api/groups/group-1/share" }]);
     expect(people().querySelector("[data-team-room-code]")!.textContent).toContain(CODE);
   });
+
+  it("scrolls 40 people and 15 bots inside the panel and keeps Cancel and Save out of the scroll", async () => {
+    const bots = Array.from({ length: 15 }, (_, i): Bot => ({
+      id: `b${i}`, threadId: `b${i}-thread`, name: `Bot ${i}`, title: "", description: "", notifications: true, color: "green", unread: false,
+      modelSelection: { instanceId: "codex-1", model: "codex-default" }, messages: [],
+    }));
+    mockState.value = { bots, instances: [] };
+    const crowd = { ...shared(Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, name: `Teammate ${i}` }))), memberIds: bots.map((bot) => bot.id) };
+    await open(crowd, "en", () => json({ roomId: "r1", code: CODE, carried: 0, group: crowd }));
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.className.split(" ")).toContain("max-h-full");
+    const body = people().closest<HTMLElement>(".overflow-y-auto")!;
+    expect(body.className.split(" ")).toEqual(expect.arrayContaining(["min-h-0", "flex-1"]));
+    expect(body.querySelectorAll("[data-group-people] li")).toHaveLength(40);
+    expect(body.querySelectorAll('[role="checkbox"]')).toHaveLength(15);
+    for (const label of ["Cancel", "Save"]) {
+      const button = [...dialog.querySelectorAll("button")].find((each) => each.textContent === label)!;
+      expect(body.contains(button)).toBe(false);
+    }
+    mockState.value = { bots: [], instances: [] };
+  });
 });
