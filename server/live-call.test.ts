@@ -54,21 +54,21 @@ describe("call token", () => {
   });
 
   it("sends the saved voice and language in the Live setup", async () => {
-    const h = harness({ liveCall: { voice: "Charon", language: "ko" } });
+    const h = harness({ liveCall: { voice: "Achird", language: "ko" } });
     const { data } = await h.post("token", { locale: "en" });
-    expect(data.voice).toBe("Charon");
+    expect(data.voice).toBe("Achird");
     const setup = h.sent().bidiGenerateContentSetup;
-    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Charon");
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
     expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
     expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean.");
   });
 
-  it("defaults to Kore and Auto: English or Korean as spoken, else the app language", async () => {
+  it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
     const setup = h.sent().bidiGenerateContentSetup;
-    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Kore");
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Aoede");
     const brief = setup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Any other language, Japanese too, gets Korean, never a third language.");
     expect(brief).not.toContain("Switch only when");
@@ -77,18 +77,18 @@ describe("call token", () => {
   it("a voice picked mid-call waits for the next call", async () => {
     const h = harness();
     const first = await h.post("token");
-    h.cfg.liveCall = { voice: "Charon" };
+    h.cfg.liveCall = { voice: "Achird" };
     await h.post("token", { callId: first.data.callId, resume: true });
     await h.post("token");
     const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
-    expect([voice(1), voice(2)]).toEqual(["Kore", "Charon"]);
+    expect([voice(1), voice(2)]).toEqual(["Aoede", "Achird"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
     const h = harness();
     const { status, raw, data } = await h.post("token");
     expect(status).toBe(200);
-    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Kore" });
+    expect(data).toEqual({ callId: expect.stringMatching(CALL_ID), engine: "gemini", model: LIVE_MODEL, url: LIVE_URL, token: "auth_tokens/abc123", expiresAt: expect.any(Number), voice: "Aoede" });
     expect(raw).not.toContain(KEY);
     const [url, init] = h.fetch.mock.calls[0]!;
     expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");

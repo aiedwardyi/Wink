@@ -35,9 +35,9 @@ describe("GeminiLive", () => {
 
   it("names the voice the token picked", () => {
     vi.stubGlobal("WebSocket", FakeSocket);
-    new GeminiLive().connect({ url: "wss://x", token: "t", model: "m", voice: "Charon" }, {} as LiveEvents);
+    new GeminiLive().connect({ url: "wss://x", token: "t", model: "m", voice: "Achird" }, {} as LiveEvents);
     FakeSocket.last.onopen!();
-    expect(FakeSocket.last.frames[0].setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Charon");
+    expect(FakeSocket.last.frames[0].setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
   });
 
   it("never sends context alone, it rides the next text", () => {

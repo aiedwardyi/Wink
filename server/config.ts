@@ -108,11 +108,13 @@ const phoneRelayConfigSchema = z.object({
     )
     .optional(),
 });
+// Picks from the earlier list keep their side.
+const OLD_VOICES: Record<string, LiveVoice> = { Kore: "Aoede", Charon: "Achird" };
 const appConfigSchema = z.object({
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   gemini: z.object({ apiKey: optionalText }).optional(),
   // A voice dropped from the list later falls back to the default, not a config that fails to load.
-  liveCall: z.object({ voice: z.enum(LIVE_VOICES).optional().catch(undefined), language: z.enum(LIVE_LANGUAGES).optional().catch(undefined) }).optional(),
+  liveCall: z.object({ voice: z.preprocess((voice) => OLD_VOICES[voice as string] ?? voice, z.enum(LIVE_VOICES)).optional().catch(undefined), language: z.enum(LIVE_LANGUAGES).optional().catch(undefined) }).optional(),
   /** `model` seeds the default selection; `provider` pins an OpenRouter
    * upstream (e.g. "fireworks"). Both are non-secret and optional. */
   openaiCompat: z

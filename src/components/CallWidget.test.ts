@@ -11,7 +11,7 @@ import { CallHostSlot, CallWidgetSlot } from "./CallSlots";
 import { CallVoicePicker } from "./CallVoicePicker";
 import { ChatView } from "./ChatView";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; closed: boolean }>, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined, puts: [] as unknown[] }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; closed: boolean }>, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined, puts: [] as unknown[], clips: [] as Array<{ src: string; paused: boolean; onended: (() => void) | null }> }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -51,7 +51,7 @@ const bot = (id: string, name: string) => ({
 }) as unknown as Bot;
 const atlas = bot("atlas", "Atlas");
 const juno = bot("juno", "Juno");
-const CONFIG = { gemini: { configured: true }, liveCall: { voice: "Kore", language: "auto" } };
+const CONFIG: { gemini: { configured: boolean }; liveCall: { voice: string; language: string } } = { gemini: { configured: true }, liveCall: { voice: "Aoede", language: "auto" } };
 
 const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -89,6 +89,13 @@ async function mount(chat: Bot) {
   vi.stubGlobal("EventSource", class { onmessage = null; constructor() { fakes.sse = this; } close() {} });
   vi.stubGlobal("fetch", vi.fn(fetchImpl));
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal("Audio", class {
+    paused = true;
+    onended: (() => void) | null = null;
+    constructor(public src: string) { fakes.clips.push(this); }
+    play() { this.paused = false; return Promise.resolve(); }
+    pause() { this.paused = true; }
+  });
   vi.stubGlobal("AudioContext", class { resume() { return Promise.resolve(); } close() { return Promise.resolve(); } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   host = document.createElement("div");
@@ -103,6 +110,7 @@ async function mount(chat: Bot) {
 const button = (scope: ParentNode, label: string) => scope.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const widget = () => host.querySelector<HTMLElement>("[data-test-sidebar] [data-call-widget]");
 const settings = () => host.querySelector<HTMLElement>("[data-test-settings]")!;
+const preview = (name: string) => button(settings(), `Play ${name}`) ?? button(settings(), `Stop ${name}`);
 const pills = (label: string) => [...settings().querySelectorAll<HTMLElement>(`[role=radiogroup][aria-label="${label}"] [role=radio]`)];
 
 async function call() {
@@ -123,6 +131,8 @@ afterEach(async () => {
   fakes.engines.length = 0;
   fakes.puts.length = 0;
   fakes.sse = undefined;
+  fakes.clips.length = 0;
+  CONFIG.gemini.configured = true;
 });
 
 describe("call follows you", () => {
@@ -196,10 +206,10 @@ describe("call follows you", () => {
 describe("call voice in Settings", () => {
   it("offers two voices and Auto / English / Korean, and saves each pick", async () => {
     await mount(atlas);
-    expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Warm", "true"], ["Deep", "false"]]);
+    expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"]]);
     expect(pills("Call language").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Auto", "true"], ["English", "false"], ["한국어", "false"]]);
     await act(async () => pills("Call voice")[1]!.click());
-    expect(fakes.puts).toEqual([{ liveCall: { voice: "Charon" } }]);
+    expect(fakes.puts).toEqual([{ liveCall: { voice: "Achird" } }]);
     await vi.waitFor(() => expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true"));
     await act(async () => pills("Call language")[2]!.click());
     expect(fakes.puts.at(-1)).toEqual({ liveCall: { language: "ko" } });
@@ -212,9 +222,45 @@ describe("call voice in Settings", () => {
     try {
       await render(atlas);
       const text = settings().textContent!;
-      for (const word of ["통화 목소리", "따뜻한", "낮은", "통화 언어", "자동", "한국어", "English"]) expect(text).toContain(word);
+      for (const word of ["통화 목소리", "Jenn", "Eddie", "통화 언어", "자동", "한국어", "English"]) expect(text).toContain(word);
+      await act(async () => button(settings(), "Jenn 들어보기")!.click());
+      expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
     } finally {
       applyLocale("en");
     }
+  });
+
+  it("previews without selecting, one clip at a time, loading none until asked", async () => {
+    await mount(atlas);
+    expect(fakes.clips).toHaveLength(0);
+    await act(async () => preview("Eddie")!.click());
+    expect(fakes.puts).toEqual([]);
+    expect(pills("Call voice")[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Achird-en.mp3", false]]);
+    expect(preview("Eddie")!.getAttribute("aria-label")).toBe("Stop Eddie");
+    await act(async () => preview("Jenn")!.click());
+    expect(fakes.clips.map((clip) => clip.paused)).toEqual([true, false]);
+    expect(preview("Eddie")!.getAttribute("aria-label")).toBe("Play Eddie");
+    await act(async () => fakes.clips[1]!.onended?.());
+    expect(preview("Jenn")!.getAttribute("aria-label")).toBe("Play Jenn");
+    await act(async () => preview("Jenn")!.click());
+    await act(async () => root.render(createElement(StoreProvider, null)));
+    expect(fakes.clips.at(-1)!.paused).toBe(true);
+  });
+
+  it("plays with no Gemini key", async () => {
+    CONFIG.gemini.configured = false;
+    await mount(atlas);
+    await act(async () => preview("Jenn")!.click());
+    expect(fakes.clips.map((clip) => [clip.src, clip.paused])).toEqual([["/voice-preview/Aoede-en.mp3", false]]);
+  });
+
+  it("stops and hides the preview during a live call", async () => {
+    await mount(atlas);
+    await act(async () => preview("Jenn")!.click());
+    await call();
+    expect(fakes.clips[0]!.paused).toBe(true);
+    expect(preview("Jenn")).toBeNull();
+    expect(preview("Eddie")).toBeNull();
   });
 });
