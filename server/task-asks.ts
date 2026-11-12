@@ -4,6 +4,7 @@ export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "de
 export const ASK_STALE_MS = 6 * 60 * 60 * 1000;
 export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40, update: 20 } as const;
 const BRIEF_ASKS = 5;
+const QUESTIONS_KEPT = 10;
 
 export const TASK_ASKS_PROMPT =
   "Add each ask the user makes to update_task_state asks in the same turn, and close it as done or declined as soon as it settles; never drop one. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them.";
@@ -71,10 +72,12 @@ export function mergeTaskAsks(
   }
   while (asks.length > ASK_LIMITS.kept) {
     const closed = asks.findIndex((ask) => !isOpenAsk(ask));
-    if (closed < 0) {
+    // a skipped question gives way before the bot's own ask is refused
+    const drop = closed < 0 ? asks.findIndex(isQuestion) : closed;
+    if (drop < 0) {
       return { error: `That would leave ${asks.length} asks open; Wink keeps ${ASK_LIMITS.kept}. Close finished ones as done or declined first.` };
     }
-    asks.splice(closed, 1);
+    asks.splice(drop, 1);
   }
   return { asks, note: `Asks saved${added.length ? `: added ${added.join(", ")}` : ""}; ${asks.filter(isOpenAsk).length} open.` };
 }
@@ -89,6 +92,8 @@ export function addQuestionAsk(existing: readonly TaskAsk[] | undefined, questio
   const ask = clip(question, ASK_LIMITS.ask);
   const asks = (existing ?? []).map((item) => ({ ...item }));
   if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) return null;
+  const questions = asks.filter((item) => isQuestion(item) && isOpenAsk(item));
+  if (questions.length >= QUESTIONS_KEPT) asks.splice(asks.indexOf(questions[0]!), 1);
   if (asks.filter(isOpenAsk).length >= ASK_LIMITS.kept) return null;
   const listed = clip(choices.join(" / "), ASK_LIMITS.ref);
   const id = `A${Math.max(0, ...asks.map((item) => Number(item.id.slice(1)))) + 1}`;
