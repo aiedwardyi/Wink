@@ -172,6 +172,38 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent).at(-1)).toBe("first.pdf");
 });
 
+// `older` messages before the loaded page, paged or indexed; only the very first brings a file
+function longChat(older: number, fail = 0) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    calls.push(url);
+    if (fail-- > 0) return new Response(null, { status: 503 });
+    if (url.includes("/media")) return Response.json(wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]));
+    const before = new URL(url, "http://x").searchParams.get("before")!;
+    const end = before === "u1" ? older : Number(before.slice(1));
+    const start = Math.max(0, end - 1_000);
+    return Response.json({ hasMore: start > 0, messages: Array.from({ length: end - start }, (_, n): Message => ({ id: `h${start + n}`, role: "bot", kind: "text", at: 0, text: start + n ? "old" : "[first.pdf](C:\\w\\first.pdf)" })) });
+  }));
+}
+
+it("lists the first file of a chat past 5,000 older messages", async () => {
+  longChat(6_000);
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, hasMore: true });
+  for (let i = 0; i < 4; i++) await settle();
+  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent)).toContain("first.pdf");
+});
+
+it("asks once more when the timeline fails to load, without reopening Media", async () => {
+  longChat(2_500, 1);
+  await act(async () => showMedia("t1"));
+  await render({ ...chat, hasMore: true });
+  for (let i = 0; i < 4; i++) await settle();
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1_100)));
+  for (let i = 0; i < 4; i++) await settle();
+  expect([...host.querySelectorAll("[data-media-file]")].map((row) => row.textContent)).toContain("first.pdf");
+  expect(calls.filter((url) => url.includes("/media"))).toHaveLength(2);
+});
+
 it("keeps the grid as it is while a reply streams, and adds a file the moment it lands", async () => {
   await act(async () => showMedia("t1"));
   await render(chat);

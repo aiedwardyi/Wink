@@ -31,6 +31,7 @@ interface Held {
 
 // held per chat or room for the session; the least recently loaded go first
 const HELD = 16;
+const RETRY_MS = 1_000;
 const held = new Map<string, Held>();
 const loads = new Map<string, Promise<MediaFile[]>>();
 const tails = new WeakMap<MediaFile[], { known: Set<string>; fresh: string; files: MediaFile[] }>();
@@ -45,16 +46,17 @@ export function decodeMedia(threadId: string, wire: MediaWire): MediaFile[] {
 /** What this session last loaded, drawn at once while it is asked again. */
 export const heldMedia = (threadId: string, roomId?: string) => held.get(heldKey(threadId, roomId))?.files ?? null;
 
-/** One request per chat or room at a time. */
+/** One request per chat or room at a time, asked once more after a failure. */
 export function loadMedia(threadId: string, roomId?: string): Promise<MediaFile[]> {
   const key = heldKey(threadId, roomId);
   let load = loads.get(key);
   if (!load) {
     const was = held.get(key);
-    const next: Promise<Held> = roomId
+    const ask = (): Promise<Held> => roomId
       ? request(`${hostRoomBase(roomId)}/files`).then((list: { files: Array<RoomFile & { at: number }> }) => ({ files: roomMedia(threadId, roomId, list.files) }))
       : request(`/api/threads/${threadId}/media${was?.v ? `?v=${encodeURIComponent(was.v)}` : ""}`)
         .then((wire: MediaWire | { v: string }) => "ids" in wire ? { v: wire.v, files: decodeMedia(threadId, wire) } : was!);
+    const next = ask().catch(() => new Promise((wait) => setTimeout(wait, RETRY_MS)).then(ask));
     load = next.then((got) => {
       held.delete(key);
       held.set(key, got);
