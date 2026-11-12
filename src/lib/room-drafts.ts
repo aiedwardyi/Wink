@@ -28,7 +28,7 @@ export function holdRoomFiles(picked: readonly File[], replace?: string): Upload
 }
 
 export function useRoomSending(id: string) {
-  return useSyncExternalStore(watch, () => sends.get(id)?.sending ?? false);
+  return useSyncExternalStore(watch, () => sends.get(id)?.sending ?? false, () => false);
 }
 
 /** null while a send is already in flight; a retry of an unedited draft reuses its send id. */
