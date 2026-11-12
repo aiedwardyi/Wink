@@ -172,6 +172,18 @@ describe("call follows you", () => {
     expect(button(host, "Call Juno")).not.toBeNull();
   });
 
+  it("switches to another bot's call on one press", async () => {
+    await mount(atlas);
+    const first = await call();
+    await render(juno);
+    await act(async () => button(host, "Call Juno")!.click());
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(2));
+    expect(first.closed).toBe(true);
+    await act(async () => fakes.engines[1]!.events.ready());
+    await vi.waitFor(() => expect(host.querySelector("[data-call-box]")).not.toBeNull());
+    expect(fakes.engines[1]!.closed).toBe(false);
+  });
+
   it("answers the order from the widget in another chat", async () => {
     await mount(atlas);
     const engine = await call();
