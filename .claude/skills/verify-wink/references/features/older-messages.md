@@ -37,11 +37,11 @@ Phone: `open phone`, open Atlas from the drawer, then the same steps. On phone C
 
 ## Gotchas
 
-- On review-base older pages come only from the `Show earlier messages` button above the first message (`role=button[name=/Show earlier messages/]`). Scrolling alone loads nothing, so `older` fails there by design: that is the eval this kit was proven on. feat/auto-older (abf8a423) loads on scroll and passes.
-- auto-older marks the load point with an empty `[data-older-row]` above the list; a spinner shows in it while a page loads.
-- auto-older starts a load while the top is still two viewports away, so the oldest row was never on screen when it began. Check the row `scroll` reports, not the first row.
+- Older pages load as you scroll up (#1377); the `Show earlier messages` button is gone.
+- The load point is an unlabelled row above the first message, with no selector; prove loads with the rows `scroll` prints.
+- A load starts while the top is still two viewports away, so the oldest row was never on screen when it began. Check the row `scroll` reports, not the first row.
 - Rows are `display: contents`, with no box of their own; `expect in-view` measures what a row holds.
-- The first view shows a window of the newest messages (120 of 320 on both builds), not all of them. Read `N` from the page, never assume it.
+- The first view shows a window of the newest messages (120 of 320), not all of them. Read `N` from the page, never assume it.
 - `scroll top` stops when the first row changes or the scroller stops moving, so one call is one page. Repeat it to walk further back.
 - WebKit pages scroll by script (Playwright has no touch scroll there); prove scrolling behavior on Chromium.
 
