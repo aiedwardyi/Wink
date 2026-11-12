@@ -19,7 +19,7 @@ const FILLER_ONLY = /^(?:uh|um|er|hmm+|mm+|ah|oh|음+|어+|아+)[\s.,!…]*$/i;
 
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
 
-/** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. With an unsent order, any plain answer is a promise. */
+/** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. With an unsent order, any plain answer is a promise unless it ends asking back. */
 export function claimOf(said: string, recap = false, order = false): { claim: Claim; sentence: string } | null {
   if (FAILED.test(said)) return { claim: "failed", sentence: said };
   const clarifies = CLARIFY.test(said);
@@ -32,12 +32,14 @@ export function claimOf(said: string, recap = false, order = false): { claim: Cl
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
     if (!FILLER_ONLY.test(sentence)) plain ||= sentence;
   }
-  return order && plain && !clarifies ? { claim: "promise", sentence: plain } : null;
+  return order && plain && !clarifies && !/\?\s*$/.test(said) ?{ claim: "promise", sentence: plain } : null;
 }
 
 const CHANGES = "open|run|restart|reboot|fix|send|add|delete|remove|schedule|install|deploy|push|merge|create|write|edit|change|move|close|kill|stop|start|update|rename|commit";
-const CHANGE_EN = new RegExp(`\\b(?:can|could|would|will) you (?:please )?(?:just )?(?:${CHANGES})\\b|^\\s*(?:please\\s+)?(?:${CHANGES})\\b`, "i");
-const CHANGE_KO = /(?:열어|실행해|재시작해|재부팅해|고쳐|수정해|보내|추가해|삭제해|지워|예약해|설치해|배포해|푸시해|머지해|만들어|바꿔|옮겨|닫아|꺼|멈춰|시작해|켜)\s?(?:줄|줘|주세요|주실|줄래|주시겠)/;
+// A bare "Stop.", "Start over.", "Change to Korean." or "Update me." mostly talks to the voice itself.
+const OPENERS = "open|run|restart|reboot|fix|send|add|delete|remove|schedule|install|deploy|push|merge|create|write|edit|move|close|kill|rename|commit";
+const CHANGE_EN = new RegExp(`\\b(?:can|could|would|will) you (?:please )?(?:just )?(?:${CHANGES})\\b|^\\s*(?:please\\s+)?(?:${OPENERS})\\b`, "i");
+const CHANGE_KO = /(?:열어|실행해|재시작해|재부팅해|고쳐|수정해|보내|추가해|삭제해|지워|예약해|설치해|배포해|푸시해|머지해|만들어|바꿔|옮겨|닫아|꺼|시작해|켜)\s?(?:줄|줘|주세요|주실|줄래|주시겠)/;
 
 /** A request to change something, even phrased as a question: it needs propose_work and a yes. */
 export function asksForChange(question: string): boolean {

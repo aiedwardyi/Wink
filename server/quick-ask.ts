@@ -138,7 +138,7 @@ export function requeueDroppedCall(store: AskStore, botId: string, threadId: str
   try {
     const queued = queueSteeredMessage(botId, threadId, row.text ?? "", { sendId: row.sendId, call: row.call });
     if (queued.skipped) return;
-    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id });
+    store.patchMessage(threadId, row.id, { steered: undefined, queueId: queued.id, queued: true });
   } catch (error) {
     console.warn(`[queue] dropped call send could not requeue: ${error instanceof Error ? error.message : String(error)}`);
     return;
