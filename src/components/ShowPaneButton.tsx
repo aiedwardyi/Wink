@@ -3,7 +3,7 @@ import { PanelRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { togglePane, useMediaThread, useShowItem } from "@/lib/show-pane";
-import { closeVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { closePane, useVerifyWatch } from "@/lib/verify-watch";
 
 export function ShowPaneButton({ threadId, className }: { threadId: string; className?: string }) {
   const { t } = useI18n();
@@ -19,7 +19,7 @@ export function ShowPaneButton({ threadId, className }: { threadId: string; clas
       aria-pressed={open}
       aria-label={t("show.pane")}
       title={t("show.pane")}
-      onClick={() => checking ? closeVerifyWatch() : togglePane(threadId)}
+      onClick={() => open ? closePane() : togglePane(threadId)}
       className={cn("shrink-0 rounded-md p-1.5 hover:bg-raised hover:text-ink", open ? "text-accent" : "text-ink-secondary", className)}
     >
       <PanelRight size={18} />

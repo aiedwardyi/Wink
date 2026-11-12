@@ -34,9 +34,9 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
-import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, useAutoShow, useMediaThread, useShowItem } from "@/lib/show-pane";
+import { useAutoShow, useCheckThread, useMediaThread, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -253,22 +253,24 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watch = useVerifyWatch();
   const show = useShowItem();
   const media = useMediaThread();
+  const checking = useCheckThread();
   const watchChat = group ?? bot;
   const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
-  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
+  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId
     ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined;
   const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
   const mediaOn = Boolean(watchChat && media === watchChat.threadId);
   const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
-  const watchShown = usePresence(watch && watchChat && watchCard ? { watch: { card: watchCard, threadId: watchChat.threadId, live: watch.live }, source } : showing || mediaOn ? { item: showing, media: mediaOn, source } : null);
+  const paneWatch = watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : undefined;
+  const watchShown = usePresence(paneWatch || showing || mediaOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show || media ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
-  const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : panel === "show" ? closeShow() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
+  const slotPanels: SlotPanel[] = [...(watch || show || media ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
-  useEffect(() => { closeVerifyWatch(); closeShow(); }, [state.selectedId]);
-  useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && slotPanels.every((panel) => panel === "show"));
+  useEffect(() => { closePane(); }, [state.selectedId]);
+  useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && !watch && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
