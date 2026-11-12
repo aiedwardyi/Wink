@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +17,8 @@ import { ReactionChips } from "./Reactions";
 import type { Message } from "@/state/store";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+const ICONS = join(dirname(fileURLToPath(import.meta.url)), "../assets/reactions");
 
 const host = document.createElement("div");
 document.body.append(host);
@@ -31,26 +36,28 @@ function renderChips(emojis: readonly string[]) {
 }
 
 describe("reaction icons", () => {
-  it("draws each offered emoji as an svg, not the text glyph", () => {
+  it("draws each offered emoji as an image file, not inline svg or the text glyph", () => {
     const chips = renderChips(EXTENDED_REACTIONS);
     expect(chips).toHaveLength(EXTENDED_REACTIONS.length);
     for (const [i, chip] of chips.entries()) {
-      expect(chip.querySelector("svg"), EXTENDED_REACTIONS[i]).not.toBeNull();
+      expect(chip.querySelector("img")?.getAttribute("src"), EXTENDED_REACTIONS[i]).toMatch(/\.svg\b/);
+      expect(chip.querySelector("svg")).toBeNull();
       expect(chip.textContent?.trim()).toBe("");
       expect(chip.querySelector("[data-emoji]")?.getAttribute("data-emoji")).toBe(EXTENDED_REACTIONS[i]);
     }
   });
 
   it("keeps the icon colors, never the text color", () => {
-    const [chip] = renderChips(["👍"]);
-    const svg = chip!.querySelector("svg")!.outerHTML;
-    expect(svg).toMatch(/#[0-9a-f]{3,6}/i);
-    expect(svg).not.toContain("currentColor");
+    for (const name of readdirSync(ICONS).filter((file) => file.endsWith(".svg"))) {
+      const svg = readFileSync(join(ICONS, name), "utf8");
+      expect(svg, name).toMatch(/#[0-9a-f]{3,6}/i);
+      expect(svg, name).not.toContain("currentColor");
+    }
   });
 
   it("draws the open-mouth face, not the hushed one", () => {
     const [chip] = renderChips(["😮"]);
-    expect(chip!.querySelector("svg")!.outerHTML).toContain("face-with-open-mouth");
+    expect(chip!.querySelector("img")!.getAttribute("src")).toContain("face-with-open-mouth");
   });
 
   it("names each pill by its emoji for screen readers", () => {
@@ -66,7 +73,7 @@ describe("reaction icons", () => {
 
   it("keeps the text glyph for an older emoji with no icon", () => {
     const [chip] = renderChips(["💯"]);
-    expect(chip!.querySelector("svg")).toBeNull();
+    expect(chip!.querySelector("img")).toBeNull();
     expect(chip!.textContent).toBe("💯");
   });
 });

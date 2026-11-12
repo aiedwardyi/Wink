@@ -25,6 +25,7 @@ import { applyPendingModel } from "./pending-model.ts";
 import { clearAccountSessions } from "./account-sessions.ts";
 import { validateProjectNotes } from "./project-notes.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { noticeText } from "./rooms/db.ts";
 import { coalescedSave } from "./save-defer.ts";
 import { redactToolMessage } from "./tool-detail.ts";
 import { redactVerifyCard } from "./verify-message.ts";
@@ -868,6 +869,11 @@ export class Store {
     }
     for (const g of this.groups) {
       g.busyBotId = null;
+      // a pin from before the cap would ride every room state push
+      if (g.notice?.text && noticeText(g.notice.text) !== g.notice.text) {
+        g.notice.text = noticeText(g.notice.text);
+        groupsMigrated = true;
+      }
       const normalized = normalizeGroupDefaultResponder({ kind: "everyone" }, g.memberIds, Boolean(g.dm));
       if (JSON.stringify(normalized) !== JSON.stringify(g.defaultResponder)) groupsMigrated = true;
       g.defaultResponder = normalized;

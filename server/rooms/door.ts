@@ -342,16 +342,16 @@ function newestThatFit(entries: DoorEntry[]): DoorEntry[] {
   return entries.slice(from);
 }
 
-function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): void {
+function snapshot(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): void {
   if (!door!.snapshots.take(person.id)) return send(res, 429, { error: "rate-limited" });
   const before = url.searchParams.get("before") ?? "";
   const entries = recentRoomEntries(group.hosted.roomId, SNAPSHOT_ENTRIES, /^\d{1,15}$/.test(before) ? Number(before) : undefined);
   const bots = url.searchParams.get("with") === "bots";
-  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles))), state: doorState(group, person) });
+  send(res, 200, { head: entries.at(-1)?.seq ?? 0, entries: newestThatFit(entries.map((entry) => compatibleDoorEntry(doorEntry(entry, bots), largeFiles, media))), state: doorState(group, person) });
 }
 
 /** Register and buffer, state, replay after `after` (or reset), flush, live. */
-async function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean): Promise<void> {
+async function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomPerson, largeFiles: boolean, media: boolean): Promise<void> {
   const roomId = group.hosted.roomId;
   const raw = url.searchParams.get("after") ?? "";
   if (!/^\d{1,15}$/.test(raw)) return send(res, 400, { error: "bad after" });
@@ -360,7 +360,7 @@ async function stream(res: ServerResponse, url: URL, group: HostedGroup, person:
   const after = Number(raw);
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
   door!.watched.set(group.id, roomId);
-  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles);
+  const open = openDoorStream(roomId, person.id, res, url.searchParams.get("with") === "bots", largeFiles, media);
   const frames: DoorFrame[] = [{ kind: "state", state: doorState(group, person) }, ...reactionFrames(group)];
   // A teammate who was away missed the deletions sent live.
   const seen = url.searchParams.get("deleted") ?? "";
@@ -445,10 +445,12 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
-  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
+  // Not a new x-orbit-room-files value: older hosts give large files only when that header is exactly "1".
+  const media = req.headers["x-orbit-room-media"] === "1";
+  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null, media);
   const largeFiles = req.headers["x-orbit-room-files"] === "1";
-  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles);
-  if (action === "stream") return stream(res, url, group, guest.person, largeFiles);
+  if (action === "snapshot") return snapshot(res, url, group, guest.person, largeFiles, media);
+  if (action === "stream") return stream(res, url, group, guest.person, largeFiles, media);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "name") return rename(req, res, guest.roomId, guest.person);
   if (action === "react") return react(req, res, guest.roomId, guest.person);

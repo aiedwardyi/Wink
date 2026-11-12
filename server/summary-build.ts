@@ -13,6 +13,8 @@ const BUILD_RUN_TIMEOUT_MS = 8 * 60_000;
 const INLINE_FLOOR_MS = 60_000;
 // The engine's own compaction runs slower beside a build call, and a native engine never reads the row back.
 const NATIVE_QUIET_MS = 2_000;
+// Back-to-back turns are never quiet, so a build parked this long runs at the next settle.
+const NATIVE_MAX_WAIT_MS = 30_000;
 const prefixKey = (messages: Message[]) => JSON.stringify(messages.map((message) => message.kind === "screen" ? { ...message, png: undefined } : message));
 
 type BuildInstance = Pick<ProviderInstance, "driverKind" | "generateText" | "textModel" | "textTimeoutMs">;
@@ -95,6 +97,7 @@ interface BuildJob {
   /** a native build waiting for a chat with no turn; `rests` voids the quiet timers a later settle replaced */
   ready?: Ready;
   parked?: boolean;
+  parkedAt?: number;
   rests?: number;
 }
 
@@ -210,6 +213,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
 
   const park = (job: BuildJob) => {
     job.parked = true;
+    job.parkedAt ??= Date.now();
     queue.push(job);
     // busy is bot-wide and only this chat's own turn settles it, so a parked build keeps looking
     rest(job);
@@ -243,6 +247,8 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     // every settle looks idle, so only the quiet wait tells a paused chat from one whose next send is on its way
     if (ready.nativeLast !== undefined && (!job.ready || deps.busy(botId, threadId))) return park(Object.assign(job, { ready }));
     const { instance, plan } = ready;
+    // the chat or its bot was deleted while this build waited
+    if (job.ready && !deps.store.taskByThread(botId, threadId)) return;
     // a send that summarized for itself while this build waited: the row would be dropped after a wasted call
     if (job.ready && (applicableCompaction(deps.store.activePath(threadId))?.messageId ?? null) !== (plan.previous?.messageId ?? null)) {
       graceThreads.delete(threadId);
@@ -308,7 +314,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     if (parked) {
       const last = deps.store.taskByThread(botId, threadId)?.nativePrompt?.last ?? Number.POSITIVE_INFINITY;
       // a smaller prompt means the engine has compacted, so the build stops waiting for quiet
-      if (last < (parked.ready?.nativeLast ?? 0)) unpark(parked);
+      if (last < (parked.ready?.nativeLast ?? 0) || Date.now() - (parked.parkedAt ?? 0) >= NATIVE_MAX_WAIT_MS) unpark(parked);
       else rest(parked);
       return;
     }

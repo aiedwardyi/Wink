@@ -355,11 +355,19 @@ describe("turn completion disposition after stop", () => {
     const claimed = indexSource.indexOf("async function startClaimedTurn(");
     const staged = indexSource.indexOf("persistTaskPacket(packet, { staged: true });", claimed);
     const dispatch = indexSource.indexOf("const started = await dispatchAdapterTurn(", claimed);
-    const settle = indexSource.indexOf("store.settleTaskPacket(threadId);", claimed);
+    const settle = indexSource.lastIndexOf("store.settleTaskPacket(threadId);");
     expect(staged).toBeGreaterThan(claimed);
     expect(staged).toBeLessThan(dispatch);
     expect(settle).toBeGreaterThan(indexSource.indexOf("return live.adapter.sendTurn({", dispatch));
     expect(indexSource.split("{ staged: true }")).toHaveLength(2);
+  });
+
+  it("settles the staged record on every early return before the dispatch", () => {
+    const staged = indexSource.indexOf("persistTaskPacket(packet, { staged: true });");
+    const early = indexSource.slice(staged, indexSource.indexOf("const releaseStarting = takeStartingHold(bot.id);", staged));
+    const exits = early.split("logSummaryWait();").slice(1);
+    expect(exits).toHaveLength(6);
+    for (const exit of exits) expect(exit.trimStart()).toMatch(/^store\.settleTaskPacket\(threadId\);/);
   });
 
   it("keeps a routine turn fired in a chat out of that chat's recovery and completion", () => {

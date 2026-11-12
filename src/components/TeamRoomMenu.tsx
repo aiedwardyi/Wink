@@ -169,6 +169,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [hosting, setHosting] = useState(false);
   const busy = useRef(false);
   const waiting = useRef<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -182,6 +183,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     busy.current = true;
     setJoining(true);
     setProblem(null);
+    setHosting(false);
     if (typed) {
       try {
         dispatch({ type: "configStatus", config: await api("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name: typed } }) }) });
@@ -201,6 +203,11 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     }
     busy.current = false;
     setJoining(false);
+    if (result.groupId) {
+      dispatch({ type: "select", id: result.groupId });
+      setHosting(true);
+      return;
+    }
     const short = !rejoin && !looksLikeRoomCode(value);
     setProblem(joinErrorKey(result.status, result.error, short));
     if (short) setCode("");
@@ -272,7 +279,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
         />
       </div>}
       <p role={problem ? "alert" : "status"} className={problem ? "mt-2 text-[12.5px] text-danger" : "mt-2 min-h-[1.25rem] text-[12.5px] text-ink-secondary"}>
-        {problem ? t(problem) : joining ? t("teamRoom.joining") : ""}
+        {problem ? t(problem) : joining ? t("teamRoom.joining") : hosting ? t("teamRoom.youHost") : ""}
       </p>
     </Shell>
   );

@@ -2,7 +2,7 @@
 // choice capping, and exactly one alert per question.
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ASK_USER_QUESTION_MAX, askUserCardPatchSchema, askUserChoices, askUserRequestSchema, closedAskNotes, memberClosedAskNotes, postAskUser, skippedQuestion, watchSkippedQuestions, type AskUserDeps, type AskUserRequest } from "./ask-user.ts";
 import type { MausColor, Message, StoreChange } from "./store.ts";
@@ -206,11 +206,24 @@ describe("skipped ask_user questions", () => {
     expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
   });
 
-  it("files a card the person typed past without picking a choice", () => {
+  it("never files a card answered by typing or speaking", () => {
+    for (const [options, text] of [[["Yes", "No"], "yes"], [["Yes", "No"], "after lunch"], [[], "Ship it Friday."], [["Yes", "No"], "Yes."]] as Array<[string[], string]>) {
+      const h = watched();
+      h.append(askCard("c1", "Ship it?", {}, { options }));
+      h.append(said("u1", text));
+      h.append(askCard("c2", "Next?", { at: 3 }));
+      expect(h.asks()).toEqual([]);
+    }
+  });
+
+  it("walks the thread only for a new question card", () => {
     const h = watched();
+    const walk = vi.spyOn(h.store, "activePath");
+    h.append(said("u1", "hi"));
+    h.append({ id: "r1", at: 3, role: "bot", kind: "text", text: "working" });
+    expect(walk).not.toHaveBeenCalled();
     h.append(askCard("c1", "Ship it?"));
-    h.append(said("u1", "what's for lunch?"));
-    expect(h.asks()).toEqual([filed("A1", "Ship it?")]);
+    expect(walk).toHaveBeenCalledTimes(1);
   });
 
   it("never files an answered, tapped or dismissed card", () => {
@@ -228,11 +241,11 @@ describe("skipped ask_user questions", () => {
     expect(tapped.asks()).toEqual([]);
   });
 
-  it("takes back a card whose typed answer landed just after its message", () => {
+  it("takes back a replaced card whose answer landed just after", () => {
     const h = watched();
     const card = askCard("c1", "Ship it?");
     h.append(card);
-    h.append(said("u1", "after lunch"));
+    h.append(askCard("c2", "Which branch?", { at: 3 }));
     expect(h.asks()).toHaveLength(1);
     h.patch({ ...card, card: { ...card.card!, answered: "after lunch" } });
     expect(h.asks()).toEqual([]);

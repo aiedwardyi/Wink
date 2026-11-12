@@ -6,7 +6,7 @@
 // bot's activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { answersQuestion, scanQuestion } from "../shared/open-question.ts";
+import { scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, type TaskAsk } from "./task-asks.ts";
@@ -124,12 +124,9 @@ export function memberClosedAskNotes(messages: readonly Message[], botId: string
   return [];
 }
 
-/** The open ask_user card `next` closes unanswered: a newer card replaces it, or the person types past it without picking a choice. */
+/** The open ask_user card `next` closes unanswered: only a newer card replaces it, since anything the person says to it may be the answer. */
 export function skippedQuestion(before: readonly Message[], next: Message): Message | null {
-  const open = scanQuestion(before);
-  if (!open) return null;
-  if (isAskUserCard(next)) return open;
-  return answersQuestion(next) && !open.card!.options.includes(next.text?.trim() ?? "") ? open : null;
+  return isAskUserCard(next) ? scanQuestion(before) : null;
 }
 
 /** Files every question card that closes unanswered on its thread's asks list. `update` saves what `change` returns; null saves nothing. */
@@ -140,7 +137,7 @@ export function watchSkippedQuestions(
 ): void {
   store.onChange((change) => {
     if (store.importingSync) return;
-    if (change.type === "message" && !change.imported) {
+    if (change.type === "message" && !change.imported && isAskUserCard(change.message)) {
       const path = store.activePath(change.threadId);
       const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
       if (card) update(change.threadId, (asks) => addQuestionAsk(asks, card.subtitle, card.options, now()));

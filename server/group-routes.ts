@@ -14,7 +14,7 @@ import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { roomFile } from "./rooms/files.ts";
-import { createPeopleOnlyRoom, PEOPLE_ONLY_LINE, peopleOnlyRoom, peopleOnlyRoster } from "./rooms/people-only.ts";
+import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/people-only.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -305,8 +305,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (body.memberIds !== undefined) {
         // A DM is the pair it was opened for; only real rooms have a roster.
         if (existing.dm) return json(res, 400, { error: "direct-message channels cannot change members" });
-        if (existing.hosted && peopleOnlyRoom(existing.hosted.roomId)) return json(res, 409, { error: PEOPLE_ONLY_LINE });
-        const roster = checkedMemberIds(body.memberIds);
+        const empty = existing.hosted ? peopleOnlyRoster(body.memberIds) : null;
+        const roster = empty?.ok ? empty : checkedMemberIds(body.memberIds);
         if (!roster.ok) return json(res, 400, { error: roster.error.replace("channel", "room") });
         const refusal = existing.hosted ? roomBots(roster.memberIds, roomPeople(existing.hosted.roomId).map((person) => person.name)) : null;
         if (refusal) return json(res, 400, { error: refusal });
@@ -364,6 +364,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         patch.pinned = body.pinned;
       }
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
+      if (existing.hosted && Array.isArray(patch.memberIds)) setPeopleOnly(existing.hosted.roomId, !patch.memberIds.length);
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: publicGroupState(group) });

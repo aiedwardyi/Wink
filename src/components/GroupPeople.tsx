@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { removeFromRoom, roomPeople, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
+import { letBackIn, removeFromRoom, roomPeople, roomRemoved, shareErrorKey, shareGroup, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
@@ -18,10 +18,12 @@ export function GroupPeople({ group }: { group: Group }) {
   const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [busy, setBusy] = useState(shared);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [codeChanged, setCodeChanged] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const confirm = usePresence(removing);
   const alive = useRef(true);
   const people = roomPeople(group);
+  const removed = roomRemoved(group);
 
   const invite = async () => {
     setBusy(true);
@@ -45,15 +47,27 @@ export function GroupPeople({ group }: { group: Group }) {
 
   const remove = async (personId: string) => {
     if (!group.hosted) return;
+    let result: Awaited<ReturnType<typeof removeFromRoom>>;
     try {
-      await removeFromRoom(group.hosted.roomId, personId);
+      result = await removeFromRoom(group.hosted.roomId, personId);
     } catch {
       return setProblem("errors.request");
     }
     if (!alive.current) return;
-    // Remove retires the old code.
+    // Remove may retire the old code.
+    if (result.codeChanged) setCodeChanged(true);
     setCode(null);
     void invite();
+  };
+
+  const letBack = async (personId: string) => {
+    if (!group.hosted) return;
+    try {
+      await letBackIn(group.hosted.roomId, personId);
+      if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, removed: removed.filter((person) => person.id !== personId) } } });
+    } catch {
+      setProblem("errors.request");
+    }
   };
 
   return (
@@ -71,9 +85,10 @@ export function GroupPeople({ group }: { group: Group }) {
           {t("teamRoom.invite")}
         </button>
       )}
+      {codeChanged && <p role="status" className="mt-1 px-3 text-[12.5px] text-ink-secondary">{t("teamRoom.codeChanged")}</p>}
       {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t(problem)}</p>}
       {problem === "teamRoom.phoneOff" && <button type="button" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "companion" })} className="mt-1 px-3 text-[12.5px] font-medium text-accent hover:underline">{t("teamRoom.openPhoneAccess")}</button>}
-      {people.length > 0 && (
+      {people.length + removed.length > 0 && (
         <ul className="mt-2 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
           {people.map((person) => (
             <li key={person.id} className="flex items-center gap-2.5 rounded-lg px-3 py-1.5 hover:bg-raised/50">
@@ -86,6 +101,20 @@ export function GroupPeople({ group }: { group: Group }) {
                 className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-secondary hover:bg-danger/10 hover:text-danger"
               >
                 {t("teamRoom.remove")}
+              </button>
+            </li>
+          ))}
+          {removed.map((person) => (
+            <li key={person.id} data-room-removed className="flex items-center gap-2.5 rounded-lg px-3 py-1.5 hover:bg-raised/50">
+              <InitialsAvatar initials={profileInitials({ name: person.name })} size={24} />
+              <span className="min-w-0 flex-1 truncate text-[14px] text-ink-secondary">{person.name}</span>
+              <button
+                type="button"
+                onClick={() => void letBack(person.id)}
+                aria-label={t("teamRoom.letBackNamed", { name: person.name })}
+                className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent hover:bg-raised"
+              >
+                {t("teamRoom.letBack")}
               </button>
             </li>
           ))}

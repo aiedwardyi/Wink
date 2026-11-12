@@ -1,5 +1,5 @@
-// People-only team rooms: people talk, no bot ever joins or works. The mode is
-// set once, when the room is created, in a rooms.db table of its own.
+// People-only team rooms: people talk, no bot works. The mode follows the
+// roster, a hosted room with no bots, in a rooms.db table of its own.
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -35,6 +35,10 @@ export function createPeopleOnlyRoom(name: string): RoomRecord {
   const room = createRoom(name);
   withDb((db) => markPeopleOnly(db, room.id));
   return room;
+}
+
+export function setPeopleOnly(roomId: string, on: boolean): void {
+  withDb((db) => db.prepare(on ? "INSERT OR IGNORE INTO people_only_rooms (room_id) VALUES (?)" : "DELETE FROM people_only_rooms WHERE room_id = ?").run(roomId));
 }
 
 /** Unreadable counts as people-only, so a broken rooms.db starts no bot work. */

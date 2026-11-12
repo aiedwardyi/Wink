@@ -105,12 +105,12 @@ describe("room file drop", () => {
     expect(vi.mocked(fetch).mock.calls.map(([path]) => String(path).split("?")[0])).toEqual(["/api/joined/rooms/r9/files", "/api/joined/rooms/r9/send"]);
   });
 
-  it("shows the existing type refusal when the dropped upload is refused", async () => {
+  it("names the kinds a room takes when the dropped upload is refused", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "file-type" }, 415)));
     await render();
     await drag("drop", [file("program.exe", "application/octet-stream")]);
     await send();
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("This kind of file can't be shared.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Only pictures, video, audio, PDF, zip, Office and text files can be shared.");
     expect(host.textContent).toContain("program.exe");
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -385,6 +385,22 @@ describe("room mentions", () => {
       box().dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect([...host.querySelectorAll('[role="option"]')].map((option) => option.textContent)).toEqual(["WinkAgent", "EdwardPerson", "SoraPerson"]);
+  });
+});
+
+describe("room bots", () => {
+  it("gives the host the dashed + on a room with no bots, opening the members picker", async () => {
+    await render();
+    const add = host.querySelector<HTMLButtonElement>('button[title="Manage members"]')!;
+    expect(add.querySelector(".border-dashed")).not.toBeNull();
+    await act(async () => add.click());
+    expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("Manage members of Design team");
+  });
+
+  it("gives a teammate no + even once the room has bots", async () => {
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: [], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
+    await render("joined");
+    expect(host.querySelector('button[title="Manage members"]')).toBeNull();
   });
 });
 

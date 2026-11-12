@@ -5,7 +5,7 @@
 import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, RefreshCw, Search, X } from "lucide-react";
 import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
@@ -59,7 +59,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
-import { GroupMemberRoster } from "./GroupMemberRoster";
+import { GroupMemberRoster, ManageMembersButton } from "./GroupMemberRoster";
 import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
@@ -1612,17 +1612,7 @@ export function GroupView({ group: live }: { group: Group }) {
               }}
             >
               <GroupPeopleFaces group={group} />
-              <button
-                ref={membersTriggerRef}
-                type="button"
-                title={t("room.manageMembers")}
-                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-                className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
-              >
-                <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
-                  <Plus size={11} />
-                </span>
-              </button>
+              <ManageMembersButton ref={membersTriggerRef} count={members.length} />
             </GroupMemberRoster>
           )}
         </div>

@@ -1,17 +1,17 @@
 // The host's People actions in a hosted team room: Invite, which hands back
-// the room's one code, and Remove, which also keeps that PC from rejoining with
-// it. Local only (/api/rooms/), owner only.
+// the room's one code; Remove, which also keeps that PC from rejoining with
+// it; and Let back in. Local only (/api/rooms/), owner only.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { json } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
 import { removeRoomPerson } from "./door.ts";
-import { barRoomPerson, roomCode, shortRoomCode } from "./invites.ts";
+import { barRoomPerson, roomCode, shortRoomCode, unbarRoomPerson } from "./invites.ts";
 
-const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64}))$/;
+const ROUTE = /^\/api\/rooms\/([\w-]{1,64})\/(?:invites|people\/([\w-]{1,64})(\/back)?)$/;
 
 export interface PeopleRouteDeps {
-  store: Pick<Store, "groups">;
+  store: Pick<Store, "groups" | "emit">;
   /** This PC's relay host, null while it has none. */
   relayHost: () => string | null;
   /** The caller holds a bot's comms token. */
@@ -24,14 +24,21 @@ export interface PeopleRouteDeps {
 export async function peopleRoute(_req: IncomingMessage, res: ServerResponse, method: string, path: string, deps: PeopleRouteDeps): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
-  const [, roomId, personId] = route as unknown as [string, string, string | undefined];
-  const served = deps.store.groups.some((group) => group.hosted?.roomId === roomId);
-  if (!served || method !== (personId ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
+  const [, roomId, personId, back] = route as unknown as [string, string, string | undefined, string | undefined];
+  const group = deps.store.groups.find((candidate) => candidate.hosted?.roomId === roomId);
+  if (!group || method !== (personId && !back ? "DELETE" : "POST")) json(res, 404, { error: "not found" });
   else if (deps.botCaller) json(res, 403, { error: "forbidden" });
-  else if (personId) {
-    if (removeRoomPerson(roomId, personId)) {
-      barRoomPerson(roomId, personId);
+  else if (personId && back) {
+    if (unbarRoomPerson(roomId, personId)) {
+      deps.store.emit({ type: "group", groupId: group.id });
       json(res, 200, { ok: true });
+    } else json(res, 404, { error: "not found" });
+  } else if (personId) {
+    if (removeRoomPerson(roomId, personId)) {
+      const codeChanged = barRoomPerson(roomId, personId);
+      // The frame removeRoomPerson sent predates the bar.
+      deps.store.emit({ type: "group", groupId: group.id });
+      json(res, 200, { ok: true, ...(codeChanged ? { codeChanged } : {}) });
     } else json(res, 404, { error: "not found" });
   } else {
     const relayHost = deps.relayHost();

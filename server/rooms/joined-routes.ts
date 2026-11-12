@@ -11,7 +11,7 @@ const notFound: Reply = { status: 404, body: { error: "not found" } };
 
 function reply<T>(result: GuestResult<T> & { sendId?: string }, key: string): Reply {
   if (result.ok) return { status: 200, body: { [key]: result.value, ...(result.sendId ? { sendId: result.sendId } : {}) } };
-  return { status: result.status, body: { error: result.error, ...(result.sendId ? { sendId: result.sendId } : {}) } };
+  return { status: result.status, body: { error: result.error, ...(result.sendId ? { sendId: result.sendId } : {}), ...(result.groupId ? { groupId: result.groupId } : {}) } };
 }
 
 const field = (body: unknown, name: string): unknown =>
