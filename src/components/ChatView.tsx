@@ -14,7 +14,6 @@ import {
   Crown,
   ListTree,
   Loader2,
-  Phone,
   Pin,
   RefreshCw,
   Search,
@@ -114,8 +113,7 @@ import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
-import { endCall } from "@/lib/call";
-import { dropCall, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -962,7 +960,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
-  const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
+  // The audio context is born in the tap: phones only let it play from one.
+  const startCall = useCallback(() => {
+    const ctx = new AudioContext();
+    void ctx.resume();
+    placeCall(bot, ctx);
+  }, [bot]);
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
@@ -1580,27 +1583,6 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           )}
           <ShowPaneButton threadId={bot.threadId} />
 
-          {/* Before the chip: the phone header fits the chip as its last control. */}
-          <button
-            type="button"
-            aria-pressed={onLiveCall}
-            aria-label={liveCallLabel}
-            title={liveCallLabel}
-            // The audio context is born in the tap: phones only let it play from one.
-            onClick={() => {
-              if (onLiveCall) {
-                // Release the call first, or the desktop's old call overlay mounts for a render.
-                endCall(bot.id);
-                return dropCall(liveCall);
-              }
-              const ctx = new AudioContext();
-              void ctx.resume();
-              placeCall(bot, ctx);
-            }}
-            className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
-          >
-            <Phone size={18} />
-          </button>
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
@@ -1932,6 +1914,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
           call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
+          onCall={!onLiveCall && callsSupported() ? startCall : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>

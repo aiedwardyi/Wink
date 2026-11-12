@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, Bot as BotIcon, Clock, Mic, Paperclip, Square, TerminalSquare, User, Users, X } from "lucide-react";
+import { ArrowUp, Bot as BotIcon, Clock, Mic, Paperclip, Phone, Square, TerminalSquare, User, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group, type Message, api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import {
@@ -219,6 +219,7 @@ export function Composer({
   locked = false,
   focusBlocked = false,
   call,
+  onCall,
 }: {
   bot?: Bot;
   group?: Group;
@@ -237,6 +238,8 @@ export function Composer({
   focusBlocked?: boolean;
   /** A live call's controls and caption, placed in the frame's grid. */
   call?: (box: { closing: boolean }) => ReactNode;
+  /** Starts a call from the empty box's Send spot; absent where calls can't work. */
+  onCall?: () => void;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -1431,6 +1434,17 @@ export function Composer({
             {busyChrome.sendLooksQueued ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
           </>
+          )}
+          {onCall && bot && !hasContent && !sendBlocked && !callSlot.mounted && (
+            <button
+              type="button"
+              onClick={onCall}
+              aria-label={t("composer.call", { name: bot.name })}
+              title={t("composer.call", { name: bot.name })}
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
+            >
+              <Phone size={16} />
+            </button>
           )}
           </div>
         </div>
