@@ -144,10 +144,12 @@
     list.hidden = false;
     list.replaceChildren();
     const sorted = pcs.slice().sort((a, b) => a.name.localeCompare(b.name) || a.label.localeCompare(b.label));
+    const last = remembered();
     for (const pc of sorted) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = pc.name;
+      button.classList.toggle("last", pc.label === last);
       button.addEventListener("click", () => openPc(button, pc));
       list.append(button);
     }
@@ -229,13 +231,14 @@
         buttonShown = true;
         slot.hidden = false;
         slot.classList.remove("ready");
+        slot.classList.toggle("last", LABEL_RE.test(remembered()));
         slot.replaceChildren();
         gis.renderButton(slot, {
           type: "standard",
           theme: matchMedia("(prefers-color-scheme: dark)").matches ? "filled_black" : "outline",
           size: "large",
           text: "signin_with",
-          shape: "rectangular",
+          shape: "pill",
           width: 300,
         });
         revealWhenDrawn(slot);

@@ -174,7 +174,7 @@ describe("phone sign-in page", () => {
   it.each([["light", "outline"], ["dark", "filled_black"]])("renders Google's button for %s mode", (scheme, theme) => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: scheme === "dark" && query === "(prefers-color-scheme: dark)" }));
     open("/signin", []);
-    expect(buttons).toEqual([expect.objectContaining({ theme, text: "signin_with", shape: "rectangular" })]);
+    expect(buttons).toEqual([expect.objectContaining({ theme, text: "signin_with", shape: "pill" })]);
     expect(inits).toHaveLength(1);
     expect(prompts).toHaveLength(0);
   });
@@ -280,6 +280,23 @@ describe("phone sign-in page", () => {
     expect(ada!.getAttribute("aria-busy")).toBe("true");
     expect([ada!.disabled, zed!.disabled]).toEqual([true, true]);
     expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+  });
+
+  it("rings only the last-used PC, with no glow animation under reduced motion", async () => {
+    expect(CSS).toMatch(/\.list button \{[^}]*border-radius: 999px;/);
+    expect(CSS).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*animation: none;/);
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }, { label: "cccccccccccccccc", name: "Mid" }]);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(3));
+    const rows = [...document.querySelectorAll("#list button")].map((button) => [button.textContent, button.classList.contains("last")]);
+    expect(rows).toEqual([["Ada", false], ["Mid", false], ["Zed", true]]);
+  });
+
+  it.each([[LABEL_B, true], ["", false], ["short", false]])("rings Google's button only for a remembered PC (%s)", (label, ringed) => {
+    if (label) localStorage.setItem(LAST_PC, label);
+    open("/?pick=1", []);
+    expect(document.getElementById("google")!.classList.contains("last")).toBe(ringed);
   });
 
   it("opens only the first PC clicked", async () => {

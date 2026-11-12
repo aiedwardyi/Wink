@@ -7,6 +7,8 @@
   --ink-secondary: #545b7c;
   --accent: #b91a61;
   --danger: #a5211a;
+  --edge: #ff4d9d;
+  --edge-glow: #ff4d9d40;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -18,6 +20,7 @@
     --ink-secondary: #a3a7b3;
     --accent: #929fff;
     --danger: #ff8c98;
+    --edge-glow: #ff4d9d80;
   }
 }
 * {
@@ -137,6 +140,57 @@ h1 {
   opacity: 1;
   visibility: visible;
 }
+#google.last {
+  width: fit-content;
+  margin-inline: auto;
+}
+.list button,
+#google {
+  position: relative;
+}
+.list button::before,
+.list button::after,
+#google.last::before,
+#google.last::after {
+  content: "";
+  position: absolute;
+  inset: -5px 50% -5px -5px;
+  border: 0 solid transparent;
+  border-left-width: 1.5px;
+  border-radius: 999px;
+  pointer-events: none;
+  transition: border-color 150ms;
+}
+.list button::after,
+#google.last::after {
+  inset: -5px -5px -5px 50%;
+  border-width: 0 1.5px 0 0;
+}
+.list button.last::before,
+.list button.last::after,
+#google.last::before,
+#google.last::after {
+  border-color: var(--edge);
+  filter: drop-shadow(0 0 3px var(--edge-glow));
+  animation: glow 2.4s ease-in-out infinite alternate;
+}
+.list button:not(.last):hover:not(:disabled)::before,
+.list button:not(.last):hover:not(:disabled)::after {
+  border-color: var(--hairline);
+}
+@keyframes glow {
+  from {
+    filter: drop-shadow(0 0 1px var(--edge-glow));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .list button.last::before,
+  .list button.last::after,
+  #google.last::before,
+  #google.last::after {
+    animation: none;
+  }
+}
 .list button {
   display: flex;
   align-items: center;
@@ -144,7 +198,7 @@ h1 {
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: 999px;
   background: var(--inset);
   color: var(--ink);
   font: inherit;
