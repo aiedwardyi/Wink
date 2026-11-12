@@ -9,7 +9,7 @@ import { broadcastDoorEntry } from "./door-streams.ts";
 export function askNote(askId: string | undefined, botName: string): string {
   const ask = askId ? askById(askId) : null;
   const asked = ask ? roomEntry(ask.roomId, ask.entryId) : null;
-  return asked ? `(${JSON.stringify(asked.author.name)} asked you: ${JSON.stringify(asked.text)}. Reply to them as ${botName}.)` : `(Reply to the conversation above as ${botName}.)`;
+  return asked ? `(${JSON.stringify(asked.author.name)} asked you: ${JSON.stringify(asked.text)}. Reply to them as ${JSON.stringify(botName)}.)` : `(Reply to the conversation above as ${JSON.stringify(botName)}.)`;
 }
 
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {

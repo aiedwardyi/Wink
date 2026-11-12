@@ -96,7 +96,7 @@ it("publishes one entry with no reply link for a teammate bot an answer @-mentio
   const { id, hosted } = created.body.group;
   expect((await api("POST", `/api/groups/${id}/messages`, { text: "@Alpha start" })).status).toBe(202);
   const fromBot = (name: string) => roomEntries(hosted.roomId).filter((entry) => entry.author.kind === "bot" && entry.author.name === name);
-  await waitFor(async () => fromBot("Beta").length > 0 && !(await api("GET", "/api/bots")).body.groups.find((g: any) => g.id === id).working, "Beta's answer");
+  await waitFor(async () => fromBot("Beta").length > 0 && !(await api("GET", "/api/bots")).body.groups.find((g: any) => g.id === id)?.working, "Beta's answer");
   expect(fromBot("Alpha").map((entry) => entry.text)).toEqual(["@Beta over to you"]);
   const answers = fromBot("Beta");
   expect(answers).toHaveLength(1);
