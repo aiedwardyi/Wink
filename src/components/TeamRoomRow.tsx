@@ -1,6 +1,6 @@
 // One renderer for team room lines, on the host and the teammate side.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Languages } from "lucide-react";
+import { Languages, MessageSquareReply } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
@@ -8,6 +8,7 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
+import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
 import { formatTime } from "@/state/store";
@@ -19,15 +20,18 @@ import { FileAttachmentRow } from "./FileAttachmentRow";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReplyQuote } from "./ReplyQuote";
 
-export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false, quote, onJump, onMenu }: {
+export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate = false, quote, onJump, onMenu, onReply }: {
   line: RoomLine; mine: boolean; named: boolean; base: string; authorName?: string; canTranslate?: boolean; quote?: RoomLine;
-  onJump: (id: string) => void; onMenu: (request: MessageMenuRequest) => void;
+  onJump: (id: string) => void; onMenu: (request: MessageMenuRequest) => void; onReply?: (message: Message) => void;
 }) {
   const { t, locale } = useI18n();
   const translation = useRoomTranslation(base, line.entryId ?? line.id, locale);
   const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
   const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
+  const rowRef = useRef<HTMLDivElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  useBubbleSwipe({ row: rowRef, bubble: bubbleRef, canReply: Boolean(onReply), canTranslate: showTranslate, onReply: () => onReply?.(roomMessage(line)), onTranslate: translation.toggle });
   const target = { threadId: base, message: roomMessage(line), copyText: line.text, user: mine, pinned: false, canPin: false };
   return (
     <div className="contents">
@@ -38,9 +42,10 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
         </div>
       ) : named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
       <div
+        ref={rowRef}
         data-mid={line.id}
         data-team-room-line={mine ? "mine" : "theirs"}
-        className={cn("group flex w-full flex-col outline-none", mine ? "items-end" : "items-start")}
+        className={cn("group relative flex w-full flex-col outline-none", mine ? "items-end" : "items-start")}
         tabIndex={-1}
         {...holdToOpen((x, y, opener) => onMenu({ kind: "message", x, y, opener, target }))}
         onContextMenu={(event) => {
@@ -60,7 +65,9 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
           onMenu({ kind: "message", x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, opener: event.currentTarget, target });
         }}
       >
-        <div className={cn("relative w-fit max-w-[min(42rem,78%)]", !mine && "ml-8")}>
+        <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />
+        {!mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
+        <div ref={bubbleRef} className={cn("relative w-fit max-w-[min(42rem,78%)]", !mine && "ml-8")}>
           {!mine && <span data-room-translate-gutter className="absolute top-0 -left-8 flex w-8 justify-start">
             {showTranslate && <button
               type="button"
@@ -215,7 +222,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
             const authorName = line.author.kind === "host" ? hostName : people.find((person) => person.id === line.author.id)?.name;
             const visible = { ...line, files: line.files.map((file) => fileState.deleted.includes(file.id) ? { ...file, deleted: true } : file) };
             const quote = line.replyToId ? byId.get(line.replyToId) : undefined;
-            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} />;
+            return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} onReply={onReply} />;
           })}
         </div>
       </div>
