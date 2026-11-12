@@ -174,7 +174,7 @@ it("the checker opens on Check, and Show keeps its file", async () => {
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Check", "Media"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -210,7 +210,7 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Check", "Media"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -249,5 +249,5 @@ it("a phone gets the Check tab for a running doc check, not a running site check
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, hidden: false });
   expect(tabs()).toEqual(["Show", "Media"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Check", "Media"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check"]);
 });

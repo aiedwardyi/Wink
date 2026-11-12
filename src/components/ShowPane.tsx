@@ -68,8 +68,8 @@ export function ShowPane({ item, watch, media = false, check = false, card, sour
         {!phone && <button type="button" onClick={closePane} aria-label={t("show.collapse")} title={t("show.collapse")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><ChevronRight size={18} /></button>}
         <div role="tablist" className="show-pane-tabs">
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
-          {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
+          {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
