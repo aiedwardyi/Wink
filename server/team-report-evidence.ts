@@ -3,6 +3,7 @@ import { openSync, closeSync, fstatSync, readFileSync, realpathSync } from "node
 import { isAbsolute, join, relative } from "node:path";
 import { REPORT_IMAGE_BYTES, teamReportSchema, type TeamReport } from "../shared/team-report.ts";
 import { safeImageMetadata } from "../shared/image-metadata.ts";
+import { isVoiceLine } from "../shared/live-call.ts";
 import { sniffImageMime } from "./attachments.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message } from "./store.ts";
@@ -55,10 +56,10 @@ export function collectReport(options: EvidenceOptions): TeamReport {
   const selected = options.selectedMessageId
     ? [...before, ...(attached ? [request] : [])].find((message) => message.id === options.selectedMessageId)
     : before.find((message) => message.id === request.replyToId) ?? (attached ? request
-      : before.findLast((message) => message.role === "bot" && message.kind === "text" && !message.comm));
+      : before.findLast((message) => message.role === "bot" && message.kind === "text" && !message.comm && !isVoiceLine(message)));
   if (!selected) throw new Error("Incident unidentified. Ask which Wink answer or problem to report, without asking for send approval.");
   const index = selected === request ? before.length : before.indexOf(selected);
-  const preceding = selected === request ? undefined : before.slice(0, index).findLast((message) => message.role === "user" && message.kind === "text" && !message.comm);
+  const preceding = selected === request ? undefined : before.slice(0, index).findLast((message) => message.role === "user" && message.kind === "text" && !message.comm && !isVoiceLine(message));
   const wanted = new Set([selected.id, request.id, ...(preceding ? [preceding.id] : [])]);
   for (const id of options.earlierMessageIds ?? []) {
     const found = before.find((message) => message.id === id);

@@ -1,7 +1,7 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { TeamSection, type TeamView } from "./TeamSection";
@@ -77,8 +77,11 @@ async function tapBar(card: Element, index: number) {
   });
 }
 
+const tipText = () => document.querySelector("[data-bar-tip]")?.textContent;
+
 describe("team cards", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     document.body.replaceChildren();
     applyLocale("en");
   });
@@ -109,14 +112,14 @@ describe("team cards", () => {
     if (!card) throw new Error("no card");
     expect(card.textContent).toContain("Mobile today · 1 visit · 12m");
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · 12m");
+    expect(tipText()).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · 12m");
   });
 
   it("shows <1m for a visit under a minute", async () => {
     const card = await cardAt(3);
     expect(card.textContent).toContain("Mobile today · 1 visit · <1m");
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · <1m");
+    expect(tipText()).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · <1m");
   });
 
   it("uses a singular day only for one active day", async () => {
@@ -135,11 +138,11 @@ describe("team cards", () => {
   it("tips with date, active hours, then mobile visits", async () => {
     const card = await cardAt(0);
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
+    expect(tipText()).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
     await tapBar(card, 10);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Sat, Oct 10\n3h active\nMobile 1 visit · 10m");
+    expect(tipText()).toBe("Sat, Oct 10\n3h active\nMobile 1 visit · 10m");
     await tapBar(card, 8);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Thu, Oct 8\n5h active\nNo mobile");
+    expect(tipText()).toBe("Thu, Oct 8\n5h active\nNo mobile");
   });
 
   it("follows the tip in the aria label", async () => {
@@ -167,19 +170,39 @@ describe("team cards", () => {
     applyLocale("ko");
     const card = await cardAt(0);
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toContain("모바일 3회 · 4m");
+    expect(tipText()).toContain("모바일 3회 · 4m");
     await tapBar(card, 8);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toContain("모바일 없음");
+    expect(tipText()).toContain("모바일 없음");
   });
 
-  it("swaps the tip in over the summary without adding a row", async () => {
-    const card = await cardAt(0);
-    expect(card.querySelector("p.whitespace-pre-line")).toBeNull();
-    expect(card.querySelector("div.grid > div")?.className).not.toContain("invisible");
-    const kids = card.childElementCount;
-    await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
-    expect(card.querySelector("div.grid > div")?.className).toContain("invisible");
-    expect(card.childElementCount).toBe(kids);
+  it("floats the tip without touching the card", async () => {
+    const host = await renderTeam();
+    const before = host.innerHTML;
+    expect(tipText()).toBeUndefined();
+    await tapBar(host.querySelector("article")!, 13);
+    expect(tipText()).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
+    expect(host.innerHTML).toBe(before);
+  });
+
+  it.each([1, 3, 4])("keeps a bottom-row tip inside the window with %i cards", async (count) => {
+    for (const [width, height] of [[1280, 800], [392, 844], [360, 640]]) {
+      Object.assign(window, { innerWidth: width, innerHeight: height });
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        if (this.hasAttribute("data-bar-tip")) return { top: 0, left: 0, width: 200, height: 52 } as DOMRect;
+        return { top: height - 24, bottom: height, left: width - 30, width: 4, height: 24 } as DOMRect;
+      });
+      const host = await renderTeam({ ...view, people: view.people.slice(0, count) });
+      const cards = host.querySelectorAll("article");
+      await tapBar(cards[cards.length - 1]!, 13);
+      const tip = document.querySelector<HTMLElement>("[data-bar-tip]")!;
+      const top = parseFloat(tip.style.top);
+      const left = parseFloat(tip.style.left);
+      expect(top).toBeGreaterThanOrEqual(8);
+      expect(top + 52).toBeLessThanOrEqual(height - 24);
+      expect(left).toBeGreaterThanOrEqual(8);
+      expect(left + 200).toBeLessThanOrEqual(width - 8);
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
   });
 });

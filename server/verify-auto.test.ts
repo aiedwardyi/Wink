@@ -208,6 +208,7 @@ it("ignores a dead named URL and non-web writes", async () => {
 });
 
 it("hands one turn's document writes to the document check once", async () => {
+  for (const name of ["script.md", "brief.docx", "notes.txt"]) await writeFile(join(root, name), "x");
   for (let i = 0; i < 20; i++) auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["brief.docx", "notes.txt", "app.py"] }));
   await auto.settled({ ...turn, reply: "Wrote script.md, brief.docx and notes.txt." });
@@ -223,7 +224,44 @@ it("does not check a document the turn wrote that nobody names", async () => {
   expect(start).not.toHaveBeenCalled();
 });
 
+it("reply naming an edited notes file does not check it", async () => {
+  await writeFile(join(root, "built.md"), "- 포키팡");
+  const startedAt = (await stat(join(root, "built.md"))).birthtimeMs + 5_000;
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "built.md")] }));
+  await auto.settled({ ...turn, startedAt, humanText: "PR 255 is green: merge, deploy and run the live check", reply: "Now the built.md lines for #255." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("reply naming a notes file edited from the shell does not check it", async () => {
+  await writeFile(join(root, "built.md"), "- 포키팡");
+  const startedAt = (await stat(join(root, "built.md"))).birthtimeMs + 5_000;
+  await utimes(join(root, "index.html"), new Date(startedAt - 3_600_000), new Date(startedAt - 3_600_000));
+  await utimes(join(root, "built.md"), new Date(startedAt), new Date(startedAt));
+  shell();
+  await auto.settled({ ...turn, startedAt, humanText: "What's the release status?", reply: "Updated built.md." });
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("new document named in reply is checked", async () => {
+  await writeFile(join(root, "report.md"), "# Report");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "report.md")] }));
+  await auto.settled({ ...turn, reply: "Saved report.md." });
+  expect(docs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ paths: [join(root, "report.md")] }));
+});
+
+it.each([
+  ["person-named edited document is checked", "Fix the typos in essay.md"],
+  ["edited document the person asks to translate is checked", "Translate my essay into Korean"],
+])("%s", async (_, humanText) => {
+  await writeFile(join(root, "essay.md"), "An essay");
+  const startedAt = (await stat(join(root, "essay.md"))).birthtimeMs + 5_000;
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "essay.md")] }));
+  await auto.settled({ ...turn, startedAt, humanText, reply: "Updated essay.md." });
+  expect(docs).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ paths: [join(root, "essay.md")] }));
+});
+
 it.each(["reply", "humanText"] as const)("checks only the written document the %s names", async source => {
+  await writeFile(join(root, "report.md"), "x");
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "report.md"), join(root, "worker-card.md")] }));
   await auto.settled({ ...turn, [source]: "The summary goes in report.md." });
   expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [root], paths: [join(root, "report.md")], humanId: "human" });
@@ -231,6 +269,8 @@ it.each(["reply", "humanText"] as const)("checks only the written document the %
 
 it.each(["report.docx", "report.md"])("checks only the named %s in a bot's workspace", async name => {
   const workspace = join(DATA_DIR, "workspaces", "bot");
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, name), "x");
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(workspace, name), join(workspace, "worker-card.md")] }));
   await auto.settled({ ...turn, roots: [workspace], reply: `Saved ${name}.` });
   expect(docs).toHaveBeenCalledExactlyOnceWith({ botId: "bot", threadId: "thread", roots: [workspace], paths: [join(workspace, name)], humanId: "human" });

@@ -17,7 +17,7 @@ describe("wire clears", () => {
   });
 
   it("sends every clearable room field as null once cleared", () => {
-    expect(wire(groupClears({}))).toEqual({ pinnedMessageId: null, section: null, cwd: null });
+    expect(wire(groupClears({}))).toEqual({ pinnedMessageId: null, picture: null, section: null, cwd: null });
   });
 
   it("passes set values through", () => {
@@ -25,6 +25,6 @@ describe("wire clears", () => {
       pinnedMessageId: "m1",
       rememberedProjectCwd: "C:/work",
     });
-    expect(wire(groupClears({ pinnedMessageId: "m1", cwd: "C:/work" }))).toMatchObject({ pinnedMessageId: "m1", cwd: "C:/work" });
+    expect(wire(groupClears({ pinnedMessageId: "m1", picture: "P".repeat(24), cwd: "C:/work" }))).toMatchObject({ pinnedMessageId: "m1", picture: "P".repeat(24), cwd: "C:/work" });
   });
 });

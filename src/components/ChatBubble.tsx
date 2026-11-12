@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, RefreshCw, Webhook } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -191,21 +191,6 @@ function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }
           document.body,
         )}
     </>
-  );
-}
-
-/** The wait for a quick answer: three pulsing dots in a plain bot bubble. */
-export function QuickTyping() {
-  return (
-    <div data-quick-typing className="flex w-full flex-col items-start pb-4">
-      <div className="w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5">
-        <div className="flex h-[22px] items-center gap-1">
-          {[0, 1, 2].map((i) => (
-            <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-secondary/60" style={{ animationDelay: `${i * 200}ms` }} />
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -561,7 +546,14 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      <TimestampLabel at={message.at} hidden={streaming} />
+      {message.call ? (
+        <div className="flex items-center gap-1">
+          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
+          <TimestampLabel at={message.at} hidden={streaming} />
+        </div>
+      ) : (
+        <TimestampLabel at={message.at} hidden={streaming} />
+      )}
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

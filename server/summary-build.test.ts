@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
+import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 const MINUTE = 60_000;
@@ -27,6 +28,10 @@ function overBudgetThread(prefix: string, turns = 70): Message[] {
     message(`${prefix}b${index}`, `outcome ${index}`, { role: "bot" }),
   ]).flat();
 }
+
+const day = `${String(new Date(1_000).getMonth() + 1).padStart(2, "0")}-${String(new Date(1_000).getDate()).padStart(2, "0")}`;
+const valuesBlock = (typed: string[]) => [TYPED_VALUES_HEADER, ...typed.map((text) => `- ${day} ${text}`)].join("\n");
+const requestBlock = valuesBlock(Array.from({ length: 36 }, (_, index) => `request ${index + 10}`));
 
 function setup(generateText?: (prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>) {
   const threads = new Map<string, Message[]>();
@@ -126,7 +131,7 @@ describe("summary build after settle", () => {
 
     expect(generateText).toHaveBeenCalledOnce();
     expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction).toMatchObject({ summary: "built", contextWindow: WINDOW });
+    expect(appended[0]!.compaction).toMatchObject({ summary: `built\n\n${requestBlock}`, contextWindow: WINDOW });
     const lines = vi.mocked(console.info).mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[summary] "));
     expect(JSON.parse(lines[0]!.slice("[summary] ".length))).toMatchObject({ botId: "bot", threadId: "t", phase: "build", run: 1, deadlineMs: 240_000, result: "ok" });
 
@@ -134,6 +139,16 @@ describe("summary build after settle", () => {
     const { prepared, summarize } = await sendPrepares("t", "next");
     expect(summarize).not.toHaveBeenCalled();
     expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
+  });
+
+  it("builds a summary equal to the model text when the chat has no typed values", async () => {
+    const { threads, appended, build } = setup(vi.fn(async () => "SUMMARY\nbuilt"));
+    threads.set("t", overBudgetThread("a").map((item) => ({ ...item, text: item.role === "bot" ? "an outcome" : "a request" })));
+
+    build.onSettled("bot", "t");
+    await build.idle();
+
+    expect(appended.map((item) => item.compaction.summary)).toEqual(["built"]);
   });
 
   it("lands an oversized build trimmed to fit", async () => {
@@ -145,7 +160,9 @@ describe("summary build after settle", () => {
     await build.idle();
 
     expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction.summary).toMatch(/^built line 0\n[\s\S]*\nbuilt line \d+\n\[summary trimmed to fit\]$/);
+    const [text, ...blocks] = appended[0]!.compaction.summary.split("\n\n");
+    expect(text).toMatch(/^built line 0\n[\s\S]*\nbuilt line \d+\n\[summary trimmed to fit\]$/);
+    expect(blocks).toEqual([requestBlock]);
     const lines = vi.mocked(console.warn).mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("[summary] "));
     expect(JSON.parse(lines[0]!.slice("[summary] ".length))).toMatchObject({ phase: "build", result: "trimmed" });
   });
@@ -225,7 +242,7 @@ describe("summary build after settle", () => {
     await build.idle();
 
     expect(calls).toHaveLength(1);
-    expect(appended.map((item) => item.compaction.summary)).toEqual(["built"]);
+    expect(appended.map((item) => item.compaction.summary)).toEqual([`built\n\n${requestBlock}`]);
   });
 
   it("send during build waits then reuses the row without a second summarize call", async () => {
@@ -662,7 +679,7 @@ describe("summary build after settle", () => {
     await build.idle();
 
     expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction).toMatchObject({ summary: "BISON-5861 kept", coveredThroughId: "plant-b", firstKeptId: "fill1-u" });
+    expect(appended[0]!.compaction).toMatchObject({ summary: `BISON-5861 kept\n\n${valuesBlock(["remember BISON-5861"])}`, coveredThroughId: "plant-b", firstKeptId: "fill1-u" });
     expect(threads.get("t")!.map((row) => row.id)).toEqual(["plant-u", "plant-b", "fill1-u", "fill1-b", "fill2-u", "build-0"]);
   });
 

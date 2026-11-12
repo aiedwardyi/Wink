@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QRCodeSVG } from "qrcode.react";
@@ -7,9 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => store);
-// the real form renders nothing until its status loads
-const access = vi.hoisted(() => ({ loaded: true }));
-vi.mock("./PhoneAccessSettings", () => ({ PhoneAccessSettings: () => (access.loaded ? createElement("input", { "data-phone-access-setup": true }) : null) }));
+const relay = vi.hoisted(() => ({ on: true }));
+vi.mock("./PhoneAccessSettings", () => ({
+  PhoneAccessSettings: ({ onEnabled }: { onEnabled?: (on: boolean) => void }) => {
+    useEffect(() => onEnabled?.(relay.on), [onEnabled]);
+    return createElement("div", { "data-this-pc": true });
+  },
+}));
+vi.mock("./DeviceRows", async (original) => ({ ...await original<typeof import("./DeviceRows")>(), YourPcs: () => null }));
 
 import { I18nProvider } from "@/lib/i18n";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
@@ -18,12 +23,10 @@ const url = "https://fixture.invalid/remote?key=fixture";
 let root: Root | undefined;
 let host: HTMLDivElement;
 const button = (label: string) => [...host.querySelectorAll("button, a")].find((node) => node.textContent === label) as HTMLElement;
-const foldOpened = () =>
-  act(async () => {
-    const end = new Event("animationend", { bubbles: true });
-    Object.defineProperty(end, "animationName", { value: "fold-open" });
-    document.getElementById("phone-relay-settings")!.dispatchEvent(end);
-  });
+const openTailscale = async () => {
+  await act(async () => host.querySelector<HTMLElement>('[aria-controls="devices-other"]')!.click());
+  await act(async () => host.querySelector<HTMLElement>('[aria-controls="devices-tailscale"]')!.click());
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -37,7 +40,7 @@ afterEach(async () => {
   root = undefined;
   host.remove();
   store.api.mockReset();
-  access.loaded = true;
+  relay.on = true;
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -48,6 +51,7 @@ async function render(body: object) {
   store.api.mockResolvedValue(body);
   root = createRoot(host);
   await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+  if (host.querySelector('[aria-controls="devices-other"]')) await openTailscale();
 }
 
 describe("Phone setup steps", () => {
@@ -169,7 +173,7 @@ describe("Phone setup steps", () => {
     store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
     await act(async () => button("Open Laptop").click());
     expect(store.api).toHaveBeenLastCalledWith("/api/remote-link?setup=1");
-    expect(store.api).toHaveBeenCalledTimes(3);
+    expect(store.api).toHaveBeenCalledTimes(2);
     expect(host.querySelector("[data-pc-ready]")).toBeNull();
     expect(button("Get Tailscale")).toBeDefined();
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tailscale is offline. Open it and connect.");
@@ -323,60 +327,57 @@ describe("Phone setup steps", () => {
     expect(button("Get Tailscale")).toBeDefined();
   });
 
-  it("opens the relay code box only from its link", async () => {
-    await render({ url: null, setup: { state: "missing" } });
-    const relay = button("Have a setup code?");
-    expect(host.querySelector("[data-phone-access-setup]")).toBeNull();
-    expect(document.getElementById(relay.getAttribute("aria-controls")!)?.hidden).toBe(true);
-    await act(async () => relay.click());
-    expect(host.querySelector("[data-phone-access-setup]")).not.toBeNull();
-    expect(document.getElementById(relay.getAttribute("aria-controls")!)?.hidden).toBe(false);
-  });
-
-  it("hides the relay link on a remote device, where relay setup is refused", async () => {
-    store.api.mockImplementation(async (path: string) => {
-      if (path === "/api/phone-relay/status") throw new Error("manage phone access on this PC");
-      return { url, setup: { state: "ready", phoneJoined: true } };
-    });
+  it("leads with this PC and folds pairing and Tailscale behind their buttons", async () => {
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
     root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
-    expect(host.querySelector("[data-phone-link-qr] svg")).not.toBeNull();
-    expect(button("Have a setup code?")).toBeUndefined();
-    expect(document.getElementById("phone-relay-settings")).toBeNull();
+    expect(host.querySelector("[data-this-pc]")).not.toBeNull();
+    expect(host.querySelector("[data-phone-pairing]")).toBeNull();
+    expect(host.querySelector("[data-devices-settings]")).toBeNull();
+    expect(store.api.mock.calls.some(([path]) => path === "/api/remote-link?setup=1")).toBe(false);
+    await act(async () => button("Other ways to connect").click());
+    const pair = button("Get Code");
+    await act(async () => pair.click());
+    expect(document.getElementById(pair.getAttribute("aria-controls")!)?.querySelector("[data-phone-pairing]")).not.toBeNull();
+    await act(async () => button("Set Up").click());
+    expect(document.getElementById("devices-tailscale")?.querySelector("[data-devices-settings]")).not.toBeNull();
   });
 
-  it.each([[false, "smooth"], [true, "auto"]])("scrolls the opened relay form into view and focuses its field (reduced motion %s)", async (reduce, behavior) => {
-    vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduce && query.includes("reduce") }));
-    const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
-    await render({ url: null, setup: { state: "missing" } });
-    await act(async () => button("Have a setup code?").click());
-    const field = host.querySelector("[data-phone-access-setup]")!;
-    expect(document.activeElement).toBe(field);
-    // the scroll waits for the fold to open, so it reaches the form where it ends up
-    if (!reduce) {
-      expect(scroll).not.toHaveBeenCalled();
-      await foldOpened();
-    }
-    expect(scroll).toHaveBeenCalledTimes(1);
-    expect(scroll.mock.contexts[0]).toBe(field.parentElement);
-    expect(document.getElementById("phone-relay-settings")?.contains(field)).toBe(true);
-    expect(scroll).toHaveBeenCalledWith({ block: "nearest", behavior });
-    await act(async () => button("Have a setup code?").click());
-    expect(scroll).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits for a relay form that loads late, and for its fold to open, before scrolling to it", async () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
-    access.loaded = false;
-    await render({ url: null, setup: { state: "missing" } });
-    await act(async () => button("Have a setup code?").click());
-    await foldOpened();
-    expect(scroll).not.toHaveBeenCalled();
-    access.loaded = true;
+  it("one fold holds code and tailscale", async () => {
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
+    root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
-    expect(scroll).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(host.querySelector("[data-phone-access-setup]"));
+    const fold = button("Other ways to connect");
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(button("Get Code")).toBeUndefined();
+    await act(async () => fold.click());
+    const body = document.getElementById(fold.getAttribute("aria-controls")!)!;
+    for (const text of ["Code instead of Google", "For someone without your Google account. Needs this PC on.", "Tailscale", "Your own private network. Install Tailscale on each device."]) expect(body.textContent).toContain(text);
+    expect(button("Pair with a code")).toBeUndefined();
+    expect(button("Use Tailscale instead")).toBeUndefined();
+    await act(async () => button("Get Code").click());
+    expect(body.querySelector("[data-phone-pairing]")).not.toBeNull();
+    await act(async () => button("Set Up").click());
+    expect(body.querySelector("[data-devices-settings]")).not.toBeNull();
+  });
+
+  it("get code disabled while off", async () => {
+    relay.on = false;
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    await act(async () => button("Other ways to connect").click());
+    expect((button("Get Code") as HTMLButtonElement).disabled).toBe(true);
+    expect((button("Set Up") as HTMLButtonElement).disabled).toBe(false);
+    expect(store.api.mock.calls.some(([path]) => path === "/api/phone/pairing")).toBe(false);
+  });
+
+  it("keeps the Tailscale page on a remote device, with no relay parts", async () => {
+    vi.stubGlobal("location", { hostname: "pc.fixture.ts.net" });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
+    expect(host.querySelector("[data-devices-settings]")).not.toBeNull();
+    expect(host.querySelector("[data-this-pc]")).toBeNull();
+    expect(button("Other ways to connect")).toBeUndefined();
   });
 
   it.each(["focus", "poll"])("refreshes on %s even after ready and stops on unmount", async (trigger) => {
@@ -400,6 +401,7 @@ describe("Phone setup steps", () => {
     store.api.mockImplementation((path: string) => path === "/api/remote-link?setup=1" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({}));
     root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    await openTailscale();
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(30_000);
@@ -470,9 +472,12 @@ describe("Phone setup steps", () => {
     expect(host.querySelector('[data-device-step="2"]')?.getAttribute("data-complete")).toBe("true");
   });
 
-  it("renders all new steps and the relay link in Korean", async () => {
+  it("renders all new steps and both rows in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
-    await render({ url, setup: { state: "ready", phoneJoined: true } });
-    for (const text of ["이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사", "설정 코드가 있나요?"]) expect(host.textContent).toContain(text);
+    store.api.mockResolvedValue({ url, setup: { state: "ready", phoneJoined: true } });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
+    await openTailscale();
+    for (const text of ["다른 연결 방법", "Google 대신 코드로 연결", "코드 받기", "나만의 사설 네트워크입니다. 기기마다 Tailscale을 설치하세요.", "설정", "이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사"]) expect(host.textContent).toContain(text);
   });
 });

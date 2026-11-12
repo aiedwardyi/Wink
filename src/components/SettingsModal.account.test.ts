@@ -144,15 +144,14 @@ describe("Account settings", () => {
     expect(host.querySelector("output")?.textContent).toBe("sync");
   });
 
-  it("lands the companion deep link on Devices and reveals relay setup on demand", async () => {
+  it("lands the companion deep link on Devices and asks for a setup code only in the confirm", async () => {
     const pane = await render("companion");
     expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
     expect(pane.querySelector("[data-phone-settings]")).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
-    expect(pane.querySelector("[data-phone-access-setup]")).toBeNull();
-    const relay = [...pane.querySelectorAll("button")].find((node) => node.textContent === "Have a setup code?")!;
-    await act(async () => relay.click());
-    expect(pane.querySelector("[data-phone-access-setup]")).not.toBeNull();
+    expect(pane.querySelector("input")).toBeNull();
+    await act(async () => pane.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+    expect(document.querySelector('[role="dialog"] input[aria-label="Setup Code"]')).not.toBeNull();
   });
 
   it("shows Devices even on a packaged PC without the legacy companion service", async () => {
@@ -161,6 +160,9 @@ describe("Account settings", () => {
     url = "";
     const pane = await render("companion");
     expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
+    expect(pane.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
+    await act(async () => [...pane.querySelectorAll("button")].find((node) => node.textContent === "Other ways to connect")!.click());
+    await act(async () => [...pane.querySelectorAll("button")].find((node) => node.textContent === "Set Up")!.click());
     expect(pane.querySelectorAll("ol > li")).toHaveLength(5);
   });
 });

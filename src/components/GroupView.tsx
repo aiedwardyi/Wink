@@ -6,6 +6,7 @@ import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
   useStore,
@@ -349,7 +350,7 @@ export const Transcript = memo(function Transcript({
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const findCurrent = useFindCurrentId();
-  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && isShownMessage(entry))?.id;
+  const lastBotTextId = [...transcript].reverse().find((entry) => entry.role === "bot" && entry.kind === "text" && !isVoiceLine(entry) && isShownMessage(entry))?.id;
   const target = roomRetry(group.messages, members, group, group.threadId, group.busyBotId, { allowSetup: true });
   const onRetryFor = (messageId: string) =>
     target && messageId === target.messageId
@@ -370,7 +371,7 @@ export const Transcript = memo(function Transcript({
   const dockTargetId = dock
     ? items.reduce<string | null>(
         (target, item, i) =>
-          rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" ? item.message.id : target,
+          rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" && !isVoiceLine(item.message) ? item.message.id : target,
         null,
       )
     : null;
@@ -1298,7 +1299,7 @@ export function GroupView({ group }: { group: Group }) {
   for (let i = windowedMessages.length - 1; liveTail && !tail && i >= 0; i--) {
     if (messageVisible(windowedMessages[i], showToolCalls, showActivities)) tail = windowedMessages[i];
   }
-  const tailSlot = tail?.role === "bot" && tail.kind === "text" ? replySlot(group.threadId, tail, shown) : null;
+  const tailSlot = tail?.role === "bot" && tail.kind === "text" && !isVoiceLine(tail) ? replySlot(group.threadId, tail, shown) : null;
   const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
@@ -1828,7 +1829,7 @@ export function GroupView({ group }: { group: Group }) {
       </div>
 
       {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onClose={() => setMenu(null)} />
+        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
       ) : menu ? (
         <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
       ) : null}

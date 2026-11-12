@@ -101,6 +101,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # only the files whose tests skip on Windows, so Windows time does not grow
+  vitest-linux:
+    name: vitest (Linux-only tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: >-
+          node node_modules/vitest/vitest.mjs run
+          companion/test/devices.test.ts
+          companion/test/origin.test.ts
+          electron/cua-linux-bundle.test.mjs
+          electron/cua-linux-runtime.test.mjs
+          electron/cua-linux.test.mjs
+          scripts/after-pack.test.mjs
+          scripts/cua-linux-release.test.mjs
+          scripts/linux-after-install.test.mjs
+          server/atomic.test.ts
+          server/branching.test.ts
+          server/config.test.ts
+          server/container-mcp.test.ts
+          server/decision-log-wiring.test.ts
+          server/decision-log.test.ts
+          server/drivers/local-inject-matrix.test.ts
+          server/env-path.test.ts
+          server/index.test.ts
+          server/local-computer.test.ts
+          server/notification-wiring.test.ts
+          server/openmaus-status-capsule.test.ts
+          server/phone-devices.test.ts
+          server/steer-e2e.test.ts
+          server/task-state.test.ts
+          server/turn-dispatch-window.test.ts
+          server/vps-container-mcp.test.ts
+          server/vps-routing.test.ts
+
   node-tests:
     name: node tests (Windows)
     runs-on: windows-latest
@@ -137,7 +179,7 @@ jobs:
 
   test:
     name: typecheck + test (Windows)
-    needs: [checks, vitest, node-tests]
+    needs: [checks, vitest, vitest-linux, node-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

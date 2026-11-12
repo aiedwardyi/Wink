@@ -62,6 +62,10 @@ describe("evaluateRun", () => {
     expect(evaluateRun({ exitCode: 0, summary: belowFloor }).ok).toBe(false);
   });
 
+  it("fails a green run that lost a tenth of the suite", () => {
+    expect(evaluateRun({ exitCode: 0, summary: summary({ numTotalTests: 14117 }) }).ok).toBe(false);
+  });
+
   it("allows an intentional targeted run without weakening its exit checks", () => {
     expect(evaluateRun({ exitCode: 0, summary: summary({ numTotalTests: 1 }) }, null)).toMatchObject({ ok: true });
     expect(evaluateRun({ exitCode: 1, summary: summary({ numTotalTests: 1 }) }, null)).toMatchObject({ ok: false });

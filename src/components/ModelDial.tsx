@@ -447,7 +447,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           {rows.map((row, j) => <div key={row.instance.instanceId} className="dial-layer dial-scene-lab" data-on={j === lab || undefined} style={{ "--c": modelFamilyAccent(row.instance.driverKind) } as CSSProperties} />)}
         </div>
         <svg className="dial-orbits" viewBox="0 0 1200 1200" aria-hidden>
-          <g fill="none" stroke="#ffffff" strokeOpacity=".05">
+          <g fill="none" stroke="var(--dial-line, #ffffff)" strokeOpacity=".05">
             <circle cx="600" cy="600" r="262" />
             <circle cx="600" cy="600" r="380" strokeDasharray="2 10" />
             <circle cx="600" cy="600" r="560" />
@@ -464,9 +464,9 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           <svg className="dial-layer dial-spin dial-ticks" viewBox="0 0 480 480" aria-hidden>
             {models.map((model, j) => {
               const d = sector(212, 226, j * step - (step / 2 - 1), j * step + (step / 2 - 1));
-              return <g key={`${model.instance.instanceId}:${model.cell.options[0]!.id}`} className="dial-chamber" data-on={j === index || undefined} style={{ "--c": modelFamilyAccent(model.instance.driverKind) } as CSSProperties}><path d={d} fill="#fff" fillOpacity=".07" /><path className="lit" d={d} /></g>;
+              return <g key={`${model.instance.instanceId}:${model.cell.options[0]!.id}`} className="dial-chamber" data-on={j === index || undefined} style={{ "--c": modelFamilyAccent(model.instance.driverKind) } as CSSProperties}><path d={d} fill="var(--dial-line, #fff)" fillOpacity=".07" /><path className="lit" d={d} /></g>;
             })}
-            <g stroke="#fff" strokeOpacity=".35" strokeWidth="1.2">
+            <g stroke="var(--dial-line, #fff)" strokeOpacity=".35" strokeWidth="1.2">
               {models.map((_, j) => {
                 if (count < 2 || labOf[j] === labOf[wrap(j + 1, count)]) return null;
                 const [x0, y0] = point(208, j * step + step / 2);
@@ -474,11 +474,11 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                 return <line key={j} x1={x0} y1={y0} x2={x1} y2={y1} />;
               })}
             </g>
-            <circle cx="240" cy="240" r="232" fill="none" stroke="#fff" strokeOpacity=".06" />
+            <circle cx="240" cy="240" r="232" fill="none" stroke="var(--dial-line, #fff)" strokeOpacity=".06" />
           </svg>
           <svg className="dial-layer dial-spin dial-labring" viewBox="0 0 480 480" aria-hidden>
-            <defs><radialGradient id="dial-seg-fill" cx="240" cy="240" r="206" gradientUnits="userSpaceOnUse"><stop offset=".68" stopColor="#16181f" /><stop offset="1" stopColor="#0d0f13" /></radialGradient></defs>
-            {rows.map((row, j) => <path key={row.instance.instanceId} d={sector(142, 206, j * labStep - (labStep / 2 - 1), j * labStep + (labStep / 2 - 1))} fill="url(#dial-seg-fill)" stroke="#fff" strokeOpacity=".07" />)}
+            <defs><radialGradient id="dial-seg-fill" cx="240" cy="240" r="206" gradientUnits="userSpaceOnUse"><stop offset=".68" stopColor="var(--dial-seg-a, #16181f)" /><stop offset="1" stopColor="var(--dial-seg-b, #0d0f13)" /></radialGradient></defs>
+            {rows.map((row, j) => <path key={row.instance.instanceId} d={sector(142, 206, j * labStep - (labStep / 2 - 1), j * labStep + (labStep / 2 - 1))} fill="url(#dial-seg-fill)" stroke="var(--dial-line, #fff)" strokeOpacity=".07" />)}
           </svg>
           {rows.map((row, j) => (
             <svg key={row.instance.instanceId} className="dial-layer dial-wedge" viewBox="0 0 480 480" data-on={j === lab || undefined} style={{ "--c": modelFamilyAccent(row.instance.driverKind), "--j": j } as CSSProperties} aria-hidden>
@@ -516,7 +516,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
               <svg key={n} className="dial-layer dial-gauge" viewBox="0 0 480 480" data-on={on || undefined} aria-hidden>
                 {notches.map((d, j) => (
                   <g key={j} className="dial-notch" data-lit={(on && j <= level) || undefined} style={{ "--p": j / Math.max(n - 1, 1) } as CSSProperties} onClick={() => on && efforts[j] && onDraft(selectPickerEffort(draft, efforts[j]!))}>
-                    <path d={d} fill="#fff" fillOpacity=".07" />
+                    <path d={d} fill="var(--dial-line, #fff)" fillOpacity=".07" />
                     <path className="lit" d={d} fill="var(--accent)" />
                   </g>
                 ))}
@@ -558,7 +558,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                   data-model-row={model.instance.instanceId}
                   data-model-cell={model.cell.options[0]!.id}
                   aria-pressed={j === index}
-                  style={{ "--k": k, "--ak": ak, "--o": fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
+                  aria-hidden={(ak > 1 && fade !== undefined) || undefined}
+                  style={{ "--k": k, "--ak": ak, "--o": ak === 1 ? `var(--dial-near-fade, ${fade})` : fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
                   onClick={() => (j === index ? commit() : go(j))}
                 >
                   <ProviderMark driverKind={model.instance.driverKind} size={18} className="dial-mark" />

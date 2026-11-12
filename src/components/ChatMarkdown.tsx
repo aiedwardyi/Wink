@@ -10,11 +10,14 @@ import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy } from "lucide-react";
+import { LinkedFolderLink } from "./LinkedFolderSheet";
 import { ReadableImage } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
+import { ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { linkedFileSrc, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
@@ -372,10 +375,6 @@ const deviceListSchema = z.object({
   })).optional(),
 });
 
-function linkedFileSrc(threadId: string, filePath: string): string {
-  return `/api/threads/${encodeURIComponent(threadId)}/linked-file?path=${encodeURIComponent(filePath)}`;
-}
-
 /** The other PC the server named for a file it does not have, when the device list knows it. */
 async function otherPc(deviceId: string | undefined): Promise<{ name: string; host: string; offline: boolean } | null> {
   if (!deviceId) return null;
@@ -540,7 +539,11 @@ function PhoneFile({
       </span>
     );
   }
-  if (phase === "desktop") return <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>;
+  if (phase === "desktop") {
+    return kind
+      ? <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>
+      : <LinkedFolderLink folderPath={filePath} threadId={threadId} fileSrc={(path) => linkedFileSrc(threadId, path)}>{children}</LinkedFolderLink>;
+  }
   if (phase === "remote" && remote) {
     return (
       <a
@@ -567,16 +570,10 @@ function PhoneFile({
     return <ReadableImage src={src} alt="" data-phone-media="image" className="max-h-96 max-w-full rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (kind === "pdf" || !kind) {
+  if (showKind(filePath)) return <ShowCard threadId={threadId} path={filePath} />;
+  if (!kind) {
     return (
-      <a
-        href={src}
-        target={kind === "pdf" || /\.html?$/i.test(filePath) ? "_blank" : undefined}
-        download={!kind && !/\.html?$/i.test(filePath) ? true : undefined}
-        rel="noreferrer"
-        data-phone-media={kind ?? undefined}
-        className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent"
-      >
+      <a href={src} download rel="noreferrer" className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
         {children}
       </a>
     );
@@ -597,6 +594,7 @@ function LocalFileLink({
 }) {
   const streaming = useContext(StreamingContext);
   if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
+  if (window.ogb && threadId && showKind(filePath)) return <ShowCard threadId={threadId} path={filePath} />;
   return <DesktopFileLink filePath={filePath} base={base} threadId={threadId}>{children}</DesktopFileLink>;
 }
 

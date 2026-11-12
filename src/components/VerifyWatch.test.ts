@@ -9,7 +9,8 @@ import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { chooseVerifyTab } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
-import { VerifyWatchFrame, VerifyWatchPanel } from "./VerifyWatch";
+import { ShowPane } from "./ShowPane";
+import { VerifyWatchFrame } from "./VerifyWatch";
 
 const flag = vi.hoisted(() => ({ on: true }));
 vi.mock("../../shared/live-verify", async importOriginal => ({ ...await importOriginal<typeof import("../../shared/live-verify")>(), get LIVE_VERIFY_V0() { return flag.on; } }));
@@ -520,7 +521,7 @@ it.each([["en", "Phone fit"], ["ko", "휴대폰 맞춤"]] as const)("names the p
 });
 
 it("slides the docked panel in and keeps it mounted, inert and click-through, while it closes", async () => {
-  const panel = (closing: boolean) => act(async () => root.render(createElement(VerifyWatchPanel, { card, threadId: "t", live: false, hidden: false, closing })));
+  const panel = (closing: boolean) => act(async () => root.render(createElement(ShowPane, { watch: { card, threadId: "t", live: false }, hidden: false, closing })));
   const aside = () => host.querySelector("aside.verify-watch")!;
   await panel(false);
   expect(aside().classList.contains("animate-panel-in")).toBe(true);
@@ -533,7 +534,7 @@ it("slides the docked panel in and keeps it mounted, inert and click-through, wh
 });
 
 it("stops the live stream the moment the panel starts closing", async () => {
-  const panel = (closing: boolean) => act(async () => root.render(createElement(VerifyWatchPanel, { card, threadId: "t", live: true, hidden: false, closing })));
+  const panel = (closing: boolean) => act(async () => root.render(createElement(ShowPane, { watch: { card, threadId: "t", live: true }, hidden: false, closing })));
   await panel(false);
   expect(calls).toHaveLength(1);
   expect(calls[0]!.signal.aborted).toBe(false);

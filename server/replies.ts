@@ -25,7 +25,8 @@ export function replyExcerpt(text: string, limit = MAX_REPLY_EXCERPT): string {
   return `${clean.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 export function replySpeaker(message: Message, userName = "User"): string {
-  return message.role === "user" ? userName : (message.from?.name ?? "Assistant");
+  if (message.role === "user") return message.author?.kind === "person" ? message.author.name : userName;
+  return message.from?.name ?? "Assistant";
 }
 
 /** Add the reply relationship to a provider turn without altering the text

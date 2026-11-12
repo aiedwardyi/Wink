@@ -1,5 +1,6 @@
 // Gate 1 of the quick router: nominate a busy-time message for the quick helper. Anything unsure goes to the bot.
 const MAX_CHARS = 240;
+const SENTENCE = /(?<=[.!?])\s+|\n+/;
 const ATTACH_OR_LINK = /<attached-(image|file)|https?:\/\//i;
 // Filler a sentence may open with, stripped before the checks ("okay great.", "hahaha", "wait", "btw").
 const LEAD =
@@ -27,15 +28,25 @@ const KO_REQUEST =
 const KO_REPORT = /버그|고장|크래시|안 ?(돼|되|됨)|같은데|[는은인]데[\s,]+\S/;
 // 뭐든 and 왜냐하면 open statements.
 const KO_QUESTION = /^(뭐|무엇|어디|언제|왜|어떻게|얼마|몇|누가|어느)(?!든|냐하?면)|(나요|까요|인가요?|일까)\?*$/;
+// Greetings, pings and asks aimed at the helper itself: a sentence of only these words orders nothing.
+const HELLO = /\b(hi+|hello+|hey+|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(ing)?|sidekick|side ?bot)\b|안녕|하이|헬로|테스트|사이드킥|사이드 ?봇/i;
+const CASUAL_WORD =
+  "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r| are| r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ya|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
+  "안녕(하세요)?|하이|헬로|ㅎㅇ|테스트(중)?|사이드킥(이면|이라면|이야)?|사이드 ?봇(이면|이라면|이야)?|거기|아직|있어(요)?|인사(해|해줘|해주세요)|대?답(해|해줘|해주세요)|ㅋ+|ㅎ+";
+const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
 
 /** "quick" when the helper should try it first. Never trusted alone: the helper confirms or hands off. */
 export function nominate(raw: string): "quick" | "main" {
-  const text = raw.trim();
-  if (!text || text.length > MAX_CHARS || ATTACH_OR_LINK.test(text) || REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "main";
+  const whole = raw.trim();
+  if (!whole || whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole)) return "main";
+  // the rest decides; nothing left means it only greets or pings
+  const text = HELLO.test(whole) ? whole.split(SENTENCE).filter((sentence) => !CASUAL.test(sentence.trim())).join("\n") : whole;
+  if (!text.trim()) return "quick";
+  if (REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "main";
   const sentences = text
-    .split(/(?<=[.!?])\s+|\n+/)
+    .split(SENTENCE)
     .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
     .filter(Boolean);
   if (!sentences.length || sentences.some((sentence) => STEER.test(sentence) || KO_STEER.test(sentence) || (COMMAND.test(sentence) && !QUESTION_START.test(sentence)))) return "main";

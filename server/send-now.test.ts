@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { acceptedSendMatch, parseSendId, SendSequencer, sendFingerprint } from "./send-idempotency.ts";
 import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
+import { parseCallTag } from "./live-call.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -40,7 +41,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, sendPostReceipt,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, sendPostReceipt, parseCallTag,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,

@@ -100,6 +100,8 @@ export function execCli(
 ): void {
   const resolved = resolveCli(cli, args);
   const { account, accountDriver, ...options } = opts;
+  // agy's --bg-updater gets its own console, which windowsHide can't reach.
+  if (process.platform === "win32") options.env = { ...(options.env ?? process.env), AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
   const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env);
   // Every engine check asks each CLI for --version; an unchanged binary
   // answers the same, and a launch is what can stall the server on Windows.

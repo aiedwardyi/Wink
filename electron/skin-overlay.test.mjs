@@ -166,7 +166,7 @@ describe("skin overlay chrome", () => {
     expect(SKIN_CHROME["wink-cyber"]).toEqual({ color: "#0b0f1c", symbolColor: "#a8b0d0" });
     expect(SKIN_CHROME["wink-violet"]).toEqual({ color: "#0b0f1c", symbolColor: "#a8b0d0" });
     expect(SKIN_CHROME["wink-black"]).toEqual({ color: "#000000", symbolColor: "#a4abc6" });
-    expect(SKIN_CHROME["wink-day"]).toEqual({ color: "#f7f5fb", symbolColor: "#545b7c" });
+    expect(SKIN_CHROME["wink-day"]).toEqual({ color: "#eeebf7", symbolColor: "#545b7c" });
     for (const id of ["wink", "wink-cyber", "wink-violet", "wink-black", "wink-day"]) {
       expect(extractOmbSkin(Buffer.from(`xxomb-skin\u0000\u0001${id}\u0000yy`))).toBe(id);
     }

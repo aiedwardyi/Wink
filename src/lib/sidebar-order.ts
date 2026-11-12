@@ -5,6 +5,33 @@ import { userSectionId } from "./sidebar-layout";
 export type SidebarItemKind = "bot" | "group";
 export type SidebarItemOrder = Record<string, string[]>;
 
+export type JoinedRoomLayout = Record<string, { section?: string; pinned?: boolean }>;
+const ROOM_LAYOUT_KEY = "openmausbot.sidebarRooms.v1";
+export const ROOM_LAYOUT_EVENT = "orbit-sidebar-rooms";
+
+export function loadJoinedRoomLayout(): JoinedRoomLayout {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(ROOM_LAYOUT_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).flatMap(([id, entry]) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const { section, pinned } = entry as { section?: unknown; pinned?: unknown };
+      return [[id, { ...(typeof section === "string" ? { section } : {}), ...(typeof pinned === "boolean" ? { pinned } : {}) }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function saveJoinedRoomLayout(layout: JoinedRoomLayout): void {
+  try {
+    localStorage.setItem(ROOM_LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    // The current window can still keep the move when storage is full.
+  }
+  window.dispatchEvent(new CustomEvent(ROOM_LAYOUT_EVENT, { detail: layout }));
+}
+
 export type SidebarOrder = {
   sectionOrder: string[];
   itemOrder: SidebarItemOrder;

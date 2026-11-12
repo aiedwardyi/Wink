@@ -1,6 +1,7 @@
 import type { MausMotion } from "@/lib/mascot";
 import type { NotificationTarget } from "@/lib/notify";
 import { isShownMessage } from "@/lib/shown-message";
+import { joinedRoomIdOf } from "@/lib/team-rooms";
 import type { AppState, Bot, ConfigStatus, ConfigStatusFrame, Group, Message, ModelSelection, NotificationRoutingState, OptionCardData, QueueReceiptSnapshot, TerminalAttention, TerminalAttentionMap } from "./store-types";
 
 /** What the UI shows as chosen: a mid-reply pick wins over the running model. */
@@ -150,7 +151,7 @@ export function visibleNotificationThread(
   return (
     state.bots.find((candidate) => candidate.id === state.selectedId)?.threadId ??
     state.groups.find((candidate) => candidate.id === state.selectedId)?.threadId ??
-    null
+    (joinedRoomIdOf(state.selectedId) ? state.selectedId : null)
   );
 }
 

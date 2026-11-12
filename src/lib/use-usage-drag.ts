@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion } from "./phone-swipe";
-import { useTouchDrag } from "./use-touch-drag";
+import { roomBelow, useTouchDrag } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
 const CHANGE = "usage-order";
@@ -33,7 +33,7 @@ export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => st
 }
 
 type Drag = {
-  node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number; scrollTop: number;
+  node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number; scrollTop: number; room: number;
 };
 
 function scrollParent(node: HTMLElement | null) {
@@ -95,7 +95,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const items = siblings(node);
     const from = items.indexOf(node);
     active.current = { node, items, rects: items.map((item) => item.getBoundingClientRect()), from, to: from,
-      key: node.matches(ROW) ? node.closest<HTMLElement>(SECTION)!.dataset.usageBase! : "engines", y: 0, dy: 0, scrollTop: scrollParent(list.current)?.scrollTop ?? 0 };
+      key: node.matches(ROW) ? node.closest<HTMLElement>(SECTION)!.dataset.usageBase! : "engines", y: 0, dy: 0, scrollTop: scrollParent(list.current)?.scrollTop ?? 0, room: roomBelow(node, scrollParent(list.current)) };
     node.setAttribute("data-usage-lifted", "");
     // the whole page: a lifted row ignores hits, so a long press would land on the text around it
     document.documentElement.setAttribute(DRAGGING, "");
@@ -138,7 +138,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     if (reducedMotion() || !drag.node.animate) { finish(); return; }
     drag.node.style.removeProperty("translate");
     const animation = drag.node.animate([
-      { translate: `0 ${drag.dy}px`, scale: "1.03", boxShadow: getComputedStyle(drag.node).boxShadow, backgroundColor: getComputedStyle(drag.node).backgroundColor },
+      { translate: `0 ${Math.min(drag.room, drag.dy)}px`, scale: "1.03", boxShadow: getComputedStyle(drag.node).boxShadow, backgroundColor: getComputedStyle(drag.node).backgroundColor },
       { translate: `0 ${offset}px`, scale: "1", boxShadow: "none", backgroundColor: "transparent" },
     ], { duration: 220, easing: "cubic-bezier(0.16,1,0.3,1)", fill: "forwards" });
     animation.finished.then(() => { finish(); animation.cancel(); }, () => { clean(drag); active.current = null; });
@@ -172,7 +172,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     const place = () => {
       if (!active.current || !node) return;
       over(null, pointerY);
-      node.style.translate = `0 ${active.current.dy}px`;
+      node.style.translate = `0 ${Math.min(active.current.room, active.current.dy)}px`;
     };
     const edge = () => {
       const box = scrollParent(list.current);

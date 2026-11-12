@@ -67,15 +67,11 @@ describe("whats new card", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
-  it("records the shown release as seen once, only after it scrolls into view", () => {
-    render(RELEASE);
+  it("records nothing when it scrolls into view", () => {
     render(RELEASE);
     expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(2);
+    scrollIntoView();
     expect(api).not.toHaveBeenCalled();
-    scrollIntoView();
-    scrollIntoView();
-    expect(api).toHaveBeenCalledTimes(1);
-    expect(api).toHaveBeenCalledWith("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release: RELEASE }) });
   });
 
   it("closes from Got it, the X and Escape", () => {
@@ -96,7 +92,7 @@ describe("whats new card", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("opens Memory from its Show me and explains the one that starts on its own", () => {
+  it("opens Memory from its Show me and stays open, and explains the one that starts on its own", () => {
     render(RELEASE);
     const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
     act(() => verify.click());
@@ -105,7 +101,7 @@ describe("whats new card", () => {
     expect(onClose).not.toHaveBeenCalled();
     act(() => memory.click());
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("plays the light clip on a light skin", () => {

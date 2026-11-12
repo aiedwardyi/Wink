@@ -3,21 +3,9 @@
 // stored: the state is derived from the transcript, so the sidebar glow, the
 // pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
+import { answersQuestion, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion } from "../../shared/open-question";
 
-/** A non-blocking ask_user card (never the first-run quiz, never a live ask). */
-export function isAskUserCard(message: Message): boolean {
-  return message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
-}
-
-/** Only what the person sent closes a question: not pane notes, peers or bots. */
-export function isSentByPerson(message: Message): boolean {
-  return message.role === "user" && message.kind === "text" && !message.from;
-}
-
-/** A live approval or engine-native question still waiting on the person. */
-function isOpenRequest(message: Message): boolean {
-  return message.kind === "options" && Boolean(message.card?.requestId) && !message.card?.answered && !message.card?.dismissed;
-}
+export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
   /** The chat's open ask_user card, if any. */
@@ -28,17 +16,6 @@ export interface NeedsYou {
 
 const NONE: NeedsYou = { question: null, request: false };
 const cache = new WeakMap<readonly Message[], NeedsYou>();
-
-function scanQuestion(messages: readonly Message[]): Message | null {
-  // The open question is always after the last sent message, and only the
-  // newest marked card can be open (a newer one supersedes it).
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (isSentByPerson(message)) return null;
-    if (isAskUserCard(message)) return message.card!.dismissed || message.card!.answered ? null : message;
-  }
-  return null;
-}
 
 /** What in this chat is waiting on the person, memoized per message array. */
 export function needsYou(messages: readonly Message[]): NeedsYou {
@@ -91,7 +68,7 @@ export function askUserStatus(messages: readonly Message[], message: Message): A
   const index = messages.findIndex((entry) => entry.id === message.id);
   for (let i = index < 0 ? messages.length : index + 1; i < messages.length; i++) {
     const later = messages[i];
-    if (isSentByPerson(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
+    if (answersQuestion(later)) return { state: "answered", reply: firstLine(later.text ?? "") };
     if (isAskUserCard(later)) return { state: "superseded" };
   }
   return { state: "waiting" };

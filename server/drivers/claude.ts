@@ -36,6 +36,8 @@ import { captureToolDetail } from "../tool-detail.ts";
 import type {
   DriverCreateInput,
   ModelCatalog,
+  PrepareFocus,
+  PrepareTurn,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -63,6 +65,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, claudeRateLimitWindows } from "./rate-limits.ts";
 import { switchEffort, type EffortRequest } from "./claude-effort.ts";
 import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
+import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
@@ -806,6 +809,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         toolStarted?: boolean;
         /** an interrupt is out for a user steer; main-agent output that raced it waits here */
         merging?: { held: unknown[] };
+        /** no_reply_needed ended it; output that raced the interrupt is dropped */
+        quietEnd?: boolean;
         /** one deadline from the interrupt to the steer's next request */
         mergeGuard?: ReturnType<typeof setTimeout>;
         restartSteers?: string[];
@@ -832,9 +837,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       /** settle the current turn; set once the spawn handlers exist */
       settleTurn?: (ok: boolean, stopReason: string | null) => void;
       restartTurn?: () => void;
+      /** started by prepare and no turn has taken it yet */
+      prepared?: Lease;
     }
     const sessions = new Map<string, Session>();
     const lastSpawn = new Map<string, ClaudeSpawn>();
+    // what prepare re-opens: each thread's last cold spawn, cursor kept current on close
+    const plans = new Map<string, SendTurnInput>();
+    const preparing = new Set<string>();
+    const incarnation = input.incarnation ?? newId();
+    const usable = (s: Session | undefined) => Boolean(s && !s.closing && s.child.exitCode === null);
+    const unprepare = (s: Session, why: string) => {
+      const lease = s.prepared;
+      s.prepared = undefined;
+      lease?.release(why);
+    };
     const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum
@@ -879,6 +896,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (!s) return undefined;
       if (s.closing) return s;
       s.closing = true;
+      unprepare(s, why);
       // the CLI drops queued messages when it exits
       ackSteers(s, false);
       if (s.idleTimer) clearTimeout(s.idleTimer);
@@ -978,6 +996,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       turn: SendTurnInput,
       relaunchOf?: string,
       restart?: { turn: NonNullable<Session["turn"]>; steerAcks: Session["steerAcks"] },
+      prepare?: boolean,
     ) => {
       if (!admitted || accountBlocked) throw new Error("Sign in to this Claude account before starting a turn");
       const { threadId } = turn;
@@ -987,7 +1006,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         throw new Error("local computer control requires the interactive approval broker");
       }
       const turnId = relaunchOf ?? newId();
-    const trace = restart?.turn.trace ?? turn.trace ?? startTurnTrace({ engine: "claude", threadId, turnId });
+    const trace = prepare ? undefined : restart?.turn.trace ?? turn.trace ?? startTurnTrace({ engine: "claude", threadId, turnId });
     trace?.identify({ threadId, turnId, engine: "claude" });
     const turnTimer = restart?.turn.timer ?? startTurnTimer({
       engine: "claude",
@@ -1155,8 +1174,24 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // A matching cursor still reuses (Stop / Continuity on uncompacted
       // threads) or --resumes after a contract change.
       const live = sessions.get(threadId);
-      if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
+      let lease: Lease | undefined;
+      if (prepare) {
+        const key = { engine: DRIVER_KIND, instanceId, threadId };
+        const reserved = usable(live) || active.has(threadId)
+          ? "busy"
+          : warmPool.reserve(key, argsKey, { generation: warmPool.generation(key), incarnation, identity: "" }, "speculative");
+        if (typeof reserved === "string") {
+          if (mcpConfigPath) {
+            try {
+              rmSync(dirname(mcpConfigPath), { recursive: true, force: true });
+            } catch {}
+          }
+          return { turnId };
+        }
+        lease = reserved;
+      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
+        unprepare(live, "adopted");
         turnTimer.mark("spawnOrReuse");
         trace?.span("spawn", "reused")();
         trace?.span("initialize", "reused")();
@@ -1261,6 +1296,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         });
       }
       lastSpawn.set(threadId, { cli: config.cli, args: [...args], mcpServers: structuredClone(mcpServers), cwd, env, policy: turn.leanStartup === true ? launchPolicy : turnPolicy, cursor: sessionId ?? newSessionId! });
+      if (!prepare) {
+        plans.delete(threadId);
+        plans.set(threadId, { ...turn, text: "", trace: undefined, transcript: undefined, resumeFallback: undefined, systemUpdate: undefined, resumeCursor: sessionId ?? newSessionId! });
+        if (plans.size > 64) plans.delete(plans.keys().next().value!);
+      }
       if (sessionId) args.push("--resume", sessionId);
       else args.push("--session-id", newSessionId!);
 
@@ -1300,7 +1340,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpConfigPath,
         argsKey,
         sessionId: sessionId ?? newSessionId,
-        turn: {
+        prepared: lease,
+        turn: prepare ? null : {
           ...restart?.turn,
           merging: undefined,
           mergeGuard: undefined,
@@ -1464,6 +1505,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           merging.held.push(o);
           return;
         }
+        if (session.turn?.quietEnd && !o.parent_tool_use_id && (o.type === "stream_event" || o.type === "assistant" || o.type === "user")) return;
         dispatch(o);
       };
 
@@ -1474,6 +1516,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           droppedLate = true;
           return;
         }
+        // a prepared process belongs to no turn until one takes it
+        if (session.prepared) return;
         // a subagent's output belongs to the turn that spawned it; it never opens one
         if (
           !session.turn &&
@@ -1697,6 +1741,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               if (o.is_error !== true) for (const line of held) dispatch(line);
               // otherwise the run aborted: its held events stay dropped and the turn settles below
             }
+            if (session.turn?.quietEnd && o.is_error === true) {
+              const t = session.turn;
+              const usage = claudeUsage(o.usage);
+              t.quietEnd = undefined;
+              if (!t.unsentSteers) {
+                settle(true, "end_turn", o.total_cost_usd ?? null, usage);
+                break;
+              }
+              // a steer raced the interrupt; the CLI answers it next
+              t.requested = false;
+              t.carried = { cost: (t.carried?.cost ?? 0) + (o.total_cost_usd ?? 0), usage: t.carried?.usage ? addUsage(t.carried.usage, usage) : usage };
+              break;
+            }
             if (session.turn) session.turn.narrationNotice = undefined;
             // a local host's window is the catalog's; the CLI only guesses it
             if (session.turn && !injected.injected) {
@@ -1907,6 +1964,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           settle(false, "exit_before_result");
         }
         if (session.idleTimer) clearTimeout(session.idleTimer);
+        unprepare(session, "exited");
         session.broker?.close();
         if (session.mcpConfigPath) {
           try {
@@ -1916,8 +1974,27 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         if (sessions.get(threadId) === session) {
           sessions.delete(threadId);
           lastSpawn.delete(threadId);
+          const plan = plans.get(threadId);
+          if (plan && session.sessionId) plan.resumeCursor = session.sessionId;
         }
       });
+
+      if (lease) {
+        const prepared = lease;
+        lease.attach({
+          session: { kind: "loaded", id: session.sessionId! },
+          alive: () => usable(session),
+          close: async (why) => {
+            if (session.prepared !== prepared && !session.closing) return;
+            if (sessions.get(threadId) === session) closeSession(threadId, `prepared ${why}`);
+            killCliTree(child);
+            if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once("close", resolve));
+          },
+        });
+        lease.ready();
+        armIdle(threadId);
+        return { turnId };
+      }
 
       const stop = () => {
         retry.cancelled = true;
@@ -2159,12 +2236,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           if (!s?.turn || s.turn.settled || s.closing || s.child.exitCode !== null) return false;
           return switchEffort(s, effort, (request) => writeControl(s, threadId, request), EFFORT_REPLY_MS);
         },
+        endTurn: async (threadId, turnId) => {
+          const s = sessions.get(threadId);
+          const t = s?.turn;
+          if (!s || !t || t.settled || t.turnId !== turnId || t.merging || t.quietEnd || s.closing || s.child.exitCode !== null) return;
+          t.quietEnd = true;
+          const written = await writeControl(s, threadId, { type: "control_request", request_id: newId(), request: { subtype: "interrupt" } });
+          if (!written) t.quietEnd = undefined;
+        },
         interruptTurn: async (threadId) => {
           const turn = active.get(threadId);
           if (turn) return turn.stop();
           const s = sessions.get(threadId);
           // expired, not cleared: a duplicate notification must not re-arm it
           if (s) s.wakeDeadline = 0;
+          if (s?.prepared) closeSession(threadId, "interrupted");
         },
         respondToRequest: async (threadId, requestId, decision) => {
           // fail-closed by construction: no broker, or an ask that already
@@ -2194,6 +2280,27 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       fork: (side) => {
         const spawn = lastSpawn.get(side.threadId);
         return spawn && admitted && !accountBlocked ? forkClaude({ ...spawn, cursor: sessions.get(side.threadId)?.sessionId ?? spawn.cursor }, side) : null;
+      },
+      prepare: async (_shape?: PrepareTurn, focus?: PrepareFocus) => {
+        if (!focus) return;
+        let moved = false;
+        for (const [threadId, s] of sessions) {
+          if (threadId === focus.threadId || !s.prepared) continue;
+          closeSession(threadId, "prepare moved");
+          moved = true;
+        }
+        if (!admitted || accountBlocked || preparing.has(focus.threadId)) return;
+        const plan = plans.get(focus.threadId);
+        if (!plan?.resumeCursor || usable(sessions.get(focus.threadId)) || active.has(focus.threadId)) return;
+        if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
+        preparing.add(focus.threadId);
+        try {
+          // let completed closes release their pool slots
+          if (moved) await new Promise((resolve) => setImmediate(resolve));
+          await sendTurn(plan, undefined, undefined, true);
+        } finally {
+          preparing.delete(focus.threadId);
+        }
       },
       textModel: "claude-haiku-5-5",
       textTimeoutMs: SUMMARY_TIMEOUT_MS,

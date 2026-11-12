@@ -4,6 +4,8 @@ import { Crown, Loader2, Pin, Users, X } from "lucide-react";
 import { roomConversationPreview } from "@/lib/conversation-preview";
 import { api, terminalAttentionForBot, useStore, formatTime, previewMessages, shownModelSelection, type Bot, type Group, type TerminalAttention } from "@/state/store";
 import { BotAvatar } from "./Avatar";
+import { RoomPicture } from "./RoomPicture";
+import { hostRoomBase, isTeamRoom, roomPictureUrl } from "@/lib/team-rooms";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -26,7 +28,7 @@ export function compactSidebarModelLabel(label: string): string {
   return label.replace(/\s+Contributor$/i, " Cont.");
 }
 
-function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
+export function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
   const { t } = useI18n();
   const shown = formatCollapsedUnreadBadge(count);
   if (!shown) return null;
@@ -96,12 +98,20 @@ function GroupListItem({
   onMenu,
   drag,
   onReselect,
+  joined = false,
+  preview,
+  unread,
+  at,
 }: {
   group: Group;
   density: SidebarDensity;
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
   drag?: SidebarRowDrag;
   onReselect?: () => void;
+  joined?: boolean;
+  preview?: string;
+  unread?: number;
+  at?: number;
 }) {
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
@@ -113,7 +123,8 @@ function GroupListItem({
   const last = group.messages.filter(isShownMessage).at(-1);
   const question = chatNeedsYou(group.messages);
   const asking = question || routineRinging(state.routineRuns, group.threadId, group.tasks);
-  const unreadCount = useMemo(() => unreadReplyCount(group.unread, group.readAt, group.messages), [group.unread, group.readAt, group.messages]);
+  const unreadCount = useMemo(() => unread ?? unreadReplyCount(group.unread, group.readAt, group.messages), [unread, group.unread, group.readAt, group.messages]);
+  const lastAt = at ?? last?.at;
   const iconLabel = [asking ? t(question ? "ask.rowHasQuestion" : "routine.rowRang", { name: group.name }) : group.name, unreadCount ? t("chrome.unreadReplies", { count: unreadCount }) : null].filter(Boolean).join(" · ");
   const select = () => {
     if (selected) onReselect?.();
@@ -158,6 +169,7 @@ function GroupListItem({
       data-sidebar-row
       data-sidebar-row-kind="group"
       data-sidebar-row-id={group.id}
+      data-joined-room-row={joined || undefined}
       data-sidebar-needs-you={asking || undefined}
       data-sidebar-chat-unread={group.unread || undefined}
       title={density === "icons" ? group.name : undefined}
@@ -223,7 +235,7 @@ function GroupListItem({
         aria-keyshortcuts={drag?.onMove ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
       >
         <span className="relative shrink-0">
-          <StackedMauses members={members} density={density} />
+          {group.hosted && (isTeamRoom(group) || group.picture) ? <RoomPicture src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} size={density === "compact" ? 32 : 48} /> : <StackedMauses members={members} density={density} />}
           <UnreadCountBadge count={unreadCount} selected={selected} />
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>
@@ -233,14 +245,15 @@ function GroupListItem({
               {group.name}
               <span className="sr-only" aria-live="polite">{asking ? t(question ? "ask.hasQuestionSuffix" : "routine.rangSuffix") : ""}</span>
             </span>
-            {last && (
+            {lastAt !== undefined && (
               <span
                 className={cn(
-                  "shrink-0 text-xs text-ink-secondary @max-[10rem]/rowtext:hidden!",
-                  !selected && "hidden group-hover:inline group-focus-within:inline",
+                  "shrink-0 text-xs text-ink-secondary",
+                  !group.hosted && !joined && "@max-[10rem]/rowtext:hidden!",
+                  !selected && !group.hosted && !joined && "hidden group-hover:inline group-focus-within:inline",
                 )}
               >
-                {formatTime(last.at, localeTag(locale))}
+                {formatTime(lastAt, localeTag(locale))}
               </span>
             )}
           </div>
@@ -251,7 +264,7 @@ function GroupListItem({
                 density === "compact" ? "text-xs leading-tight" : "text-[13px]",
               )}
             >
-              {roomConversationPreview(group, state.bots, showToolCalls)}
+              {preview ?? roomConversationPreview(group, state.bots, showToolCalls)}
             </span>
           </div>
         </div>

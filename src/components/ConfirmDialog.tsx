@@ -3,6 +3,7 @@
 // cycles inside the panel, and focus returns to its previous owner on close.
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useBackLayer } from "@/lib/use-back-layer";
 
@@ -15,6 +16,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   danger = true,
+  light = false,
   confirmDisabled = false,
   closing = false,
   onConfirm,
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
+  light?: boolean;
   confirmDisabled?: boolean;
   closing?: boolean;
   onConfirm: () => void;
@@ -100,7 +103,7 @@ export function ConfirmDialog({
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+      className={cn("animate-fade-in fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-[2px]", light ? "bg-black/25" : "bg-black/55")}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onCancel();
       }}

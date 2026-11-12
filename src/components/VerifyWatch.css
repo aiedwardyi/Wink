@@ -1,5 +1,5 @@
 .verify-watch-dock { container: verify-watch / inline-size; }
-.verify-watch { --dock: clamp(380px, 44cqi, 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
+.verify-watch { --dock: clamp(380px, min(44cqi, 100cqi - 960px), 560px); position: relative; z-index: 0; flex-shrink: 0; width: var(--dock); min-height: 0; display: flex; align-items: flex-start; border-left: 1px solid var(--color-hairline); background: var(--color-app); transition: width var(--motion-large) var(--ease-standard), margin-left var(--motion-large) var(--ease-standard), border-left-width var(--motion-large) var(--ease-standard), z-index 0s var(--motion-large); }
 @container verify-watch (max-width: 659px) {
   .verify-watch { --dock: min(380px, calc(100cqi - 56px)); position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
 }
