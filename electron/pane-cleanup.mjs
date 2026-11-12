@@ -13,7 +13,8 @@ const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
 const BACKUP_RE = /^\.pane-cleanup-/i;
 const RECHECK = new Set(["dirty", "unpushed"]);
 const SETTLE_MS = 50;
-export const SWEEP_BUDGET = { dirs: 500_000, ms: 10 * 60_000 };
+// `walk` caps the ignored-file walk per worktree; past it the worktree is kept, never deleted on a partial look.
+export const SWEEP_BUDGET = { dirs: 500_000, ms: 10 * 60_000, walk: 100_000 };
 // Only Windows watches recursively without a startup walk or delivery lag.
 const WATCH = process.platform === "win32";
 const normalize = (file) => {
@@ -118,13 +119,14 @@ async function statEntry(file) {
 }
 
 // Status can't see ignored files, so a long run writing under one only shows in mtimes.
-async function writtenSince(file, since, stats) {
+async function writtenSince(file, since, stats, walk) {
   const stat = await statEntry(file);
   if (!stat) return false;
   if (stat.mtimeMs > since) return true;
   if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
   stats.dirs++;
-  for (const name of await fsp.readdir(file)) if (await writtenSince(path.join(file, name), since, stats)) return true;
+  if (--walk.left < 0) return true;
+  for (const name of await fsp.readdir(file)) if (await writtenSince(path.join(file, name), since, stats, walk)) return true;
   return false;
 }
 
@@ -690,14 +692,15 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     for (const head of [path.join(gitdir, "HEAD"), path.join(gitdir, "logs", "HEAD")]) {
       try { changed = Math.max(changed, (await fsp.lstat(head)).mtimeMs); } catch (error) { if (error.code !== "ENOENT") throw error; }
     }
+    const walk = { left: budget.walk ?? SWEEP_BUDGET.walk };
     const written = async () => {
       if (now() - changed < DAY_MS) return true;
       for (const file of (await git(target, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory"])).split("\0").filter(Boolean)) {
-        if (await writtenSince(path.join(target, file), now() - DAY_MS, context.stats)) return true;
+        if (await writtenSince(path.join(target, file), now() - DAY_MS, context.stats, walk)) return true;
       }
       return false;
     };
-    if (await written() || await busy(false)) return hold();
+    if (await written() || await busy(false)) return walk.left < 0 ? keep("walk cap") : hold();
     if (await isPinned(false)) return keep("pinned");
     const linked = await linkedInto(target, context);
     if (linked) return keep(linked);

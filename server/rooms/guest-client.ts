@@ -119,13 +119,16 @@ export interface JoinedView {
   canReact: boolean;
 }
 
-export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
+/** `groupId` is the room this PC hosts, when its own code was entered. */
+export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string; groupId?: string };
 
 export interface GuestClientDeps {
   /** Relay bases a code's host may sit under: the enrolled one and the baked team one. */
   bases(): ReadonlyArray<string | null>;
   /** This PC as the host sees it: its own name and a steady id a Remove can bar. */
   joiner(): { name: string; device: string };
+  /** The group this PC hosts behind `code`, so the host never joins its own room. */
+  ownRoom?(code: string): string | null;
   onChange?(roomId: string): void;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
@@ -161,6 +164,8 @@ interface Sync {
   stopped: boolean;
   /** Set per live stream by the host's first reactions frame; an older host never sends one. */
   reacts: boolean;
+  /** Set per live stream when a deleted file's copy stays, so the count holds and the next stream sends it again. */
+  undropped: boolean;
 }
 
 export class GuestClient {
@@ -247,6 +252,8 @@ export class GuestClient {
   /** The whole join: the pasted code in, a synced room out. */
   async join(code: string): Promise<GuestResult<JoinedView>> {
     if (this.changing.size) return failed(409, "room is busy");
+    const own = this.deps.ownRoom?.(code);
+    if (own) return { ...failed(409, "own-room"), groupId: own };
     this.joining++;
     try {
       return await this.joinNow(code);
@@ -494,7 +501,7 @@ export class GuestClient {
   private async call(
     relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
   ): Promise<GuestResult<unknown>> {
-    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
+    const headers: Record<string, string> = { host: relayHost, "x-orbit-room-files": "1", "x-orbit-room-media": "1", ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) {
       headers.authorization = `Bearer ${key}`;
       headers["x-wink-device"] = this.deps.joiner().device;
@@ -530,7 +537,7 @@ export class GuestClient {
   }
 
   private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false };
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false, undropped: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }
@@ -609,13 +616,14 @@ export class GuestClient {
       servername: creds.relayHost,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1" },
+      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1", "x-orbit-room-media": "1" },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,
     });
     sync.req = req;
     sync.reacts = false;
+    sync.undropped = false;
     let silence: NodeJS.Timeout | null = null;
     const quiet = () => {
       if (silence) clearTimeout(silence);
@@ -679,9 +687,9 @@ export class GuestClient {
       setJoinedReactions(roomId, parsed.lines, parsed.reset);
       this.changed(roomId);
     } else if (parsed.kind === "deleted") {
-      await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
+      if (!(await dropJoinedFiles(roomId, parsed.ids).then(() => true, () => false))) sync.undropped = true;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
-      if (parsed.count !== undefined) setJoinedDeletedCount(roomId, parsed.count);
+      if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

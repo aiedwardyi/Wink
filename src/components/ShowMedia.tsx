@@ -8,28 +8,31 @@ import { useThumb } from "@/lib/media-thumbs";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
 import { showItem } from "@/lib/show-pane";
 import { MediaViewer } from "./MediaViewer";
+import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved } from "./RoomMedia";
 
 const ROW = "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
 const BUBBLE_MS = 600;
 
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
-function useMediaFiles({ threadId, messages, roomId }: MediaSource): MediaFile[] | null {
+function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
   const [index, setIndex] = useState(() => heldMedia(threadId, roomId));
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
+  const removed = useRoomFilesRemoved();
 
   // A room lists again when a new message brings files.
   useEffect(() => {
     let alive = true;
-    loadMedia(threadId, roomId).then((files) => { if (alive) setIndex(files); }, () => { if (alive) setIndex((was) => was ?? []); });
+    loadMedia(threadId, roomId).then((got) => { if (alive) setIndex(got); }, () => { if (alive) setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined }); });
     return () => { alive = false; };
-  }, [threadId, roomId, latest]);
+  }, [threadId, roomId, latest, removed]);
 
-  return useMemo(() => roomId || !index ? index : withLive(index, chatMedia(threadId, messages)), [threadId, roomId, index, messages]);
+  const files = useMemo(() => roomId || !index ? index?.files ?? null : withLive(index.files, chatMedia(threadId, messages)), [threadId, roomId, index, messages]);
+  return { files, room: index?.list ?? null };
 }
 
 export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
   const { t, locale } = useI18n();
-  const files = useMediaFiles(source);
+  const { files, room } = useMediaFiles(source);
   const months = useMemo(() => mediaMonths(files ?? [], locale), [files, locale]);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
   const [open, setOpen] = useState<MediaFile | null>(null);
@@ -39,21 +42,25 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
 
   return (
     <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={!files || undefined}>
-      <div ref={scroller} className="show-media-scroll">
-        {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
-        {layout.height > 0 && (
-          <div data-media-grid style={{ height: layout.height }}>
-            {layout.months.map((month) => month.top < to && month.top + month.height > from && (
-              <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} onOpen={setOpen} />
-            ))}
-          </div>
-        )}
+      {room && <RoomFilesNotice list={room} />}
+      <div className="show-media-body">
+        <div ref={scroller} className="show-media-scroll">
+          {files?.length === 0 && <p className="show-media-empty">{t("show.empty")}</p>}
+          {layout.height > 0 && (
+            <div data-media-grid style={{ height: layout.height }}>
+              {layout.months.map((month) => month.top < to && month.top + month.height > from && (
+                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} onOpen={setOpen} />
+              ))}
+            </div>
+          )}
+        </div>
+        <MediaScrollThumb scroller={scroller} layout={layout} viewport={viewport} />
       </div>
-      <MediaScrollThumb scroller={scroller} layout={layout} viewport={viewport} />
       {open && at >= 0 && (
         <MediaViewer image={{ src: open.src!, name: open.name }} onClose={() => setOpen(null)} previous={at > 0} next={at < images.length - 1}
           onNavigate={(step) => setOpen(images[at + step] ?? open)} />
       )}
+      {source.roomId && room && <RoomMedia roomId={source.roomId} list={room} files={files} frame={scroller} />}
     </div>
   );
 });

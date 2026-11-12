@@ -52,8 +52,9 @@ import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
-import { configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { hostSend } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
@@ -1903,7 +1904,7 @@ function publicGroupState(group: GroupRecord) {
     ...groupClears(group),
     working: groupIsWorking(group),
     taskState: store.taskPacket(group.threadId) ?? undefined,
-    ...(group.hosted ? { room: hostedRoomView(group.hosted) } : {}),
+    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -5022,6 +5023,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     });
     opts?.onDispatchError?.(detail);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
   let latestCompactionId = prepared.compactionId ?? null;
@@ -5037,6 +5039,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       opts?.onDispatchError?.(detail);
       logSummaryWait();
+      store.settleTaskPacket(threadId);
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
     if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
@@ -5242,11 +5245,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (currentTurnEpoch(bot.id) !== epoch) {
     memoryLookup.release(bot.id, threadId);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage);
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
     memoryLookup.release(bot.id, threadId);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { cancelled: true });
   }
   store.setActivity(bot.id, "working", threadId);
@@ -5257,6 +5262,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.setActivity(bot.id, "idle");
     clearSendRunning(bot.id);
     logSummaryWait();
+    store.settleTaskPacket(threadId);
     return startedTurn(userMessage);
   }
   // a pane note, delegation, routine, or peer ask starting this turn is not
@@ -5290,6 +5296,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
+      store.settleTaskPacket(threadId);
       settleTrace?.();
       return;
     }
@@ -6322,9 +6329,15 @@ sweepRoomFiles(store.groups);
 const guestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
   joiner: () => ({ name: cfg.profile?.name?.trim() || deviceDisplayName(deviceName, process.env.ORBIT_DEVICE_NAME, osHostname()), device: profileSyncSettings.deviceId }),
+  ownRoom: (code) => ownRoomGroup(code, store.groups),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   alert: roomAlert,
 });
+try {
+  dropOwnJoins(store.groups);
+} catch (error) {
+  console.warn(`[rooms] own joined copy: ${error instanceof Error ? error.message : String(error)}`);
+}
 guestClient.start();
 // Room asks queued or running died with the previous process; held ones wait on.
 if (store.groups.some((group) => group.hosted)) failInterruptedAsks();
@@ -6633,7 +6646,8 @@ async function runClaimedGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
-  const text = `${roomContext}\n\n${askNote(authority, bot.name)}${
+  const riders = authority ? askRiders(authority) : [];
+  const text = `${roomContext}\n\n${askNote(authority, bot.name, riders)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
   }`;
 
@@ -6708,7 +6722,7 @@ async function runClaimedGroupMemberTurn(
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
-      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority))) {
+      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
       }
       const live = providerReload.started(threadId, selection.instanceId);

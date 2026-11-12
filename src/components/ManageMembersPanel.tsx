@@ -105,9 +105,11 @@ export function ManageMembersPanel({
     [...bots.map((b) => b.id), ...[...createdBotIds.current].filter((id) => !bots.some((bot) => bot.id === id))],
   );
   const changed = memberIds.length !== group.memberIds.length || memberIds.some((id, i) => id !== group.memberIds[i]);
+  // A shared group with no bots stays open as a people-only room.
+  const emptyRefused = !memberIds.length && !group.hosted;
 
   const save = () => {
-    if (!memberIds.length) return;
+    if (emptyRefused) return;
     const opened = openedMemberIds.current;
     const rosterChanged =
       opened.length !== group.memberIds.length || opened.some((id, index) => id !== group.memberIds[index]);
@@ -201,7 +203,7 @@ export function ManageMembersPanel({
             </button>
             <p className="mt-3 text-[12.5px] text-ink-secondary">{groupResponseHint(group, bots.filter((bot) => group.memberIds.includes(bot.id)), t)}</p>
           </div>
-          {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
+          {emptyRefused && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
           {saveError && (
             <div role="alert" className="mt-2 text-[12px] text-danger">
               {saveError}
@@ -217,7 +219,7 @@ export function ManageMembersPanel({
             </button>
             <button
               onClick={save}
-              disabled={!memberIds.length || rows.some((row) => row.saving)}
+              disabled={emptyRefused || rows.some((row) => row.saving)}
               className="flex-1 rounded-lg bg-accent py-2 text-[14px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
             >
               {t("room.save")}

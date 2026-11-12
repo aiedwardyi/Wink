@@ -24,6 +24,7 @@ export function saveFile(src: string, name: string, path?: string) {
 
 let showing: ShowItem | null = null;
 let media: string | null = null;
+let checking: string | null = null;
 const last = new Map<string, ShowItem>();
 const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
@@ -31,22 +32,35 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 
 export function showItem(next: ShowItem) {
   last.set(next.threadId, next);
-  if (!media && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
+  if (!media && !checking && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
   showing = next;
   media = null;
+  checking = null;
   emit();
 }
 
 export function showMedia(threadId: string) {
   if (media === threadId) return;
   media = threadId;
+  checking = null;
   emit();
 }
 
+/** Fronts the Check tab; the checker itself lives in verify-watch. */
+export function showCheck(threadId: string) {
+  if (checking === threadId) return;
+  checking = threadId;
+  media = null;
+  emit();
+}
+
+export const checkThread = () => checking;
+
 export function closeShow() {
-  if (!showing && !media) return;
+  if (!showing && !media && !checking) return;
   showing = null;
   media = null;
+  checking = null;
   emit();
 }
 
@@ -67,6 +81,11 @@ export function useShowItem(): ShowItem | null {
 /** The thread whose pane is on the Media tab. */
 export function useMediaThread(): string | null {
   return useSyncExternalStore(subscribe, () => media, () => null);
+}
+
+/** The thread whose pane is on the Check tab. */
+export function useCheckThread(): string | null {
+  return useSyncExternalStore(subscribe, () => checking, () => null);
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));

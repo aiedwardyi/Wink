@@ -29,15 +29,24 @@ export const isTeamRoom = (group: Group | undefined): group is TeamRoom => Boole
 
 export const roomPeople = (group: Group) => (group.room && "people" in group.room ? group.room.people : []);
 
+export const roomRemoved = (group: Group) => (group.room && "people" in group.room ? group.room.removed ?? [] : []);
+/** The pin's preview stops at the cap; the host's room carries the whole line when it is longer. */
+export const roomNoticeText = (group: Group) => (group.room && "people" in group.room ? group.room.noticeText : undefined) ?? group.notice?.text;
+
 const NO_JOINS: RoomJoin[] = [];
 
 // One empty list, so a memoized transcript keeps its props.
 export const roomJoins = (group: Group) => (group.room && "joins" in group.room ? group.room.joins : NO_JOINS);
 
 export const hostLines = (messages: readonly Message[]): RoomLine[] =>
-  messages.flatMap((message) => (message.author && message.roomEntryId
-    ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author: message.author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, message }]
-    : []));
+  messages.flatMap((message) => {
+    // A bot's answer row carries `from`, not `author`; it stays once the room is back to no bots.
+    const bot = !message.author && message.from;
+    const author = bot ? { kind: "bot" as const, id: bot.botId, name: bot.name } : message.author;
+    return author && message.roomEntryId
+      ? [{ id: message.id, entryId: message.roomEntryId, at: message.at, author, text: message.text ?? "", files: message.roomFiles ?? [], replyToId: message.replyToId, ...(bot ? { color: bot.color } : {}), message }]
+      : [];
+  });
 
 export type JoinedLink = "connecting" | "live" | "offline";
 
@@ -127,6 +136,7 @@ export const looksLikeRoomCode = (text: string) => CODE.test(text.trim());
 
 export function joinErrorKey(status: number, error: string, short = false): MessageKey {
   if (error === "room-full") return "teamRoom.full";
+  if (status === 403 && error === "removed") return "teamRoom.removed";
   if (status === 429) return "teamRoom.busy";
   if (status === 503) return "teamRoom.unreachable";
   return short ? "teamRoom.badShortCode" : "teamRoom.badCode";
@@ -149,9 +159,12 @@ export function createTeamRoom(name: string): Promise<{ group: Group }> {
   return request("/api/groups", { method: "POST", body: JSON.stringify({ name, hosted: true, peopleOnly: true, memberIds: [] }) });
 }
 
-type Refused = { status: number; error: string };
+/** `groupId` is the room this PC hosts, when its own code was entered. */
+type Refused = { status: number; error: string; groupId?: string };
 
-const refused = (status: number, body: any): Refused => ({ status, error: typeof body?.error === "string" ? body.error : "" });
+const refused = (status: number, body: any): Refused => ({
+  status, error: typeof body?.error === "string" ? body.error : "", ...(typeof body?.groupId === "string" ? { groupId: body.groupId } : {}),
+});
 
 /** `short` is the 6-character code, missing while this PC's relay can't mint one. */
 export type RoomInviteCode = { code: string; short?: string };
@@ -186,8 +199,13 @@ export const typedRoomName = (value: string) => [...value.normalize("NFC").repla
 export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
   error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
-export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true }> {
+/** `codeChanged` when Remove retired the room code instead of barring a PC. */
+export function removeFromRoom(roomId: string, personId: string): Promise<{ ok: true; codeChanged?: true }> {
   return request(`${hostRoomBase(roomId)}/people/${personId}`, { method: "DELETE" });
+}
+
+export function letBackIn(roomId: string, personId: string): Promise<{ ok: true }> {
+  return request(`${hostRoomBase(roomId)}/people/${personId}/back`, { method: "POST" });
 }
 
 export async function joinRoom(code: string): Promise<{ room: JoinedView } | Refused> {
@@ -221,7 +239,7 @@ export function filesProblem(files: readonly Pick<File, "name" | "size" | "type"
 
 function uploadProblem(status: number, name: string, error?: string): RoomProblem {
   if (status === 413) return { key: "teamRoom.tooBig", vars: { name } };
-  if (status === 415) return { key: "teamRoom.fileType" };
+  if (status === 415) return { key: "teamRoom.fileKinds" };
   if (status === 429) return { key: "teamRoom.tooFast" };
   if (status === 507) return { key: "teamRoom.outOfSpace" };
   if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };

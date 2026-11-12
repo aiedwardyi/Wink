@@ -1,5 +1,6 @@
 // The Media tab's whole timeline for each chat or room: fetched when the tab opens,
 // kept for the session, and asked again with its version so an unchanged chat costs a few bytes.
+import type { RoomFiles } from "@/components/RoomMedia";
 import { request } from "./api-request";
 import type { MediaRef } from "./chat-media";
 import { localeTag, type LocaleId } from "./i18n";
@@ -27,13 +28,15 @@ export interface MediaMonth {
 interface Held {
   v?: string;
   files: MediaFile[];
+  /** A room's own `/files` answer, for its notice and Delete. */
+  list?: RoomFiles;
 }
 
 // held per chat or room for the session; the least recently loaded go first
 const HELD = 16;
 const RETRY_MS = 1_000;
 const held = new Map<string, Held>();
-const loads = new Map<string, Promise<MediaFile[]>>();
+const loads = new Map<string, Promise<Held>>();
 const tails = new WeakMap<MediaFile[], { known: Set<string>; fresh: string; files: MediaFile[] }>();
 
 const heldKey = (threadId: string, roomId?: string) => roomId ? `room:${roomId}` : threadId;
@@ -44,16 +47,16 @@ export function decodeMedia(threadId: string, wire: MediaWire): MediaFile[] {
 }
 
 /** What this session last loaded, drawn at once while it is asked again. */
-export const heldMedia = (threadId: string, roomId?: string) => held.get(heldKey(threadId, roomId))?.files ?? null;
+export const heldMedia = (threadId: string, roomId?: string) => held.get(heldKey(threadId, roomId)) ?? null;
 
 /** One request per chat or room at a time, asked once more after a failure. */
-export function loadMedia(threadId: string, roomId?: string): Promise<MediaFile[]> {
+export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
   const key = heldKey(threadId, roomId);
   let load = loads.get(key);
   if (!load) {
     const was = held.get(key);
     const ask = (): Promise<Held> => roomId
-      ? request(`${hostRoomBase(roomId)}/files`).then((list: { files: Array<RoomFile & { at: number }> }) => ({ files: roomMedia(threadId, roomId, list.files) }))
+      ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
       : request(`/api/threads/${threadId}/media${was?.v ? `?v=${encodeURIComponent(was.v)}` : ""}`)
         .then((wire: MediaWire | { v: string }) => "ids" in wire ? { v: wire.v, files: decodeMedia(threadId, wire) } : was!);
     const next = ask().catch(() => new Promise((wait) => setTimeout(wait, RETRY_MS)).then(ask));
@@ -61,7 +64,7 @@ export function loadMedia(threadId: string, roomId?: string): Promise<MediaFile[
       held.delete(key);
       held.set(key, got);
       if (held.size > HELD) held.delete(held.keys().next().value!);
-      return got.files;
+      return got;
     }).finally(() => loads.delete(key));
     loads.set(key, load);
   }

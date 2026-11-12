@@ -117,6 +117,17 @@ describe("MemoryMap", () => {
     expect(rows.map((row) => row.getAttribute("data-status"))).toEqual(["building", "waiting-for-user", "open"]);
   });
 
+  it("labels the bot's own question as a question, en and ko", async () => {
+    const asks = [{ text: "Ship it?", at: 1, status: "open", kind: "question" }, { text: "Fix login", at: 2, status: "open" }];
+    const questioned = { ...bot, tasks: [{ threadId: "t", taskState: { goal: "g", plan: [], nextAction: "", updatedAt: 1, asks } }] } as unknown as Bot;
+    await mount({ bot: questioned });
+    expect([...host.querySelectorAll(".mm-asks-open li")].map((row) => row.textContent)).toEqual(["Ship it?question for you", "Fix loginto do"]);
+    await act(async () => root.unmount());
+    applyLocale("ko");
+    await mount({ bot: questioned });
+    expect(host.querySelector(".mm-asks-open li")!.textContent).toBe("Ship it?답할 질문");
+  });
+
   it("folds done and declined asks behind a count and keeps them", async () => {
     await mount({ bot: asked(["building", "done", "declined", "done"]) });
     const toggle = host.querySelector<HTMLButtonElement>(".mm-asks-done-toggle")!;
