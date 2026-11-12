@@ -130,7 +130,7 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
   for (let i = messages.length - 1, seen = 0; i >= 0 && seen < wanted.size; i -= 1) {
     if (!wanted.has(messages[i]!.id)) continue;
     seen += 1;
-    let card: string | undefined;
+    let card: { subtitle: string; options: string[] } | undefined;
     let reply: string | undefined;
     for (let j = i - 1; j >= Math.max(0, i - CONTEXT_SCAN); j -= 1) {
       const message = messages[j]!;
@@ -140,10 +140,10 @@ export function replyContexts(messages: readonly Message[], ids: string[]): Map<
         reply = message.text;
         break;
       }
-      // a card often just says "pick 1-3", so it stands in only when no reply names the options
-      if (!card && message.kind === "options" && message.card?.askUser && !message.card.requestId) card = `${message.card.subtitle}\n${message.card.options.join("\n")}`;
+      if (!card && message.kind === "options" && message.card?.askUser && !message.card.requestId) card = message.card;
     }
-    const context = replyContext(reply ?? card ?? "");
+    // a card often just says "pick 1-3", so behind a reply only its options ride, last so the cap keeps them
+    const context = replyContext(reply ? [reply, ...(card?.options ?? [])].join("\n") : card ? `${card.subtitle}\n${card.options.join("\n")}` : "");
     if (context) found.set(messages[i]!.id, context);
   }
   return found;
@@ -247,7 +247,7 @@ const LITERALS = [
   /\b(?:[a-z][\w+.-]*:\/\/|www\.)\S+/gi,
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
   /\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\/\S*/gi,
-  /\b[a-z]:[\\/]\S*|\\\\\S+|(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/\S*/gi,
+  /\b[a-z]:[\\/]\S*|\\\\\S+|(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+(?:\/\S*)?/gi,
   /\b[\w.-]+(?:[\\/][\w.-]+)+\.[a-z0-9]{1,5}\b/gi,
   /`[^`]+`/g,
 ];
@@ -278,6 +278,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   for (const { replaces } of facts) if (replaces) claims.set(replaces, (claims.get(replaces) ?? 0) + 1);
   const seen = new Set<string>();
   const decided = new Set<string>();
+  let decisions = 0;
   const accept = ({ kind, fact, quote, replaces }: Fact): Note | null => {
     const decision = kind === "decision";
     const line = fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
@@ -285,16 +286,19 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     if (!line || line.length > (decision ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => paragraph.includes(squash(said)))) return null;
     if (secretLike(line) || secretLike(said)) return null;
-    if (decision ? decided.size >= DECISIONS_PER_PASS || !grounded(line, said, sources) : decided.has(squash(said))) return null;
+    if (decision ? decisions >= DECISIONS_PER_PASS || !grounded(line, said, sources) : decided.has(squash(said))) return null;
     const target = replaceable(replaces, lines, claims) && inSection(replaces) === decision ? replaces : undefined;
-    const noted = [...lines.filter((note) => !target || !sameLine(note, target)), ...archived.split("\n")].map(words);
+    const noted = (target ? lines.filter((note) => !sameLine(note, target)) : [...lines, ...archived.split("\n")]).map(words);
     const quoted = quoteWords(said);
     // a short pick like "yes" says nothing on its own
     if (!decision && quoted.length && noted.some((note) => quoted.every((word) => note.includes(word)))) return null;
     const key = words(line).join(" ") || squash(line);
     if (seen.has(key) || noted.some((note) => ` ${note.join(" ")} `.includes(` ${key} `))) return null;
     seen.add(key);
-    if (decision) decided.add(squash(said));
+    if (decision) {
+      decided.add(squash(said));
+      decisions += 1;
+    }
     const note: Note = { line };
     if (target) note.replaces = target;
     if (decision) note.kind = "decision";
@@ -371,12 +375,19 @@ export function appendNotes(raw: string, notes: Note[], now: number): string | n
 
 /** Rolled lines appended to memory/decisions.md, skipping any already there, so a retried save never doubles one. */
 function fileOlderDecisions(botId: string, moved: string[]): void {
-  const current = readMemoryTopic(botId, DECISIONS_FILE) ?? "";
+  const file = join(ensureWorkspace(botId), "memory", DECISIONS_FILE);
+  let current = "";
+  try {
+    current = readFileSync(file, "utf8");
+  } catch (error) {
+    // only a missing file starts empty; any other failure would overwrite the older decisions
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
   const have = new Set(current.split("\n").map((line) => line.replace(/\r$/, "")));
   const fresh = moved.filter((line) => !have.has(line));
   if (!fresh.length) return;
   const head = current.trim() ? (current.endsWith("\n") ? current : `${current}\n`) : "# Older decisions\n\n";
-  writeFileAtomic(join(ensureWorkspace(botId), "memory", DECISIONS_FILE), `${head}${fresh.map((line) => `${line}\n`).join("")}`, { mode: 0o600 });
+  writeFileAtomic(file, `${head}${fresh.map((line) => `${line}\n`).join("")}`, { mode: 0o600 });
 }
 
 export function noteSummary(facts: string[]): string {
@@ -510,6 +521,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const last = dropped.get(botId);
       dropped.set(botId, { dropped: (last?.dropped ?? 0) + facts.length, since: last?.since ?? now() });
       return done(threadId, batch.ids);
+    }
+    // lines rolled from a stale MEMORY.md would outlive the user's edit, so a changed file retries first
+    if (placed.moved.length && readMemoryFile(botId).revision !== memory.revision) {
+      held.set(threadId, batch);
+      log({ botId, threadId, facts: facts.length, ms, result: "conflict" });
+      return arm(botId, threadId);
     }
     if (placed.moved.length) {
       try {

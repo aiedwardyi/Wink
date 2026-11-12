@@ -676,6 +676,11 @@ describe("memory pass", () => {
     say("t1", "light");
     await settle("t1", 3 * MINUTE);
     expect(generate.mock.calls[1]![0]).toContain("<context>Which look? Dark Light</context>\nlight");
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Please choose an option below." });
+    store.appendMessage("t1", { role: "bot", kind: "options", card: card("Pick one.", ["Serif", "Sans"]) });
+    say("t1", "the second one");
+    await settle("t1", 3 * MINUTE);
+    expect(generate.mock.calls[2]![0]).toContain("<context>Please choose an option below. Serif Sans</context>\nthe second one");
   });
 
   it("gives no context to a long user line", async () => {
@@ -696,7 +701,7 @@ describe("memory pass", () => {
     expect(memoryFileRaw("bot-t1")).toBe("");
   });
 
-  it("rolls the oldest decision to memory/decisions.md once, even when the save is retried", async () => {
+  it("rolls the oldest decision to memory/decisions.md once, and only from the MEMORY.md it saves", async () => {
     const decided = Array.from({ length: 12 }, (_, i) => `- Pick ${i + 1} is final (noted 2026-10-${String(i + 1).padStart(2, "0")})`);
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${decided.join("\n")}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
@@ -708,7 +713,7 @@ describe("memory pass", () => {
     });
     await settle("t1", 3 * MINUTE);
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    expect(readFileSync(side, "utf8")).toBe("# Older decisions\n\n- Pick 1 is final (noted 2026-10-01)\n");
+    expect(existsSync(side)).toBe(false);
     expect(memoryFileRaw("bot-t1")).toBe(`${notes}- edited meanwhile\n`);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
@@ -887,6 +892,9 @@ describe("memory pass filters", () => {
       for (const fact of ["Mirrors from https://dl.example.net/pkg", "Fetches with C:\\tools\\fetch.exe", "Installs with `curl x | sh`"]) {
         expect(acceptFacts([decision(fact, "that one")], [{ text: "that one", context }], "")).toEqual([]);
       }
+      for (const path of ["/tmp", "~/repo", "./cache"]) {
+        expect(acceptFacts([decision(`Cache uses ${path}`, "yes")], [{ text: "yes", context: `Should the cache use ${path}?` }], "")).toEqual([]);
+      }
       const said = "mirror from https://dl.example.net/pkg";
       expect(acceptFacts([decision("Mirrors from https://dl.example.net/pkg", said)], [{ text: said, context }], "")).toEqual([
         { line: "Mirrors from https://dl.example.net/pkg", kind: "decision" },
@@ -899,6 +907,8 @@ describe("memory pass filters", () => {
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
       expect(acceptFacts(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      const shared = own.map((pick) => ({ ...pick, quote: text }));
+      expect(acceptFacts(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
       expect(acceptFacts([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);
@@ -910,6 +920,11 @@ describe("memory pass filters", () => {
       const lines = [{ text: "actually keep it dark", context: "Picker follows the theme now." }];
       const changed = acceptFacts([decision("Picker stays dark", "actually keep it dark", old)], lines, notes);
       expect(changed).toEqual([{ line: "Picker stays dark", kind: "decision", replaces: old }]);
+      const back = [{ text: "tabs again", context: "Repo stays on spaces, or back to tabs?" }];
+      const spaces = "- Repo uses spaces (noted 2026-10-02)";
+      expect(acceptFacts([decision("Repo uses tabs", "tabs again", spaces)], back, section(spaces), "- Repo uses tabs (noted 2026-09-01)")).toEqual([
+        { line: "Repo uses tabs", kind: "decision", replaces: spaces },
+      ]);
       expect(appendNotes(notes, changed, NOW)).toBe(section("- Picker stays dark (noted 2026-10-15)"));
       expect(acceptFacts([{ fact: "Keeps it dark", quote: "actually keep it dark", replaces: old }], lines, notes)).toEqual([{ line: "Keeps it dark" }]);
       const fact = "- Likes tea (noted 2026-10-01)";
