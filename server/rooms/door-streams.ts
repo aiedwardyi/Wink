@@ -57,6 +57,7 @@ export interface DoorStream {
   /** Asked with `with=bots`; anyone else reads a bot as a person by its name. */
   bots: boolean;
   largeFiles?: boolean;
+  media?: boolean;
   /** Live frames held until replay is done; null once live. */
   buffer: DoorFrame[] | null;
 }
@@ -79,9 +80,13 @@ export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   ...(entry.files ? { files: entry.files } : {}),
 });
 
-export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean): DoorEntry {
-  if (largeFiles || !entry.files?.length) return entry;
-  const files = entry.files.filter((file) => !file.deleted && file.bytes <= 25 * 1024 ** 2).slice(0, 10);
+/** Builds before video and audio fail a whole line or snapshot on any other type. */
+const OLDER_FILE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]);
+
+export function compatibleDoorEntry(entry: DoorEntry, largeFiles: boolean, media = true): DoorEntry {
+  if (!entry.files?.length || (largeFiles && media)) return entry;
+  const fits = (file: RoomFile) => (media || OLDER_FILE_TYPES.has(file.type)) && (largeFiles || (!file.deleted && file.bytes <= 25 * 1024 ** 2));
+  const files = entry.files.filter(fits).slice(0, largeFiles ? undefined : 10);
   const omitted = entry.files.filter((file) => !file.deleted && !files.includes(file));
   return { ...entry, files, text: [entry.text, ...omitted.map((file) => file.name)].filter(Boolean).join("\n").slice(0, 20_000) };
 }
@@ -108,13 +113,13 @@ function write(stream: DoorStream, chunk: string): void {
 }
 
 export function writeFrame(stream: DoorStream, frame: DoorFrame): void {
-  const sent = frame.kind === "entry" ? { kind: "entry", entry: compatibleDoorEntry({ ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) }, stream.largeFiles !== false) } : frame;
+  const sent = frame.kind === "entry" ? { kind: "entry", entry: compatibleDoorEntry({ ...frame.entry, author: wireAuthor(frame.entry.author, stream.bots) }, stream.largeFiles !== false, stream.media !== false) } : frame;
   write(stream, `data: ${JSON.stringify(sent)}\n\n`);
 }
 
 /** Registered and buffering: live frames wait until goLive. */
-export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false, largeFiles = true): DoorStream {
-  const stream: DoorStream = { roomId, personId, res, bots, buffer: [], largeFiles };
+export function openDoorStream(roomId: string, personId: string, res: ServerResponse, bots = false, largeFiles = true, media = true): DoorStream {
+  const stream: DoorStream = { roomId, personId, res, bots, buffer: [], largeFiles, media };
   streams.add(stream);
   const heartbeat = setInterval(() => write(stream, ": ping\n\n"), HEARTBEAT_MS);
   res.once("close", () => {

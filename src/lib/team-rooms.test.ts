@@ -164,7 +164,7 @@ describe("sending to a room", () => {
   it("names what went wrong and never sends after a refused upload", async () => {
     for (const [status, problem] of [
       [413, { key: "teamRoom.tooBig", vars: { name: "a.png" } }],
-      [415, { key: "teamRoom.fileType" }],
+      [415, { key: "teamRoom.fileKinds" }],
       [429, { key: "teamRoom.tooFast" }],
       [500, { key: "teamRoom.sendFailed" }],
     ] as const) {

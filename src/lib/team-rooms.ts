@@ -221,7 +221,7 @@ export function filesProblem(files: readonly Pick<File, "name" | "size" | "type"
 
 function uploadProblem(status: number, name: string, error?: string): RoomProblem {
   if (status === 413) return { key: "teamRoom.tooBig", vars: { name } };
-  if (status === 415) return { key: "teamRoom.fileType" };
+  if (status === 415) return { key: "teamRoom.fileKinds" };
   if (status === 429) return { key: "teamRoom.tooFast" };
   if (status === 507) return { key: "teamRoom.outOfSpace" };
   if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };
