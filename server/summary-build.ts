@@ -239,6 +239,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     const { botId, threadId, messages, leafId } = job;
     const ready = job.ready ?? await prepare(job, controller);
     if (!ready || !leafId) return;
+    // every settle looks idle, so only the quiet wait tells a paused chat from one whose next send is on its way
     if (ready.nativeLast !== undefined && (!job.ready || deps.busy(botId, threadId))) return park(Object.assign(job, { ready }));
     const { instance, plan } = ready;
     // a send that summarized for itself while this build waited: the row would be dropped after a wasted call

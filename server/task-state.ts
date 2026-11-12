@@ -197,6 +197,7 @@ function serializeBounded(packet: TaskResumePacket): string {
   return serialized;
 }
 
+// a sha256 hex digest and its newline
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 
