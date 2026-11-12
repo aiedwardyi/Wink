@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, isTeamRoom, removeFromRoom, roomPeople, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, isTeamRoom, letBackIn, removeFromRoom, roomPeople, roomRemoved, shareErrorKey, shareGroup, type JoinedView, type RoomInviteCode } from "@/lib/team-rooms";
 import { usePresence } from "@/lib/use-presence";
 import { useStore, type Group } from "@/state/store";
 
@@ -23,10 +23,12 @@ export function HostPeople({ group }: { group: Group }) {
   const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [busy, setBusy] = useState(shared);
   const [problem, setProblem] = useState<MessageKey | null>(null);
+  const [codeChanged, setCodeChanged] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const confirm = usePresence(removing);
   const alive = useRef(true);
   const people = roomPeople(group);
+  const removed = roomRemoved(group);
 
   const fetchCode = async (): Promise<Coded> => {
     if (teamRoom) {
@@ -59,18 +61,31 @@ export function HostPeople({ group }: { group: Group }) {
     };
   }, [group.id, shared]);
 
-  const remove = async (personId: string) => {
+  const remove = async (gone: { id: string; name: string }) => {
     if (!group.hosted) return;
+    let result: Awaited<ReturnType<typeof removeFromRoom>>;
     try {
-      await removeFromRoom(group.hosted.roomId, personId);
+      result = await removeFromRoom(group.hosted.roomId, gone.id);
     } catch {
       return setProblem("errors.request");
     }
     if (!alive.current) return;
-    if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.filter((person) => person.id !== personId) } } });
-    // Remove retires the old code.
+    if (result.codeChanged) setCodeChanged(true);
+    // A retired code bars no one, so only a kept code lists them under Let back in.
+    const barred = [...removed.filter((person) => person.id !== gone.id), ...(result.codeChanged ? [] : [gone])];
+    if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, people: group.room.people.filter((person) => person.id !== gone.id), removed: barred } } });
     setCode(null);
     void invite(false);
+  };
+
+  const letBack = async (personId: string) => {
+    if (!group.hosted) return;
+    try {
+      await letBackIn(group.hosted.roomId, personId);
+    } catch {
+      return setProblem("errors.request");
+    }
+    if (group.room && "people" in group.room) dispatch({ type: "groupPatched", group: { id: group.id, room: { ...group.room, removed: removed.filter((person) => person.id !== personId) } } });
   };
 
   return (
@@ -87,6 +102,7 @@ export function HostPeople({ group }: { group: Group }) {
           {t("teamRoom.invite")}
         </button>
       )}
+      {codeChanged && <p role="status" className="mt-1 px-3 text-[12.5px] text-ink-secondary">{t("teamRoom.codeChanged")}</p>}
       {problem && <p role="alert" className="mt-1 px-3 text-[12.5px] text-danger">{t(problem)}</p>}
       {problem === "teamRoom.phoneOff" && <button type="button" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "companion" })} className="mt-1 px-3 text-[12.5px] font-medium text-accent hover:underline">{t("teamRoom.openPhoneAccess")}</button>}
       {shared && (
@@ -105,6 +121,18 @@ export function HostPeople({ group }: { group: Group }) {
             </PersonRow>
           ))}
           {people.length === 0 && <li className={`${DETAILS_ROW} text-[13px] text-ink-secondary`}>{t("teamRoom.nobody")}</li>}
+          {removed.map((person) => (
+            <PersonRow key={person.id} name={person.name} gone>
+              <button
+                type="button"
+                onClick={() => void letBack(person.id)}
+                aria-label={t("teamRoom.letBackNamed", { name: person.name })}
+                className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent hover:bg-raised"
+              >
+                {t("teamRoom.letBack")}
+              </button>
+            </PersonRow>
+          ))}
         </ul>
       )}
       {confirm.mounted && confirm.value && (
@@ -116,7 +144,7 @@ export function HostPeople({ group }: { group: Group }) {
           onCancel={() => setRemoving(null)}
           onConfirm={() => {
             setRemoving(null);
-            void remove(confirm.value!.id);
+            void remove(confirm.value!);
           }}
         />
       )}
@@ -137,11 +165,11 @@ export function JoinedPeople({ room }: { room: JoinedView }) {
   );
 }
 
-function PersonRow({ name, children }: { name: string; children?: React.ReactNode }) {
+function PersonRow({ name, gone = false, children }: { name: string; gone?: boolean; children?: React.ReactNode }) {
   return (
-    <li className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>
+    <li data-room-removed={gone || undefined} className={`${DETAILS_ROW} flex items-center gap-2.5 py-2`}>
       <InitialsAvatar initials={profileInitials({ name })} size={24} tone="bg-control" />
-      <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
+      <span className={`min-w-0 flex-1 truncate text-[14px] ${gone ? "text-ink-secondary" : "text-ink"}`}>{name}</span>
       {children}
     </li>
   );

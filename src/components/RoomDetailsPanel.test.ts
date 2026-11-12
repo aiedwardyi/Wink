@@ -198,6 +198,27 @@ describe("People", () => {
     expect(section("people").querySelector("[data-team-room-code]")!.textContent).toContain("fresh-code");
   });
 
+  it.each([[[]], [["b1"]]] as const)("lists a removed teammate under the people and lets them back in (bots %j)", async (memberIds) => {
+    const room = { ...shared([{ id: "p1", name: "Mina" }], [...memberIds]), room: { name: "Channel", people: [{ id: "p1", name: "Mina" }], joins: [], removed: [{ id: "p2", name: "Joon" }] } } as Group;
+    await open({ group: room }, (path) => json(path.endsWith("/back") ? { ok: true } : { code: "old-code", roomId: "r1", carried: 0, group: room }));
+    expect(section("people").querySelector("[data-room-removed]")!.textContent).toContain("Joon");
+    await act(async () => button("Let Joon back in").click());
+    await settle();
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toContain("POST /api/rooms/r1/people/p2/back");
+    expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, removed: [] } } });
+  });
+
+  it.each([false, true])("moves a removed teammate to the removed rows, or says the code changed (retired %s)", async (codeChanged) => {
+    const room = shared([{ id: "mina", name: "Mina" }], []);
+    await open({ group: room }, (_path, method) => json(method === "DELETE" ? { ok: true, ...(codeChanged && { codeChanged }) } : { code: "old-code" }));
+    expect(section("people").querySelector('[role="status"]')).toBeNull();
+    await act(async () => button("Remove Mina").click());
+    await confirm("Remove");
+    await settle();
+    expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [], removed: codeChanged ? [] : [{ id: "mina", name: "Mina" }] } } });
+    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The room code changed. Send the new one to your team." : undefined);
+  });
+
   it("says Phone Access is off only after a tap on Invite, never on open", async () => {
     await open({ group: shared([{ id: "p1", name: "Mina" }], []) }, () => json({ error: "phone access is off" }, 409));
     expect(calls).toHaveLength(1);
