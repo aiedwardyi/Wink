@@ -15,6 +15,7 @@ import {
   endJoined,
   joinedCode,
   joinedCursor,
+  joinedDeletedCount,
   joinedEntries,
   joinedEntry,
   joinedFile,
@@ -30,6 +31,7 @@ import {
   resetJoined,
   removeJoined,
   saveJoined,
+  setJoinedDeletedCount,
   setJoinedReactions,
   setJoinedState,
   setJoinedSentName,
@@ -97,7 +99,7 @@ const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
   z.object({ kind: z.literal("state"), state: stateSchema }),
   z.object({ kind: z.literal("reactions"), reset: z.boolean().optional(), lines: z.array(z.object({ id, marks: marksSchema })).max(10_000) }),
-  z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000) }),
+  z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000), count: z.number().int().nonnegative().optional() }),
   z.object({ kind: z.literal("reset") }),
   z.object({ kind: z.literal("ended") }),
 ]);
@@ -610,7 +612,7 @@ export class GuestClient {
       hostname: creds.relayHost,
       servername: creds.relayHost,
       port: https.port ?? 443,
-      path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots`,
+      path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
       headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1" },
       ca: https.ca,
       lookup: https.lookup,
@@ -683,6 +685,7 @@ export class GuestClient {
     } else if (parsed.kind === "deleted") {
       await dropJoinedFiles(roomId, parsed.ids).catch(() => {});
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
+      if (parsed.count !== undefined) setJoinedDeletedCount(roomId, parsed.count);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {
