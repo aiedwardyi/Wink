@@ -357,7 +357,7 @@ export function drainSteeredMessages(
       const ask = store.messagesFor(entry.threadId).find((message) => showsQueued(message, item.messageId));
       let appended: Message;
       try {
-        appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined, queued: undefined })) ||store.appendMessage(entry.threadId, {
+        appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined, queued: undefined })) || store.appendMessage(entry.threadId, {
           role: "user",
           kind: "text",
           text: item.text,

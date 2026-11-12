@@ -32,7 +32,7 @@ export function claimOf(said: string, recap = false, order = false): { claim: Cl
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
     if (!FILLER_ONLY.test(sentence)) plain ||= sentence;
   }
-  return order && plain && !clarifies && !/\?\s*$/.test(said) ?{ claim: "promise", sentence: plain } : null;
+  return order && plain && !clarifies && !/\?\s*$/.test(said) ? { claim: "promise", sentence: plain } : null;
 }
 
 const CHANGES = "open|run|restart|reboot|fix|send|add|delete|remove|schedule|install|deploy|push|merge|create|write|edit|change|move|close|kill|stop|start|update|rename|commit";
