@@ -89,4 +89,18 @@ describe("media index", () => {
 
     expect("size" in index && index.size).toEqual([300, null, null, null, 2048]);
   });
+
+  it("keeps a file that lands while the first index builds", async () => {
+    const store = new Store(selection);
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[a.pdf](C:\\w\\a.pdf)" });
+    const media = createMediaIndex(store);
+
+    const building = media(threadId);
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[b.pdf](C:\\w\\b.pdf)" });
+    const first = await building;
+
+    expect("name" in first && first.name).toEqual(["a.pdf"]);
+    expect(await media(threadId, first.v)).toMatchObject({ name: ["b.pdf", "a.pdf"] });
+  });
 });

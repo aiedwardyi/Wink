@@ -66,9 +66,10 @@ async function linkedSizes(list: MediaList): Promise<MediaList> {
 export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) {
   const held = new Map<string, MediaIndex>();
   const dirty = new Set<string>();
+  const building = new Set<string>();
   let count = 0;
   store.onChange((change) => {
-    if (!("threadId" in change) || !held.has(change.threadId)) return;
+    if (!("threadId" in change) || !(held.has(change.threadId) || building.has(change.threadId))) return;
     if (change.type === "thread.deleted") held.delete(change.threadId);
     else dirty.add(change.threadId);
   });
@@ -76,7 +77,8 @@ export function createMediaIndex(store: Pick<Store, "activePath" | "onChange">) 
     let index = held.get(threadId);
     if (!index || dirty.has(threadId)) {
       dirty.delete(threadId);
-      const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId)));
+      building.add(threadId);
+      const list = await linkedSizes(buildMediaIndex(threadId, store.activePath(threadId))).finally(() => building.delete(threadId));
       index = held.get(threadId);
       if (!index || !same(index, list)) index = { v: `${boot}.${++count}`, ...list };
     }
