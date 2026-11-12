@@ -23,5 +23,17 @@ describe("RoomCode", () => {
     expect(boxes.children).toHaveLength(6);
     expect(boxes.className).toContain("select-none");
     expect(boxes.className).not.toContain("select-all");
+    expect(document.querySelector("[data-room-code-text]")).toBeNull();
+  });
+
+  it("shows the short code as selectable text when copy fails", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("navigator", { clipboard: undefined });
+    root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root!.render(createElement(RoomCode, { code: "long-code", short: "6LD5N6" })));
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-team-room-code] button")!.click());
+    const text = document.querySelector("[data-room-code-text]")!;
+    expect(text.textContent).toBe("6LD5N6");
+    expect(text.className).toContain("select-all");
   });
 });
