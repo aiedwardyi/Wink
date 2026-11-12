@@ -59,7 +59,7 @@ describe("room reactions", () => {
     const onReact = vi.fn();
     await render({ onReact });
     const chips = [...host.querySelectorAll<HTMLButtonElement>("[data-message-reactions] button")];
-    expect(chips.map((chip) => chip.textContent)).toEqual(["👍1", "🔥2"]);
+    expect(chips.map((chip) => `${chip.querySelector("[data-emoji]")?.getAttribute("data-emoji")}${chip.textContent?.trim()}`)).toEqual(["👍1", "🔥2"]);
     expect(chips.map((chip) => chip.title)).toEqual(["Mina Park", "You, 이서연"]);
     await act(async () => chips[0]!.click());
     expect(onReact).toHaveBeenCalledWith(expect.objectContaining({ id: "e1" }), "👍");

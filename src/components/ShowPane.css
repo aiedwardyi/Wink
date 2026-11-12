@@ -8,7 +8,8 @@
 .show-pane-tabs button { height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; cursor: default; }
 .show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
-.show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame { min-height: calc(100% - var(--head) - 20px); }
+.show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media { min-height: calc(100% - var(--head) - 20px); }
+.show-pane-tabs button:disabled { opacity: .45; }
 
 .show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
 .show-frame-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
@@ -22,6 +23,11 @@
 @media (prefers-reduced-motion: reduce) {
   .show-stage > * { transition: none; }
 }
+
+.show-media { display: block; padding: 6px; overflow-y: auto; overscroll-behavior: contain; }
+.show-media > [data-media-grid] { margin-bottom: 6px; }
+.show-media > [data-media-file] { content-visibility: auto; contain-intrinsic-size: auto 44px; }
+.show-media-empty { padding: 28px 8px; color: var(--color-ink-secondary); font-size: 13px; text-align: center; }
 
 /* A phone has no side room: the pane is a full-screen sheet over the chat. */
 @media (max-width: 767px) {

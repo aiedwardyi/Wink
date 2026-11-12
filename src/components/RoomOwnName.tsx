@@ -3,6 +3,7 @@ import { Pencil } from "lucide-react";
 
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { useI18n } from "@/lib/i18n";
+import { typedRoomName } from "@/lib/team-rooms";
 import { api, useStore } from "@/state/store";
 
 export function RoomOwnName({ name }: { name: string }) {
@@ -19,7 +20,7 @@ export function RoomOwnName({ name }: { name: string }) {
     setSaving(true);
     setError(false);
     try {
-      const name = [...value.normalize("NFC").replace(/[@\r\n]/g, "").trim()].slice(0, 36).join("").trim() || "Guest";
+      const name = typedRoomName(value) || "Guest";
       dispatch({ type: "configStatus", config: await api("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name } }) }) });
       setEditing(false);
     } catch {

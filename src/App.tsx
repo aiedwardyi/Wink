@@ -36,7 +36,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closeVerifyWatch, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, useAutoShow, useShowItem } from "@/lib/show-pane";
+import { closeShow, useAutoShow, useMediaThread, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -252,20 +252,23 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.createBotOpen;
   const watch = useVerifyWatch();
   const show = useShowItem();
+  const media = useMediaThread();
   const watchChat = group ?? bot;
-  const showChat = group && isTeamRoom(group) ? undefined : watchChat;
+  const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
   const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
     ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined;
-  const showing = show && showChat && show.threadId === showChat.threadId ? show : undefined;
-  const watchShown = usePresence(watch && watchChat && watchCard ? { watch: { card: watchCard, threadId: watchChat.threadId, live: watch.live } } : showing ? { item: showing } : null);
+  const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
+  const mediaOn = Boolean(watchChat && media === watchChat.threadId);
+  const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
+  const watchShown = usePresence(watch && watchChat && watchCard ? { watch: { card: watchCard, threadId: watchChat.threadId, live: watch.live }, source } : showing || mediaOn ? { item: showing, media: mediaOn, source } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const slotPanels: SlotPanel[] = [...(watch ? ["watch" as const] : []), ...(show || media ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
   const closeSlot = (panel: SlotPanel) => panel === "watch" ? closeVerifyWatch() : panel === "show" ? closeShow() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
   useEffect(() => { closeVerifyWatch(); closeShow(); }, [state.selectedId]);
-  useAutoShow(showChat?.threadId, chatMessages, !phoneMenuVisible && slotPanels.every((panel) => panel === "show"));
+  useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || bot && (state.settingsOpen || state.inspectorOpen));
   const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
@@ -743,7 +746,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       ) : joinedId ? (
         <JoinedRoomView key={joinedId} roomId={joinedId} />
       ) : group && isTeamRoom(group) ? (
-        <TeamRoomView key={group.id} group={group} />
+        <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
+          <TeamRoomView key={group.id} group={group} />
+          {watchPanel(nativeViewOverlayOpen)}
+        </div>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>

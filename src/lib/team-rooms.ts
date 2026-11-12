@@ -181,6 +181,8 @@ export async function shareGroup(groupId: string): Promise<RoomInviteCode & { gr
   }
 }
 
+export const typedRoomName = (value: string) => [...value.normalize("NFC").replace(/[@\r\n]/g, "").trim()].slice(0, 36).join("").trim();
+
 export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
   error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
@@ -220,10 +222,14 @@ export function filesProblem(files: readonly Pick<File, "name" | "size" | "type"
 function uploadProblem(status: number, name: string, error?: string): RoomProblem {
   if (status === 413) return { key: "teamRoom.tooBig", vars: { name } };
   if (status === 415) return { key: "teamRoom.fileType" };
+  if (status === 429) return { key: "teamRoom.tooFast" };
   if (status === 507) return { key: "teamRoom.outOfSpace" };
   if (status === 503 && error === "room files folder is unavailable") return { key: "teamRoom.folderError" };
   return { key: "teamRoom.sendFailed" };
 }
+
+/** A retry skips files the room already took and resends the same uploadId for the rest. */
+const uploaded = new WeakMap<File, { base: string; uploadId: string; id?: string }>();
 
 /** Uploads each file, then sends one message. A retry reuses `sendId`, so it never posts twice. */
 export async function sendToRoom(base: string, text: string, files: readonly File[], sendId: string, replyToId?: string): Promise<RoomProblem | null> {
@@ -232,13 +238,19 @@ export async function sendToRoom(base: string, text: string, files: readonly Fil
   try {
     const fileIds: string[] = [];
     for (const file of files) {
-      const query = new URLSearchParams({ name: file.name, uploadId: crypto.randomUUID() });
-      const res = await fetchResponse(`${base}/files?${query}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } });
-      const body = await responseBody(res);
-      if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name, body?.error);
-      fileIds.push(body.file.id);
+      let held = uploaded.get(file);
+      if (held?.base !== base) uploaded.set(file, held = { base, uploadId: crypto.randomUUID() });
+      if (!held.id) {
+        const query = new URLSearchParams({ name: file.name, uploadId: held.uploadId });
+        const res = await fetchResponse(`${base}/files?${query}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } });
+        const body = await responseBody(res);
+        if (!res.ok || typeof body?.file?.id !== "string") return uploadProblem(res.status, file.name, body?.error);
+        held.id = body.file.id;
+      }
+      fileIds.push(held.id!);
     }
     const res = await fetchResponse(`${base}/send`, { method: "POST", body: JSON.stringify({ text, sendId, ...(replyToId !== undefined ? { replyToId } : {}), ...(fileIds.length ? { fileIds } : {}) }) });
+    if (res.status === 404) for (const file of files) uploaded.delete(file);
     return res.ok ? null : { key: "teamRoom.sendFailed" };
   } catch {
     return { key: "teamRoom.sendFailed" };

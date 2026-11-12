@@ -22,6 +22,7 @@ const FLASH_CLASSES = ["ring-2", "ring-accent/70", "rounded-2xl", "transition-sh
 // Widens the ring past a bot row's bare text without moving the text.
 const BOT_ROW_ROOM = ["box-content", "px-3", "-mx-3"];
 const TALL_TARGET_MARGIN = 16;
+const LANDING_ROWS = 12;
 
 /** Scroll a message into the transcript pane without moving the window.
  * `scrollIntoView({ block: "center" })` walks every scrollable ancestor,
@@ -36,6 +37,30 @@ export function scrollElementIntoContainer(
   container.scrollTop += tRect.height > cRect.height
     ? tRect.top - cRect.top - TALL_TARGET_MARGIN
     : tRect.top + tRect.height / 2 - (cRect.top + cRect.height / 2);
+}
+
+/** Off-screen rows are 80px guesses until drawn: draw the target's neighbors before
+ * measuring, then re-align once rows that scrolled into view have drawn. */
+export function landInTranscript(scroller: HTMLElement, wrapper: Element, target: Element | Range, frame: (run: () => void) => number = requestAnimationFrame): () => void {
+  const near = [wrapper];
+  for (let row = wrapper.previousElementSibling, n = 0; row && n < LANDING_ROWS; row = row.previousElementSibling, n++) near.push(row);
+  for (let row = wrapper.nextElementSibling, n = 0; row && n < LANDING_ROWS; row = row.nextElementSibling, n++) near.push(row);
+  for (const row of near) row.setAttribute("data-landing", "");
+  let live = true;
+  const release = () => {
+    live = false;
+    for (const row of near) row.removeAttribute("data-landing");
+  };
+  scrollElementIntoContainer(scroller, target);
+  frame(() => {
+    if (!live) return;
+    frame(() => {
+      if (!live) return;
+      scrollElementIntoContainer(scroller, target);
+      release();
+    });
+  });
+  return release;
 }
 
 /** Pin the window back to the top-left after find closes or a search lands. */
@@ -108,6 +133,7 @@ export function useFocusMessage(threadId: string, ready: boolean) {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let flashTimer: ReturnType<typeof setTimeout> | null = null;
     let unsubscribe: (() => void) | null = null;
+    let unland: (() => void) | null = null;
     let target: HTMLElement | null = null;
     let flash = FLASH_CLASSES;
     const attempt = () => {
@@ -120,7 +146,7 @@ export function useFocusMessage(threadId: string, ready: boolean) {
       }
       const scroller = target.closest("[data-orbit-transcript]");
       const match = scroller ? revealFindMatch(scroller, focus.messageId) : null;
-      if (scroller instanceof HTMLElement) scrollElementIntoContainer(scroller, match ?? target);
+      if (scroller instanceof HTMLElement) unland = landInTranscript(scroller, wrapper!, match ?? target);
       else {
         const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
         target.scrollIntoView({ block: "nearest", behavior: reducedMotion ? "auto" : "smooth" });
@@ -146,6 +172,7 @@ export function useFocusMessage(threadId: string, ready: boolean) {
       if (retryTimer) clearTimeout(retryTimer);
       if (flashTimer) clearTimeout(flashTimer);
       unsubscribe?.();
+      unland?.();
       target?.classList.remove(...flash);
     };
   }, [dispatch, focus?.nonce, focus?.threadId, focus?.messageId, threadId, ready]);

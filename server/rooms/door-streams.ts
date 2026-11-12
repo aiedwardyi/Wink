@@ -46,6 +46,7 @@ export type DoorFrame =
   | { kind: "entry"; entry: DoorEntry }
   | { kind: "state"; state: DoorState }
   | { kind: "reactions"; reset?: true; lines: LineReactions[] }
+  | { kind: "deleted"; ids: string[] }
   | { kind: "reset" }
   | { kind: "ended" };
 

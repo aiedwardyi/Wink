@@ -14,7 +14,7 @@ import { openEngineSignIn } from "./engine-signin.mjs";
 import { registerEngineInstall } from "./engine-install.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, watchDevServer } from "./google-signin.mjs";
 import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./terminal-host.mjs";
-import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
+import { createPaneCleanupWorker } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
@@ -334,7 +334,7 @@ const terminalHost = createTerminalHost({
   sessionBridge: () => terminalBridgeAccess?.url,
   scratchRoot,
   processes: paneProcesses,
-  paneCleanup: createPaneCleanup({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
+  paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
     require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
