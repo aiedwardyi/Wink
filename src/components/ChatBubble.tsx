@@ -26,7 +26,7 @@ const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
 
 /** Hover/focus-revealed copy control shared by user + bot bubbles. */
-function CopyButton({ text, className }: { text: string; className?: string }) {
+export function CopyButton({ text, className }: { text: string; className?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   return (
@@ -117,7 +117,7 @@ function BubbleEditor({
  *  under the body so the transcript's overflow-x-hidden cannot clip it, and so
  *  the date stays out of the transcript's live region: otherwise every
  *  arriving message would be read out with its own datestamp. */
-function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }) {
+export function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }) {
   const { locale } = useI18n();
   const tag = localeTag(locale);
   const full = useMemo(() => formatDateTime(at, tag), [at, tag]);

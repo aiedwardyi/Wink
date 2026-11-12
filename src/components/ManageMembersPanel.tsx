@@ -159,7 +159,7 @@ export function ManageMembersPanel({
       <div
         data-closing={closing || undefined}
         inert={closing}
-        className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+        className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
         onMouseDown={(e) => e.target === e.currentTarget && !pendingRows && onClose()}
       >
         <div
@@ -167,45 +167,47 @@ export function ManageMembersPanel({
           role={closing ? undefined : "dialog"}
           aria-modal={!closing || undefined}
           aria-label={t("room.manageMembersOf", { name: group.name })}
-          className="animate-pop-in w-[340px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl"
+          className="animate-pop-in flex max-h-full w-[340px] max-w-full flex-col rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl"
         >
           <div className="mb-1 text-[15px] font-semibold text-ink first-letter:uppercase">{t("room.manageMembers")}</div>
           <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
-          <GroupPeople group={group} />
-          <div className="mb-1.5 px-2 text-[12.5px] font-medium text-ink-secondary">{t("chrome.bots")}</div>
-          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint={t("chrome.createBotFirst")} />
-          {rows.map((row, rowIndex) => (
-            <NewBotRow
-              key={row.key}
-              row={row}
-              preferIndex={addedNew + rowIndex}
-              instances={state.instances}
-              onPatch={(patch) => patchRow(row.key, patch)}
-              onAdd={(pick) => void addBot(row, pick)}
-            />
-          ))}
-          <button
-            type="button"
-            data-manage-create-bot
-            onClick={() => {
-              const key = nextRowKey.current++;
-              setRows((prev) => [
-                ...prev,
-                { key, name: "", instanceId: null, model: null, saving: false, error: null },
-              ]);
-            }}
-            className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
-          >
-            {t("groupWizard.newBot")}
-          </button>
-          <p className="mt-3 text-[12.5px] text-ink-secondary">{groupResponseHint(group, bots.filter((bot) => group.memberIds.includes(bot.id)), t)}</p>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <GroupPeople group={group} />
+            <div className="mb-1.5 px-2 text-[12.5px] font-medium text-ink-secondary">{t("chrome.bots")}</div>
+            <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint={t("chrome.createBotFirst")} />
+            {rows.map((row, rowIndex) => (
+              <NewBotRow
+                key={row.key}
+                row={row}
+                preferIndex={addedNew + rowIndex}
+                instances={state.instances}
+                onPatch={(patch) => patchRow(row.key, patch)}
+                onAdd={(pick) => void addBot(row, pick)}
+              />
+            ))}
+            <button
+              type="button"
+              data-manage-create-bot
+              onClick={() => {
+                const key = nextRowKey.current++;
+                setRows((prev) => [
+                  ...prev,
+                  { key, name: "", instanceId: null, model: null, saving: false, error: null },
+                ]);
+              }}
+              className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
+            >
+              {t("groupWizard.newBot")}
+            </button>
+            <p className="mt-3 text-[12.5px] text-ink-secondary">{groupResponseHint(group, bots.filter((bot) => group.memberIds.includes(bot.id)), t)}</p>
+          </div>
           {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
           {saveError && (
             <div role="alert" className="mt-2 text-[12px] text-danger">
               {saveError}
             </div>
           )}
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex shrink-0 gap-2">
             <button
               onClick={onClose}
               disabled={pendingRows}
