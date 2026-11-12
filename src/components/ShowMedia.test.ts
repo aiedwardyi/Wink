@@ -49,11 +49,11 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); act(() => closeShow()); applyLocale("en"); delete window.ogb; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-function Pane({ source }: { source: MediaSource }) {
+function Pane({ source, closing }: { source: MediaSource; closing?: boolean }) {
   const item = useShowItem();
   const media = useMediaThread() === source.threadId;
   shown = item;
-  return item || media ? createElement(ShowPane, { item: item ?? undefined, media, source, hidden: false }) : null;
+  return item || media ? createElement(ShowPane, { item: item ?? undefined, media, source, hidden: false, closing }) : null;
 }
 
 const render = (source: MediaSource) => act(async () => root.render(createElement(Pane, { source })));
@@ -227,4 +227,24 @@ it("lists a room again only when a new message brings files", async () => {
   await render({ threadId: "r-thread", roomId: "r1", messages: [text, sent] });
   await settle();
   expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+});
+
+it("closes at its open width, with the same thumbs and no new fetch", async () => {
+  const { showMedia } = await import("@/lib/show-pane");
+  const source: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => showMedia("r-thread"));
+  await render(source);
+  await settle();
+  const thumb = host.querySelector("[data-media-grid] img");
+  const width = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ width: 633 } as DOMRect);
+  await act(async () => root.render(createElement(Pane, { source, closing: true })));
+  width.mockReturnValue({ width: 515 } as DOMRect);
+  await act(async () => root.render(createElement(Pane, { source, closing: true })));
+  await settle();
+  width.mockRestore();
+  expect(host.querySelector("aside")!.style.getPropertyValue("--dock")).toBe("633px");
+  expect(host.querySelector("[data-media-grid] img")).toBe(thumb);
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(1);
+  await render(source);
+  expect(host.querySelector("aside")!.style.getPropertyValue("--dock")).toBe("");
 });

@@ -23,6 +23,8 @@ export type CallState = {
   error?: string;
   /** The line being spoken, kept after its turn until the next one starts. */
   caption?: { id: number; who: CallLine["who"]; text: string };
+  /** The last order or ask that never reached the bot, or got no reply. */
+  notice?: { kind: "notSent" | "noReply"; text: string; why?: string };
 };
 
 export type CallAudioPort = {
@@ -62,18 +64,21 @@ const TOOLS: Record<string, ToolRun> = {
 /** One thing the person said: a request until something real accounts for it. */
 type Request = { text: string; accounted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>> };
 /** A [Wink] line waiting for the voice to be quiet. */
-type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: () => void };
+type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: () => void; nudge?: true };
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
 const MAX_NUDGES = 3;
+// A gate input with no engine event for this long is stale: a stray fragment, not a turn.
+const QUIET_MS = 4_000;
 const REPORT_CHARS = 1_500;
 const RETRY_MS = 1_500;
 const STATUS_MS = 30_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
+const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
 const request = (text: string): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map() });
 
@@ -132,6 +137,9 @@ export class LiveCall {
   private guarded = false;
   private doneTold = false;
   private generating = false;
+  private quiet = false;
+  private quietTimer?: ReturnType<typeof setTimeout>;
+  private ran = false;
   private req = request("");
   private pending?: { order: string; toolIds: string[]; req: Request; timer: ReturnType<typeof setTimeout> };
   private toolEngines = new Map<string, LiveEngine>();
@@ -265,14 +273,20 @@ export class LiveCall {
         if (!resumed) engine.sendText("[Wink] The call just started. Greet the user in one short sentence.");
         else this.release();
       },
-      audio: (pcm) => { if (mine()) this.deps.audio.play(pcm); },
+      audio: (pcm) => {
+        if (!mine()) return;
+        this.stir();
+        this.deps.audio.play(pcm);
+      },
       heard: (text) => {
         if (!mine()) return;
+        this.stir();
         this.heardBuf += text;
         this.caption("user", this.heardBuf);
       },
       said: (text) => {
         if (!mine()) return;
+        this.stir();
         this.saidBuf += text;
         this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
@@ -284,6 +298,7 @@ export class LiveCall {
       },
       answering: () => {
         if (!mine()) return;
+        this.stir();
         this.generating = true;
         this.flushHeard();
       },
@@ -317,6 +332,8 @@ export class LiveCall {
       },
       toolCall: (calls) => {
         if (!mine()) return;
+        // A tool call can come before any audio, so what was heard is its request.
+        this.flushHeard();
         for (const call of calls) this.toolEngines.set(call.id, engine);
         // Two offers in one tool message are one order, answered once per id.
         const offers = calls.filter((call) => call.name === "propose_work");
@@ -345,6 +362,7 @@ export class LiveCall {
     const old = this.engine;
     this.engine = null;
     this.connected = false;
+    this.flushHeard();
     this.turnHadAudio = false;
     this.generating = false;
     this.guarded = false;
@@ -366,12 +384,18 @@ export class LiveCall {
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
   private toolResult(ids: string[], name: string, subject: string, result: string) {
+    // An ask redirected to propose_work shows until its offer replaces it.
+    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     for (const id of live) engine!.sendToolResult(id, name, result);
     if (live.length) return;
     this.held.push({ text: `[Wink] ${told(result, subject)}` });
     this.release();
+  }
+
+  private notSent(subject: string, why?: string) {
+    this.set({ notice: { kind: "notSent", text: subject, ...(why ? { why } : {}) } });
   }
 
   private get notNeeded() {
@@ -381,25 +405,36 @@ export class LiveCall {
   propose(order: string, ids: string[]) {
     if (!order) return this.toolResult(ids, "propose_work", order, "declined");
     // The bot's own question already takes the spoken answer; an order would ask twice.
-    if (this.card || this.justAnswered) return this.toolResult(ids, "propose_work", order, this.notNeeded);
+    if (this.card?.armed || this.justAnswered) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
     if (this.pending && orderKey(this.pending.order) === key) return this.toolResult(ids, "propose_work", order, "already proposed, waiting for their answer");
-    if (this.pending) {
+    const replaced = Boolean(this.pending);
+    if (replaced) {
       this.stats.orders.replaced += 1;
       this.answerTool("replaced");
     }
     this.stats.orders.proposed += 1;
     this.req.accounted = true;
     const expiresAt = this.now() + ORDER_EXPIRY_MS;
-    const pending = { order, toolIds: ids, req: this.req, timer: setTimeout(() => {
+    const expire = () => {
       if (this.pending !== pending) return;
+      // A yes still being said lands just after the timer; one left stale in the buffer is read now.
+      if (spokenText(this.heardBuf)) {
+        if (!this.quiet) {
+          pending.timer = setTimeout(expire, QUIET_MS);
+          return;
+        }
+        this.flushHeard();
+        if (this.pending !== pending) return;
+      }
       this.stats.orders.expired += 1;
       pending.req.accounted = false;
       this.answerTool("expired");
-    }, ORDER_EXPIRY_MS) };
+    };
+    const pending = { order, toolIds: ids, req: this.req, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
-    this.set({ pending: { order, expiresAt } });
+    this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
   }
 
   private clearPending() {
@@ -442,8 +477,8 @@ export class LiveCall {
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
   query(question: string, id: string) {
     if (!question) return this.toolResult([id], "ask", question, "not sent: no question");
-    if (this.card || this.justAnswered) return this.toolResult([id], "ask", question, this.notNeeded);
-    if (asksForChange(question)) return this.toolResult([id], "ask", question, "not sent: this changes something, so offer it with propose_work and wait for a yes");
+    if (this.card?.armed || this.justAnswered) return this.toolResult([id], "ask", question, this.notNeeded);
+    if (asksForChange(question)) return this.toolResult([id], "ask", question, CHANGE_ASK);
     const req = this.req;
     req.accounted = true;
     const key = orderKey(question);
@@ -500,6 +535,7 @@ export class LiveCall {
       if (sent.data.cancelled) return "not sent: cancelled";
       if (sent.data.dispatchFailed) return `not sent: ${sent.data.error ?? "dispatch failed"}`;
       this.awaiting += 1;
+      this.set({ notice: undefined });
       this.refresh();
       return sent.data.queued ? "queued" : "sent";
     }
@@ -510,27 +546,31 @@ export class LiveCall {
   private guard(said: string) {
     if (this.guarded || !said) return;
     const req = this.req;
-    const claim = claimOf(said, asksAboutDone(req.text));
-    if (!claim) return;
-    if (claim.claim === "failed") {
+    const claim = claimOf(said, asksAboutDone(req.text), !this.pending && !req.accounted && asksForChange(req.text));
+    // A turn answering a nudge that still sent nothing is a dropped request, whatever it says.
+    if (!claim && !req.nudged) return;
+    if (claim?.claim === "failed") {
       req.failed = true;
+      if (req.text && !req.accounted && !req.told) this.notSent(req.text);
       return;
     }
-    if (this.pending && claim.claim === "promise") {
+    if (this.pending && claim?.claim === "promise") {
       this.held.push({ text: `[Wink] Not sent yet: they have not said yes to "${this.pending.order}". Ask them again.` });
       return;
     }
     if (!req.text || req.accounted || req.failed || req.told) return;
-    this.stats.guard[claim.claim] += 1;
-    if (!req.nudged && this.stats.guard.nudges < MAX_NUDGES) {
+    if (claim) this.stats.guard[claim.claim] += 1;
+    if (claim && !req.nudged && this.stats.guard.nudges < MAX_NUDGES) {
       req.nudged = true;
       this.stats.guard.nudges += 1;
-      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now, or say plainly it was not sent.` });
+      this.held.push({ text: `[Wink] Not done: you said "${claim.sentence}", but nothing was sent, so nothing is running. Call ask or propose_work now, or say plainly it was not sent.`, nudge: true });
       return;
     }
     req.told = true;
     this.stats.guard.failLines += 1;
     this.postLines([{ who: "voice", text: `Not sent: ${req.text}`, at: this.now() }]);
+    this.notSent(req.text);
+    this.held.push({ text: `[Wink] Not sent: "${req.text}" never reached ${this.deps.botName}, so nothing is running. Tell them plainly it was not sent.` });
   }
 
   private caption(who: CallLine["who"], buf: string) {
@@ -566,6 +606,7 @@ export class LiveCall {
         this.justAnswered = false;
         req.accounted = false;
         this.postLines([{ who: "user", text, at }]);
+        this.notSent(text, reasonOf(result));
         if (this.card === card) card.armed = true;
         this.held.push({ text: `[Wink] Not sent: their answer "${text}" did not reach ${this.deps.botName} (${reasonOf(result)}). Say so plainly and ask them to answer again.` });
         this.release();
@@ -601,6 +642,7 @@ export class LiveCall {
   observe(input: { busy: boolean; messages: Message[]; threadId?: string; needs?: { id: string; short: string } }) {
     this.busy = input.busy;
     this.threadId = input.threadId;
+    if (input.busy && this.awaiting) this.ran = true;
     if (!this.connected || this.snapshot.startedAt === undefined || this.ended) return this.refresh();
     const startedAt = this.snapshot.startedAt;
     // A quick answer to this call's ask is spoken while the bot keeps working.
@@ -642,6 +684,7 @@ export class LiveCall {
         this.answered(replyOrders, replyOrders.map((row) => row.id), reply);
         void this.report(reply.text!, replyOrders.map((row) => row.id));
       }
+      if (this.ran) this.stopped(input.messages, openQuestion(input.messages)?.at, Boolean(input.needs && !this.toldNeeds.has(input.needs.id)));
     }
     const question = openQuestion(input.messages);
     const id = question && !this.askAnswered.has(question.id) ? question.id : undefined;
@@ -666,6 +709,22 @@ export class LiveCall {
     this.statusNow(callStatus(this.deps.botName, input.busy, input.messages));
     this.release();
     this.refresh();
+  }
+
+  /** The bot went idle after running: this call's orders it never answered get no reply, so they are told and can be asked again. A question or need raised since is its reply. */
+  private stopped(messages: Message[], askedAt: number | undefined, newNeed: boolean) {
+    this.ran = false;
+    const lost: string[] = [];
+    for (const row of messages) {
+      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || this.settled.has(row.id) || !row.text?.trim()) continue;
+      this.settled.add(row.id);
+      this.awaiting = Math.max(0, this.awaiting - 1);
+      if (newNeed || (askedAt !== undefined && askedAt >= row.at)) continue;
+      this.sent.delete(orderKey(row.text));
+      lost.push(row.text);
+      this.held.push({ text: `[Wink] ${this.deps.botName} stopped with no reply to "${row.text}". Tell them plainly; they can ask again.` });
+    }
+    if (lost.length) this.set({ notice: { kind: "noReply", text: lost.join("; ") } });
   }
 
   /** The first audio of a turn that sent something is how fast the voice acknowledged it. */
@@ -746,15 +805,24 @@ export class LiveCall {
 
   // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
-    if (!this.connected || this.playing || this.turnHadAudio || this.deps.audio.playing || this.generating || spokenText(this.heardBuf)) return;
+    if (!this.connected || this.playing || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();
     if (!item) return;
     // The next turn relays a real result, so the guards sit it out.
-    this.guarded = true;
+    this.guarded = !item.nudge;
     this.playing = { item, ended: false };
     this.engine?.sendText(item.text);
+  }
+
+  private stir() {
+    this.quiet = false;
+    clearTimeout(this.quietTimer);
+    this.quietTimer = setTimeout(() => {
+      this.quiet = true;
+      this.release();
+    }, QUIET_MS);
   }
 
   /** A held line counts as heard once its turn ended and the audio drained. */
@@ -819,6 +887,7 @@ export class LiveCall {
       this.pending = undefined;
     }
     clearTimeout(this.status?.timer);
+    clearTimeout(this.quietTimer);
     engine?.close();
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;
