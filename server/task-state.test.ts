@@ -13,15 +13,18 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
+import * as atomic from "./atomic.ts";
 import {
   assignTaskNextAction,
   deleteTaskResumePacket,
   groundTaskArtifacts,
   readTaskResumePacket,
+  settleTaskResumePacket,
+  stageTaskResumePacket,
   TASK_STATE_MAX_BYTES,
   taskStateNotice,
   taskStateUpdateError,
@@ -66,6 +69,7 @@ describe("task resume packets", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -174,6 +178,78 @@ describe("task resume packets", () => {
     expect(readTaskResumePacket("thread-1", { dir })?.nextAction).toBe("");
     expect(existsSync(join(dir, "thread-1.json"))).toBe(true);
     expect(readFileSync(join(dir, "thread-1.json"), "utf8")).not.toContain("Finish the comparison table");
+  });
+
+  it("stages a send's record with no fsync and reads it back", () => {
+    const before = writeTaskResumePacket(packet(), { dir });
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(staged);
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(before);
+  });
+
+  it("stages the same file text a direct write saves", () => {
+    const next = packet({ goal: "Use token=abcdefgh12345678 to prepare the brief", updatedAt: 300 });
+    const direct = mkdtempSync(join(tmpdir(), "orbit-task-state-"));
+    try {
+      expect(stageTaskResumePacket(next, { dir })).toEqual(writeTaskResumePacket(next, { dir: direct }));
+      expect(readFileSync(join(dir, "thread-1.json.staged"), "utf8").slice(65)).toBe(readFileSync(join(direct, "thread-1.json"), "utf8"));
+    } finally {
+      rmSync(direct, { recursive: true, force: true });
+    }
+  });
+
+  it("settles a staged record into the saved file once", () => {
+    writeTaskResumePacket(packet(), { dir });
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+
+    settleTaskResumePacket("thread-1", { dir });
+    settleTaskResumePacket("thread-1", { dir });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(staged);
+    expect(existsSync(join(dir, "thread-1.json.staged"))).toBe(false);
+  });
+
+  it("settles a staged record stamped before the saved one", () => {
+    writeTaskResumePacket(packet({ updatedAt: 500 }), { dir });
+    const staged = stageTaskResumePacket(packet({ instructionId: "message-2", updatedAt: 300 }), { dir });
+
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(staged);
+    settleTaskResumePacket("thread-1", { dir });
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(staged);
+  });
+
+  it.each([
+    ["torn", (text: string) => text.slice(0, 200)],
+    ["one a later save could not remove", (text: string) => text],
+  ])("keeps the saved record when the staged one is %s", (label, leftover) => {
+    const path = join(dir, "thread-1.json.staged");
+    let saved = writeTaskResumePacket(packet(), { dir });
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 900 }), { dir });
+    const text = leftover(readFileSync(path, "utf8"));
+    if (label !== "torn") saved = writeTaskResumePacket(packet({ nextAction: "written", updatedAt: 300 }), { dir });
+    writeFileSync(path, text);
+
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(saved);
+    settleTaskResumePacket("thread-1", { dir });
+    expect(JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"))).toEqual(saved);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("drops a staged record on the next write and on delete", () => {
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 300 }), { dir });
+    const saved = writeTaskResumePacket(packet({ nextAction: "written" }), { dir });
+    expect(readTaskResumePacket("thread-1", { dir })).toEqual(saved);
+    expect(existsSync(join(dir, "thread-1.json.staged"))).toBe(false);
+
+    stageTaskResumePacket(packet({ nextAction: "staged", updatedAt: 300 }), { dir });
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(readTaskResumePacket("thread-1", { dir })).toBeNull();
   });
 
   it("treats unknown versions and malformed files as absent without deleting them", () => {

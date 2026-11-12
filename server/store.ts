@@ -32,6 +32,8 @@ import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import {
   deleteTaskResumePacket,
   readTaskResumePacket,
+  settleTaskResumePacket,
+  stageTaskResumePacket,
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
@@ -2044,12 +2046,21 @@ export class Store {
     return repaired ? structuredClone(repaired) : null;
   }
 
-  writeTaskPacket(packet: TaskResumePacket): TaskResumePacket | null {
+  /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. */
+  writeTaskPacket(packet: TaskResumePacket, opts: { staged?: boolean } = {}): TaskResumePacket | null {
     if (!this.conversationForBot(packet.botId, packet.threadId)) return null;
-    const saved = writeTaskResumePacket(packet);
+    const saved = opts.staged ? stageTaskResumePacket(packet) : writeTaskResumePacket(packet);
     this.taskPackets.set(packet.threadId, saved);
     this.emit({ type: "task.packet", threadId: packet.threadId });
     return structuredClone(saved);
+  }
+
+  settleTaskPacket(threadId: string): void {
+    try {
+      settleTaskResumePacket(threadId);
+    } catch (error) {
+      console.error("task state: settle failed", error);
+    }
   }
 
   /** A fresh context on the same bot: new thread, new session, same

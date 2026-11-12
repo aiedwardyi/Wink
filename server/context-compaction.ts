@@ -1236,9 +1236,11 @@ export async function prepareModelContext(input: {
   nativePrompt?: NativePromptSize;
   nativeCycleBuilt?: boolean;
   summaryGrace?: SummaryGrace;
+  /** the caller's own plan for these same inputs, so a send plans once */
+  plan?: CompactionPlan;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
-  const plan = planCompaction(input);
+  const plan = input.plan ?? planCompaction(input);
   const grace = input.summaryGrace ? planSummaryGrace({ ...input, plan, grace: input.summaryGrace }) : null;
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {

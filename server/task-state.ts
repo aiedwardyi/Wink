@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { z } from "zod";
@@ -196,29 +197,32 @@ function serializeBounded(packet: TaskResumePacket): string {
   return serialized;
 }
 
-export function writeTaskResumePacket(
-  packet: TaskResumePacket,
-  options: TaskStateOptions = {},
-): TaskResumePacket {
+// a sha256 hex digest and its newline
+const MARK_BYTES = 65;
+const stagedPath = (path: string): string => `${path}.staged`;
+
+function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
-  const dir = options.dir ?? TASK_STATE_DIR;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = taskStatePath(normalized.threadId, dir);
   const serialized = serializeBounded(normalized);
-  writeFileAtomic(path, serialized, { mode: 0o600 });
-  return taskResumePacketSchema.parse(JSON.parse(serialized));
+  return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
 }
 
-export function readTaskResumePacket(
-  threadId: ThreadId,
-  options: TaskStateOptions = {},
-): TaskResumePacket | null {
-  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+function fileText(path: string, maxBytes = TASK_STATE_MAX_BYTES): string | null {
   try {
     const status = lstatSync(path);
-    if (!status.isFile() || status.isSymbolicLink() || status.size > TASK_STATE_MAX_BYTES) return null;
+    if (!status.isFile() || status.isSymbolicLink() || status.size > maxBytes) return null;
     const raw = readFileSync(path, "utf8");
-    if (Buffer.byteLength(raw, "utf8") > TASK_STATE_MAX_BYTES) return null;
+    return Buffer.byteLength(raw, "utf8") > maxBytes ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
+function recordOf(raw: string | null, threadId: ThreadId): TaskResumePacket | null {
+  if (raw === null) return null;
+  try {
     const parsed = taskResumePacketSchema.safeParse(JSON.parse(raw));
     return parsed.success && parsed.data.threadId === threadId ? parsed.data : null;
   } catch {
@@ -226,14 +230,77 @@ export function readTaskResumePacket(
   }
 }
 
+/** Names the saved file a record is staged over: any later save changes it, so a staged file that save could not remove reads as stale. */
+function savedMark(path: string): string {
+  return `${createHash("sha256").update(fileText(path) ?? "").digest("hex")}\n`;
+}
+
+function stagedRecord(path: string, threadId: ThreadId): { raw: string; packet: TaskResumePacket } | null {
+  const text = fileText(stagedPath(path), TASK_STATE_MAX_BYTES + MARK_BYTES);
+  if (!text || text.slice(0, MARK_BYTES) !== savedMark(path)) return null;
+  const raw = text.slice(MARK_BYTES);
+  const packet = recordOf(raw, threadId);
+  return packet && { raw, packet };
+}
+
+function dropStaged(path: string): void {
+  try {
+    rmSync(stagedPath(path), { force: true });
+  } catch {
+    // a leftover no longer matches the saved file, so readers skip it
+  }
+}
+
+export function writeTaskResumePacket(
+  packet: TaskResumePacket,
+  options: TaskStateOptions = {},
+): TaskResumePacket {
+  const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeFileAtomic(path, serialized, { mode: 0o600 });
+  dropStaged(path);
+  return saved;
+}
+
+/** A send's record, on disk before its dispatch but without the fsync; settleTaskResumePacket pays that after.
+ * It goes beside the saved file, never over it, so a power cut cannot tear the record already saved. */
+export function stageTaskResumePacket(
+  packet: TaskResumePacket,
+  options: TaskStateOptions = {},
+): TaskResumePacket {
+  const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeFileSync(stagedPath(path), savedMark(path) + serialized, { mode: 0o600 });
+  return saved;
+}
+
+export function settleTaskResumePacket(
+  threadId: ThreadId,
+  options: TaskStateOptions = {},
+): void {
+  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+  if (!existsSync(stagedPath(path))) return;
+  const staged = stagedRecord(path, threadId);
+  if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
+  dropStaged(path);
+}
+
+export function readTaskResumePacket(
+  threadId: ThreadId,
+  options: TaskStateOptions = {},
+): TaskResumePacket | null {
+  const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
+  return stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+}
+
 export function deleteTaskResumePacket(
   threadId: ThreadId,
   options: TaskStateOptions = {},
 ): boolean {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  if (!existsSync(path)) return false;
+  const staged = existsSync(stagedPath(path));
+  rmSync(stagedPath(path), { force: true });
+  if (!existsSync(path)) return staged;
   const status = lstatSync(path);
-  if (!status.isFile() || status.isSymbolicLink()) return false;
+  if (!status.isFile() || status.isSymbolicLink()) return staged;
   unlinkSync(path);
   return true;
 }
