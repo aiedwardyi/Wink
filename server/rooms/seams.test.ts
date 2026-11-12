@@ -121,17 +121,17 @@ describe("hosted thread seams", () => {
     expect(serveLinkedFolder).not.toHaveBeenCalled();
   });
 
-  it("never starts a card continuation in a hosted room", () => {
+  it("continues a card in a shared group like any group", () => {
     const groupTaskResumes = new Map();
     const beginGroupTurnOperation = vi.fn(() => 1);
     const start = load("startGroupCardContinuation", {
       store, groupTaskResumes, beginGroupTurnOperation, groupQueues: new Map(), drainQueuedSends: () => {}, finishGroupTurnOperation: () => {},
     });
     start(hosted.id, hosted.threadId, "bot", "resume");
-    expect(groupTaskResumes.size).toBe(0);
-    expect(beginGroupTurnOperation).not.toHaveBeenCalled();
-    start(plain.id, plain.threadId, "bot", "resume");
     expect(groupTaskResumes.size).toBe(1);
+    expect(beginGroupTurnOperation).toHaveBeenCalled();
+    start(plain.id, plain.threadId, "bot", "resume");
+    expect(groupTaskResumes.size).toBe(2);
   });
 
   it("refuses task resume in a hosted room", async () => {

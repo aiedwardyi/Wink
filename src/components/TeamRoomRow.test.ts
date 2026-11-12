@@ -111,3 +111,17 @@ it("opens the message menu from the keyboard", async () => {
   await act(async () => row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })));
   expect(document.querySelector("[data-message-menu]")).not.toBeNull();
 });
+
+it("names a bot line with the bot's face, on the left", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply: () => {},
+    lines: [{ id: "answer", at: Date.now(), author: { kind: "bot", id: "b1", name: "Wink" }, color: "blue", text: "on it", files: [] }],
+    mine: () => false, base: "/api/joined/rooms/r1", label: "Crew",
+  }))));
+  const row = host.querySelector<HTMLElement>('[data-mid="answer"]')!;
+  expect(row.dataset.teamRoomLine).toBe("theirs");
+  const label = host.querySelector<HTMLElement>("[data-team-room-bot]")!;
+  expect(label.textContent).toBe("Wink");
+  expect(label.querySelector("svg, img")).not.toBeNull();
+});

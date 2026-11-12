@@ -1,23 +1,20 @@
 // Every message into a team room: the host's through the normal send route,
-// a person's through the door. Plain lines cost nothing; one bot, at most,
-// gets an ask.
+// a person's through the door. The host's line is only committed here: the
+// normal group turn answers it. A person's wakes one bot, at most, with an ask.
 import { roomResponder } from "../../shared/room-routing.ts";
 import { alertWhenUnread, roomLineText } from "./alerts.ts";
-import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
-import { roomEngineAllowed } from "./guards.ts";
+import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry } from "./db.ts";
 import { ownRoomFiles } from "./files.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
-import { askById, beginEnd, createAsk, engineLine, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
+import { askById, createAsk, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
 
 export type RoomSender = { kind: "host" } | { kind: "person"; id: string };
-
-const GRANTS: Record<RoomLevel, RoomGrant | "held"> = { trusted: "work", ask: "held", chat: "words" };
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 export function hostedSend(group: HostedGroup, sender: RoomSender, text: string, replyToId?: string, sendId?: string, fileIds: readonly string[] = []) {
-  const { store, hostName, driverKind, alert } = roomAskDeps();
+  const { store, hostName, alert } = roomAskDeps();
   const roomId = group.hosted.roomId;
   const people = roomPeople(roomId);
   const person = sender.kind === "person" ? people.find((candidate) => candidate.id === sender.id) : undefined;
@@ -30,10 +27,9 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const bot = store.bot(id);
     return bot && !bot.hidden ? [bot] : [];
   });
-  const bot = peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
-  const grant = person ? GRANTS[person.level] : "work";
+  const bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
   if (person) {
-    const refusal = sendRefusal(roomId, person.id, bot ? grant : null);
+    const refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
     if (refusal) throw statusError(429, refusal);
   }
   const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId);
@@ -43,19 +39,18 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const line = { chat: group.id, threadId: group.threadId, room: group.name, name: person.name, text: roomLineText(entry.text, entry.files) };
     alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert);
   }
-  if (!bot) return { entry, message, ask: null };
+  if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({
     roomId,
     threadId: group.threadId,
     botId: bot.id,
-    asker: person ? { kind: "person", id: person.id } : { kind: "host", id: "host" },
+    asker: { kind: "person", id: person.id },
     entryId: entry.id,
     ...(quote ? { quoteId: quote.id } : {}),
-    ...(grant === "held" ? {} : { grant }),
-    clean: (!person || person.level === "trusted") && cleanQuote(quote, people),
+    grant: "work",
+    clean: person.level === "trusted" && cleanQuote(quote, people),
   });
-  if (!roomEngineAllowed(driverKind(bot.id))) beginEnd(ask.id, "failed", engineLine(bot.name));
-  else if (ask.state === "queued") runAsk(ask);
+  runAsk(ask);
   return { entry, message, ask: askById(ask.id) };
 }
 

@@ -16,16 +16,13 @@ beforeEach(() => {
 afterEach(closeRoomsDb);
 
 describe("team room guards", () => {
-  it("lets only Claude or Codex bots into a team room", () => {
-    expect(roomBotsRefusal([{ name: "A", driverKind: "claudeAgent" }, { name: "B", driverKind: "codex" }])).toBeNull();
-    for (const driverKind of ["grok", "antigravityAgent", "boxAgent", "museAgent", "acp", undefined]) {
-      expect(roomBotsRefusal([{ name: "Odd", driverKind }])).toBe("Odd can only answer in team rooms on Claude or Codex");
-    }
+  it("lets bots on any engine into a team room", () => {
+    expect(roomBotsRefusal([{ name: "A" }, { name: "B" }])).toBeNull();
   });
 
   it("refuses a bot whose name clashes with a person or another bot", () => {
-    expect(roomBotsRefusal([{ name: "Mina", driverKind: "codex" }], ["mina"])).toMatch(/already called Mina/);
-    expect(roomBotsRefusal([{ name: "Wink", driverKind: "codex" }, { name: "WINK", driverKind: "claudeAgent" }])).toMatch(/already called WINK/);
+    expect(roomBotsRefusal([{ name: "Mina" }], ["mina"])).toMatch(/already called Mina/);
+    expect(roomBotsRefusal([{ name: "Wink" }, { name: "WINK" }])).toMatch(/already called WINK/);
   });
 
   it("recognizes hosted threads and tags deleted rooms", () => {

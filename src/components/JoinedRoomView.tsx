@@ -29,7 +29,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const [peopleOpen, setPeopleOpen] = useState(false);
   const peopleButton = useRef<HTMLButtonElement>(null);
   const entries = room?.entries;
-  const lines = useMemo(() => joinedLines(entries ?? []), [entries]);
+  const bots = room?.state?.bots;
+  const lines = useMemo(() => joinedLines(entries ?? [], bots), [entries, bots]);
   const base = joinedRoomBase(roomId);
   const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
   const name = room?.state?.roomName ?? "";

@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
@@ -13,6 +14,7 @@ import { formatTime } from "@/state/store";
 import type { Message } from "@/state/store-types";
 
 import { AttachedImageGallery } from "./AttachmentPreview";
+import { BotAvatar } from "./Avatar";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReplyQuote } from "./ReplyQuote";
@@ -29,7 +31,12 @@ export function TeamRoomRow({ line, mine, named, base, authorName, canTranslate 
   const target = { threadId: base, message: roomMessage(line), copyText: line.text, user: mine, pinned: false, canPin: false };
   return (
     <div className="contents">
-      {named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
+      {named && line.author.kind === "bot" ? (
+        <div className="mt-1 flex items-center gap-1.5 pl-8" data-team-room-bot>
+          <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
+          <span className="text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</span>
+        </div>
+      ) : named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
       <div
         data-mid={line.id}
         data-team-room-line={mine ? "mine" : "theirs"}

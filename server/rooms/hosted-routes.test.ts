@@ -56,19 +56,16 @@ describe("hosted group routes", () => {
     expect(store.groups.find((g) => g.name === "Plain")!.hosted).toBeUndefined();
   });
 
-  it.each(["grok", "antigravityAgent", "boxAgent", "museAgent"])("refuses a %s bot at create", async (driverKind) => {
-    const odd = bot("Odd", driverKind);
-    const result = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex"), odd], hosted: true });
-    expect(result).toEqual({ status: 400, body: { error: "Odd can only answer in team rooms on Claude or Codex" } });
-    expect(store.groups).toHaveLength(0);
+  it.each(["grok", "antigravityAgent", "boxAgent", "museAgent"])("shares a %s bot at create", async (driverKind) => {
+    const result = await call(routes().create, { name: "Team", memberIds: [bot("Wink", "codex"), bot("Odd", driverKind)], hosted: true });
+    expect(result.status).toBe(201);
   });
 
-  it("refuses a bot add whose engine or name doesn't fit", async () => {
+  it("refuses a bot add whose name clashes with a person", async () => {
     const wink = bot("Wink", "claudeAgent");
     const { body } = await call(routes().create, { name: "Team", memberIds: [wink], hosted: true });
     const group = store.group(body.group.id)!;
     addPerson(group.hosted!.roomId, "Mina", "chat", ["Wink"]);
-    expect((await call(routes().patch, { memberIds: [wink, bot("Muse", "museAgent")] }, [group.id])).status).toBe(400);
     expect((await call(routes().patch, { memberIds: [wink, bot("mina", "codex")] }, [group.id])).body.error).toMatch(/already called mina/);
     expect((await call(routes().patch, { memberIds: [wink, bot("Helper", "codex")] }, [group.id])).status).toBe(200);
   });

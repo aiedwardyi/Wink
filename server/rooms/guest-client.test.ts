@@ -66,7 +66,7 @@ const reply = (res: ServerResponse, status: number, body: unknown) => {
 /** Join, snapshot and a stream that sends state once and then stays silent. */
 function quietDoor(req: IncomingMessage, res: ServerResponse) {
   if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: { id: "p1", name: "Mina" }, key: KEY });
-  if (req.url?.endsWith("/snapshot")) return reply(res, 200, { head: 0, entries: [], state: STATE });
+  if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 0, entries: [], state: STATE });
   if (req.url?.includes("/stream")) {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({ kind: "state", state: STATE })}\n\n`);
@@ -234,7 +234,7 @@ describe("join", () => {
     expect(JSON.parse(seen[0]!.body)).toEqual({ code: CODE, name: "Mina Park", device: PC });
     expect(seen[0]!.headers.authorization).toBeUndefined();
     await until(() => seen.some((row) => row.url.includes("/stream")));
-    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot", "/room/v1/rooms/r1/stream?after=0"]);
+    expect(seen.map((row) => row.url)).toEqual(["/room/v1/join", "/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=0&with=bots"]);
     expect(seen[1]!.headers).toMatchObject({ authorization: `Bearer ${KEY}` });
     expect(seen.every((row) => row.headers.cookie === undefined)).toBe(true);
   });
@@ -271,7 +271,7 @@ describe("sync", () => {
     guest().start();
     await until(() => seen.some((row) => row.url.includes("/stream")));
     expect(seen.some((row) => row.url === "/room/v1/join")).toBe(false);
-    expect(seen.filter((row) => row.url.endsWith("/snapshot"))).toHaveLength(cached ? 0 : 1);
+    expect(seen.filter((row) => row.url.includes("/snapshot"))).toHaveLength(cached ? 0 : 1);
     for (const row of seen) expect(row.headers).toMatchObject({ authorization: `Bearer ${KEY}`, "x-wink-device": PC });
   });
 
@@ -291,7 +291,7 @@ describe("sync", () => {
     const c = guest({ timing: { silenceMs: 200, retryMs: 20 } });
     await c.join(CODE);
     await until(() => seen.filter((row) => row.url.includes("/stream")).length >= 2);
-    expect(seen.filter((row) => row.url.endsWith("/snapshot"))).toHaveLength(1);
+    expect(seen.filter((row) => row.url.includes("/snapshot"))).toHaveLength(1);
   });
 
   it("stays live on heartbeats alone", async () => {
@@ -354,7 +354,7 @@ describe("races and floods", () => {
     let snapshots = 0;
     let streams = 0;
     route = (req, res) => {
-      if (req.url?.endsWith("/snapshot")) return ++snapshots === 2 ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res);
+      if (req.url?.includes("/snapshot")) return ++snapshots === 2 ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res);
       if (req.url?.includes("/stream") && ++streams === 1) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(frame({ kind: "reset" }) + frame({ kind: "entry", entry: entry(5) }) + frame({ kind: "state", state: { ...STATE, version: 2 } }));
@@ -365,7 +365,7 @@ describe("races and floods", () => {
     await guest({ timing: { retryMs: 20 } }).join(CODE);
     await until(() => urls("/stream").length >= 2);
     expect(snapshots).toBe(3);
-    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0");
+    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0&with=bots");
   });
 
   it("a late 401 or leave from before a rejoin leaves the new key alone", async () => {
@@ -390,7 +390,7 @@ describe("races and floods", () => {
   it("a flood of resets costs one snapshot at a time", async () => {
     let streams = 0;
     route = (req, res) => {
-      if (req.url?.endsWith("/snapshot")) return void setTimeout(() => quietDoor(req, res), 200);
+      if (req.url?.includes("/snapshot")) return void setTimeout(() => quietDoor(req, res), 200);
       if (req.url?.includes("/stream") && ++streams === 1) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(frame({ kind: "reset" }).repeat(50));
@@ -580,5 +580,47 @@ describe("own name", () => {
     c.stop();
     c.start();
     await until(() => seen.filter((row) => row.url.endsWith("/name")).length === 2);
+  });
+});
+
+describe("bot lines", () => {
+  const WINK = { id: "b1", name: "Wink", color: "blue" };
+  const bot = { kind: "bot", id: "b1", name: "Wink" } as const;
+  const line = (seq: number, text: string) => ({ seq, id: `e${seq}`, at: seq, author: bot, text });
+
+  it("asks for bot authors and keeps them with the bot roster", async () => {
+    const state = { ...STATE, bots: [WINK] };
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 1, entries: [line(1, "hi")], state });
+      if (req.url?.includes("/stream")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ kind: "entry", entry: line(2, "done") })}
+
+`);
+        return;
+      }
+      reply(res, 404, { error: "not found" });
+    };
+    const c = guest();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => (c.room("r1")?.entries.length ?? 0) === 2);
+    expect(seen.map((row) => row.url).slice(1)).toEqual(["/room/v1/rooms/r1/snapshot?with=bots", "/room/v1/rooms/r1/stream?after=1&with=bots"]);
+    expect(c.room("r1")!.entries.map((entry) => entry.author)).toEqual([bot, bot]);
+    expect(c.room("r1")!.state!.bots).toEqual([WINK]);
+    expect(c.room("r1")!.unread).toBe(2);
+  });
+
+  it("reads an older host's state with no bots as none", async () => {
+    const { bots: _bots, ...older } = STATE;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 0, entries: [], state: older });
+      reply(res, 404, { error: "not found" });
+    };
+    const c = guest();
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => Boolean(c.room("r1")?.state));
+    expect(c.room("r1")!.state!.bots).toEqual([]);
   });
 });
