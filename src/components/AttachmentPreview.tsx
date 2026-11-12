@@ -1,6 +1,7 @@
 // Saved paths resolve through the attachment route before loading.
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ImageOff, Maximize2 } from "lucide-react";
+import { CHAT_IMAGE, chatImageBox, rememberChatImage } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { usePresence } from "@/lib/use-presence";
 import { previewImage, type PreviewImage } from "@/lib/media-viewer";
@@ -120,14 +121,17 @@ export function ShownImage({ name, caption }: { name: string; caption?: string }
           onClick={(event) => { if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setOpen(true); } }}
           aria-label={`Open image ${image.name}`}
           title={`Open ${image.name}`}
-          className="block w-fit max-w-[min(42rem,78%)] cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          style={CHAT_IMAGE}
+          className="block w-fit cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <img
             src={retry.src}
             alt={caption || image.name}
             loading="lazy"
+            onLoad={rememberChatImage}
             onError={retry.onError}
-            className="block w-full rounded-2xl border border-hairline/40"
+            style={chatImageBox(retry.src)}
+            className="block rounded-2xl border border-hairline/40"
           />
         </button>
       ) : image ? (

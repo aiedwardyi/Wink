@@ -596,7 +596,7 @@ function PhoneFile({
     );
   }
   if (kind === "image") {
-    return <ReadableImage src={src} alt="" data-phone-media="image" className="max-h-96 max-w-full rounded-lg border border-hairline/30" />;
+    return <ReadableImage src={src} alt="" data-phone-media="image" className="rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
   if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} />;
@@ -742,7 +742,7 @@ function ChatMarkdownComponent({
           src={src}
           alt={alt ?? ""}
           loading="lazy"
-          className="max-h-96 max-w-full rounded-lg border border-hairline/30"
+          className="rounded-lg border border-hairline/30"
         />
       );
     },
