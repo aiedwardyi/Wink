@@ -17,7 +17,7 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource): Me
   const [older, setOlder] = useState<Message[]>([]);
   const [room, setRoom] = useState<RoomFile[] | null>(null);
   const start = useRef({ before: messages[0]?.id, hasMore });
-  const latest = messages.at(-1)?.id;
+  const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
 
   useEffect(() => {
     const { before, hasMore: more } = start.current;
@@ -37,7 +37,7 @@ function useMediaFiles({ threadId, messages, hasMore, roomId }: MediaSource): Me
     return () => { alive = false; };
   }, [threadId, roomId]);
 
-  // A new room message may carry a file.
+  // Lists again when a new message brings files.
   useEffect(() => {
     if (!roomId) return;
     let alive = true;

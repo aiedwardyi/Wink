@@ -156,3 +156,18 @@ it("keeps 300 files in a scrolling list with lazy thumbs", async () => {
   expect(thumbs[0]!.getAttribute("src")).toContain("shot-299.png");
   expect(readFileSync("src/components/ShowPane.css", "utf8")).toMatch(/\.show-media \{[^}]*overflow-y: auto/);
 });
+
+it("lists a room again only when a new message brings files", async () => {
+  const { showMedia } = await import("@/lib/show-pane");
+  const text: Message = { id: "m1", role: "user", kind: "text", at: 1, text: "hi" };
+  const sent: Message = { ...text, id: "m2", roomFiles: [{ id: id(4), name: "new.png", type: "image/png", bytes: 1 }] };
+  await act(async () => showMedia("r-thread"));
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  await settle();
+  await render({ threadId: "r-thread", roomId: "r1", messages: [text] });
+  await settle();
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(1);
+  await render({ threadId: "r-thread", roomId: "r1", messages: [text, sent] });
+  await settle();
+  expect(calls.filter((url) => url.endsWith("/files"))).toHaveLength(2);
+});
