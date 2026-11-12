@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
-import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type TeamRoom } from "@/lib/team-rooms";
+import { inviteErrorKey, inviteToRoom, removeFromRoom, roomPeople, type JoinedView, type RoomInviteCode, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useStore } from "@/state/store";
 
@@ -19,7 +19,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
-  const [code, setCode] = useState<string | null>(null);
+  const [code, setCode] = useState<RoomInviteCode | null>(null);
   const [codeVersion, setCodeVersion] = useState(0);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -35,7 +35,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
     let alive = true;
     void inviteToRoom(roomId).then((result) => {
       if (!alive) return;
-      if ("code" in result) setCode(result.code);
+      if ("code" in result) setCode(result);
       else setProblem(inviteErrorKey(result.status));
     });
     return () => {
@@ -114,7 +114,7 @@ export function TeamRoomPeople({ group, joined, closing = false, onClose, trigge
           </button>
         </div>
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group?.name ?? joined?.state?.roomName}</div>
-        {code && <RoomCode code={code} />}
+        {code && <RoomCode {...code} />}
         {problem && <p role="alert" className="mt-2 text-[12.5px] text-danger">{t(problem)}</p>}
         <ul className="mt-3 flex flex-col gap-0.5" aria-label={t("teamRoom.people")}>
           {group ? <RoomOwnName name={state.config?.profile?.name || t("teamRoom.host")} /> : (

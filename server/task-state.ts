@@ -7,6 +7,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
@@ -86,6 +87,7 @@ const taskResumePacketSchema = z.object({
   ]),
   lastEventId: idSchema.optional(),
   turnsAtWrite: z.number().int().nonnegative(),
+  asks: z.array(taskAskSchema).max(ASK_LIMITS.kept).optional(),
 }).strict();
 
 export type TaskResumePacket = z.output<typeof taskResumePacketSchema>;
@@ -156,6 +158,14 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
   if (instructionGoal) normalized.instructionGoal = instructionGoal;
   const instructionStep = packet.instructionStep ? clean(packet.instructionStep, LIMITS.step) : undefined;
   if (instructionStep) normalized.instructionStep = instructionStep;
+  const asks = packet.asks?.flatMap((item) => {
+    const ask = clean(item.ask, ASK_LIMITS.ask);
+    const ref = item.ref ? clean(item.ref, ASK_LIMITS.ref) : "";
+    if (!ask) return [];
+    const at = Math.max(0, Math.trunc(item.at));
+    return [{ id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), at, changedAt: Math.max(0, Math.trunc(item.changedAt)) }];
+  });
+  if (asks?.length) normalized.asks = asks;
   return taskResumePacketSchema.parse(normalized);
 }
 
@@ -164,6 +174,12 @@ function serializeBounded(packet: TaskResumePacket): string {
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
   let serialized = JSON.stringify(bounded, null, 2);
   while (Buffer.byteLength(serialized, "utf8") > TASK_STATE_MAX_BYTES) {
+    const closedAsk = bounded.asks?.findIndex((ask) => !isOpenAsk(ask)) ?? -1;
+    if (closedAsk >= 0) {
+      bounded.asks?.splice(closedAsk, 1);
+      serialized = JSON.stringify(bounded, null, 2);
+      continue;
+    }
     const removable = pruneOrder.filter((candidate) => bounded[candidate].length > 1);
     const candidates = removable.length
       ? removable
@@ -257,6 +273,18 @@ export function taskStateUpdateSchema(clipped: string[]) {
       return { ref: item.ref, label: clip(`artifacts.${index}.label`, item.label, LIMITS.label) };
     }),
   );
+  const asks = z.array(z.object({
+    id: z.string().trim().min(1).max(12).optional(),
+    ask: z.string().trim().min(1).optional(),
+    status: z.enum(ASK_STATUSES),
+    ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
+  }).strict()).max(ASK_LIMITS.update).transform((items) =>
+    items.map((item, index) => ({
+      ...item,
+      ...(item.ask === undefined ? {} : { ask: clip(`asks.${index}.ask`, item.ask, ASK_LIMITS.ask) }),
+      ...(item.ref === undefined ? {} : { ref: clip(`asks.${index}.ref`, item.ref, ASK_LIMITS.ref) }),
+    })),
+  );
   return z.object({
     fromBotId: z.string().min(1).max(128),
     fromThreadId: z.string().min(1).max(128),
@@ -267,9 +295,11 @@ export function taskStateUpdateSchema(clipped: string[]) {
     next_action: nextAction.optional(),
     blockers: blockers.optional(),
     artifacts: artifacts.optional(),
+    asks: asks.optional(),
   }).strict().refine(
     (body) => body.goal !== undefined || body.plan !== undefined || body.completed_note !== undefined ||
-      body.next_action !== undefined || body.blockers !== undefined || body.artifacts !== undefined || body.pause_automatic_wakes === true,
+      body.next_action !== undefined || body.blockers !== undefined || body.artifacts !== undefined ||
+      body.asks !== undefined || body.pause_automatic_wakes === true,
     "at least one task field is required",
   );
 }
@@ -285,7 +315,7 @@ export function assignTaskNextAction(packet: TaskResumePacket, nextAction: strin
   else delete packet.nextActionInstructionId;
 }
 
-const TASK_STATE_UPDATE_FIELDS = "goal, plan, completed_note, next_action, blockers, artifacts";
+const TASK_STATE_UPDATE_FIELDS = "goal, plan, completed_note, next_action, blockers, artifacts, asks";
 
 function valueAt(body: unknown, path: readonly PropertyKey[]): unknown {
   let current: unknown = body;

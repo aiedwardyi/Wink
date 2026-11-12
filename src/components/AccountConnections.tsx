@@ -154,6 +154,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
             className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
       </>} />}
+      {named?.codexPromo && <p className="pb-2 pl-6 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
       <Fold open={menu} id={`${id}-actions`}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>

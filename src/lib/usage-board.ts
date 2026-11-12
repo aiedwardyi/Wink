@@ -44,6 +44,7 @@ export type UsageBoardAccount = {
   workers: UsageBoardRun[] | null;
   // Runs on the saved OpenAI key: no plan windows, never Main.
   credit?: true;
+  codexPromo?: true;
 };
 
 export type UsageBoardEngine = {

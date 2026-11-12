@@ -7,7 +7,7 @@ import { request } from "node:https";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
-import { labelFromHost } from "../../shared/relay-protocol.ts";
+import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES } from "./files.ts";
 import {
@@ -16,6 +16,7 @@ import {
   joinedCode,
   joinedCursor,
   joinedEntries,
+  joinedEntry,
   joinedFile,
   joinedPictureFile,
   joinedKey,
@@ -28,10 +29,12 @@ import {
   resetJoined,
   removeJoined,
   saveJoined,
+  setJoinedReactions,
   setJoinedState,
   setJoinedSentName,
   type JoinedEntry,
   type JoinedFile,
+  type JoinedMark,
   type JoinedRoom,
   type JoinedState,
 } from "./joined.ts";
@@ -75,9 +78,11 @@ const entrySchema = z.object({
   replyToId: id.optional(),
   files: z.array(fileSchema).max(MAX_FILES).optional(),
 });
+const marksSchema = z.array(z.object({ emoji: z.string().max(16), by: z.string().max(80) })).max(2_000);
 const stateSchema = z.object({
   version: z.number().int().nonnegative(),
   picture: fileSchema.shape.id.optional(),
+  notice: z.object({ entryId: id, by: z.string().max(80), at: z.number() }).optional(),
   roomName: z.string().max(200),
   instructions: z.string().max(20_000),
   host: name,
@@ -85,11 +90,12 @@ const stateSchema = z.object({
   people: z.array(personSchema).max(100),
   bots: z.array(z.object({ id, name, color: z.string().max(64) })).max(100).default([]),
 });
-const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/) });
+const joinSchema = z.object({ roomId: id, person: personSchema, key: z.string().regex(/^wkg_[A-Za-z0-9_-]{43}$/), code: z.string().regex(CODE).optional() });
 const snapshotSchema = z.object({ head: z.number().int().nonnegative(), entries: z.array(entrySchema).max(1_000), state: stateSchema });
 const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), entry: entrySchema }),
   z.object({ kind: z.literal("state"), state: stateSchema }),
+  z.object({ kind: z.literal("reactions"), reset: z.boolean().optional(), lines: z.array(z.object({ id, marks: marksSchema })).max(10_000) }),
   z.object({ kind: z.literal("reset") }),
   z.object({ kind: z.literal("ended") }),
 ]);
@@ -105,6 +111,8 @@ export interface JoinedView {
   state: JoinedState | null;
   unread: number;
   lastEntry?: JoinedEntry;
+  /** The host's stream sent reactions, so it takes reactions and notices. */
+  canReact: boolean;
 }
 
 export type GuestResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
@@ -147,6 +155,8 @@ interface Sync {
   needsSnapshot: boolean;
   snapshotting: Promise<boolean> | null;
   stopped: boolean;
+  /** Set per live stream by the host's first reactions frame; an older host never sends one. */
+  reacts: boolean;
 }
 
 export class GuestClient {
@@ -186,9 +196,38 @@ export class GuestClient {
     return joinedRooms().map((room) => this.view(room));
   }
 
-  room(roomId: string): (JoinedView & { entries: JoinedEntry[] }) | null {
+  room(roomId: string): (JoinedView & { entries: JoinedEntry[]; noticeEntry?: JoinedEntry }) | null {
     const room = joinedRoom(roomId);
-    return room ? { ...this.view(room), entries: joinedEntries(roomId, VIEW_ENTRIES) } : null;
+    if (!room) return null;
+    const notice = room.state?.notice && joinedEntry(roomId, room.state.notice.entryId);
+    return { ...this.view(room), entries: joinedEntries(roomId, VIEW_ENTRIES), ...(notice ? { noticeEntry: notice } : {}) };
+  }
+
+  /** Toggles this PC's mark on a line through the door. */
+  async react(roomId: string, entryId: unknown, emoji: unknown): Promise<GuestResult<JoinedMark[]>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
+    if (typeof entryId !== "string" || typeof emoji !== "string") return failed(400, "bad request");
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/react`, creds.key, JSON.stringify({ entryId, emoji }));
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return reply;
+    }
+    const marks = z.object({ marks: marksSchema }).safeParse(reply.value);
+    if (!marks.success) return unavailable();
+    setJoinedReactions(roomId, [{ id: entryId, marks: marks.data.marks }]);
+    this.changed(roomId);
+    return { ok: true, value: marks.data.marks };
+  }
+
+  /** Pins a line as the room's notice, or null to unpin this PC's own. */
+  async notice(roomId: string, entryId: unknown): Promise<GuestResult<unknown>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(joinedRoom(roomId) ? 409 : 404, joinedRoom(roomId) ? "this room is read-only" : "not found");
+    if (entryId !== null && typeof entryId !== "string") return failed(400, "bad request");
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/notice`, creds.key, JSON.stringify({ entryId }));
+    if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
+    return reply;
   }
 
   read(roomId: string, seq: unknown): GuestResult<JoinedView> {
@@ -212,20 +251,40 @@ export class GuestClient {
     }
   }
 
+  /** The host a short code points at, from the first of `bases` whose relay knows it. */
+  private async shortCodeHost(code: string): Promise<GuestResult<string>> {
+    let answered = false;
+    for (const base of new Set(this.deps.bases())) {
+      if (!base) continue;
+      const reply = await this.call(`relay.${base}`, "GET", `/v1/room-codes/${code}`, null);
+      const label = reply.ok ? (reply.value as { label?: unknown } | null)?.label : undefined;
+      if (typeof label === "string" && LABEL_RE.test(label)) return { ok: true, value: hostFor(label, base) };
+      if (!reply.ok && reply.status === 429) return reply;
+      if (reply.ok || reply.status !== 503) answered = true;
+    }
+    return answered ? failed(404, "no-invite") : unavailable();
+  }
+
   private async joinNow(code: string, expectedRoomId?: string): Promise<GuestResult<JoinedView>> {
     const pasted = code.trim();
-    const relayHost = roomCodeHost(pasted, this.deps.bases());
+    const short = !expectedRoomId && ROOM_CODE_RE.test(pasted.toUpperCase()) ? pasted.toUpperCase() : null;
+    const found = short ? await this.shortCodeHost(short) : null;
+    if (found && !found.ok) return found;
+    const relayHost = found ? found.value : roomCodeHost(pasted, this.deps.bases());
     if (!relayHost) return failed(400, "bad-code");
     const { name, device } = this.deps.joiner();
     // The door refuses join bodies over 1 KB, and a profile name has no cap.
-    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
+    const reply = await this.call(relayHost, "POST", "/room/v1/join", null, JSON.stringify({ code: short ?? pasted, name: [...name].slice(0, NAME_MAX).join(""), device, ...(expectedRoomId ? { roomId: expectedRoomId } : {}) }));
     if (!reply.ok) return reply;
     const joined = joinSchema.safeParse(reply.value);
     if (!joined.success) return unavailable();
     const { roomId, person, key } = joined.data;
     if (expectedRoomId && roomId !== expectedRoomId) return failed(400, "bad-code");
+    // A short code expires, so a rejoin needs the long one the door hands back.
+    const saved = short ? joined.data.code : pasted;
+    if (!saved || CODE.exec(saved)?.[1] !== relayHost) return unavailable();
     this.unfollow(roomId);
-    saveJoined(roomId, relayHost, person, key, pasted);
+    saveJoined(roomId, relayHost, person, key, saved);
     setJoinedSentName(roomId, name);
     this.oldNames.delete(roomId);
     this.follow(roomId);
@@ -450,7 +509,8 @@ export class GuestClient {
 
   private view(room: JoinedRoom): JoinedView {
     const link = room.status === "joined" ? (this.syncs.get(room.roomId)?.link ?? "offline") : null;
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room) };
+    const sync = this.syncs.get(room.roomId);
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
@@ -466,7 +526,7 @@ export class GuestClient {
   }
 
   private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false };
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false, reacts: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }
@@ -551,6 +611,7 @@ export class GuestClient {
       agent: false,
     });
     sync.req = req;
+    sync.reacts = false;
     let silence: NodeJS.Timeout | null = null;
     const quiet = () => {
       if (silence) clearTimeout(silence);
@@ -609,6 +670,10 @@ export class GuestClient {
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
+    } else if (parsed.kind === "reactions") {
+      sync.reacts = true;
+      setJoinedReactions(roomId, parsed.lines, parsed.reset);
+      this.changed(roomId);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

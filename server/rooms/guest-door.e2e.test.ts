@@ -562,3 +562,49 @@ describe("a shared bot group", () => {
     expect(seqs(roomId).at(-1)).toBe(200);
   });
 });
+
+describe("reactions and the notice on a teammate", () => {
+  const mirrorOf = (group: HostedGroup, entryId: string) => store.messagesFor(group.threadId).find((message) => message.roomEntryId === entryId)!;
+  const marks = (c: GuestClient, roomId: string, entryId: string) => c.room(roomId)?.entries.find((entry) => entry.id === entryId)?.reactions ?? [];
+
+  it("carries Mina's reaction and the host's own both ways and keeps 20 lines of them across a reconnect", async () => {
+    const { group, c, roomId } = await joinedTeam("Mina Park");
+    await until(() => c.room(roomId)?.canReact === true);
+    const me = c.room(roomId)!.me.id;
+    const welcome = recentRoomEntries(roomId, 1)[0]!;
+    expect(await c.react(roomId, welcome.id, "👍")).toMatchObject({ ok: true });
+    expect(mirrorOf(group, welcome.id).reactions).toEqual([{ emoji: "👍", by: `person:${me}` }]);
+    await until(() => marks(c, roomId, welcome.id).length === 1);
+    store.toggleReaction(group.threadId, mirrorOf(group, welcome.id).id, "❤️", "user");
+    await until(() => marks(c, roomId, welcome.id).some((mark) => mark.by === "host"));
+    const ids = [welcome.id];
+    for (let index = 0; index < 19; index++) {
+      const entry = hostSays(group, `line ${index}`);
+      ids.push(entry.id);
+      await until(() => texts(roomId).includes(`line ${index}`));
+      expect((await c.react(roomId, entry.id, "🔥")).ok).toBe(true);
+    }
+    hop.up = false;
+    hop.drop();
+    await until(() => c.room(roomId)?.link === "offline");
+    expect(c.room(roomId)?.canReact).toBe(false);
+    store.toggleReaction(group.threadId, mirrorOf(group, welcome.id).id, "❤️", "user");
+    hop.up = true;
+    await live(c, roomId);
+    await until(() => marks(c, roomId, welcome.id).length === 1);
+    for (const id of ids) expect(marks(c, roomId, id)).toHaveLength(1);
+    expect(c.room(roomId)?.canReact).toBe(true);
+  });
+
+  it("pins a notice through the door and shows its line", async () => {
+    const { group, c, roomId } = await joinedTeam("Mina Park");
+    await until(() => c.room(roomId)?.canReact === true);
+    const welcome = recentRoomEntries(roomId, 1)[0]!;
+    expect(await c.notice(roomId, welcome.id)).toMatchObject({ ok: true });
+    await until(() => c.room(roomId)?.state?.notice?.entryId === welcome.id);
+    expect(c.room(roomId)?.noticeEntry?.text).toBe("welcome");
+    expect(store.groups.find((candidate) => candidate.id === group.id)?.notice?.by).toBe(`person:${c.room(roomId)!.me.id}`);
+    expect(await c.notice(roomId, null)).toMatchObject({ ok: true });
+    await until(() => !c.room(roomId)?.state?.notice);
+  });
+});
