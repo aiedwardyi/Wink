@@ -45,7 +45,10 @@ it("glides each cursor quickly and rests only on a quote it marked", () => {
   play(show, step => {
     for (const c of step.moved) {
       const was = last.get(c.id);
-      if (c.duration) expect(c.duration).toBeGreaterThanOrEqual(220), expect(c.duration).toBeLessThanOrEqual(320);
+      if (c.duration) {
+        expect(c.duration).toBeGreaterThanOrEqual(220);
+        expect(c.duration).toBeLessThanOrEqual(320);
+      }
       if (was?.quote) quote = Math.max(quote, show.clock - was.end);
       else if (was) reading = Math.max(reading, show.clock - was.end);
       last.set(c.id, { end: c.duration ? show.clock + c.duration : Infinity, quote: c.quote !== undefined });
