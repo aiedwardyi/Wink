@@ -29,4 +29,8 @@ describe("channel bulletin editor", () => {
     expect(groupView).not.toContain("saveBulletin");
     expect(roomDetails).toContain("onBlur={saveBulletin}");
   });
+
+  it("opens from a bot-to-bot channel's name too", () => {
+    expect(groupView).not.toContain('group.dm ? <span');
+  });
 });

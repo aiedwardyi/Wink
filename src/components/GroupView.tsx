@@ -1550,7 +1550,7 @@ export function GroupView({ group: live }: { group: Group }) {
         )}
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
-          {group.dm ? <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span> : <RoomTitle name={group.name} />}
+          <RoomTitle name={group.name} />
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />

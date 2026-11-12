@@ -95,7 +95,7 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
         {group ? (
           <>
             {section("room", t("room.section"), <HostRoom group={group} />, false)}
-            {section("people", `${t("teamRoom.people")} (${1 + roomPeople(group).length})`, <HostPeople group={group} />)}
+            {!group.dm && section("people", `${t("teamRoom.people")} (${1 + roomPeople(group).length})`, <HostPeople group={group} />)}
             {!group.dm && section("bots", `${t("chrome.bots")} (${group.memberIds.length + roomTeamBots(group).length})`, <RoomDetailsBots group={group} />)}
           </>
         ) : joined && (

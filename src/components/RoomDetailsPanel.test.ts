@@ -90,6 +90,12 @@ describe("Room details", () => {
     expect(host.querySelector("[data-room-add-bot]")!.textContent).toBe(addBot);
   });
 
+  it("opens on a bot-to-bot channel with only its instructions", async () => {
+    await open({ group: { ...group, dm: true, memberIds: ["b1", "b2"] } });
+    expect(order()).toEqual(["room"]);
+    expect(section("room").querySelector("textarea")).not.toBeNull();
+  });
+
   it("renames the room in place from the pencil, and saves on Enter", async () => {
     await open({ group: { ...group, name: "Channel" } });
     expect(section("room").querySelector("input")).toBeNull();
