@@ -51,6 +51,22 @@ export function sheetSwipeCloses(dy: number, velocity: number, height: number): 
   return swipeStep(dy, velocity, height) === -1;
 }
 
+export const BUBBLE_ARM = 56;
+export const BUBBLE_FOLLOW = 64;
+export const BUBBLE_MAX = 96;
+const BUBBLE_PAST_FOLLOW = 0.3;
+
+export type BubbleSide = "right" | "left";
+
+/** A room bubble follows the finger 1:1 to 64 px, then 0.3x, stopping at 96. Arms at 56 px; a side that isn't allowed doesn't move. */
+export function bubbleSwipe(dx: number, allowed: Record<BubbleSide, boolean>): { offset: number; armed: BubbleSide | null } {
+  const side: BubbleSide = dx < 0 ? "left" : "right";
+  if (!allowed[side]) return { offset: 0, armed: null };
+  const pull = Math.abs(dx);
+  const travel = Math.min(BUBBLE_MAX, pull <= BUBBLE_FOLLOW ? pull : BUBBLE_FOLLOW + (pull - BUBBLE_FOLLOW) * BUBBLE_PAST_FOLLOW);
+  return { offset: Math.sign(dx) * travel, armed: pull >= BUBBLE_ARM ? side : null };
+}
+
 /** Stops at both ends, no wrap. */
 export function neighborId(ids: readonly string[], currentId: string, step: SwipeStep): string | null {
   const index = ids.indexOf(currentId);

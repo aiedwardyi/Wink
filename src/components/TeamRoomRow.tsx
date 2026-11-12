@@ -9,6 +9,7 @@ import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from 
 import { useI18n } from "@/lib/i18n";
 import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
+import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import type { PreviewImage } from "@/lib/media-viewer";
 import { isRoomPicture, roomFileUrl, roomMessage, type JoinedPerson, type RoomLine } from "@/lib/team-rooms";
@@ -45,6 +46,9 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
   const showTranslate = !mine && canTranslate && Boolean(line.text.trim()) && !alreadyInLanguage(line.text, locale);
   const pictures = line.files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
   const files = line.files.filter((file) => !file.deleted && !isRoomPicture(file));
+  const rowRef = useRef<HTMLDivElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  useBubbleSwipe({ row: rowRef, bubble: bubbleRef, canReply: true, canTranslate: showTranslate, onReply: () => onReply(roomMessage(line)), onTranslate: translation.toggle });
   const entryId = line.entryId ?? line.id;
   const pinned = notice?.entryId === entryId;
   const message = roomMessage(line);
@@ -66,9 +70,10 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
         </div>
       ) : named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
       <div
+        ref={rowRef}
         data-mid={line.id}
         data-team-room-line={mine ? "mine" : "theirs"}
-        className={cn("group flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
+        className={cn("group relative flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
         tabIndex={-1}
         {...holdToOpen((x, y, opener) => onMenu({ kind: "message", x, y, opener, target }))}
         onContextMenu={(event) => {
@@ -88,7 +93,9 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
           onMenu({ kind: "message", x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, opener: event.currentTarget, target });
         }}
       >
-        <div className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
+        <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />
+        {!mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
+        <div ref={bubbleRef} className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
           <div
             data-message-hover-actions
             className={cn("pointer-events-none absolute bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100", mine ? "right-0" : "left-0")}
