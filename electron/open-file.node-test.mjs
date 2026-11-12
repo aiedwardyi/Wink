@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { fileMenuFor, imageBytes, imageFetchFor, imageSaveName, openLocalFile, saveImageCopy, saveLocalFile } from "./open-file.mjs";
+import { fileMenuFor, imageBytes, imageFetchFor, imageSaveName, openLocalFile, saveImageCopy, saveLocalFile, showLocalFile } from "./open-file.mjs";
 
 // Creating a symlink on Windows needs elevation or developer mode, so the
 // symlink case only runs where the runner can actually make one.
@@ -119,6 +119,15 @@ describe("open-file policy", () => {
       await assert.rejects(openLocalFile(p, { shell, platform: "win32" }), { message: "That file path is invalid" });
     }
     assert.deepEqual(shell.calls, []);
+  });
+
+  it("shows any file in its folder, a type that could run too, and never a UNC path", async () => {
+    const shell = fakeShell();
+    const p = file("tool.exe");
+    await showLocalFile(p, { shell });
+    assert.deepEqual(shell.calls, [["reveal", await fs.promises.realpath(p)]]);
+    await assert.rejects(showLocalFile("\\\\evil\\share\\a.pdf", { shell, platform: "win32" }), { message: "That file path is invalid" });
+    assert.equal(shell.calls.length, 1);
   });
 
   it("keeps a relative link's file inside its bot folder", async () => {

@@ -8,6 +8,7 @@ import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { createMediaIndex } from "./media-index.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -55,6 +56,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
   const openPath = join(deps.dataDir, OPEN_THREAD_FILE);
   let openThread = readOpenThread(openPath);
   let openTimer: ReturnType<typeof setTimeout> | undefined;
+  let mediaIndex: ReturnType<typeof createMediaIndex> | undefined;
   return {
     openThread: () => openThread,
     listMessages: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
@@ -98,6 +100,14 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
       return json(res, 200, turnIndex(store.activePath(threadId)));
+    },
+    media: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
+      const threadId = m[1];
+      if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
+      if (threadSyncGate.enabled) await pullSyncedThread(threadId);
+      else pullSyncedThread(threadId);
+      mediaIndex ??= createMediaIndex(store);
+      return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },
     messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice

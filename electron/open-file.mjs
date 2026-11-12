@@ -50,6 +50,11 @@ export async function openLocalFile(rawPath, { shell, ...options }) {
   return action;
 }
 
+export async function showLocalFile(rawPath, { shell, ...options }) {
+  const { filePath } = await resolveOpenTarget(rawPath, options);
+  shell.showItemInFolder(filePath);
+}
+
 // The save dialog confirms before overwriting. Picking the file itself copies
 // nothing; realpath catches it under another case or a short 8.3 name too.
 export async function saveFileCopy(filePath, { dialog, downloads, window, fsp = fs.promises }) {
