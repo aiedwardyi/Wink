@@ -24,7 +24,7 @@ export type CallState = {
   /** The line being spoken, kept after its turn until the next one starts. */
   caption?: { id: number; who: CallLine["who"]; text: string };
   /** The last order or ask that never reached the bot, or got no reply. */
-  notice?: { kind: "notSent" | "noReply"; text: string };
+  notice?: { kind: "notSent" | "noReply"; text: string; why?: string };
 };
 
 export type CallAudioPort = {
@@ -384,8 +384,8 @@ export class LiveCall {
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
   private toolResult(ids: string[], name: string, subject: string, result: string) {
-    // An ask redirected to propose_work is not lost yet; the guard catches it if no offer follows.
-    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed") && result !== CHANGE_ASK) this.notSent(subject, reasonOf(result));
+    // An ask redirected to propose_work shows until its offer replaces it.
+    if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     for (const id of live) engine!.sendToolResult(id, name, result);
@@ -395,7 +395,7 @@ export class LiveCall {
   }
 
   private notSent(subject: string, why?: string) {
-    this.set({ notice: { kind: "notSent", text: why ? `${subject} (${why})` : subject } });
+    this.set({ notice: { kind: "notSent", text: subject, ...(why ? { why } : {}) } });
   }
 
   private get notNeeded() {
@@ -419,10 +419,14 @@ export class LiveCall {
     const expiresAt = this.now() + ORDER_EXPIRY_MS;
     const expire = () => {
       if (this.pending !== pending) return;
-      // A yes still being said lands just after the timer.
-      if (spokenText(this.heardBuf) && !this.quiet) {
-        pending.timer = setTimeout(expire, QUIET_MS);
-        return;
+      // A yes still being said lands just after the timer; one left stale in the buffer is read now.
+      if (spokenText(this.heardBuf)) {
+        if (!this.quiet) {
+          pending.timer = setTimeout(expire, QUIET_MS);
+          return;
+        }
+        this.flushHeard();
+        if (this.pending !== pending) return;
       }
       this.stats.orders.expired += 1;
       pending.req.accounted = false;
@@ -680,7 +684,7 @@ export class LiveCall {
         this.answered(replyOrders, replyOrders.map((row) => row.id), reply);
         void this.report(reply.text!, replyOrders.map((row) => row.id));
       }
-      if (this.ran) this.stopped(input.messages, Boolean(openQuestion(input.messages) || input.needs));
+      if (this.ran) this.stopped(input.messages, openQuestion(input.messages)?.at, Boolean(input.needs && !this.toldNeeds.has(input.needs.id)));
     }
     const question = openQuestion(input.messages);
     const id = question && !this.askAnswered.has(question.id) ? question.id : undefined;
@@ -707,18 +711,20 @@ export class LiveCall {
     this.refresh();
   }
 
-  /** The bot went idle after running: this call's orders it never answered get no reply, so they are told and can be asked again. A question back is its reply. */
-  private stopped(messages: Message[], asking: boolean) {
+  /** The bot went idle after running: this call's orders it never answered get no reply, so they are told and can be asked again. A question or need raised since is its reply. */
+  private stopped(messages: Message[], askedAt: number | undefined, newNeed: boolean) {
     this.ran = false;
+    const lost: string[] = [];
     for (const row of messages) {
       if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || this.settled.has(row.id) || !row.text?.trim()) continue;
       this.settled.add(row.id);
       this.awaiting = Math.max(0, this.awaiting - 1);
-      if (asking) continue;
+      if (newNeed || (askedAt !== undefined && askedAt >= row.at)) continue;
       this.sent.delete(orderKey(row.text));
-      this.set({ notice: { kind: "noReply", text: row.text } });
+      lost.push(row.text);
       this.held.push({ text: `[Wink] ${this.deps.botName} stopped with no reply to "${row.text}". Tell them plainly; they can ask again.` });
     }
+    if (lost.length) this.set({ notice: { kind: "noReply", text: lost.join("; ") } });
   }
 
   /** The first audio of a turn that sent something is how fast the voice acknowledged it. */

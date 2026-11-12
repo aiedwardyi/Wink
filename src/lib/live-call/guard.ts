@@ -14,6 +14,9 @@ const CLARIFY = /\b(?:heard|hear you|catch that|repeat|say that again|what you m
 const DONE = /\bi(?:'?ve| have| just| already)?\s+(?:just\s+|already\s+)?(?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran)\b|확인했|알아봤|찾았|열었|추가했|보냈/gi;
 const FAILED = /\b(?:nothing (?:was|has been|got) sent|(?:wasn'?t|was not|isn'?t|is not|hasn'?t been|has not been|couldn'?t be|could not be) sent|not sent|nothing is running)\b|아무것도 (?:안 )?보내지 않|보내지 (?:않았|못했)|안 보냈|전송되지 않/i;
 
+// A thinking noise is not an answer, so it promises nothing.
+const FILLER_ONLY = /^(?:uh|um|er|hmm+|mm+|ah|oh|음+|어+|아+)[\s.,!…]*$/i;
+
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
 
 /** The first claim in a turn; an honest "not sent" anywhere wins, and a clarification is never a dodge. With an unsent order, any plain answer is a promise. */
@@ -27,7 +30,7 @@ export function claimOf(said: string, recap = false, order = false): { claim: Cl
     if (ACTION_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
     if (CANT.test(sentence)) return { claim: "cant", sentence };
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
-    plain ||= sentence;
+    if (!FILLER_ONLY.test(sentence)) plain ||= sentence;
   }
   return order && plain && !clarifies ? { claim: "promise", sentence: plain } : null;
 }

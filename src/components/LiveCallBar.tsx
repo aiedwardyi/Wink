@@ -67,6 +67,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
   },
 };
 
+// Known outcome reasons; anything else (a server error) shows as sent.
+const REASONS: Record<LocaleId, Record<string, string>> = {
+  en: {},
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요" },
+};
+
 async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
@@ -197,7 +203,7 @@ export function LiveCallBar({ bot, ctx, onEnd }: { bot: Bot; ctx: AudioContext; 
   }, [bot.busy, bot.threadId, call, messages]);
 
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? `${words[snap.notice.kind]}: ${snap.notice.text}` : privacy ? words.privacy : "";
+  const note = intro ? "" : snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? `${words[snap.notice.kind]}: ${snap.notice.text}${snap.notice.why ? ` (${REASONS[locale]?.[snap.notice.why] ?? snap.notice.why})` : ""}` : privacy ? words.privacy : "";
   const target = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.

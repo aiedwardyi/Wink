@@ -26,6 +26,8 @@ export function consentOf(said: string): "yes" | "no" | null {
   const text = said.trim().replace(FILLER, "");
   const [first = "", second = ""] = koWords(text);
   if (NO_EN.test(text) || [first, second].some((word) => NO_KO.some((no) => word.startsWith(no)))) return "no";
+  // "Confirm?" asks, it does not answer.
+  if (/\?\s*$/.test(text)) return null;
   if (YES_ALONE_EN.test(text)) return "yes";
   if (YES_EN.test(text)) return BUT_EN.test(text) ? null : "yes";
   if (BUT_KO.test(text)) return null;

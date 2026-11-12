@@ -220,7 +220,7 @@ describe("live call in the message box", () => {
       await act(async () => engine.events.toolCall([{ id: "t2", name: "propose_work", args: { order: "로그인 버그 고쳐 줘" } }]));
       expect(host.querySelector("[data-live-call-notice]")).toBeNull();
       await act(async () => pick(host.querySelector<HTMLElement>("[data-live-call-order]")!, "아니요")!.click());
-      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘 (declined)");
+      expect(host.querySelector("[data-live-call-notice=notSent]")?.textContent).toBe("보내지 않음: 로그인 버그 고쳐 줘 (거절됨)");
     } finally {
       applyLocale("en");
       await unmount();

@@ -716,7 +716,7 @@ describe("VOICE-SEND: ask", () => {
     await flush();
     expect(messagesOf(posts)).toEqual([]);
     expect(engine().results[0]?.result).toMatch(/^not sent: this changes something, so offer it with propose_work/);
-    expect(call.state().notice).toBeUndefined();
+    expect(call.state().notice).toEqual({ kind: "notSent", text: question, why: "needs a yes" });
   });
 
   it("a replayed ask in the same request shares one send; a new request asks again", async () => {
@@ -1438,6 +1438,12 @@ describe("VOICE-P0: not sent is shown and said", () => {
     expect(linesOf(posts)).toContain("Not sent: Open my desktop folder.");
   });
 
+  it.each(["Hmm.", "Mm...", "음..."])("a bare filler after an order is not a promise: %s", async (said) => {
+    const { engine } = await started();
+    turn(engine(), "Open my desktop folder.", said);
+    expect(nudges(engine())).toEqual([]);
+  });
+
   it("past the nudge cap the voice is still told and the bar shows it", async () => {
     const { call, engine } = await started();
     for (const ask of ["Check A?", "Check B?", "Check C?"]) {
@@ -1456,14 +1462,14 @@ describe("VOICE-P0: not sent is shown and said", () => {
     const { call, engine } = await started({ "/messages": { status: 409, data: { error: "down" } } });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
     await vi.advanceTimersByTimeAsync(45_000);
-    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug. (expired)" });
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug.", why: "expired" });
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Fix the tests." } }]);
     expect(call.state().notice).toBeUndefined();
     await call.answer(false);
-    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the tests. (declined)" });
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the tests.", why: "declined" });
     engine().events.toolCall([{ id: "t3", name: "propose_work", args: { order: "Push it." } }]);
     await call.answer(true);
-    expect(call.state().notice).toEqual({ kind: "notSent", text: "Push it. (down)" });
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Push it.", why: "down" });
   });
 
   it("a voice that says plainly it was not sent leaves it in the bar", async () => {
@@ -1498,6 +1504,30 @@ describe("VOICE-P0: a turn that ends with no reply", () => {
     call.observe({ busy: false, messages: [orderRow("o1", "Fix the login bug.")], threadId: "th" });
     expect(call.state().status).toBe("working");
     expect(call.state().notice).toBeUndefined();
+  });
+
+  it("every order left with no reply shows in the bar", async () => {
+    const { call, engine } = await started({ "/messages": ACCEPTED });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    await call.answer(true);
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Restart the server." } }]);
+    await call.answer(true);
+    const rows = [orderRow("o1", "Fix the login bug."), orderRow("o2", "Restart the server.")];
+    call.observe({ busy: true, messages: rows, threadId: "th" });
+    call.observe({ busy: false, messages: rows, threadId: "th" });
+    expect(call.state().notice).toEqual({ kind: "noReply", text: "Fix the login bug.; Restart the server." });
+  });
+
+  it("a question or need from before the order is not its reply", async () => {
+    const { call, engine } = await started({ "/messages": ACCEPTED });
+    const needs = { id: "n1", short: "approve a command" };
+    call.observe({ busy: false, messages: [cardRow("q0", 1_500)], threadId: "th", needs });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy it." } }]);
+    await call.answer(true);
+    const rows = [cardRow("q0", 1_500), orderRow("o1", "Deploy it.")];
+    call.observe({ busy: true, messages: rows, threadId: "th", needs });
+    call.observe({ busy: false, messages: rows, threadId: "th", needs });
+    expect(call.state().notice).toEqual({ kind: "noReply", text: "Deploy it." });
   });
 
   it("a turn that ends on a question card is its reply, not a stop", async () => {
@@ -1594,12 +1624,23 @@ describe("VOICE-P0: offers", () => {
     expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Fix the login bug."]);
   });
 
+  it("a yes left in the buffer past the quiet wait is settled before the offer expires", async () => {
+    vi.useFakeTimers();
+    const { engine, posts } = await started({ "/messages": ACCEPTED });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    await vi.advanceTimersByTimeAsync(44_000);
+    engine().events.heard("Yes.");
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Fix the login bug."]);
+    expect(engine().results).not.toContainEqual({ id: "t1", result: "expired" });
+  });
+
   it("a replaced offer stays in the bar", async () => {
     const { call, engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Restart the server." } }]);
     expect(call.state().pending?.order).toBe("Restart the server.");
-    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug. (replaced)" });
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug.", why: "replaced" });
   });
 });
 

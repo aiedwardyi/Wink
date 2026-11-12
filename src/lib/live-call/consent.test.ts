@@ -21,7 +21,7 @@ describe("consentOf", () => {
     "됐어", "괜찮아", "어떻게 해?", "어떻게 하지", "네가 해야 하는 거 아니야", "I'm sure it works", "what about the tests", "",
     "Yes, don't send it.", "Sure, but wait.", "Of course not.", "Absolutely not.", "Sounds good, but not now.", "Alright, hold on.",
     "어...", "어 그거 말고 다른 거", "네 근데 그거 말고요", "응 그런데 하나만", "Yes, but make it blue", "Okay want me to open your desktop folder",
-    "Right now?", "Please make it blue.",
+    "Right now?", "Please make it blue.", "Confirm?", "Yes?",
   ])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
 });
 
