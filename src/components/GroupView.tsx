@@ -58,8 +58,8 @@ import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
-import { ManageMembersPanel } from "./ManageMembersPanel";
-import { GroupMemberRoster, ManageMembersButton } from "./GroupMemberRoster";
+import { GroupMemberRoster } from "./GroupMemberRoster";
+import { RoomTitle } from "./RoomTitle";
 import { GroupArchiveBar } from "./GroupArchiveBar";
 import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
@@ -69,7 +69,7 @@ import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, locali
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
-import { nextBulletin } from "@/lib/room-bulletin";
+import { openRoomDetails } from "@/lib/room-details";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -100,7 +100,6 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { useReplyDraft } from "@/lib/drafts";
-import { Presence } from "@/lib/use-presence";
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -1168,10 +1167,7 @@ export function GroupView({ group: live }: { group: Group }) {
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
-  const [bulletinOpen, setBulletinOpen] = useState(false);
-  const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
   const [folderOpen, setFolderOpen] = useState(false);
-  const [membersOpen, setMembersOpen] = useState(false);
   const find = useSearchFindSeed(group.threadId);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
@@ -1195,8 +1191,6 @@ export function GroupView({ group: live }: { group: Group }) {
     setMenu(null);
   }
   useEffect(() => endSelectMode, [group.threadId]);
-  const membersTriggerRef = useRef<HTMLButtonElement>(null);
-  const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
@@ -1404,14 +1398,8 @@ export function GroupView({ group: live }: { group: Group }) {
   // A plain tail holds at least the newest window of visible rows - see ChatView.
   const tailStart = useMemo(() => tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [group.messages.length, renders]);
 
-  // an open draft outranks an incoming bulletin patch — resyncing under the cursor loses the edit
-  useEffect(() => {
-    if (!bulletinOpen) setBulletinDraft(group.bulletin);
-  }, [bulletinOpen, group.id, group.bulletin]);
   // an open folder editor belongs to the room it was opened in
   useEffect(() => setFolderOpen(false), [group.id]);
-  useEffect(() => setMembersOpen(false), [group.id]);
-  useEffect(() => setBulletinOpen(false), [group.id]);
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted - see ChatView.
@@ -1530,19 +1518,6 @@ export function GroupView({ group: live }: { group: Group }) {
     });
   };
 
-  const saveBulletin = () => {
-    setBulletinOpen(false);
-    const next = nextBulletin(group.bulletin, bulletinDraft);
-    if (next !== null) {
-      dispatch({ type: "patchGroup", groupId: group.id, patch: { bulletin: next } });
-    }
-  };
-
-  const discardBulletin = () => {
-    setBulletinDraft(group.bulletin);
-    setBulletinOpen(false);
-  };
-
   // Static mauses: one per member, a ring + dot on whoever is working.
   const memberMauses = members.map((b) => (
     <span
@@ -1564,9 +1539,6 @@ export function GroupView({ group: live }: { group: Group }) {
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
-      <Presence open={membersOpen && !group.dm}>
-        {(closing) => <ManageMembersPanel group={group} closing={closing} onClose={closeMembers} triggerRef={membersTriggerRef} />}
-      </Presence>
       {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
@@ -1576,7 +1548,7 @@ export function GroupView({ group: live }: { group: Group }) {
         )}
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
-          <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
+          {group.dm ? <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span> : <RoomTitle name={group.name} />}
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
@@ -1598,19 +1570,8 @@ export function GroupView({ group: live }: { group: Group }) {
           {group.dm ? (
             memberMauses
           ) : (
-            // The roster lives where you already look to see who is in the
-            // room; a dashed + says the row is editable without shouting.
-            <GroupMemberRoster
-              group={group}
-              members={members}
-              mauses={memberMauses}
-              onOpen={(pressed) => {
-                if (pressed) membersTriggerRef.current = pressed;
-                setMembersOpen(true);
-              }}
-            >
+            <GroupMemberRoster group={group} members={members} mauses={memberMauses} onOpen={(section) => openRoomDetails(dispatch, section)}>
               <GroupPeopleFaces group={group} />
-              <ManageMembersButton ref={membersTriggerRef} count={members.length} />
             </GroupMemberRoster>
           )}
         </div>
@@ -1625,57 +1586,6 @@ export function GroupView({ group: live }: { group: Group }) {
           onClose={find.closeFind}
         />
       )}
-
-      {/* Bulletin: one pinned line; click to edit */}
-      {!setupPending && <div className="w-full px-5">
-        {bulletinOpen ? (
-          <div className="mb-1 rounded-lg border border-hairline/40 bg-panel p-2">
-            <textarea
-              autoFocus
-              value={bulletinDraft}
-              onChange={(e) => setBulletinDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBulletin();
-                if (e.key === "Escape") discardBulletin();
-              }}
-              placeholder={t("room.bulletinPlaceholder")}
-              rows={4}
-              className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-ink-secondary focus:outline-none"
-            />
-            <div className="flex items-center justify-end gap-1">
-              <button
-                type="button"
-                onClick={discardBulletin}
-                aria-label={t("room.discardInstructions")}
-                title={t("room.discardInstructions")}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
-              >
-                <X size={15} />
-              </button>
-              <button
-                type="button"
-                onClick={saveBulletin}
-                aria-label={t("room.saveInstructions")}
-                title={t("room.save")}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
-              >
-                <Check size={15} />
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setBulletinOpen(true)}
-            className="mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised/40"
-            title={t("room.bulletinTitle")}
-          >
-            <Pin size={12} className="shrink-0 text-ink-secondary" />
-            <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>
-              {group.bulletin.split("\n")[0] || t("room.addInstructions")}
-            </span>
-          </button>
-        )}
-      </div>}
 
       {/* Optional shared folder — the chip in the header toggles it */}
       {!setupPending && folderOpen && !group.dm && (

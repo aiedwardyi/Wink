@@ -61,8 +61,8 @@ async function show(memberIds: string[]) {
         group,
         members,
         mauses: members.map((b) => createElement("span", { key: b.id }, b.name)),
-        onOpen: (pressed) => opened.push(pressed?.dataset.memberId ?? pressed?.textContent ?? null),
-        children: createElement("button", { type: "button" }, "+"),
+        onOpen: (section) => opened.push(section),
+        children: [createElement("button", { key: "plus", type: "button" }, "+"), createElement("span", { key: "faces", "data-group-people-faces": "" }, "MP")],
       })),
     ),
   );
@@ -103,7 +103,7 @@ describe("group member roster", () => {
     expect(saved()).toEqual([["career", "wink", "pokkey", "gone"]]);
   });
 
-  it("swallows the click that ends a drag, and a plain click still opens Manage members", async () => {
+  it("swallows the click that ends a drag, and a plain click still opens Room details at Bots", async () => {
     await render();
     await press("wink");
     await pointer("pointermove", at("wink") + 50);
@@ -113,8 +113,14 @@ describe("group member roster", () => {
     await press("pokkey");
     await pointer("pointerup", at("pokkey"));
     await click(picture("pokkey"));
-    expect(opened).toEqual(["pokkey"]);
+    expect(opened).toEqual(["bots"]);
     expect(saved()).toHaveLength(1);
+  });
+
+  it("opens Room details at People from the people faces", async () => {
+    await render();
+    await click(document.querySelector<HTMLElement>("[data-group-people-faces]")!);
+    expect(opened).toEqual(["people"]);
   });
 
   it("puts a picture back when Escape cancels the drag", async () => {
@@ -180,13 +186,13 @@ describe("group member roster", () => {
     expect(picture("wink").style.opacity).toBe("");
   });
 
-  it("leaves a touch tap to open Manage members", async () => {
+  it("leaves a touch tap to open Room details", async () => {
     vi.useFakeTimers();
     await render();
     await press("pokkey", "touch");
     await pointer("pointerup", at("pokkey"), "touch");
     await click(picture("pokkey"));
-    expect(opened).toEqual(["pokkey"]);
+    expect(opened).toEqual(["bots"]);
     expect(saved()).toEqual([]);
   });
 

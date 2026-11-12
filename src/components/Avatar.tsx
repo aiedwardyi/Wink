@@ -268,11 +268,13 @@ export function InitialsAvatar({
   imageUrl,
   size = 32,
   pending = false,
+  tone = "bg-raised",
 }: {
   initials: string;
   imageUrl?: string;
   size?: number;
   pending?: boolean;
+  tone?: string;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [imageUrl]);
@@ -295,7 +297,7 @@ export function InitialsAvatar({
   }
   return (
     <div
-      className="flex shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary font-medium"
+      className={`flex shrink-0 items-center justify-center rounded-full ${tone} text-ink-secondary font-medium`}
       style={{ width: size, height: size, fontSize: size * 0.38 }}
     >
       {initials}

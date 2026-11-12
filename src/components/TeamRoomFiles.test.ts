@@ -6,12 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
-import { TeamRoomFilesMenu } from "./TeamRoomMenu";
 import { TeamRoomRow } from "./TeamRoomRow";
 
-const mock = vi.hoisted(() => ({ request: vi.fn(), showMedia: vi.fn(), phone: false }));
+const mock = vi.hoisted(() => ({ request: vi.fn(), phone: false }));
 vi.mock("@/lib/api-request", () => ({ request: mock.request }));
-vi.mock("@/lib/show-pane", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/show-pane")>(), showMedia: mock.showMedia }));
 vi.mock("@/lib/use-phone-swipe", () => ({ useIsPhone: () => mock.phone }));
 
 let root: Root;
@@ -27,7 +25,6 @@ beforeEach(() => {
   root = createRoot(host);
   mock.phone = false;
   mock.request.mockReset();
-  mock.showMedia.mockReset();
 });
 
 afterEach(async () => {
@@ -59,14 +56,6 @@ describe("room files", () => {
     vi.stubGlobal("ogb", { pickFolder: vi.fn() });
     await render(createElement(RoomFilesFolderRow));
     expect(host.textContent).toBe("");
-    expect(mock.request).not.toHaveBeenCalled();
-  });
-
-  it("the header Files button opens Media for the room, with no dialog", async () => {
-    await render(createElement(TeamRoomFilesMenu, { threadId: "r-thread" }));
-    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Files"]')!.click());
-    expect(mock.showMedia).toHaveBeenCalledWith("r-thread");
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(mock.request).not.toHaveBeenCalled();
   });
 

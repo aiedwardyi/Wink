@@ -94,6 +94,18 @@ async function boot({ groups = [], route = () => undefined, locale = "en" }: {
 
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((each) => each.getAttribute("aria-label") === label || each.textContent?.trim() === label);
+const found = <T,>(get: () => T | null | undefined) => vi.waitFor(() => {
+  const value = get();
+  if (!value) throw new Error("not on screen yet");
+  return value;
+});
+// the sidebar folds for Room details, and happy-dom reports a canceled fold as unhandled
+async function openDetails(name = "Design team, Open room details") {
+  const matchMedia = window.matchMedia.bind(window);
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : matchMedia(query));
+  await click(button(name)!);
+  return found(() => $("aside[data-room-details]"));
+}
 async function click(target: Element | null | undefined) {
   expect(target, "control on screen").toBeTruthy();
   await act(async () => { (target as HTMLElement).click(); });
@@ -287,7 +299,7 @@ describe("Team rooms for the host", () => {
     expect($('[data-joined-room-row] [data-sidebar-unread-count]')).toBeNull();
   });
 
-  it.each(["Join with code", "People"])("Back closes %s first", async (label) => {
+  it.each(["Join with code"])("Back closes %s first", async (label) => {
     const layers = new Map<string, () => void>();
     const layer = (event: CustomEvent<{ key: string; close?: () => void }>) => {
       if (event.detail.close) layers.set(event.detail.key, event.detail.close);
@@ -297,7 +309,7 @@ describe("Team rooms for the host", () => {
     try {
       await boot({ groups: [teamRoom()] });
       await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-      if (label !== "People") await openPlus();
+      await openPlus();
       await click(button(label));
       expect($('[role="dialog"]')?.getAttribute("aria-label")).toBe(label);
       expect(layers.size).toBeGreaterThan(0);
@@ -385,7 +397,7 @@ describe("Team rooms for the host", () => {
     expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
     expect(main.querySelector("[data-room-transcript]")).toBeNull();
     const labels = [...main.querySelectorAll("button")].map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels).toEqual(["Room photo", "Turn off alerts for this room", "Files", "Show and media", "People", "Manage members · 0 bots in this group.", "Attach a file"]);
+    expect(labels).toEqual(["Design team, Open room details", "Turn off alerts for this room", "Show and media", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Find in conversation|approve|hold|level/i);
   });
 
@@ -420,8 +432,7 @@ describe("Team rooms for the host", () => {
       },
     });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-    await click(button("People"));
-    const dialog = $('[role="dialog"]')!;
+    const dialog = (await openDetails()).querySelector<HTMLElement>('[data-room-details-section="people"]')!;
     expect(dialog.querySelector("input, textarea")).toBeNull();
     expect(button("Invite")).toBeUndefined();
     await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
@@ -440,6 +451,7 @@ describe("Team rooms for the host", () => {
     await click(button("Remove Mina"));
     await click([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"][aria-labelledby] button')].find((candidate) => candidate.textContent === "Remove")!);
     expect(asked("DELETE", "/api/rooms/r1/people/p1")).toHaveLength(1);
+    await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(2));
     expect(button("Remove Mina")).toBeUndefined();
     expect(button("Remove Joon")).toBeTruthy();
     expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(2);
@@ -454,31 +466,35 @@ describe("Team rooms for the host", () => {
       route: (call) => (call.method === "DELETE" ? reply({ error: "room store is busy" }, 500) : undefined),
     });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-    await click(button("People"));
-    await click(button("Remove Mina"));
+    await openDetails();
+    await click(await found(() => button("Remove Mina")));
     await click([...document.querySelectorAll<HTMLButtonElement>('[role="dialog"][aria-labelledby] button')].find((candidate) => candidate.textContent === "Remove")!);
-    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Wink couldn't finish that. Try again."));
+    await vi.waitFor(() => expect($('[data-room-details] [role="alert"]')?.textContent).toBe("Wink couldn't finish that. Try again."));
     expect(button("Remove Mina")).toBeTruthy();
   });
 
-  it("says why there's no code in one line", async () => {
+  it("says why there's no code in one line, only once Invite is tapped", async () => {
     await boot({
       groups: [teamRoom()],
       route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ error: "phone access is off" }, 409) : undefined),
     });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-    await click(button("People"));
-    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Turn on Phone Access in Settings first."));
+    await openDetails();
+    await vi.waitFor(() => expect(asked("POST", "/api/rooms/r1/invites")).toHaveLength(1));
+    expect($('[data-room-details] [role="alert"]')).toBeNull();
+    await click(await found(() => button("Invite")));
+    await vi.waitFor(() => expect($('[data-room-details] [role="alert"]')?.textContent).toBe("Turn on Phone Access in Settings first."));
     expect($("[data-team-room-code]")).toBeNull();
   });
 
   it("shows the room code in Korean", async () => {
     await boot({ locale: "ko", groups: [teamRoom()], route: (call) => (call.path === "/api/rooms/r1/invites" ? reply({ code: CODE }) : undefined) });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
-    await click(button("참여자"));
+    await openDetails("Design team, 채팅방 세부 정보 열기");
     await vi.waitFor(() => expect($("[data-team-room-code]")?.textContent).toContain(CODE));
-    expect($('[role="dialog"]')!.textContent).toContain("초대 코드");
-    expect($('[role="dialog"]')!.textContent).toContain("이 코드가 있으면 누구나 참여해서 이 채팅 전체를 읽을 수 있어요.");
+    expect($("aside[data-room-details]")!.textContent).toContain("채팅방 세부 정보");
+    expect($("aside[data-room-details]")!.textContent).toContain("초대 코드");
+    expect($("aside[data-room-details]")!.textContent).toContain("이 코드가 있으면 누구나 참여해서 이 채팅 전체를 읽을 수 있어요.");
     expect(button("복사")).toBeTruthy();
   });
 
@@ -723,7 +739,8 @@ describe("Team rooms for a teammate", () => {
     view = joinedView("joined", "live");
     await joinedFrame("r9");
     await vi.waitFor(() => expect(phase()).toBe("live"));
-    await click(button("Leave"));
+    await openDetails();
+    await click(await found(() => button("Leave")));
     expect($('[role="dialog"]')!.textContent).toContain("Leave Design team?");
     await click([...document.querySelectorAll('[role="dialog"] button')].find((each) => each.textContent === "Leave"));
     expect(asked("POST", "/api/joined/rooms/r9/leave")).toHaveLength(1);
@@ -746,14 +763,15 @@ describe("Team rooms for a teammate", () => {
     const main = $('[data-team-room="joined"]')!;
     expect(main.querySelector("[data-orbit-composer]")).not.toBeNull();
     const labels = [...main.querySelectorAll("button")].filter((each) => !each.closest("[data-mid]")).map((each) => each.getAttribute("aria-label") ?? each.textContent);
-    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["People", "Turn off alerts for this room", "Leave", "Attach a file"]);
+    expect(labels.filter((label) => !label?.startsWith("Preview attached image"))).toEqual(["Design team, Open room details", "Turn off alerts for this room", "Attach a file"]);
     expect(main.textContent).not.toMatch(/Nova|Settings|Manage members|Find in conversation|approve|model/i);
-    await click(button("People"));
-    expect($('[role="dialog"]')!.textContent).toContain("Edward");
-    expect($('[role="dialog"]')!.textContent).toContain("You");
+    const details = await openDetails();
+    expect(details.textContent).toContain("Edward");
+    expect(details.textContent).toContain("You");
+    expect(details.textContent).not.toMatch(/Nova|Invite|New bot/);
     expect(button("Remove")).toBeUndefined();
     await click(button("Change your name"));
-    const input = $<HTMLInputElement>('[role="dialog"] input')!;
+    const input = $<HTMLInputElement>("aside[data-room-details] input")!;
     expect(document.activeElement).toBe(input);
     await joinedFrame("r9");
     expect(document.activeElement).toBe(input);

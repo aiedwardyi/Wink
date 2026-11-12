@@ -7,8 +7,7 @@ import { setRoomAlerts, useRoomAlertsOn } from "@/lib/room-alerts";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { enableWebPush, readWebPushState, syncWebPushRooms, webPushSupported, type WebPushState } from "@/lib/web-push";
 
-export function RoomAlertsBell({ chat }: { chat: string }) {
-  const { t } = useI18n();
+export function useRoomAlerts(chat: string) {
   const wanted = useRoomAlertsOn(chat);
   const pushable = useIsPhone() && webPushSupported();
   const [push, setPush] = useState<WebPushState | null>(null);
@@ -22,6 +21,12 @@ export function RoomAlertsBell({ chat }: { chat: string }) {
     if (push === "off" || push === "blocked") void enableWebPush().then(setPush).catch(() => {});
     else if (pushable) void syncWebPushRooms().catch(() => {});
   };
+  return { on, toggle };
+}
+
+export function RoomAlertsBell({ chat }: { chat: string }) {
+  const { t } = useI18n();
+  const { on, toggle } = useRoomAlerts(chat);
   const label = t(on ? "teamRoom.alertsOff" : "teamRoom.alertsOn");
   return (
     <button

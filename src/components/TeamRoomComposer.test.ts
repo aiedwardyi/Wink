@@ -14,7 +14,7 @@ import { JoinedRoomView } from "./JoinedRoomView";
 import { TeamRoomComposer } from "./TeamRoomComposer";
 import { TeamRoomView } from "./TeamRoomView";
 
-const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null }));
+const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null, dispatched: [] as unknown[] }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
 vi.mock("@/lib/room-files-state", () => ({ useRoomFilesState: () => ({ deleted: [], error: null }) }));
 vi.mock("@/lib/room-translate", async (importOriginal) => ({
@@ -23,7 +23,7 @@ vi.mock("@/lib/room-translate", async (importOriginal) => ({
 }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ state: { connected: true, bots: [], acceptedSends: {}, instances: [], pendingQueued: {} }, dispatch: () => {} }),
+  useStore: () => ({ state: { connected: true, bots: [], acceptedSends: {}, instances: [], pendingQueued: {} }, dispatch: (action: unknown) => joined.dispatched.push(action) }),
   formatTime: () => "",
 }));
 
@@ -390,12 +390,10 @@ describe("room mentions", () => {
 });
 
 describe("room bots", () => {
-  it("gives the host the dashed + on a room with no bots, opening the members picker", async () => {
+  it("gives the host no dashed + on a room with no bots: Add lives in Room details", async () => {
     await render();
-    const add = host.querySelector<HTMLButtonElement>('button[title="Manage members"]')!;
-    expect(add.querySelector(".border-dashed")).not.toBeNull();
-    await act(async () => add.click());
-    expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("Manage members of Design team");
+    expect(host.querySelector(".border-dashed")).toBeNull();
+    expect(host.querySelector('button[title="Manage members"]')).toBeNull();
   });
 
   it("gives a teammate no + even once the room has bots", async () => {
@@ -563,5 +561,26 @@ describe("room box is the 1:1 box", () => {
     await type("hello");
     await act(async () => host.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!.click());
     expect(vi.mocked(fetch).mock.calls[0][0]).toContain("/api/rooms/r1/send");
+  });
+});
+
+describe("room header", () => {
+  const labels = () => [...host.querySelector("main")!.firstElementChild!.querySelectorAll("button")].map((each) => each.getAttribute("aria-label"));
+
+  it("keeps only the name, the bell and the side pane, side pane last", async () => {
+    await render();
+    expect(labels()).toEqual(["Design team, Open room details", "Turn off alerts for this room", "Show and media"]);
+  });
+
+  it("gives a joined room only its name and bell", async () => {
+    await render("joined");
+    expect(labels()).toEqual(["Design team, Open room details", "Turn off alerts for this room"]);
+  });
+
+  it("opens Room details from the name", async () => {
+    joined.dispatched.length = 0;
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-room-title]")!.click());
+    expect(joined.dispatched).toEqual([{ type: "toggleSettings", open: true }]);
   });
 });
