@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import { closeShow, showItem } from "@/lib/show-pane";
 import { closeVerifyWatch } from "@/lib/verify-watch";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SIDEBAR_COLLAPSED_KEY, SIDEBAR_WIDTH_KEY } from "@/lib/sidebar-preferences";
@@ -65,6 +66,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   closeVerifyWatch();
+  closeShow();
   host.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -83,6 +85,28 @@ describe("right slot", () => {
     expect(watchPanel()).toBeNull();
     await openDetails();
     expect(inspectorPanel()).toBeUndefined();
+  });
+
+  it("the checker docks as the pane's Check tab, and Show keeps its file", async () => {
+    await act(async () => root.render(createElement(App)));
+    await act(async () => showItem({ threadId: "t1", path: "C:\\w\\a.png", kind: "image" }));
+    await openWatch();
+    const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
+    expect(tabs()).toEqual(["Show", "Check*", "Media"]);
+    const img = document.querySelector(".show-pane img");
+    expect(img).toBeTruthy();
+    await act(async () => button(".show-pane-tabs [role=tab]").click());
+    expect(tabs()).toEqual(["Show*", "Check", "Media"]);
+    expect(document.querySelector(".show-pane img")).toBe(img);
+    expect(document.querySelector(".show-pane .verify-watch-url")).toBeTruthy();
+  });
+
+  it("has no Check tab in a chat with no check", async () => {
+    await act(async () => root.render(createElement(App)));
+    await pick("b2");
+    await act(async () => (await until(() => button("button[data-show-pane-button]")) as HTMLButtonElement).click());
+    await until(watchPanel);
+    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media"]);
   });
 
   it("picking another bot closes the slot, and the same bot again keeps it", async () => {

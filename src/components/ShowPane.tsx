@@ -4,9 +4,9 @@ import { ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
-import { closeShow, lastShown, linkedFileSrc, showItem, showMedia, showName, type ShowItem } from "@/lib/show-pane";
+import { lastShown, linkedFileSrc, showCheck, showItem, showMedia, showName, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { closeVerifyWatch } from "@/lib/verify-watch";
+import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { ShowMedia } from "./ShowMedia";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
@@ -21,49 +21,59 @@ interface ShowPaneProps {
   watch?: { card: VerifyCardData; threadId: string; live: boolean };
   /** the Media tab is open */
   media?: boolean;
+  /** the Check tab is open */
+  check?: boolean;
+  /** the chat's last check, which the Check tab opens */
+  card?: VerifyCardData;
   source?: MediaSource;
   hidden: boolean;
   closing?: boolean;
 }
 
-/** The right slot's one pane: a bot's file, or the checker. A phone gets it as a full-screen sheet. */
-export function ShowPane({ item, watch, media = false, source, hidden, closing = false }: ShowPaneProps) {
+/** The right slot's one pane: a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
+export function ShowPane({ item, watch, media = false, check = false, card, source, hidden, closing = false }: ShowPaneProps) {
   const { t } = useI18n();
   const phone = useIsPhone();
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !phone;
-  const close = watch ? closeVerifyWatch : closeShow;
   const again = source && lastShown(source.threadId);
+  const tab = media && source ? "media" : watch && (check || !item) ? "check" : "show";
+  // A phone watches a doc check live; only a site check waits for the end.
+  const action = card && verifyCardAction(card, phone && !card.doc);
+  const checkable = Boolean(watch) || action === "live" || action === "watch";
+  const openCheck = () => {
+    if (watch) showCheck(watch.threadId);
+    else if (card && source) openVerifyWatch({ threadId: source.threadId, owner: card.owner, live: action === "live" });
+  };
 
   useEffect(() => {
     if (closing) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
-      else close();
+      else closePane();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [close, closing, expanded]);
+  }, [closing, expanded]);
 
   const pane = (
-    <aside className="verify-watch show-pane animate-panel-in" data-verify-watch data-side-panel="" data-wide={item || media ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
+    <aside className="verify-watch show-pane animate-panel-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
         <div role="tablist" className="show-pane-tabs">
-          <button type="button" role="tab" aria-selected={!media} disabled={media && !again} onClick={() => media && again && showItem(again)}>{t("show.tab")}</button>
-          {source && <button type="button" role="tab" aria-selected={media} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
+          <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
+          {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
+          {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={close} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
+        <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
       </div>
-      {media && source
-        ? <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />
-        : watch
-        ? watch.card.doc
-          ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
-          : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
-        : item && <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />}
+      {item && <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />}
+      {watch && (watch.card.doc
+        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
+      {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.

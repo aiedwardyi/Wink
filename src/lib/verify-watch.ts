@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { VERIFY_ROUTES, verifyCardStale, type VerifyCardData, type VerifyCounts, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
 import { request } from "@/lib/api-request";
+import { checkThread, closeShow, showCheck } from "@/lib/show-pane";
 import type { Message } from "@/state/store";
 
 export interface VerifyWatchOpen {
@@ -17,6 +18,7 @@ const emit = () => { for (const listener of listeners) listener(); };
 
 export function openVerifyWatch(next: VerifyWatchOpen) {
   open = next;
+  showCheck(next.threadId);
   emit();
 }
 
@@ -26,9 +28,17 @@ export function closeVerifyWatch() {
   emit();
 }
 
+/** The header's checker button: fronts the Check tab, or shuts the checker from there. */
 export function toggleVerifyWatch(next: VerifyWatchOpen) {
-  if (open?.threadId === next.threadId) closeVerifyWatch();
-  else openVerifyWatch(next);
+  if (open?.threadId !== next.threadId) openVerifyWatch(next);
+  else if (checkThread() === next.threadId) closeVerifyWatch();
+  else showCheck(next.threadId);
+}
+
+/** The right pane's close: the checker goes with the file. */
+export function closePane() {
+  closeVerifyWatch();
+  closeShow();
 }
 
 export function useVerifyWatch(): VerifyWatchOpen | null {
