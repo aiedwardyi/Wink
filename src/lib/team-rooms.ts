@@ -181,6 +181,8 @@ export async function shareGroup(groupId: string): Promise<RoomInviteCode & { gr
   }
 }
 
+export const typedRoomName = (value: string) => [...value.normalize("NFC").replace(/[@\r\n]/g, "").trim()].slice(0, 36).join("").trim();
+
 export const shareErrorKey = ({ status, error }: Refused): MessageKey =>
   error === "phone access is off" ? "teamRoom.phoneOff" : status === 409 ? "teamRoom.shareBusy" : "errors.request";
 
