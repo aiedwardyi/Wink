@@ -2,7 +2,7 @@
 // LOCAL_ONLY_PREFIXES), so no relay caller reaches them; no reply carries the guest key.
 import type { GuestClient, GuestResult } from "./guest-client.ts";
 
-const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice))?$/;
+const ROOM = /^\/api\/joined\/rooms\/([\w-]{1,64})(?:\/(send|leave|rejoin|read|notice|older))?$/;
 const REACT = /^\/api\/joined\/rooms\/([\w-]{1,64})\/entries\/([\w-]{1,64})\/reactions$/;
 
 type Reply = { status: number; body: unknown };
@@ -18,7 +18,8 @@ const field = (body: unknown, name: string): unknown =>
   body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>)[name] : undefined;
 
 export async function joinedRoute(
-  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice">, body: () => Promise<unknown>,
+  method: string, path: string, client: Pick<GuestClient, "start" | "rooms" | "room" | "join" | "send" | "leave" | "rejoin" | "remove" | "read" | "react" | "notice" | "older">, body: () => Promise<unknown>,
+  query = new URLSearchParams(),
 ): Promise<Reply | null> {
   if (!path.startsWith("/api/joined/")) return null;
   client.start();
@@ -32,10 +33,10 @@ export async function joinedRoute(
   if (reaction) return method === "POST" ? reply(await client.react(reaction[1]!, reaction[2], field(await body(), "emoji")), "marks") : notFound;
   const route = ROOM.exec(path);
   if (!route) return notFound;
-  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | undefined];
+  const [, roomId, action] = route as unknown as [string, string, "send" | "leave" | "rejoin" | "read" | "notice" | "older" | undefined];
   if (!action) {
     if (method === "DELETE") return reply(await client.remove(roomId), "removed");
-    const room = method === "GET" ? client.room(roomId) : null;
+    const room = method === "GET" ? client.room(roomId, Number(query.get("limit")) || undefined) : null;
     return room ? { status: 200, body: { room } } : notFound;
   }
   if (method !== "POST") return notFound;
@@ -43,6 +44,7 @@ export async function joinedRoute(
   if (action === "rejoin") return reply(await client.rejoin(roomId, field(await body(), "code")), "room");
   const fields = await body();
   if (action === "read") return reply(client.read(roomId, field(fields, "seq")), "room");
+  if (action === "older") return reply(await client.older(roomId, field(fields, "before")), "more");
   if (action === "notice") return reply(await client.notice(roomId, field(fields, "entryId") ?? null), "result");
   return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId"), field(fields, "fileIds")), "entry");
 }

@@ -53,7 +53,7 @@ import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
-import { RoomFileRows, roomPictures } from "./TeamRoomRow";
+import { RoomFileRows, RoomLineText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
@@ -70,6 +70,7 @@ import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
 import { nextBulletin } from "@/lib/room-bulletin";
+import { useTranslationAvailable } from "@/lib/room-translate";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -344,6 +345,7 @@ export const Transcript = memo(function Transcript({
   const { state, dispatch } = useStore();
   const skin = useSkin();
   const roomBase = group.hosted ? hostRoomBase(group.hosted.roomId) : null;
+  const canTranslate = useTranslationAvailable(roomBase ?? "");
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
@@ -616,7 +618,7 @@ export const Transcript = memo(function Transcript({
                         <AttachedImageGallery paths={attachedImages.images} />
                       )}
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
-                      {attachedImages?.display ?? m.text}
+                      {roomBase ? <RoomLineText base={roomBase} entryId={person ? m.roomEntryId : undefined} text={attachedImages?.display ?? m.text ?? ""} canTranslate={canTranslate} /> : attachedImages?.display ?? m.text}
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
                     </>

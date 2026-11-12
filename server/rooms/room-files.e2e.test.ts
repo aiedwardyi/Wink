@@ -366,6 +366,17 @@ describe("pictures and files in a team room, through the real door", () => {
     expect((await call("GET", `/api/rooms/${roomId}/files-state`)).json.deleted).toContain(file.id);
   });
 
+  it("keeps a teammate's 250 held lines when the host deletes a file", async () => {
+    const { group, roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, pdf(100), "plan.pdf");
+    hostedSend(group, { kind: "host" }, "delete me", undefined, undefined, [file.id]);
+    for (let i = 0; i < 248; i += 1) hostedSend(group, { kind: "host" }, `line ${i}`);
+    await until(() => joinedEntries(roomId, 500).length === 250);
+    expect((await call("DELETE", `/api/rooms/${roomId}/files/${file.id}`)).status).toBe(200);
+    await until(() => filesOf(roomId, "delete me")[0]?.deleted === true);
+    expect(joinedEntries(roomId, 500)).toHaveLength(250);
+  });
+
   it("lists every room file newest first and only lets the host delete", async () => {
     const { c, group, roomId } = await joinedTeam();
     const host = await hostUpload(roomId, pdf(100), "plan.pdf");
