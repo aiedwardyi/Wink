@@ -510,6 +510,21 @@ describe("deleted files", () => {
   });
 });
 
+describe("teammate media files", () => {
+  it("takes a video or audio file back from an upload", async () => {
+    saveJoined("r1", HOST, STATE.me, KEY);
+    setJoinedState("r1", STATE);
+    for (const type of ["video/mp4", "video/quicktime", "video/webm", "video/x-m4v", "audio/mp4", "audio/mpeg", "audio/wav"]) {
+      const file = { id: "f".repeat(24), name: "clip", type, bytes: 5, sha256: "0".repeat(64) };
+      route = (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ file }));
+      };
+      expect(await guest().upload("r1", Buffer.from("hello"), "clip", "u".repeat(16), "5")).toMatchObject({ ok: true, value: file });
+    }
+  });
+});
+
 describe("upload deadline", () => {
   it("grows with size so a 1 GB file on a 10 Mbps uplink is not cut", () => {
     expect(uploadDeadline("1000")).toBe(10 * 60_000 + 8);

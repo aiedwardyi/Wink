@@ -39,7 +39,7 @@ export function RoomCode({ code, short }: { code: string; short?: string }) {
           </button>
         </div>
         {short ? (
-          <div data-room-short-code aria-label={short} className="mt-2 flex select-all justify-between gap-2">
+          <div data-room-short-code aria-label={short} className="mt-2 flex select-none justify-between gap-2">
             {[...short].map((ch, i) => <span key={i} aria-hidden className={`${BOX} flex items-center justify-center bg-card`}>{ch}</span>)}
           </div>
         ) : <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{code}</div>}

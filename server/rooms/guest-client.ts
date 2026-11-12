@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
-import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES } from "./files.ts";
+import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES, ROOM_FILE_TYPES } from "./files.ts";
 import {
   addJoinedEntries,
   endJoined,
@@ -65,7 +65,7 @@ const personSchema = z.object({ id, name });
 const fileSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
   name: z.string().max(200),
-  type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+  type: z.enum(ROOM_FILE_TYPES),
   bytes: z.number().int().positive().max(DOCUMENT_MAX_BYTES),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   deleted: z.boolean().optional(),
