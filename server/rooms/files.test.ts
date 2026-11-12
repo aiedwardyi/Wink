@@ -148,7 +148,7 @@ describe("room file types", () => {
       expect(res.status).toBe(200);
       expect(res.json.file).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{24}$/), name: "photo.png", type, bytes: bytes.length, sha256: sha(bytes) });
     }
-    for (const bytes of [ftyp("heic"), ftyp("avif"), Buffer.concat([Buffer.from("MZ"), randomBytes(200)]), Buffer.from([0x68, 0x69, 0x00, 0x21, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a])]) {
+    for (const bytes of [Buffer.from([0xff, 0xe1, ...randomBytes(60)]), ftyp("heic"), ftyp("avif"), Buffer.concat([Buffer.from("MZ"), randomBytes(200)]), Buffer.from([0x68, 0x69, 0x00, 0x21, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a])]) {
       expect(await upload(room, bytes)).toMatchObject({ status: 415, json: { error: "this kind of file can't be shared" } });
     }
     expect(await upload(room, Buffer.alloc(0))).toMatchObject({ status: 400, json: { error: "file is empty" } });

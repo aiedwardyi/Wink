@@ -109,7 +109,7 @@ function sniffMedia(head: Buffer): string | null {
   const latin = head.toString("latin1");
   if (latin.startsWith("ftyp", 4)) return STILL_BRAND.test(latin.slice(8, 12)) ? null : FTYP[latin.slice(8, 12) as keyof typeof FTYP] ?? "video/mp4";
   if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
-  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
+  if (latin.startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && ((head[1] ?? 0) & 0x06) !== 0)) return "audio/mpeg";
   if (latin.startsWith("RIFF") && latin.startsWith("WAVE", 8)) return "audio/wav";
   return null;
 }
