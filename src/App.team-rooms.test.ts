@@ -543,6 +543,7 @@ describe("Team rooms for a teammate", () => {
         return undefined;
       },
     });
+    await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
     await click(button("Join with code"));
     const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
@@ -582,6 +583,49 @@ describe("Team rooms for a teammate", () => {
     await vi.waitFor(() => expect(store.selectedId).toBe("joined:r9"));
   });
 
+  it("holds a code pasted before the name guess lands, then joins under it", async () => {
+    let guess!: (response: Response) => void;
+    await boot({
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
+        if (call.path === "/api/joined/name") return new Promise<Response>((resolve) => { guess = resolve; });
+        if (call.path === "/api/config" && call.method === "PUT") return reply({ features: {}, profile: { name: "DESKTOP-4F2K" } });
+        if (call.path === "/api/joined/join") return reply({ room: joinedView("joined", "connecting") });
+        return undefined;
+      },
+    });
+    await openPlus();
+    await click(button("Join with code"));
+    await paste($<HTMLInputElement>('input[aria-label="Room code 1"]'), CODE);
+    expect(asked("POST", "/api/joined/join")).toHaveLength(0);
+    await act(async () => guess(reply({ name: "DESKTOP-4F2K" })));
+    await vi.waitFor(() => expect(asked("POST", "/api/joined/join")).toHaveLength(1));
+    expect(asked("PUT", "/api/config").map((call) => call.body)).toEqual([{ profile: { name: "DESKTOP-4F2K" } }]);
+  });
+
+  it("will not join with a blank name, and Enter on the name retries", async () => {
+    await boot({
+      route: (call) => {
+        if (call.path === "/api/joined/rooms") return reply({ rooms: [] });
+        if (call.path === "/api/joined/name") return reply({ name: "" });
+        if (call.path === "/api/config" && call.method === "PUT") return reply({ features: {}, profile: { name: "Mina" } });
+        if (call.path === "/api/joined/join") return reply({ room: joinedView("joined", "connecting") });
+        return undefined;
+      },
+    });
+    await openPlus();
+    await click(button("Join with code"));
+    const name = $<HTMLInputElement>('[role="dialog"] input[aria-label="Your name"]');
+    await type(name, " @ ");
+    await paste($<HTMLInputElement>('input[aria-label="Room code 1"]'), CODE);
+    await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Add your name first."));
+    expect(asked("POST", "/api/joined/join")).toHaveLength(0);
+    await type(name, "Mina");
+    await enter(name);
+    await vi.waitFor(() => expect(asked("POST", "/api/joined/join")).toHaveLength(1));
+    expect(asked("PUT", "/api/config").map((call) => call.body)).toEqual([{ profile: { name: "Mina" } }]);
+  });
+
   it("joins under the profile name without asking for one", async () => {
     await boot({
       route: (call) => {
@@ -607,6 +651,7 @@ describe("Team rooms for a teammate", () => {
         return undefined;
       },
     });
+    await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
     await click(button("Join with code"));
     const box = $<HTMLInputElement>('input[aria-label="Room code 1"]')!;
@@ -709,6 +754,7 @@ describe("Team rooms for a teammate", () => {
 
   it("speaks Korean", async () => {
     await boot({ locale: "ko", route: (call) => (call.path === "/api/joined/rooms" ? reply({ rooms: [] }) : undefined) });
+    await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
     expect(button("새 팀 채팅방")).toBeUndefined();
     await click(button("코드로 참여"));

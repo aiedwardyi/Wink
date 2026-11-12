@@ -170,18 +170,24 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
   const { state, dispatch } = useStore();
   const [askName] = useState(() => !rejoin && !state.config?.profile?.name?.trim());
   const [name, setName] = useState("");
+  const [guessed, setGuessed] = useState(!askName);
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const busy = useRef(false);
+  const waiting = useRef<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const join = async (value: string) => {
     if (busy.current) return;
+    waiting.current = value;
+    if (!guessed) return;
+    const typed = askName ? typedRoomName(name) : "";
+    if (askName && !typed) return setProblem("teamRoom.nameRequired");
+    waiting.current = null;
     busy.current = true;
     setJoining(true);
     setProblem(null);
-    const typed = askName ? typedRoomName(name) : "";
     if (typed) {
       try {
         dispatch({ type: "configStatus", config: await api("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name: typed } }) }) });
@@ -215,8 +221,11 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
 
   useEffect(() => (rejoin ? input.current : document.querySelector<HTMLInputElement>(askName ? "[data-join-name]" : "[data-join-boxes] input"))?.focus(), []);
   useEffect(() => {
-    if (askName) void request("/api/joined/name").then((body) => setName((typed) => typed || String(body?.name ?? ""))).catch(() => {});
-  }, [askName]);
+    if (askName) void request("/api/joined/name").then((body) => setName((typed) => typed || String(body?.name ?? ""))).catch(() => {}).finally(() => setGuessed(true));
+  }, []);
+  useEffect(() => {
+    if (guessed && waiting.current) void join(waiting.current);
+  }, [guessed]);
 
   const title = t(rejoin ? "teamRoom.rejoin" : "teamRoom.joinMenu");
   return (
@@ -232,6 +241,9 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
           value={name}
           readOnly={joining}
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && waiting.current) void join(waiting.current);
+          }}
           aria-label={t("teamRoom.joinName")}
           placeholder={t("teamRoom.joinName")}
           className={INPUT}
