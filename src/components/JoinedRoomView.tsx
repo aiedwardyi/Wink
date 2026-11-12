@@ -43,6 +43,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     : phase === "left" ? t("teamRoom.left")
     : null;
   const me = room?.me.id;
+  const composerPeople = room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined;
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
   const seq = entries?.at(-1)?.seq;
   useEffect(() => {
@@ -94,7 +95,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         onReply={selectReply}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
+        {status === null ? <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} replyTo={replyTo} onClearReply={clearReply} /> : <TeamRoomStatus text={status} />}
       </div>
       <Presence open={leaving}>
         {(closing) => (
