@@ -5,7 +5,7 @@ export const SHORT_CODE_LENGTH = 6;
 const KEEP = /[^2-9A-HJ-NP-Z]/g;
 const PASTED = /^[2-9A-HJ-NP-Z]{1,6}$/;
 
-// With Korean input on, letters arrive as Hangul; these are the 2-set keys for conjoining initials, vowels and finals.
+// With Korean input on, letters arrive as Hangul; NFKD turns IME jamo and syllables into conjoining jamo, keyed here by 2-set layout.
 const HANGUL_KEYS: Array<[number, string[]]> = [
   [0x1100, "R R S E E F A Q Q T T D W W C Z X V G".split(" ")],
   [0x1161, "K O I O J P U P H HK HO HL Y N NJ NP NL B M ML L".split(" ")],
