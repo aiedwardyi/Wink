@@ -48,6 +48,11 @@ describe("reaction icons", () => {
     expect(svg).not.toMatch(/#[0-9a-f]{3,6}/i);
   });
 
+  it("names each pill by its emoji for screen readers", () => {
+    const chips = renderChips(["👍", "🎉"]);
+    expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual(["👍", "🎉"]);
+  });
+
   it("keeps the text glyph for an older emoji with no icon", () => {
     const [chip] = renderChips(["💯"]);
     expect(chip!.querySelector("svg")).toBeNull();
