@@ -35,12 +35,12 @@ const event = (threadId: string, type: string) => ({ type, threadId, eventId: "e
 describe("search_my_chats", () => {
   it("masks prose secrets and room codes in search hits and replies", () => {
     const { store, rando, say } = world();
-    say(rando.threadId, "user", "network wifi password is bluefish42; room K7PQ2M");
-    say(rando.threadId, "bot", "my pin is 4471");
+    say(rando.threadId, "user", "network wifi password is Hx7!kq92; room K7MZ3Q");
+    say(rando.threadId, "bot", "my passcode is 4471, the code is ready, color #3B82F6");
     const text = searchOwnerChats(store, [rando.threadId], "network", "Edward");
-    for (const secret of ["bluefish42", "K7PQ2M", "4471"]) expect(text).not.toContain(secret);
-    expect(text).toContain("wifi password is «redacted 10 chars»");
-    expect(text).toContain("You replied: my pin is «redacted 4 chars»");
+    for (const secret of ["Hx7!kq92", "K7MZ3Q", "4471"]) expect(text).not.toContain(secret);
+    expect(text).toContain("wifi password is «redacted 8 chars»");
+    expect(text).toContain("You replied: my passcode is «redacted 4 chars», the code is ready, color #3B82F6");
   });
 
   it("finds a 1:1 fact 64 turns back with the private header and the bot's reply", () => {
@@ -115,14 +115,14 @@ describe("1:1 topics", () => {
     const { store, rando, say } = world();
     const row = say(rando.threadId, "user", "network");
     store.appendCompaction(rando.threadId, {
-      v: 1, summary: "SUMMARY\n- wifi password is bluefish42\n- my pin is 4471\n- room K7PQ2M\n- password=hunter2hunter2",
+      v: 1, summary: "SUMMARY\n- wifi password is bluefish42\n- my passcode is 4471\n- room K7PQ2M\n- password=hunter2hunter2",
       coveredThroughId: row.id, firstKeptId: null,
       contextWindow: 200_000, estimatedTokensBefore: 1_000, sourceMessageCount: 1,
     });
     const topics = ownerTopics(store.activePath(rando.threadId), "K7PQ2M");
     for (const secret of ["bluefish42", "4471", "K7PQ2M", "hunter2hunter2"]) expect(topics).not.toContain(secret);
     expect(topics).toContain("wifi password is «redacted 10 chars»");
-    expect(topics).toContain("my pin is «redacted 4 chars»");
+    expect(topics).toContain("my passcode is «redacted 4 chars»");
     expect(topics).toContain("room «redacted 6 chars»");
   });
 
