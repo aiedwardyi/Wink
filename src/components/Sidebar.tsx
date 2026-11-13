@@ -48,6 +48,7 @@ import { CallWidgetSlot } from "./CallSlots";
 import { updaterActions, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { showBotMenuCopy, showNewMenuExport, showPhoneDrawerCollapse, showSidebarPhone } from "@/lib/friends-chrome";
 import { nextRename } from "@/lib/rename";
@@ -1683,7 +1684,7 @@ export function Sidebar({
                       setPlusOpen(false);
                       dispatch({ type: "newBot" });
                     }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     <BotIcon size={16} className="text-ink-secondary" />
                     {t("chrome.newBot")}
@@ -1693,7 +1694,7 @@ export function Sidebar({
                       setPlusOpen(false);
                       setWizard(true);
                     }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
@@ -1705,7 +1706,7 @@ export function Sidebar({
                       void exportAllBots();
                     }}
                     disabled={exportingTeam}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                    className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                   >
                     {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
                     {exportingTeam ? t("chrome.exporting") : t("chrome.exportAllBots")}
@@ -1717,7 +1718,7 @@ export function Sidebar({
                         setPlusOpen(false);
                         setArchivedBotsOpen(true);
                       }}
-                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                      className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                     >
                       <Archive size={16} className="text-ink-secondary" />
                       <span className="flex-1">{t("chrome.archivedBots")}</span>
@@ -1730,7 +1731,7 @@ export function Sidebar({
                         setPlusOpen(false);
                         setTrashOpen(true);
                       }}
-                      className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                      className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
                     >
                       <Trash2 size={16} className="shrink-0 text-ink-secondary" />
                       <span className="flex-1 whitespace-nowrap">{t("chrome.recentlyDeleted")}</span>

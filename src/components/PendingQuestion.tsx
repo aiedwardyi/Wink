@@ -38,7 +38,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             onClick={onDismiss}
             aria-label={t("chat.dismissQuestion")}
             title={t("chat.dismissQuestion")}
-            className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:-my-3 pointer-coarse:-ml-[11px] pointer-coarse:-mr-[15px] pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4"
+            className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink pointer-coarse:-my-3 pointer-coarse:-ml-[11px] pointer-coarse:-mr-[15px] pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4"
           >
             <X size={14} aria-hidden="true" />
           </button>

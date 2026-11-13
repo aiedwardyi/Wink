@@ -22,6 +22,19 @@ afterEach(() => {
 });
 
 describe("+ menu room items", () => {
+  it("gives Join with code the shared hover and focus surface", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(TeamRoomMenuItems, { onPick: () => {} })));
+      const row = host.querySelector("button")!;
+      expect(row.className).toContain("hover:bg-control");
+      expect(row.className).toContain("focus-visible:bg-control");
+    } finally { act(() => root.unmount()); }
+  });
+
   it.each([["en", "Join with code"], ["ko", "코드로 참여"]] as const)("offers only Join with code in %s", async (locale, label) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     localStorage.setItem("omb-locale", locale);

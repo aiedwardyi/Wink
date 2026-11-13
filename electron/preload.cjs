@@ -212,6 +212,7 @@ contextBridge.exposeInMainWorld("ogb", {
   /** Reveals a local file in its folder. */
   showInFolder: (filePath, base) =>
     invoke("desktop:show-file", filePath, base),
+  localMediaFile: (file) => invoke("desktop:local-media-file", file),
   /** Opens a chat's linked file from the other PC that has it. */
   openPeerFile: (host, threadId, filePath) =>
     invoke("desktop:open-peer-file", host, threadId, filePath),
