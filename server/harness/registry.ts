@@ -52,6 +52,7 @@ interface Probe {
 }
 
 const CHECKING: Probe = { snapshot: { state: "checking" }, cliCandidates: [] };
+const BLOCKED: Probe = { snapshot: { state: "unavailable" }, cliCandidates: [] };
 
 const savedProbeSchema = z.object({
   key: z.string(),
@@ -486,7 +487,9 @@ export class ProviderRegistry {
   /** describeCached() rows that never wait on a first check: such an instance reads "checking". */
   async describeKnown() {
     await this.refreshLogins();
-    const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId) ?? CHECKING));
+    // A blocked account never probes, so it reads as startProbe() answers it.
+    const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId)
+      ?? (this.accountBlocked(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
     this.saveProbes();
     return this.currentAccountRows(rows);
   }

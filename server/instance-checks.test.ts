@@ -46,6 +46,14 @@ describe("first-run engine checks", () => {
     expect(failed.snapshot.reason).toBe("cli exploded");
   });
 
+  it("answers a stopped account unavailable, never checking", async () => {
+    const registry = await slowRegistry(async () => ({ state: "available" }));
+    registry.blockAccount("b", true);
+    const checks = createInstanceChecks(registry, vi.fn());
+
+    expect(states(await checks.describe())).toMatchObject({ b: "unavailable" });
+  });
+
   it("answers checked engines as before and pushes nothing on a later refresh", async () => {
     const registry = await slowRegistry(async () => ({ state: "available" }));
     await registry.describe();
