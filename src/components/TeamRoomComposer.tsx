@@ -1,31 +1,25 @@
-import { useEffect, useState } from "react";
-
+import { useReplyDraft } from "@/lib/drafts";
 import { useBackLayer } from "@/lib/use-back-layer";
 import type { Message } from "@/state/store-types";
 
 import { CallWidgetSlot } from "./CallSlots";
-import { Composer, type RoomPerson } from "./Composer";
+import { Composer, type RoomBotStatus, type RoomPerson } from "./Composer";
 
-export function useTeamRoomReply(base: string) {
-  const [draft, setDraft] = useState<{ base: string; message: Message } | null>(null);
-  const replyTo = draft?.base === base ? draft.message : null;
-  const clearReply = () => setDraft(null);
-  useBackLayer(Boolean(replyTo), clearReply);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.querySelector("[data-message-menu], [data-selection-menu]")) setDraft(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setDraft]);
-  return { replyTo, selectReply: (message: Message) => setDraft({ base, message }), clearReply };
+export function useTeamRoomReply(base: string, draftId: string, messages: Message[]) {
+  const reply = useReplyDraft(base, draftId, messages);
+  useBackLayer(Boolean(reply.replyTo), reply.clearReply);
+  return reply;
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, offline }: { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean }) {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop }: {
+  name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean;
+  onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
+  status?: readonly RoomBotStatus[]; onStop?: () => void;
+}) {
   return (
     <>
       <CallWidgetSlot className="px-3 pb-2 md:hidden" />
-      <Composer room={{ name, base, draftId, people, bots, offline }} replyTo={replyTo} onClearReply={onClearReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop }} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
     </>
   );
 }
