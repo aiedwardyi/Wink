@@ -203,6 +203,26 @@ it("steps through the changed files with Up and Down only where the Map has focu
   expect(path()).toBe("src/a.ts");
 });
 
+it("drops a fold response from an earlier edit and keeps lines a capped file left out folded", async () => {
+  const pending: ((lines: object[]) => void)[] = [];
+  vi.mocked(fetch).mockImplementation(async url => {
+    const query = new URL(String(url), "http://test").searchParams;
+    if (!query.get("path")) return Response.json(repo);
+    if (query.get("whole") === "1") return new Promise(done => pending.push(lines => done(Response.json({ lines, capped: true }))));
+    return Response.json({ lines: [{ kind: "fold", text: "", count: 2, line: 1 }, { kind: "add", text: "edit", line: 3 }] });
+  });
+  const rows = () => [...host.querySelectorAll(".map-code-row code, .map-gap")].map(row => row.textContent);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await click("button.map-gap");
+  await emit([{ ...workers[0], editedAt: 5 }]);
+  await act(async () => pending.shift()!([{ kind: "context", text: "stale", line: 1 }, { kind: "context", text: "stale", line: 2 }]));
+  expect(rows()).toEqual(["2 lines unchanged", "edit"]);
+  await click("button.map-gap");
+  await act(async () => pending.shift()!([{ kind: "context", text: "one", line: 1 }]));
+  expect(rows()).toEqual(["one", "Large diff folded", "edit"]);
+});
+
 it("opens a folded run in place and keeps the whole file on while the pane is open", async () => {
   vi.mocked(fetch).mockImplementation(async url => {
     const query = new URL(String(url), "http://test").searchParams;

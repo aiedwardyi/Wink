@@ -184,12 +184,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const grid = squares && ({ "--cell": `${squares.size}px`, "--gap": `${squares.size > 5 ? 2 : 1}px` } as React.CSSProperties);
   const unfold = (line: number) => {
     if (!base || !loaded) return;
-    const { worker: id, path } = loaded;
+    const { worker: id, path, data } = loaded;
     const diffs = cache.current.diffs;
-    const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
+    const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
     const hit = diffs.get(`true\0${path}`);
     if (hit) return show(hit);
-    request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((data: MapDiff) => { diffs.set(`true\0${path}`, data); show(data); }, () => {});
+    request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((full: MapDiff) => { diffs.set(`true\0${path}`, full); show(full); }, () => {});
   };
   const move = (event: React.KeyboardEvent) => {
     const delta = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
@@ -258,7 +258,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
                 if (line.kind !== "fold") return codeRow(line, index);
                 const start = line.line ?? 1;
                 if (!loaded.full || !loaded.opened?.includes(start)) return <button key={index} type="button" className="map-gap" onClick={() => unfold(start)}>{c.unchanged(line.count ?? 0)}</button>;
-                return loaded.full.lines.filter(full => full.kind === "context" && full.line! >= start && full.line! < start + (line.count ?? 0)).map(full => codeRow(full, `${index}:${full.line}`));
+                const opened = loaded.full.lines.filter(full => full.kind === "context" && full.line! >= start && full.line! < start + (line.count ?? 0));
+                return [...opened.map(full => codeRow(full, `${index}:${full.line}`)), opened.length < (line.count ?? 0) && <div key={`${index}:capped`} className="map-gap">{c.capped}</div>];
               })}
               {loaded.data.capped && <div className="map-gap">{c.capped}</div>}
             </>}
