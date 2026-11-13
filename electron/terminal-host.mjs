@@ -12,6 +12,7 @@ import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.m
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
 import { workerResumeStatus } from "./worker-resume.mjs";
 import { watchCodexPromo } from "./codex-promo.mjs";
+import { nudgeApiBlip } from "./pane-blip.mjs";
 import { mapBase } from "./map-base.mjs";
 import { createMapEvents } from "./map-events.mjs";
 
@@ -821,6 +822,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           });
         }
       }
+      if (!limit && nudgeApiBlip(session, text, at, AGENT_BUSY_RE.test(text), (data) => typeIntoPane(session, data))) continue;
       const capacity = session.engine === "codex" && codexCapacity(session.screen.snapshot({ maxScrollbackChars: 0 }));
       const held = !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true));
       const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? WAIT_HOLD_MS : JOBS_HOLD_MS;
@@ -1225,7 +1227,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
-      stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
+      stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, blipNudge: null, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
       commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
       claudeTrust: false, claudeTrustMoved: false, claudeTrustAnswered: false, claudeTrustTimer: null,
     };
