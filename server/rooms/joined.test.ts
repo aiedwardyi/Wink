@@ -7,6 +7,7 @@ import { DATA_DIR } from "../config.ts";
 import {
   addJoinedEntries,
   closeJoinedDb,
+  dropMyRoomBot,
   endJoined,
   joinedEntries,
   joinedEntry,
@@ -16,9 +17,11 @@ import {
   joinedRooms,
   myRoomBots,
   resetJoined,
+  roomTaskThreads,
   saveJoined,
   saveMyRoomBot,
   setJoinedState,
+  setMyRoomBotTurn,
   type JoinedEntry,
   type JoinedState,
 } from "./joined.ts";
@@ -113,6 +116,14 @@ describe("joined.db", () => {
     expect(myRoomBots("r1").map((bot) => bot.botId)).toEqual(["local-pete"]);
     saveJoined("r1", HOST, { id: "p2", name: "Mina" }, KEY);
     expect(myRoomBots("r1")).toEqual([]);
+  });
+
+  it("remembers a room task thread after its bot leaves the room", () => {
+    saveJoined("r2", HOST, ME, KEY);
+    saveMyRoomBot("r2", "tb-BBBBBBBBBBBBBBBB", "local-pete");
+    setMyRoomBotTurn("r2", "tb-BBBBBBBBBBBBBBBB", "room-task-1", 0);
+    dropMyRoomBot("r2", "tb-BBBBBBBBBBBBBBBB");
+    expect(roomTaskThreads()).toContain("room-task-1");
   });
 });
 

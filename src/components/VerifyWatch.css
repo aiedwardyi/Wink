@@ -26,7 +26,8 @@
 .verify-watch-tabs button[aria-selected="true"] { background: var(--color-panel); color: var(--color-ink); font-weight: 500; }
 .verify-watch-grow { flex: 1; }
 .verify-watch-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; flex-shrink: 0; }
-@media (hover: hover) { .verify-watch-icon:hover { background: var(--color-inset); color: var(--color-ink); } }
+@media (hover: hover) { .verify-watch-icon:hover { background: var(--color-control); color: var(--color-ink); } }
+.verify-watch-icon:focus-visible { background: var(--color-control); color: var(--color-ink); }
 .verify-watch-icon:disabled { opacity: .45; cursor: default; }
 .verify-watch-again { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; align-self: center; gap: 6px; min-height: 32px; margin: 0 12px 12px; padding: 6px 12px; border: 1px solid var(--color-hairline); border-radius: 6px; background: var(--color-raised); cursor: pointer; }
 @media (hover: hover) { .verify-watch-again:hover { background: var(--color-inset); } }

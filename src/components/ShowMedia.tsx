@@ -181,7 +181,7 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   return (
     <>
       <div className="show-media-rail" aria-hidden="true">
-        <div ref={thumb} data-media-thumb data-dragging={shown || undefined} className="show-media-thumb" style={{ height: size }}
+        <div ref={thumb} data-media-thumb className="show-media-thumb" style={{ height: size }}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} />
       </div>
       <div ref={bubble} data-media-bubble data-shown={shown || undefined} className="show-media-bubble" aria-hidden="true">{label}</div>

@@ -30,4 +30,3 @@ export function webLinks(text: string): Array<{ start: number; text: string; hre
   }
   return links;
 }
-

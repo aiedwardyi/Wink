@@ -10,6 +10,7 @@ import { openRoomDetails } from "@/lib/room-details";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
@@ -37,7 +38,7 @@ const watch = (watcher: () => void) => {
   return () => void watchers.delete(watcher);
 };
 
-const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+const ITEM = `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 
 export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClose: () => void }) {
   const { t } = useI18n();

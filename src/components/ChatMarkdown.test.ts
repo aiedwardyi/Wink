@@ -6,7 +6,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks } from "./ChatMarkdown";
+import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
 import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
 import { closeShow, showItem } from "@/lib/show-pane";
@@ -62,6 +62,9 @@ describe("web links", () => {
     host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(https://starzum.com/a(b)). [starzum.com](https://example.org) ./starzum.com wrong.invalidtld file.ts" }));
     expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org"]);
   });
+// warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
+it("warms the parser outside a render", () => {
+  expect(() => warmMarkdown()).not.toThrow();
 });
 
 describe("ChatMarkdown streaming", () => {

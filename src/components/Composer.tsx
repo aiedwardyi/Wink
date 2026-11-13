@@ -77,6 +77,7 @@ import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } 
 import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
+import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { useI18n } from "@/lib/i18n";
 import { pinnedQuestion } from "@/lib/open-question";
@@ -1062,6 +1063,11 @@ export function Composer({
             first, so a long list of them shrinks instead of pushing the send
             row (below, shrink-0) off the screen. */}
         <div className="min-h-0 shrink overflow-y-auto">
+        {group?.waitingBotIds?.map((id) => (
+          <p key={id} data-room-bot-wait role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
+          </p>
+        ))}
         {catchingUp && (
           <p data-catching-up role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
             {t("composer.catchingUp")}
@@ -1451,6 +1457,8 @@ export function Composer({
             <button
               type="button"
               onClick={onCall}
+              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+              onFocus={warmCallAudio}
               aria-label={t("composer.call", { name: bot.name })}
               title={t("composer.call", { name: bot.name })}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"

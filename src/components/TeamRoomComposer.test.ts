@@ -67,6 +67,24 @@ async function render(side = "host", missing = false) {
     : createElement(JoinedRoomView, { roomId: "r9" })));
 }
 
+it.each([
+  ["en", "스타줌 is finishing another task, then answers here."],
+  ["ko", "스타줌 다른 작업을 마치면 여기서 답해요."],
+] as const)("shows the %s room wait until the bot starts", async (locale, text) => {
+  applyLocale(locale);
+  joined.view!.state!.teamBots = [{ id: "tb1", name: "스타줌", color: "blue", owner: "p1" }];
+  joined.view!.myBots = [{ id: "tb1", botId: "b1", waiting: true }];
+  await render("joined");
+  expect(host.querySelector("[data-my-bot-turn]")!.textContent).toBe(text);
+  expect(host.querySelector("[data-my-bot-turn]")!.className).not.toContain("text-danger");
+  joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true }];
+  await render("joined");
+  expect(host.textContent).not.toContain(text);
+  joined.view!.myBots = [];
+  await render("joined");
+  expect(host.querySelector("[data-my-bot-turn]")).toBeNull();
+});
+
 async function drag(type: string, files: File[], types = ["Files"], target: EventTarget = host.querySelector("[data-team-room-transcript]")!) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", { value: { types, files } });

@@ -10,6 +10,7 @@ class FakeEngine implements LiveEngine {
   texts: string[] = [];
   contexts: string[] = [];
   results: Array<{ id: string; result: unknown }> = [];
+  frames: string[][] = [];
   paused = 0;
   closed = false;
   connect(_session: unknown, events: LiveEvents) { this.events = events; }
@@ -17,7 +18,10 @@ class FakeEngine implements LiveEngine {
   audioPaused() { this.paused += 1; }
   sendText(text: string) { this.texts.push(text); }
   sendContext(text: string) { this.contexts.push(text); }
-  sendToolResult(id: string, _name: string, result: unknown) { this.results.push({ id, result }); }
+  sendToolResult(ids: string[], _name: string, result: unknown) {
+    this.frames.push(ids);
+    for (const id of ids) this.results.push({ id, result });
+  }
   close() { this.closed = true; }
 }
 
@@ -225,7 +229,7 @@ describe("LiveCall", () => {
     expect(call.state().pending).toBeDefined();
     engine().events.heard("No, wait.");
     engine().events.answering();
-    expect(engine().results).toEqual([{ id: "t1", result: "declined" }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "declined. They already heard you answer: say nothing more." }]);
     expect(posts.some((p) => p.path.endsWith("/messages"))).toBe(false);
   });
 
@@ -547,7 +551,7 @@ describe("LiveCall", () => {
     expect(engine().results).toEqual([{ id: "t1", result: "sent" }, { id: "t2", result: "already sent" }]);
     engine().events.toolCall([{ id: "t3", name: "propose_work", args: { order: "Check the build." } }]);
     engine().events.toolCall([{ id: "t4", name: "propose_work", args: { order: "Check the build" } }]);
-    expect(engine().results.at(-1)).toEqual({ id: "t4", result: "already proposed, waiting for their answer" });
+    expect(engine().results).toHaveLength(2);
     await call.answer(false);
     engine().events.toolCall([{ id: "t5", name: "propose_work", args: { order: "Check the build." } }]);
     expect(call.state().pending?.order).toBe("Check the build.");
@@ -709,6 +713,20 @@ describe("VOICE-SNAGS", () => {
     expect(engine().results).toEqual([{ id: "t1", result: "sent" }]);
   });
 
+  it("a yes to a short confirm of their instruction is the confirmation too", async () => {
+    const { call, engine, posts } = await started();
+    engine().events.heard("I want you to look at the transcripts.");
+    engine().events.answering();
+    engine().events.said("Looking at the transcripts, okay?");
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Look at the transcripts." } }]);
+    expect(call.state().pending).toBeUndefined();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Look at the transcripts."]);
+  });
+
   it("an offer made in the turn that calls propose_work still waits for a yes", async () => {
     const { call, engine } = await started();
     engine().events.said("Want me to check the status?");
@@ -757,6 +775,35 @@ describe("VOICE-SNAGS", () => {
     await flush();
     expect(call.state().pending).toBeUndefined();
     expect(engine().results).toEqual([{ id: "t1", result: "sent. They already heard you answer: say nothing more." }]);
+  });
+});
+
+describe("one reply per turn", () => {
+  it("a re-offer of the pending order gets no result of its own until they answer", async () => {
+    const { engine, posts } = await started();
+    turn(engine(), "I need to change your voice.", "Want me to switch to a more natural voice for you?");
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Want me to switch to a more natural voice for you?" } }]);
+    turn(engine(), "That's pretty cool.", "Do you want me to switch to a more natural voice for you?");
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Do you want me to switch to a more natural voice for you?" } }]);
+    expect(engine().results).toEqual([]);
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Switch to a more natural voice for me."]);
+    expect(engine().frames).toEqual([["t1", "t2"]]);
+    expect(engine().results).toEqual([{ id: "t1", result: "sent" }, { id: "t2", result: "sent" }]);
+  });
+
+  it("a spoken no the voice is already answering tells it to say nothing more", async () => {
+    const { call, engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Set up a workspace to analyze our chat." } }]);
+    engine().events.heard("No, you do that in chat already.");
+    engine().events.answering();
+    expect(engine().results).toEqual([{ id: "t1", result: "declined. They already heard you answer: say nothing more." }]);
+    engine().events.turnDone();
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Fix it." } }]);
+    await call.answer(false);
+    expect(engine().results.at(-1)).toEqual({ id: "t2", result: "declined" });
   });
 });
 
@@ -969,8 +1016,6 @@ describe("VOICE-SEND: receipts and retries", () => {
   it.each([
     ["already sent", "Check the build.", "Sent: Check the build."],
     ["already sent", "빌드 확인해 줘.", "Sent: 빌드 확인해 줘."],
-    ["already proposed, waiting for their answer", "Check the build.", "Waiting for their answer: Check the build."],
-    ["already proposed, waiting for their answer", "빌드 확인해 줘.", "Waiting for their answer: 빌드 확인해 줘."],
   ])("a late %s result never reads as not sent: %s", (result, subject, line) => {
     expect(told(result, subject)).toBe(line);
   });

@@ -108,8 +108,9 @@ export class GeminiLive implements LiveEngine {
     this.context.push(text);
   }
 
-  sendToolResult(id: string, name: string, result: unknown) {
-    this.send({ toolResponse: { functionResponses: [{ id, name, response: { result } }] } });
+  // All ids in one frame: each frame makes the model speak again.
+  sendToolResult(ids: string[], name: string, result: unknown) {
+    this.send({ toolResponse: { functionResponses: ids.map((id) => ({ id, name, response: { result } })) } });
   }
 
   close() {

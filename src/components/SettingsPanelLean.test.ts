@@ -112,11 +112,9 @@ describe("SettingsPanel lean startup switch", () => {
     document.body.append(host);
     root = createRoot(host);
     (window as any).ogb = {};
-    chrome.voiceAndStartupSettings = true;
   });
 
   afterEach(() => {
-    chrome.voiceAndStartupSettings = false;
     root.unmount();
     host.remove();
   });
@@ -386,7 +384,7 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const switches = Array.from(host.querySelectorAll('[role="switch"]'));
-    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Auto Notes"]);
+    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Load Skills & Plugins", "Auto Notes"]);
     for (const each of switches) expect(each.className).toContain("h-6 w-11");
   });
 });

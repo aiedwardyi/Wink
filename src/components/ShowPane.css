@@ -30,7 +30,7 @@
 .show-media-kinds button { flex: 1; height: 26px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; cursor: default; }
 .show-media-kinds button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .show-media-body { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.show-media-scroll { flex: 1; min-height: 0; padding: 0 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.show-media-scroll { isolation: isolate; flex: 1; min-height: 0; padding: 0 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
 .show-media-scroll::-webkit-scrollbar { display: none; }
 .show-media [data-media-grid] { position: relative; margin: 6px 0; }
 .show-media [data-media-grid] > section { position: absolute; left: 0; right: 0; }
@@ -40,9 +40,7 @@
 .show-media [data-media-file] { position: absolute; height: 52px; }
 .show-media-rail { position: absolute; top: 0; right: 0; bottom: 0; width: 12px; pointer-events: none; }
 .show-media-thumb { position: absolute; top: 0; right: 0; width: 100%; pointer-events: auto; touch-action: none; }
-.show-media-thumb::before { content: ""; position: absolute; inset: 0 3px 0 auto; width: 4px; border-radius: 2px; background: var(--color-ink-secondary); opacity: .35; transition: opacity var(--motion-fast) var(--ease-standard); }
-.show-media-thumb[data-dragging]::before { opacity: .7; }
-@media (hover: hover) { .show-media-thumb:hover::before { opacity: .7; } }
+.show-media-thumb::before { content: ""; position: absolute; inset: 0 3px 0 auto; width: 4px; border-radius: 2px; background: var(--color-ink-secondary); opacity: .35; }
 .show-media-bubble { position: absolute; top: 0; right: 18px; translate: 0 -50%; padding: 4px 10px; border-radius: 999px; background: var(--color-raised); color: var(--color-ink); font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: 0 1px 2px rgb(0 0 0 / .2); opacity: 0; pointer-events: none; transition: opacity var(--motion-moderate) var(--ease-standard); }
 .show-media-bubble[data-shown] { opacity: 1; }
 .show-media-empty { padding: 28px 8px; color: var(--color-ink-secondary); font-size: 13px; text-align: center; }

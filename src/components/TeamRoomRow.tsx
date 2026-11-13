@@ -1,5 +1,5 @@
 // One renderer for team room lines, on the host and the teammate side.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Languages, MessageSquareReply } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -62,14 +62,13 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
   );
 }
 
-/** A line in the host's bot room; `entryId` only on a teammate's line, which gets Translate. */
-export function RoomLineText({ base, entryId, text, canTranslate }: { base: string; entryId?: string; text: string; canTranslate: boolean }) {
+export function RoomLineText({ base, entryId, text, canTranslate, children }: { base: string; entryId?: string; text: string; canTranslate: boolean; children?: ReactNode }) {
   const { t, locale } = useI18n();
-  const translation = useRoomTranslation(base, entryId ?? "", locale);
+  const translation = useRoomTranslation(base, entryId ?? "", locale, text);
   const show = Boolean(entryId) && canTranslate && Boolean(text.trim()) && !alreadyInLanguage(text, locale);
   return (
     <>
-      <LinkedText text={text} />
+      {children ?? <LinkedText text={text} />}
       {show && <button
         type="button"
         data-room-translate

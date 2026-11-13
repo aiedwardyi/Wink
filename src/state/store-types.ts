@@ -100,6 +100,7 @@ export interface Message {
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
+  roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   call?: import("../../shared/live-call").CallTag;
@@ -185,6 +186,7 @@ export interface Group {
   taskState?: TaskResumePacket;
   /** True while a member turn or queued room operation is in flight. */
   working?: boolean;
+  waitingBotIds?: string[];
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;

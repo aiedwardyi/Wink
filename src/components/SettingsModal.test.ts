@@ -169,7 +169,7 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Precision Dimmed", "Bronze", "Dim Sand", "Wink Day", "Notebook"]) {
+    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Dim Sand", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
     expect(html).toContain(`More themes (${SKINS.length - 11})`);
@@ -298,7 +298,7 @@ describe("SettingsModal friends chrome", () => {
     expect([catalogs.ko["settings.pickerLook.title"], catalogs.ko["settings.pickerLook.dark"], catalogs.ko["settings.pickerLook.light"]]).toEqual(["모델 선택", "다크", "라이트"]);
   });
 
-  it("picks the model picker style from Dial and List under the look row, wherever the dial can show", () => {
+  it("picks the model picker style from Dial, List and Chart under the look row, wherever the dial can show", () => {
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
     const style = 'aria-label="Model Picker Style"';
@@ -311,18 +311,21 @@ describe("SettingsModal friends chrome", () => {
       expect(html.indexOf(style)).toBeGreaterThan(html.indexOf('aria-label="Model Picker"'));
       const group = () => markup("themes").match(/<div role="radiogroup" aria-label="Model Picker Style"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
       const checked = () => group().match(/aria-checked="true"[^>]*>([^<]+)</)?.[1];
-      expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dial", "List"]);
+      expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dial", "List", "Chart"]);
       expect(checked()).toBe("Dial");
       saveModelPickerView("list");
       expect(values.get("omb-model-picker-view")).toBe("list");
       expect(checked()).toBe("List");
+      saveModelPickerView("chart");
+      expect(values.get("omb-model-picker-view")).toBe("chart");
+      expect(checked()).toBe("Chart");
     } finally {
       mock.dial = false;
       Reflect.deleteProperty(window, "matchMedia");
       vi.unstubAllGlobals();
     }
     expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={saveModelPickerView}");
-    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"]]).toEqual(["모델 선택 방식", "다이얼", "목록"]);
+    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"], catalogs.ko["settings.pickerStyle.chart"]]).toEqual(["모델 선택 방식", "다이얼", "목록", "차트"]);
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
@@ -444,7 +447,7 @@ describe("SettingsModal friends chrome", () => {
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "precision-dimmed", "bronze"]);
+    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze"]);
     expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
     expect(ids(html)).toHaveLength(11);
   });

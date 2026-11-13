@@ -146,6 +146,7 @@ function open(): DatabaseSync {
       seen_seq INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS room_task_threads (thread_id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS pictures (
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -431,9 +432,15 @@ export function dropMyRoomBot(roomId: string, id: string): void {
 
 export function setMyRoomBotTurn(roomId: string, id: string, threadId: string, seenSeq: number): void {
   db().prepare("UPDATE my_room_bots SET thread_id = ?, seen_seq = MAX(seen_seq, ?) WHERE room_id = ? AND id = ?").run(threadId, seenSeq, roomId, id);
+  db().prepare("INSERT OR IGNORE INTO room_task_threads (thread_id) VALUES (?)").run(threadId);
 }
 
 /** Every room task thread on this PC, so chat sync leaves them alone. */
 export function myRoomBotThreads(): Set<string> {
   return new Set((db().prepare("SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
+}
+
+/** Every thread that ever ran a room turn, kept after the bot leaves the room, so it never reads as a 1:1. */
+export function roomTaskThreads(): Set<string> {
+  return new Set((db().prepare("SELECT thread_id FROM room_task_threads UNION SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
 }

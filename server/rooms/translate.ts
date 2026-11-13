@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { BotAccounts } from "../bot-accounts.ts";
@@ -5,7 +6,7 @@ import type { ProviderInstance } from "../contracts.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import { json, readBody } from "../http-helpers.ts";
 import type { Store } from "../store.ts";
-import { roomEntry, roomPeople, roomTranslation, saveRoomTranslation } from "./db.ts";
+import { committedRoomText, roomEntry, roomPeople, roomTranslation, saveRoomTranslation } from "./db.ts";
 import { joinedEntry, joinedRoom, joinedTranslation, saveJoinedTranslation } from "./joined.ts";
 import { protectTranslationNames } from "./translation-names.ts";
 
@@ -90,7 +91,7 @@ function generateOnce(key: string, generate: Generator, prompt: string, save: (t
 
 export async function translateRoute(
   req: IncomingMessage, res: ServerResponse, method: string, path: string,
-  deps: { store: Pick<Store, "groups">; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; hostName?: string; botCaller: boolean },
+  deps: { store: Pick<Store, "groups"> & Partial<Pick<Store, "messagesFor">>; instances: readonly TextEngine[] | (() => readonly TextEngine[]); key?: string; hostName?: string; botCaller: boolean },
 ): Promise<boolean> {
   const route = ROUTE.exec(path);
   if (!route) return false;
@@ -101,9 +102,16 @@ export async function translateRoute(
   if (!held() || method !== (entryId ? "POST" : "GET")) { json(res, 404, { error: "not found" }); return true; }
   const generate = translationGenerator(deps.key, deps.key?.trim() ? [] : typeof deps.instances === "function" ? deps.instances() : deps.instances);
   if (!entryId) { json(res, 200, { available: generate !== null }); return true; }
-  const entry = () => joined ? joinedEntry(roomId, entryId) : roomEntry(roomId, entryId);
+  const localMessage = !joined && entryId.startsWith("m-");
+  const entry = () => {
+    if (!localMessage) return joined ? joinedEntry(roomId, entryId) : roomEntry(roomId, entryId);
+    const group = deps.store.groups.find((group) => group.hosted?.roomId === roomId);
+    const message = group && deps.store.messagesFor?.(group.threadId).find((message) => message.id === entryId.slice(2));
+    return message?.role === "bot" && message.kind === "text" && message.from && !message.summarized && !message.queued && !message.quick && !message.comm
+      ? { text: committedRoomText("bot", message.text ?? ""), author: message.author ?? { kind: "bot" as const, id: message.from.botId, name: message.from.name } } : null;
+  };
   const line = entry();
-  const own = joined ? line?.author.kind === "person" && line.author.id === joinedRoom(roomId)?.me.id : line?.author.kind !== "person";
+  const own = joined ? line?.author.kind === "person" && line.author.id === joinedRoom(roomId)?.me.id : line?.author.kind !== "person" && line?.author.kind !== "bot";
   if (!line?.text || own) { json(res, 404, { error: "not found" }); return true; }
   try {
     const body = await readBody(req);
@@ -115,7 +123,8 @@ export async function translateRoute(
       : [deps.hostName ?? "", ...roomPeople(roomId).map((person) => person.name)];
     const protectedNames = protectTranslationNames(line.text, [...names, line.author.name]);
     // Older cached translations did not enforce exact name spelling.
-    const cacheLang = protectedNames.hasNames ? `${lang}:names-v1:${protectedNames.cacheKey}` : lang;
+    const namedLang = protectedNames.hasNames ? `${lang}:names-v1:${protectedNames.cacheKey}` : lang;
+    const cacheLang = localMessage ? `${namedLang}:text:${createHash("sha256").update(line.text).digest("hex")}` : namedLang;
     const cached = (joined ? joinedTranslation : roomTranslation)(roomId, entryId, cacheLang);
     if (cached !== undefined) { json(res, 200, { text: cached }); return true; }
     if (!generate) { json(res, 503, { error: "translation unavailable" }); return true; }

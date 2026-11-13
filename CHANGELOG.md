@@ -2,6 +2,25 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.259] - 2026-11-13
+
+### Added
+- Auto Notes keeps your picks: a short reply choosing among a bot's options is saved as one dated line under Decisions in MEMORY.md.
+- Save and cancel buttons beside room, profile and bot name edits; Enter saves and Esc cancels.
+- Question cards fold to a pill by chevron or phone swipe and reopen without answering.
+
+### Changed
+- Bots report every finished deliverable and pending decision with a picture or link, and close their own question cards once you answer in chat.
+- Room details shows the invite code on one line with a Copy button.
+- Bots are steered away from narrating their next step between tool calls.
+- Muse uses fewer tokens: the worker playbook and five rarely used Wink tools load only when needed.
+- The sidebar profile, Account and Connections tiles show from the last launch while the server starts.
+
+### Fixed
+- Dragging an image inside a chat no longer attaches it.
+- A changed call voice applies from the next call, and the voice picker stays on the saved voice.
+- A call whose reconnect never sets up fails with "Call failed" instead of sitting open, and a mic that stops sending recovers or asks for a tap.
+
 ## [1.0.258] - 2026-11-13
 
 ### Changed

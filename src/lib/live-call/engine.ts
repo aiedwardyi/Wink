@@ -31,6 +31,6 @@ export interface LiveEngine {
   sendText(text: string): void;
   /** Adds to the conversation without asking for a reply. */
   sendContext(text: string): void;
-  sendToolResult(id: string, name: string, result: unknown): void;
+  sendToolResult(ids: string[], name: string, result: unknown): void;
   close(): void;
 }

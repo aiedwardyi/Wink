@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { localMediaFile, registerMediaImageIpc } from "./media-file.mjs";
 import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
 import { assemblyAICredential, mintAssemblyAIStreamingToken } from "./assemblyai.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
@@ -1788,6 +1789,22 @@ ipcMain.handle("desktop:file-menu", async (event, rawPath, rawBase) => {
 
 ipcMain.handle("desktop:show-file", async (_event, rawPath, rawBase) => {
   await showLocalFile(rawPath, { base: rawBase, shell });
+});
+
+ipcMain.handle("desktop:local-media-file", (event, file) => {
+  if (!trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())) throw new Error("Untrusted file caller");
+  return localMediaFile(file, { dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit") });
+});
+
+registerMediaImageIpc(ipcMain, {
+  trusted: (event) => trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin()),
+  optionsFor: (event) => ({
+    origin: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`,
+    token: serverToken,
+    dialog,
+    downloads: app.getPath("downloads"),
+    window: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+  }),
 });
 
 ipcMain.handle("desktop:save-file", async (event, rawPath) => {
