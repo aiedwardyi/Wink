@@ -10,6 +10,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Room bots can search their owner's 1:1 chat with them. Only the owner sees the "Searched your 1:1" note.
 - New call voices: Jenn and Eddie sound new, and Adele joins with a British accent.
 - Every group gets the same header: picture, name, bell and side pane, with Ctrl+F search.
+- A Map tab in the side pane shows which files a worker changed, as squares and a list, with the live diff.
 
 ### Changed
 - The call button lives in the message box: Call when idle, Send while typing, Stop while busy, and End with Mute beside it during a call. The header no longer has a call button.
