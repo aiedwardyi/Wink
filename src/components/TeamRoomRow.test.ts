@@ -146,7 +146,7 @@ it("renders a bot line's markdown and makes web links clickable on every line", 
   expect([...person.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/b"]);
 });
 
-it("links www text and URLs in own, teammate and bot room bubbles", async () => {
+it("links common domains and URLs in own, teammate and bot room bubbles", async () => {
   const host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   const text = "starzum.com www.x.io x.co.kr https://example.com file.ts README.md deploy.sh notes.ai v1.0.259 e.g. person@example.com";
@@ -157,7 +157,7 @@ it("links www text and URLs in own, teammate and bot room bubbles", async () => 
   for (const kind of ["host", "person", "bot"]) {
     const links = [...host.querySelectorAll<HTMLAnchorElement>(`[data-mid="${kind}"] a`)];
     expect(links.filter((link) => !link.href.startsWith("mailto:")).map((link) => link.getAttribute("href"))).toEqual([
-      kind === "bot" ? "http://www.x.io" : "https://www.x.io", "https://example.com",
+      "https://starzum.com", kind === "bot" ? "http://www.x.io" : "https://www.x.io", "https://x.co.kr", "https://example.com",
     ]);
   }
 });

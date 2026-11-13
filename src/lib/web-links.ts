@@ -1,4 +1,5 @@
-const WEB_LINK = /https?:\/\/[^\s<>"`]+|(?<![\p{L}\p{N}_@./\\-])www\.[^\s<>"`]+/giu;
+const WEB_TLDS = new Set("com net org io co kr dev app me so gg tv xyz us uk jp edu gov info biz".split(" "));
+const WEB_LINK = /https?:\/\/[^\s<>"`]+|(?<![\p{L}\p{N}_@./\\-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#][^\s<>"`]+)?/giu;
 
 function trimLink(value: string): string {
   let text = value.replace(/[.,;:!?']+$/, "");
@@ -20,13 +21,50 @@ export function webLinks(text: string): Array<{ start: number; text: string; hre
   for (const match of text.matchAll(WEB_LINK)) {
     const value = trimLink(match[0]);
     const explicit = /^https?:\/\//i.test(value);
+    if (!explicit && /^(?:[\p{L}\p{N}_@-]|\.[\p{L}\p{N}_-])/u.test(text.slice(match.index + match[0].length))) continue;
     const href = explicit ? value : `https://${value}`;
     try {
-      new URL(href);
+      const host = new URL(href).hostname;
+      if (!explicit && !WEB_TLDS.has(host.split(".").at(-1)!)) continue;
     } catch {
       continue;
     }
     links.push({ start: match.index, text: value, href });
   }
   return links;
+}
+
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[]; position?: { start: { offset?: number }; end: { offset?: number } } };
+
+export function remarkWebLinks() {
+  return (tree: MdNode, file: { value?: unknown }) => {
+    const source = String(file.value ?? "");
+    const walk = (node: MdNode): void => {
+      if (!node.children || ["link", "linkReference", "image", "imageReference"].includes(node.type)) return;
+      node.children = node.children.flatMap((child) => {
+        if (child.type === "link" && child.children?.length === 1) {
+          const label = child.children[0];
+          const start = child.position?.start.offset;
+          const end = child.position?.end.offset;
+          if (label.value && child.url?.startsWith("http://www.") && start !== undefined && end !== undefined
+            && source.slice(start, end) === label.value && !webLinks(label.value).length) return [label];
+        }
+        if (child.type !== "text" || !child.value) {
+          walk(child);
+          return [child];
+        }
+        const parts: MdNode[] = [];
+        let from = 0;
+        for (const link of webLinks(child.value)) {
+          parts.push({ type: "text", value: child.value.slice(from, link.start) });
+          parts.push({ type: "link", url: link.href, children: [{ type: "text", value: link.text }] });
+          from = link.start + link.text.length;
+        }
+        if (!parts.length) return [child];
+        parts.push({ type: "text", value: child.value.slice(from) });
+        return parts;
+      });
+    };
+    walk(tree);
+  };
 }

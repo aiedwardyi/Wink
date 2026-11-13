@@ -20,13 +20,23 @@ beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
 
 describe("web links", () => {
-  it.each(["README.md", "deploy.sh", "notes.ai", "starzum.com", "x.co.kr", "starzum.com/path", "example.technology", "한글.kr"])("keeps %s plain in user and bot text", (text) => {
+  it.each(["README.md", "deploy.sh", "file.ts", "notes.ai", "v1.0.259", "e.g.", "file.tsx", "file.js", "file.json", "file.py", "file.txt", "file.yml", "file.log", "www.notes.ai", "example.technology"])("keeps %s plain in user and bot text", (text) => {
     for (const Component of [LinkedText, ChatMarkdown]) {
       const host = document.createElement("div");
       host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
       expect(host.querySelector("a")).toBeNull();
       expect(host.textContent).toBe(text);
     }
+  });
+
+  it.each([["user", LinkedText], ["bot", ChatMarkdown]] as const)("links common domains in %s text", (kind, Component) => {
+    const text = "starzum.com x.co.kr www.x.io";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", "https://x.co.kr", kind === "bot" ? "http://www.x.io" : "https://www.x.io",
+    ]);
+    expect(host.textContent).toBe(text);
   });
 
   it.each([
@@ -59,8 +69,8 @@ describe("web links", () => {
 
   it("leaves explicit markdown labels and paths intact and trims sentence punctuation", () => {
     const host = document.createElement("div");
-    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(https://starzum.com/a(b)). [starzum.com](https://example.org) ./starzum.com wrong.invalidtld file.ts" }));
-    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org"]);
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(starzum.com/a(b)). [starzum.com](https://example.org) [www.notes.ai](https://www.notes.ai) ./starzum.com wrong.invalidtld file.ts" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org", "https://www.notes.ai"]);
   });
 });
 
