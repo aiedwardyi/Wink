@@ -24,6 +24,7 @@ export class AccountLifecycle {
   private queue: Promise<unknown> = Promise.resolve();
   private jobs = new Map<string, object>();
   private pending = new Map<string, Promise<void>>();
+  private restoring?: Map<string, Promise<void>>;
   private mutations = 0;
   private drainTimer?: ReturnType<typeof setTimeout>;
   private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
@@ -51,24 +52,32 @@ export class AccountLifecycle {
       : this.accounts.get(id)?.state === "ready" ? { state: "complete" as const } : undefined);
   }
 
+  // undefined until restore can answer per account: before it starts, or while a drain may still move routing.
+  restoredFor(of: string): Promise<void> | undefined {
+    if (!this.restoring || !this.bots) return undefined;
+    return this.restoring.get(this.bots.routedAccount(of) ?? "") ?? Promise.resolve();
+  }
+
   async restore() {
     for (const [id, drain] of Object.entries(this.accounts.drains)) {
       if (drain.phase === "logout") await this.accounts.drain(id, drain.destinationId, "failed");
     }
-    for (const account of [...this.accounts.snapshot]) {
-      if (this.accounts.drains[account.id]) continue;
-      if (account.state === "pending") await this.discard(account.id);
-      else if (account.state === "ready") {
-        this.registry.blockAccount(account.id, true);
-        const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
-        await this.observe(account.id, snapshot ?? { state: "unavailable" }).catch(() => {
-          console.error("Account restoration is waiting for recovery");
-        });
-      }
-    }
+    const accounts = this.accounts.snapshot.filter((account) => !this.accounts.drains[account.id]);
+    for (const account of accounts) if (account.state === "pending") await this.discard(account.id);
+    const ready = new Map(accounts.filter((account) => account.state === "ready").map((account) => [account.id, this.restoreAccount(account.id)]));
+    if (!Object.values(this.accounts.drains).some((drain) => drain.phase !== "failed")) this.restoring = ready;
+    await Promise.all(ready.values());
     await this.resumeDrains().catch(() => {
       console.error("Account drain recovery failed");
       this.scheduleDrains();
+    });
+  }
+
+  private async restoreAccount(id: string) {
+    this.registry.blockAccount(id, true);
+    const snapshot = await this.registry.get(id)?.snapshot({ refresh: true }).catch(() => undefined);
+    await this.observe(id, snapshot ?? { state: "unavailable" }).catch(() => {
+      console.error("Account restoration is waiting for recovery");
     });
   }
 

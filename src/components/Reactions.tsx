@@ -21,7 +21,7 @@ function reactLabel(t: Translate, emoji: string, pressed: boolean) {
   return pressed ? t("chat.removeReaction", { emoji }) : t("chat.reactEmoji", { emoji });
 }
 
-export function ReactionBar({ threadId, message }: { threadId: string; message: Message }) {
+export function ReactionBar({ threadId, message, onPick }: { threadId: string; message: Message; onPick?: (emoji: string) => void }) {
   const { t } = useI18n();
   const dispatch = useStoreDispatch();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -163,7 +163,8 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
   }, [pickerOpen, placed]);
 
   const toggle = (emoji: string) => {
-    dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
+    if (onPick) onPick(emoji);
+    else dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji, message });
     closeAndRefocus();
   };
 

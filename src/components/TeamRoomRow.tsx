@@ -27,7 +27,7 @@ import { PersonLabel } from "./GroupPeople";
 import { JumpToLatest } from "./JumpToLatest";
 import { MediaViewerProvider, useMediaViewer } from "./MediaViewerProvider";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
-import { ReactionChips } from "./Reactions";
+import { ReactionBar, ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
 import { RoomNotice } from "./RoomNotice";
 import { RoomPicture } from "./RoomPicture";
@@ -65,26 +65,43 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
   );
 }
 
-export function RoomLineText({ base, entryId, text, canTranslate, children }: { base: string; entryId?: string; text: string; canTranslate: boolean; children?: ReactNode }) {
-  const { t, locale } = useI18n();
+type LineTranslation = ReturnType<typeof useRoomTranslation>;
+
+/** Hands a host row its translation, or null when the line can't be translated; the rows render in a loop. */
+export function RoomLineTranslation({ base, entryId, text, canTranslate, children }: { base: string; entryId?: string; text: string; canTranslate: boolean; children: (translation: LineTranslation | null) => ReactNode }) {
+  const { locale } = useI18n();
   const translation = useRoomTranslation(base, entryId ?? "", locale, text);
   const show = Boolean(entryId) && canTranslate && Boolean(text.trim()) && !alreadyInLanguage(text, locale);
+  return <>{children(show ? translation : null)}</>;
+}
+
+export function RoomTranslateButton({ translation }: { translation: LineTranslation }) {
+  const { t } = useI18n();
+  const label = t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate");
   return (
-    <>
-      {children ?? <LinkedText text={text} />}
-      {show && <button
-        type="button"
-        data-room-translate
-        aria-pressed={translation.visible}
-        onClick={translation.toggle}
-        className="mt-1 flex items-center gap-1 text-[13px] text-ink-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-      ><Languages size={14} aria-hidden />{t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}</button>}
-      {show && translation.visible && <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
-        {translation.pending ? t("teamRoom.translating") : translation.failed
-          ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
-          : translation.text}
-      </div>}
-    </>
+    <button
+      type="button"
+      data-room-translate
+      aria-label={label}
+      title={label}
+      aria-pressed={translation.visible}
+      onClick={translation.toggle}
+      className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+    >
+      <Languages size={14} />
+    </button>
+  );
+}
+
+export function RoomTranslationText({ translation }: { translation: LineTranslation }) {
+  const { t } = useI18n();
+  if (!translation.visible) return null;
+  return (
+    <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
+      {translation.pending ? t("teamRoom.translating") : translation.failed
+        ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
+        : translation.text}
+    </div>
   );
 }
 
@@ -125,11 +142,11 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
     <div className="contents">
       {newDay && <DaySeparator at={line.at} />}
       {named && line.author.kind === "bot" ? (
-        <div className="mt-1 flex items-center gap-1.5 pl-8" data-team-room-bot>
+        <div className="mt-1 flex items-center gap-1.5 pl-0.5" data-team-room-bot>
           <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
           <span className="text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</span>
         </div>
-      ) : named && <div className="pl-7.5"><PersonLabel name={authorName ?? line.author.name} /></div>}
+      ) : named && <PersonLabel name={authorName ?? line.author.name} />}
       <div
         ref={rowRef}
         data-mid={line.id}
@@ -157,11 +174,12 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
       >
         {swiping && <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />}
         {swiping && !mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
-        <div ref={bubbleRef} data-orbit-message-body data-strip={line.reactions?.length ? "" : undefined} className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
+        <div ref={bubbleRef} data-orbit-message-body data-strip={line.reactions?.length ? "" : undefined} className="relative w-fit max-w-[min(42rem,78%)] pb-8">
           <div
             data-message-hover-actions
-            className={cn("pointer-events-none absolute bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100", mine ? "right-0" : "left-0")}
+            className={cn("pointer-events-none absolute bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100", mine ? "right-0" : "left-0")}
           >
+            {!mine && onReact && <ReactionBar threadId={base} message={message} onPick={(emoji) => onReact(message, emoji)} />}
             {line.text && <CopyButton text={line.text} className="opacity-100" />}
             <button
               type="button"
@@ -172,18 +190,8 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
             >
               <MessageSquareReply size={14} />
             </button>
+            {showTranslate && <RoomTranslateButton translation={translation} />}
           </div>
-          {!mine && <span data-room-translate-gutter className="absolute top-0 -left-8 flex w-8 justify-start">
-            {showTranslate && <button
-              type="button"
-              data-room-translate
-              aria-label={t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}
-              title={t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}
-              aria-pressed={translation.visible}
-              onClick={translation.toggle}
-              className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
-            ><Languages size={16} /></button>}
-          </span>}
           <div
             data-orbit-message-content
             className={cn(
@@ -198,11 +206,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
               {line.author.kind === "bot" && line.text.trim()
                 ? <MessageBoundary fallbackText={line.text}><ChatMarkdown text={line.text} localLinks={false} /></MessageBoundary>
                 : <LinkedText text={line.text} />}
-              {translation.visible && <div data-room-translation role="status" className="mt-2 border-t border-hairline pt-2">
-                {translation.pending ? t("teamRoom.translating") : translation.failed
-                  ? <button type="button" onClick={() => void translation.retry()} className="text-left text-ink-secondary hover:text-ink">{t("teamRoom.translationFailed")}</button>
-                  : translation.text}
-              </div>}
+              <RoomTranslationText translation={translation} />
               <RoomFileRows base={base} files={line.files} className={cn(line.text && "mt-2")} />
             </div>
           </div>

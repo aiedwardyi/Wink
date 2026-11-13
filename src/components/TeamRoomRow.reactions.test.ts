@@ -85,6 +85,17 @@ describe("room reactions", () => {
     expect(old?.querySelector("[data-menu-copy]")).not.toBeNull();
     expect(old?.querySelector("[data-menu-pin]")).toBeNull();
   });
+
+  it("puts the emoji picker in the hover row on others' lines, through the room", async () => {
+    const onReact = vi.fn();
+    await render({ onReact });
+    expect(row("e1").querySelector("[data-message-hover-actions] [data-reaction-bar]")).toBeNull();
+    await act(async () => row("e2").querySelector<HTMLButtonElement>("[data-message-hover-actions] [data-reaction-bar] button")!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-reaction-picker] button[aria-label*="😂"]')!.click());
+    expect(onReact).toHaveBeenCalledWith(expect.objectContaining({ id: "e2" }), "😂");
+    await render({ onReact: undefined });
+    expect(row("e2").querySelector("[data-reaction-bar]")).toBeNull();
+  });
 });
 
 describe("room notice", () => {
