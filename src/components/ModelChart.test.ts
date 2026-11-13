@@ -173,5 +173,21 @@ describe("ModelChart", () => {
     expect(document.querySelector(".model-chart")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("list");
+    const back = document.querySelector<HTMLButtonElement>(".model-dial-view")!;
+    expect(back.textContent).toBe("Chart View");
+    await act(async () => back.click());
+    expect(document.querySelector(".model-chart")).not.toBeNull();
+    expect(localStorage.getItem("omb-model-picker-view")).toBe("chart");
+  });
+
+  it("steps on a wheel over the plot but leaves the controls to scroll", async () => {
+    await mount();
+    const wheel = (selector: string) => act(async () => {
+      document.querySelector(selector)!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
+    });
+    await wheel(".chart-controls");
+    expect(model()).toBe("claude-opus-5-5");
+    await wheel(".chart-plot");
+    expect(model()).toBe("claude-sonnet-5-5");
   });
 });

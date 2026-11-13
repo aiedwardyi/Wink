@@ -70,6 +70,7 @@ export function ModelPickerControl({
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
   const [view, setView] = useState(loadModelPickerView);
+  const [style, setStyle] = useState(view === "list" ? "dial" : view);
   const listView = view === "list";
   const dialView = dial && dialFits && view === "dial";
   const chartView = dial && dialFits && view === "chart";
@@ -137,6 +138,7 @@ export function ModelPickerControl({
     setDraft(selection);
     setCustomOpen(false);
     setView(next);
+    if (next !== "list") setStyle(next);
     setQuery("");
     focusComposerAfterCloseRef.current = false;
     switchingRef.current = switching;
@@ -388,10 +390,11 @@ export function ModelPickerControl({
         <header className="model-cross-header">
           <h2 className="sr-only">{t("model.choose")}</h2>
           {dial && dialFits && <button type="button" className="model-dial-view" onClick={() => {
-            setView(listView ? "dial" : "list");
-            saveModelPickerView(listView ? "dial" : "list", "picker");
+            const next = listView ? style : "list";
+            setView(next);
+            saveModelPickerView(next, "picker");
             dialogRef.current?.focus();
-          }}>{t(listView ? "model.dial.dial" : "model.dial.list")}</button>}
+          }}>{t(!listView ? "model.dial.list" : style === "chart" ? "model.chart.view" : "model.dial.dial")}</button>}
           <button data-picker-action type="button" onClick={close} aria-label={t("createBot.cancel")}><X size={18} /></button>
         </header>
         {dialView ? <ModelDial rows={rows} draft={draft} canCommit={canCommit} onDraft={pick} onSave={save} handle={dialRef} stageRef={stageRef} bindingsId={bindingsId} />

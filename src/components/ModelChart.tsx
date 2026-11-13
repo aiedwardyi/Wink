@@ -251,10 +251,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
   }
 
   return (
-    <div ref={(el) => {
-      root.current = el;
-      stageRef.current = el;
-    }} className="model-chart" data-phone={phone || undefined} data-short={(!phone && size.rh > 0 && size.rh <= 800) || undefined} data-mid={(!phone && size.rw > 0 && size.rw <= 1240) || undefined}>
+    <div ref={root} className="model-chart" data-phone={phone || undefined} data-short={(!phone && size.rh > 0 && size.rh <= 800) || undefined} data-mid={(!phone && size.rw > 0 && size.rw <= 1240) || undefined}>
       <header className="chart-top">
         <h2 className="chart-title">{t("model.choose")}</h2>
         <span className="chart-now" data-chart-now>
@@ -326,7 +323,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
         </div>
       </section>
 
-      <section className="chart-stage">
+      <div ref={stageRef} className="chart-stage">
         <div className="chart-readout">
           <div className="chart-who">
             <div className="chart-rlab">{line && <span className="chart-mk"><ProviderMark driverKind={line.row.instance.driverKind} size={16} /></span>}<span>{line?.row.label}</span></div>
@@ -383,7 +380,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
             </g>
           </svg>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
