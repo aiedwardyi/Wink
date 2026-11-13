@@ -32,6 +32,7 @@ const store = {
   bot: () => ({ id: "b1", threadId: "t1" }),
   group: () => ({ id: "g1", threadId: "t1" }),
   messagesFor: () => [stored],
+  activePath: () => [stored],
   toggleReaction: () => stored,
   patchMessage: () => stored,
 };

@@ -5,6 +5,7 @@
 import type { Message } from "@/state/store";
 import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion, type AskState } from "../../shared/open-question";
 
+export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
@@ -60,6 +61,12 @@ export function askUserStatus(messages: readonly Message[], message: Message): A
   if (!states) statuses.set(messages, (states = new Map([...askStates(messages)].map(([card, state]) => [card.id, state]))));
   const status = states.get(message.id) ?? askStates([message]).get(message)!;
   return status.state === "answered" ? { state: "answered", reply: status.reply } : status;
+}
+
+/** False only for an ask_user card that already settled, so a stale tap cannot answer it again. */
+export function canAnswerCard(messages: readonly Message[], messageId: string): boolean {
+  const message = messages.find((candidate) => candidate.id === messageId);
+  return !message || !isAskUserCard(message) || askUserStatus(messages, message).state === "waiting";
 }
 
 /** For the control hiding the rows (drawer button, collapsed sidebar or

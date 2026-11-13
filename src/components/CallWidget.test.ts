@@ -35,8 +35,6 @@ vi.mock("@/lib/live-call/audio", () => ({
     play() {}
     flush() {}
     close() {}
-    ring() {}
-    stopRing() {}
     boop() {}
     heardShare() { return 1; }
     level() { return 0; }
