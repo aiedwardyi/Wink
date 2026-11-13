@@ -43,7 +43,7 @@ html[data-orbit-caption="win32"] .model-chart { top: var(--orbit-caption-height)
 .model-cross-backdrop:has(.model-chart) .model-cross-header { top: 34px; right: 40px; display: flex; height: 30px; align-items: center; gap: 4px; color: var(--ink-2, #a5a49f); }
 html[data-orbit-caption="win32"] .model-cross-backdrop:has(.model-chart) .model-cross-header { top: calc(var(--orbit-caption-height) + 34px); }
 
-.chart-top { grid-column: 1 / -1; display: flex; height: 30px; align-items: center; justify-content: space-between; padding-right: 140px; }
+.chart-top { grid-column: 1 / -1; display: flex; height: 30px; align-items: center; justify-content: space-between; padding-right: 212px; }
 .chart-title { font: 500 11px var(--mono); letter-spacing: .24em; text-transform: uppercase; color: var(--ink-2); }
 .chart-now { display: flex; height: 30px; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid var(--line); font: 11px var(--mono); letter-spacing: .06em; color: var(--ink-2); white-space: nowrap; }
 .chart-now i { font-style: normal; letter-spacing: .24em; text-transform: uppercase; color: var(--ink-3); }
@@ -155,12 +155,12 @@ svg.chart-tier { color: var(--ink-3); }
 .model-chart[data-short] .chart-keys { display: none; }
 .model-cross-backdrop:has(.model-chart[data-short]) .model-cross-header { top: 24px; }
 .model-cross-backdrop:has(.model-chart[data-mid]) .model-cross-header { right: 20px; }
-.model-chart[data-mid] .chart-top { padding-right: 124px; }
+.model-chart[data-mid] .chart-top { padding-right: 196px; }
 
 /* Phone: chart on top, then the readout, then lab, model, effort and pick. */
 .model-chart[data-phone] { display: flex; flex-direction: column; gap: 12px; padding: calc(14px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
-.model-chart[data-phone] .chart-top { height: 26px; padding-right: 40px; }
-.model-chart[data-phone] .chart-title { font-size: 10px; }
+.model-chart[data-phone] .chart-top { height: 26px; padding-right: 128px; }
+.model-chart[data-phone] .chart-title { display: none; }
 .model-chart[data-phone] .chart-now { height: 26px; gap: 7px; padding: 0 8px; font-size: 10px; }
 .model-chart[data-phone] .chart-stage { order: 1; flex: 1; gap: 8px; }
 .model-chart[data-phone] .chart-controls { order: 2; flex: none; gap: 12px; overflow: visible; }
@@ -184,7 +184,6 @@ svg.chart-tier { color: var(--ink-3); }
 .model-chart[data-phone] .chart-plot svg { font-size: 9.5px; }
 .model-chart[data-phone] .chart-plot .cap { font-size: 8.5px; }
 .model-cross-backdrop:has(.model-chart[data-phone]) .model-cross-header { top: calc(12px + env(safe-area-inset-top, 0px)); right: 4px; height: 30px; }
-.model-cross-backdrop:has(.model-chart[data-phone]) .model-dial-view { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .model-chart *, .model-chart *::before { transition: none !important; }

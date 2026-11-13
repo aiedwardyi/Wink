@@ -299,6 +299,14 @@ describe("theme cycle shortcut", () => {
     expect(handler()).toContain("setThemeToast(");
   });
 
+  it("shows the theme toast above an open model picker", () => {
+    const picker = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "components", "ModelPicker.css"), "utf8");
+    const backdrop = Number(picker.match(/\.model-cross-backdrop \{[^}]*z-index: (\d+)/)?.[1]);
+    const toast = Number(app.match(/\{themeToast && \([\s\S]*?z-\[(\d+)\]/)?.[1]);
+    expect(backdrop).toBeGreaterThan(0);
+    expect(toast).toBeGreaterThan(backdrop);
+  });
+
   it("keeps the shortcut comment in App-wide shortcuts up to date", () => {
     expect(app).toContain("Alt+Shift+T Cycle theme");
   });
