@@ -157,6 +157,15 @@ describe("teammates' own bots", () => {
     expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ role: "bot", from: { botId: bot.id, name: "Pete-Coder", color: "teal" } });
   });
 
+  it("wakes a host bot once for a bot line that @'s it, even when the post is retried", async () => {
+    const peter = await join("Peter");
+    const bot = (await call(room("bots"), "POST", peter.key, { name: "Pete-Coder" })).body.bot;
+    const body = { botId: bot.id, text: "@Wink Peter is free Sat after 7. What works for Edward?", sendId: "t".repeat(24) };
+    const posted = await call(room("bot-send"), "POST", peter.key, body);
+    expect((await call(room("bot-send"), "POST", peter.key, body)).body.entry.id).toBe(posted.body.entry.id);
+    expect(roomAsks(group.hosted.roomId, ["held", "queued", "running"])).toEqual([expect.objectContaining({ botId: wink, asker: { kind: "person", id: peter.id }, entryId: posted.body.entry.id })]);
+  });
+
   it("never wakes the host's only bot for a teammate's bot name or a reply to its line", async () => {
     const peter = await join("Peter");
     const mina = await join("Mina");
