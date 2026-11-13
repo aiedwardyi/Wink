@@ -172,6 +172,12 @@ describe("closed ask_user card note", () => {
     expect(line).toContain(`("${"q".repeat(199)}…")`);
   });
 
+  it("puts every open card in the turn prompt when two or more wait", () => {
+    const typed = said("u1", "staging first");
+    const open = [askCard("c1", "Ship it?", {}, { staysOpen: true }), askCard("c2", "Which region?", {}, { staysOpen: true })];
+    expect(turnPrompt([...open, typed], typed)).toBe(`${OPEN}\n\nCurrent message:\n\nstaging first`);
+  });
+
   it("lists every open card when they type while two or more wait", () => {
     const open = [askCard("c1", "Ship it?", {}, { staysOpen: true }), askCard("c2", "Which region?", {}, { staysOpen: true })];
     expect(closedAskNotes([...open, said("u1", "staging first")], "staging first", "u1")).toEqual([OPEN]);
