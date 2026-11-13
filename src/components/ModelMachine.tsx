@@ -234,7 +234,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
     else if (k === "ArrowLeft" || k === "ArrowRight") { if (!vend) onDraft(dialShift(rows, draft, k === "ArrowLeft" ? -1 : 1)); }
     else if (k === "ArrowUp" || k === "ArrowDown") { if (!vend) onDraft(dialStep(rows, draft, k === "ArrowUp" ? -1 : 1)); }
     else if (k === "Enter") {
-      if (target?.closest("[data-machine-close]")) return;
+      if (target?.closest("[data-machine-close], [data-picker-style-button]")) return;
       flash("pick");
       pick(true);
     } else return;

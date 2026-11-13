@@ -155,6 +155,10 @@ describe("Picker style strip", () => {
     for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);
     expect([shown(), localStorage.getItem("omb-model-picker-view")]).toEqual(["machine", "machine"]);
     expect(strip()?.hasAttribute("data-closing")).toBe(false);
+    await press("Escape");
+    expect(document.activeElement?.classList.contains("model-machine")).toBe(true);
+    const enter = await press("Enter", {}, document.querySelector(".model-machine [data-picker-style-button]"));
+    expect([enter.defaultPrevented, dispatch.mock.calls.length, picker() !== null]).toEqual([false, 0, true]);
     await act(async () => root.unmount());
     await mount(localStorage.getItem("omb-model-picker-view")!);
     for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);

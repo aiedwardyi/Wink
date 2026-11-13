@@ -199,10 +199,11 @@ export function ModelPickerControl({
     // Leaving the Machine unmounts the focused overlay.
     requestAnimationFrame(() => { if (!dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus(); });
   };
+  // The shown view takes focus back, so its keys and Enter work again.
+  const refocus = () => (dialogRef.current?.querySelector<HTMLElement>(".model-machine") ?? dialogRef.current)?.focus();
   const closeStrip = () => {
     setStyleOpen(false);
-    // The closing strip goes inert; the picker takes focus so Enter commits again.
-    if (document.activeElement?.closest("[data-picker-style-strip]")) dialogRef.current?.focus();
+    if (document.activeElement?.closest("[data-picker-style-strip]")) refocus();
   };
   const styleButton = dial ? <PickerStyleButton shown={shown} open={styleOpen} onToggle={() => styleOpen ? closeStrip() : setStyleOpen(true)} /> : null;
 
@@ -377,7 +378,7 @@ export function ModelPickerControl({
           event.preventDefault();
           event.stopPropagation();
           setStyleOpen(false);
-          dialogRef.current?.focus();
+          refocus();
         }}
         onKeyDown={(event) => {
           // focus lingers in the fading dialog for a frame; let Alt+M through to reopen it
