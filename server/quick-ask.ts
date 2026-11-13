@@ -206,11 +206,13 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
 }
 
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
+    // Loading every open chat here held the server for ~30 s on a big messages.db.
+    if (!store.hasUnansweredQuickAsk(threadId)) continue;
     const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
     for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }

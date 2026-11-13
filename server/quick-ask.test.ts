@@ -476,6 +476,20 @@ describe("boot recovery", () => {
     expect(store.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
   });
 
+  it("leaves chats with no pending ask unread", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    const asked = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: asked.id } });
+    const messages = vi.spyOn(store, "messagesFor");
+    const path = vi.spyOn(store, "activePath");
+    recoverQuickAsks(store);
+    expect(messages).not.toHaveBeenCalledWith(bot.threadId);
+    expect(path).not.toHaveBeenCalledWith(bot.threadId);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+  });
+
   it("leaves an ask stopped before a restart", async () => {
     const h = harness({ result: { route: "handoff", ms: 3 } });
     await h.send({ text: QUESTION });

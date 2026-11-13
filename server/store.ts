@@ -1294,6 +1294,10 @@ export class Store {
     return this.thread(threadId).messages;
   }
 
+  hasUnansweredQuickAsk(threadId: string): boolean {
+    return mdb.hasUnansweredQuickAsk(threadId);
+  }
+
   activeLeaf(threadId: string): string | null {
     return this.thread(threadId).activeLeafId;
   }
@@ -1309,6 +1313,11 @@ export class Store {
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
     return path.reverse();
+  }
+
+  /** activePath newest first, read lazily from disk when the thread is not loaded. */
+  activePathBack(threadId: string): Iterable<Message> {
+    return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
