@@ -4,6 +4,8 @@
 
 - Local bots and workers use CLI sign-ins: Claude Code, Codex, Grok, Antigravity (Gemini, `agy`) and Meta Muse. They need no API key.
 - The user picks each bot's engine, model and effort in the model picker (Alt+M, Open Model Picker). Switching keeps the chat: the new engine gets the conversation so far.
+- Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.
+- Coding fallback as engines run low: Opus 5.5, GPT-6.1 Sol, Sonnet 5.5, GPT-6.1 Terra, then Grok 4.7 extra high or GPT-6 Luna max. Grok also suits writing, X news.
 - Saved keys have separate uses:
   - xAI, Gemini, Claude and Vertex AI keys: `call_api` to that provider's own API.
   - OpenAI key: `generate_image`, bot avatars and `call_api` to `api.openai.com` (for example `/v1/responses`), subject to the key's access. Codex workers use the Codex sign-in, or this key's API credit with the `$env:CODEX_HOME='OpenAI credit';` prefix.
