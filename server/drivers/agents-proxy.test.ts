@@ -196,6 +196,10 @@ beforeAll(async () => {
           res.writeHead(403, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "source thread does not belong to sender" }));
         }
+        if (lastAskUserBody.close) {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ closed: true }));
+        }
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-ask" }));
       });
@@ -458,6 +462,16 @@ describe("agents-proxy MCP surface", () => {
       question: "Ship to prod or staging?",
       choices: ["Prod", 3, "Staging"],
     });
+  });
+
+  it("forwards a question close through the same tool without asking again", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "ask_user");
+    expect(tool.inputSchema.properties.close).toMatchObject({ type: "boolean" });
+    const res = await callTool("ask_user", { question: " Ship it? ", close: true });
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Closed as answered in chat.");
+    expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
   });
 
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {
