@@ -110,6 +110,14 @@ it("reads the whole file with its changes marked", async () => {
   expect(whole.lines.at(-1)).toEqual({ kind: "context", text: "line 12", line: 12 });
 });
 
+it("shows the whole file when only its mode changed", async () => {
+  const { root, git, base } = repo();
+  git("update-index", "--chmod=+x", "file.ts");
+  const [file] = await mapFiles(root, base);
+  expect(file).toEqual({ path: "file.ts", added: 0, removed: 0 });
+  expect((await mapFileDiff(root, base, file, true)).lines).toEqual([{ kind: "context", text: "const before = 1;", line: 1 }]);
+});
+
 it("folds unchanged runs between unified hunks and caps rendered lines", () => {
   const diff = mapDiffLines("@@ -20,1 +20,1 @@\n-old\n+new\n@@ -50,1 +50,1 @@\n-next\n+last\n");
   expect(diff.lines.filter(line => line.kind === "fold").map(line => [line.line, line.count])).toEqual([[1, 19], [21, 29]]);

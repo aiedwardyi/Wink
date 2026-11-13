@@ -268,6 +268,10 @@ it("scrolls the whole file to its first change and falls back to changes only pa
   await emit([workers[0]]);
   expect(rows()).toHaveLength(41);
   expect(host.querySelector(".map-code")?.scrollTop).toBe(800);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-code")?.scrollTop).toBe(800);
   expect(host.querySelector(".map-whole")?.textContent).toBe("Changes only");
   await click('[data-map-file="src/manual.ts"]');
   expect(rows()).toEqual(["9000 lines unchanged", "late edit", "Large diff folded"]);

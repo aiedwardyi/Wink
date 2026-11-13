@@ -63,7 +63,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const listRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const codeRef = useRef<HTMLDivElement>(null);
-  const scrolled = useRef("");
+  const scrolled = useRef<{ code: HTMLElement | null; key: string }>({ code: null, key: "" });
   const chosen = mapFollow(selection, snapshot.workers);
   const worker = snapshot.workers.find(worker => worker.id === chosen.worker);
   const files = useMemo(() => (worker?.files ?? []).toSorted((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), [worker?.files]);
@@ -185,8 +185,9 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   useLayoutEffect(() => {
     const code = codeRef.current;
     const key = loaded ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
-    if (!code || !loaded || scrolled.current === key) return;
-    scrolled.current = key;
+    if (!code || scrolled.current.code === code && scrolled.current.key === key) return;
+    scrolled.current = { code, key };
+    if (!loaded) return;
     const row = code.querySelector<HTMLElement>('.map-code-row:not([data-kind="context"])');
     code.scrollTop = row ? code.scrollTop + row.getBoundingClientRect().top - code.getBoundingClientRect().top - code.clientHeight / 4 : 0;
   }, [loaded]);
