@@ -13,7 +13,7 @@ import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
 
-const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
+const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), frame: undefined as ((pcm: ArrayBuffer) => void) | undefined, config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 vi.mock("@/lib/live-call/gemini", () => ({
   GeminiLive: class {
@@ -33,13 +33,14 @@ vi.mock("@/lib/live-call/audio", () => ({
     playing = false;
     onIdle = () => {};
     onStart = () => {};
-    async capture() { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); }
+    async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
     play() {}
     flush() {}
     close() {}
     boop() {}
     heardShare() { return 1; }
     level() { return fakes.level; }
+    micLevel() { return 0; }
   },
 }));
 
@@ -111,6 +112,7 @@ async function type(host: HTMLElement, text: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -119,6 +121,7 @@ afterEach(() => {
   fakes.engines.length = 0;
   fakes.micError = "";
   fakes.capture.mockClear();
+  fakes.frame = undefined;
   fakes.config = undefined;
   fakes.token = undefined;
   fakes.messages = undefined;
@@ -406,6 +409,41 @@ describe("live call in the message box", () => {
       expect(alert.textContent).toBe("Microphone is off for Wink.Open settings");
       await act(async () => [...alert.querySelectorAll("button")].find((b) => b.textContent === "Open settings")!.click());
       expect(permOpenSettings).toHaveBeenCalledWith("mic");
+    } finally {
+      await unmount();
+    }
+  });
+
+  async function silentHint(host: HTMLElement) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await connect(host);
+    vi.setSystemTime(Date.now() + 6_000);
+    fakes.frame!(new ArrayBuffer(320));
+    await vi.waitFor(() => expect(host.querySelector("[data-call-mic-hint]")).not.toBeNull(), { timeout: 3_000 });
+    return host.querySelector<HTMLElement>("[data-call-mic-hint]")!;
+  }
+
+  it.each(["win32", "darwin"])("links sound input in the mic hint to the %s sound settings", async (platform) => {
+    const permOpenSettings = vi.fn();
+    Object.assign(window, { ogb: { platform, permOpenSettings, speechStop: vi.fn() } });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      await act(async () => pick(hint, "sound input").click());
+      expect(permOpenSettings).toHaveBeenCalledWith("sound");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([["the browser", undefined], ["Linux", { platform: "linux", permOpenSettings: vi.fn(), speechStop: vi.fn() }]])("keeps the mic hint plain text in %s", async (_where, ogb) => {
+    if (ogb) Object.assign(window, { ogb });
+    const { host, unmount } = await mount();
+    try {
+      const hint = await silentHint(host);
+      expect(hint.textContent).toBe("Can't hear your mic. Check your sound input.");
+      expect(hint.querySelector("button, a")).toBeNull();
     } finally {
       await unmount();
     }
