@@ -1886,7 +1886,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
+  if (process.platform === "win32" && (pane === "mic" || pane === "sound")) return shell.openExternal(pane === "mic" ? "ms-settings:privacy-microphone" : "ms-settings:sound");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -1897,7 +1897,7 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
   // own-property lookup only — a renderer-supplied "__proto__"/"constructor"
   // would otherwise resolve up the prototype chain to a truthy object
   const anchor = Object.hasOwn(panes, pane) ? panes[pane] : "Privacy";
-  return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`);
+  return shell.openExternal(pane === "sound" ? "x-apple.systempreferences:com.apple.preference.sound?input" : `x-apple.systempreferences:com.apple.preference.security?${anchor}`);
 });
 
 ipcMain.handle("speech:start", (event, options) => {

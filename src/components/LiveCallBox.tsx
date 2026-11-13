@@ -86,12 +86,15 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
 
   const talking = snap.status === "listening" || snap.status === "speaking" || snap.status === "working";
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
+  const [beforeLink, afterLink] = words.micSilent.split(words.soundInput);
+  // Only the Windows and macOS apps have a sound input pane to open.
+  const soundPane = afterLink !== undefined && window.ogb?.permOpenSettings && (window.ogb.platform === "win32" || window.ogb.platform === "darwin");
   return (
     <>
       {snap.hushed && talking
         ? <button type="button" data-call-hushed onClick={() => call.wake()} className="col-span-full row-start-1 self-center justify-self-start px-1 py-1 text-left text-[15px] leading-6 font-medium text-accent hover:underline">{words.hushed}</button>
         : snap.micSilent && talking && !snap.muted
-          ? <p data-call-mic-hint role="status" className="pointer-events-none col-span-full row-start-1 self-center px-1 py-1 text-[15px] leading-6 text-ink-secondary">{words.micSilent}</p>
+          ? <p data-call-mic-hint role="status" className="pointer-events-none col-span-full row-start-1 self-center px-1 py-1 text-[15px] leading-6 text-ink-secondary">{soundPane ? <>{beforeLink}<button type="button" onClick={() => void window.ogb?.permOpenSettings("sound")} className="pointer-events-auto font-medium text-accent hover:underline">{words.soundInput}</button>{afterLink}</> : words.micSilent}</p>
           : captions && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
       <div data-call-box={snap.status} data-leaving={closing || undefined} className="col-start-2 row-start-3 mt-1 flex min-w-0 items-center gap-1">
         <p role="status" className="flex min-w-0 items-center gap-2 px-1 text-[13px] tabular-nums text-ink-secondary">
