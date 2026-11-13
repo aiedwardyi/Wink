@@ -84,6 +84,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     flushInterruptedTask,
     closeOpenApprovals,
     releaseInterruptedBot,
+    rooms,
   } = deps;
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => store.bot(id)!), people);
   /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
@@ -169,7 +170,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const refusal = body.hosted ? roomBots(memberIds) : null;
       if (refusal) return json(res, 400, { error: refusal });
       const group = store.createGroup(name, memberIds, false, section, setup, body.hosted ? { roomId: (body.peopleOnly ? createPeopleOnlyRoom : createRoom)(name).id } : undefined);
-      deps.rooms?.created();
+      rooms?.created();
       return json(res, 201, { group: { ...publicGroupState(group), messages: [] } });
     },
     setup: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
@@ -208,7 +209,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       } else {
         patch.setupSkippedAt = Date.now();
       }
-      deps.rooms?.edited(group, patch);
+      rooms?.edited(group, patch);
       const updated = store.patchGroup(m[1], patch);
       if (!updated) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: publicGroupState(updated) });
@@ -386,7 +387,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
       if (existing.hosted && Array.isArray(patch.memberIds)) setPeopleOnly(existing.hosted.roomId, !patch.memberIds.length);
-      deps.rooms?.edited(existing, patch);
+      rooms?.edited(existing, patch);
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
       return json(res, 200, { group: publicGroupState(group) });
@@ -405,7 +406,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
       for (const threadId of threadIds) lastReply.delete(threadId);
-      deps.rooms?.removed(group);
+      rooms?.removed(group);
       store.deleteGroup(group.id);
       for (const threadId of threadIds) {
         for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
