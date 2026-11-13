@@ -16,6 +16,7 @@ const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: 
 const TRAIL = 6;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const folder = (path: string) => path.includes("/") ? name(path.slice(0, path.lastIndexOf("/"))) : "";
+type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
 
 const Cells = ({ group }: { group: SquareGroup }) => {
@@ -43,7 +44,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
   const [selection, setSelection] = useState<MapSelection>(INITIAL);
   const [menu, setMenu] = useState(false);
-  const [diff, setDiff] = useState<MapDiff | null>(null);
+  const [diff, setDiff] = useState<{ worker: string; path: string; data: MapDiff; step?: Step } | null>(null);
   const [repo, setRepo] = useState<(MapRepo & { worker: string }) | null>(null);
   const [failed, setFailed] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
@@ -101,14 +102,15 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     if (!active || !liveReady.current) return;
     if (!base || !worker?.git || !chosen.path) { setDiff(null); return; }
     const controller = new AbortController();
-    setDiff(null);
     setFailed(false);
-    const query = new URLSearchParams({ worker: worker.id, path: chosen.path });
-    request(`${base}/file?${query}`, { signal: controller.signal }).then(data => {
-      if (!controller.signal.aborted) setDiff(data);
+    const id = worker.id;
+    const path = chosen.path;
+    const step = path === worker.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
+    request(`${base}/file?${new URLSearchParams({ worker: id, path })}`, { signal: controller.signal }).then((data: MapDiff) => {
+      if (!controller.signal.aborted) setDiff({ worker: id, path, data, step });
     }, () => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
-  }, [base, worker?.id, worker?.editedAt, worker?.git, chosen.path, retry, active, connection]);
+  }, [base, worker?.id, worker?.editedAt, worker?.path, worker?.reason, worker?.git, chosen.path, retry, active, connection]);
 
   useEffect(() => {
     if (!menu) return;
@@ -161,7 +163,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     return <path key={hops.count - age} d={`M${from.x} ${from.y}H${point.x}V${point.y}`} opacity={Math.max(0.22, 0.95 - age * 0.13)} data-new={age === 0 || undefined} strokeDasharray={length} style={{ "--len": length } as React.CSSProperties} />;
   });
   const blip = trail.length && hops.paths.at(-1) === worker?.path ? trail.at(-1) : undefined;
-  const crumbs = chosen.path ? [repo?.worker === worker?.id ? repo?.name : "", ...chosen.path.split("/")].filter(Boolean) : [];
+  const loaded = !failed && diff?.worker === worker?.id ? diff : null;
+  const shown = loaded ? loaded.path : chosen.path;
+  const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
+  // SAFETY: CSSProperties has no custom properties; this sets only --cell and --gap.
+  const grid = squares && ({ "--cell": `${squares.size}px`, "--gap": `${squares.size > 5 ? 2 : 1}px` } as React.CSSProperties);
+  const crumbs = shown ? [repo?.worker === worker?.id ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
   return <section className="verify-watch-frame map-pane" data-maximized={maximized || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
     {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? c.failed : c.empty}</p> : <>
@@ -181,7 +188,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
             <span>{squares ? c.of(<b>{files.length}</b>, squares.total) : c.changed(files.length)}</span>
             <span>{[repo?.worker === worker.id && repo.name, worker.nick].filter(Boolean).join(" / ")}</span>
           </div>
-          {squares && <div ref={squaresRef} className="map-squares" aria-hidden="true" data-near={squares.near.length > 0 || undefined} onClick={event => {
+          {squares && <div ref={squaresRef} className="map-squares" aria-hidden="true" data-near={squares.near.length > 0 || undefined} style={grid} onClick={event => {
             const path = event.target instanceof HTMLElement && event.target.dataset.square;
             if (path) open(path);
           }}>
@@ -199,19 +206,19 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         </div>
         {files.length > 0 && <>
           <div className="map-crumbs">
-            <span className="map-path" title={chosen.path ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
+            <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
             <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
           </div>
-          {worker.path && <div key={`${worker.path}:${worker.editedAt}`} className="map-step">
+          {shown && <div key={`${shown}:${step?.editedAt}`} className="map-step">
             <i />
-            <h3 title={worker.reason ?? worker.path}>{worker.reason ?? worker.path}</h3>
-            {worker.editedAt > 0 && <time dateTime={new Date(worker.editedAt).toISOString()}>{clock(worker.editedAt)}</time>}
-            {worker.reason && <p>{worker.path}</p>}
+            <h3 title={step?.reason ?? shown}>{step?.reason ?? shown}</h3>
+            {step && step.editedAt > 0 && <time dateTime={new Date(step.editedAt).toISOString()}>{clock(step.editedAt)}</time>}
+            {step?.reason && <p>{shown}</p>}
           </div>}
-          <div className="map-code" aria-busy={!diff && !failed}>
-            {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !diff ? <p className="map-empty" role="status">{c.loading}</p> : diff.binary ? <p className="map-empty">{c.binary}</p> : <>
-              {diff.lines.map((line, index) => line.kind === "fold" ? <div key={index} className="map-gap">{c.unchanged(line.count ?? 0)}</div> : <div key={index} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>)}
-              {diff.capped && <div className="map-gap">{c.capped}</div>}
+          <div className="map-code" aria-busy={!failed && loaded?.path !== chosen.path}>
+            {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
+              {loaded.data.lines.map((line, index) => line.kind === "fold" ? <div key={index} className="map-gap">{c.unchanged(line.count ?? 0)}</div> : <div key={index} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>)}
+              {loaded.data.capped && <div className="map-gap">{c.capped}</div>}
             </>}
           </div>
         </>}

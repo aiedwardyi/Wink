@@ -17,21 +17,22 @@
 .map-near, .map-far { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .map-d > header, .map-sub > header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px; font: 10px var(--font-sans, sans-serif); color: var(--color-ink-secondary); }
 .map-d > header span:first-child, .map-sub > header span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-d > header span, .map-sub > header span { position: relative; z-index: 1; background: var(--color-panel); box-shadow: 0 0 0 2px var(--color-panel); }
 .map-d:not([data-far]) > header span:first-child, .map-sub:not([data-quiet]) > header span:first-child { color: var(--color-ink); font-weight: 600; }
 .map-sub { margin: 0 0 5px 8px; }
 .map-sub:last-child { margin-bottom: 0; }
-.map-cells { display: flex; flex-wrap: wrap; gap: 1px; }
-.map-cells i { width: 3px; height: 3px; background: color-mix(in oklab, var(--color-ink) 17%, transparent); }
+.map-cells { display: flex; flex-wrap: wrap; gap: var(--gap); }
+.map-cells i { width: var(--cell); height: var(--cell); background: color-mix(in oklab, var(--color-ink) 17%, transparent); }
 .map-sub[data-quiet] .map-cells i { background: color-mix(in oklab, var(--color-ink) 9%, transparent); }
-.map-d[data-far] .map-cells i { width: 2px; height: 2px; background: color-mix(in oklab, var(--color-ink) 10%, transparent); }
+.map-d[data-far] .map-cells i { width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); background: color-mix(in oklab, var(--color-ink) 10%, transparent); }
 .map-cells i[data-on] { position: relative; z-index: 1; background: var(--color-accent); cursor: pointer; animation: map-pop 700ms ease-out; }
 .map-cells i[data-on]::after { content: ""; position: absolute; inset: -3px; }
-@keyframes map-pop { 30% { transform: scale(3.2); } }
+@keyframes map-pop { 30% { transform: scale(2.2); } }
 .map-trail { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .map-trail path { fill: none; stroke: var(--color-accent); stroke-width: 1; shape-rendering: crispEdges; }
 .map-trail path[data-new] { animation: map-draw 550ms cubic-bezier(.4,0,.2,1) both; }
 @keyframes map-draw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
-.map-blip { position: absolute; z-index: 2; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border: 1px solid var(--color-accent); pointer-events: none; transition: left 500ms cubic-bezier(.4,0,.2,1), top 500ms cubic-bezier(.4,0,.2,1); }
+.map-blip { position: absolute; z-index: 2; width: calc(var(--cell) + 7px); height: calc(var(--cell) + 7px); margin: calc(var(--cell) / -2 - 3.5px) 0 0 calc(var(--cell) / -2 - 3.5px); border: 1px solid var(--color-accent); pointer-events: none; transition: left 500ms cubic-bezier(.4,0,.2,1), top 500ms cubic-bezier(.4,0,.2,1); }
 .map-blip::before { content: ""; position: absolute; inset: -1px; border: 1px solid var(--color-accent); animation: map-ring 2s ease-out infinite; }
 @keyframes map-ring { from { transform: scale(1); opacity: .9; } to { transform: scale(2.6); opacity: 0; } }
 .map-file-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 4px; font-size: 11px; color: var(--color-ink-secondary); }
