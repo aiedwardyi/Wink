@@ -11,9 +11,6 @@ on:
         description: "Commit/tag/branch to build (defaults to the branch this is run from)"
         required: false
         type: string
-  # temporary: dispatch needs the file on the default branch first
-  push:
-    branches: [feat/mac-build-1]
 
 permissions:
   contents: read
