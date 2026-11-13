@@ -20,7 +20,7 @@ describe("wink guide", () => {
     expect(guide).toContain("- Coding fallback as engines run low:");
   });
 
-  it("covers rooms, calls, side pane and to-do list in a short read", () => {
+  it("covers rooms, calls, side pane, to-do list and skills in a short read", () => {
     const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
     for (const heading of ["## Groups and team rooms", "## Calls", "## Side pane", "## Bot details and to-do list", "## Skills"]) {
       expect(guide).toContain(`\n${heading}\n`);
