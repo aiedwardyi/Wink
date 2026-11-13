@@ -1418,7 +1418,7 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !busy && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
+          {(callButton || onCall) && bot && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
             <button
               type="button"
               onClick={onCall}
