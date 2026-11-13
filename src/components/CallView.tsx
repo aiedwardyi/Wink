@@ -39,7 +39,7 @@ import { sendInput } from "@/lib/usage-stats";
 type Phase = "listening" | "sending" | "working" | "speaking";
 const CALL_ENDPOINT_MS = 850;
 
-export function CallButton({ bot }: { bot: Bot }) {
+export function CallButton({ bot, helpAbove = false }: { bot: Bot; helpAbove?: boolean }) {
   return (
     <CallTargetButton
       targetId={bot.id}
@@ -47,6 +47,7 @@ export function CallButton({ bot }: { bot: Bot }) {
       voices={[bot.voice]}
       setupBotId={bot.id}
       requireExplicitVoices={false}
+      helpAbove={helpAbove}
     />
   );
 }
@@ -58,6 +59,7 @@ export function CallTargetButton({
   setupBotId,
   requireExplicitVoices,
   onStart,
+  helpAbove = false,
 }: {
   targetId: string;
   targetName: string;
@@ -67,6 +69,7 @@ export function CallTargetButton({
   /** Rooms cannot rely on one workspace fallback for multiple speakers. */
   requireExplicitVoices: boolean;
   onStart?: () => void;
+  helpAbove?: boolean;
 }) {
   const { state, dispatch } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
@@ -164,7 +167,7 @@ export function CallTargetButton({
           inert={help.closing}
           role="group"
           aria-label="Call unavailable"
-          className="animate-pop-in absolute right-0 z-30 mt-1.5 w-[280px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl"
+          className={cn("animate-pop-in absolute right-0 z-30 w-[280px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl", helpAbove ? "bottom-full mb-1.5" : "mt-1.5")}
         >
           <div className="text-[13px] font-medium text-ink">Call unavailable</div>
           <div className="mt-1 text-[12px] leading-[1.45] text-ink-secondary">{reason}</div>

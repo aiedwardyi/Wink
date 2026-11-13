@@ -189,6 +189,7 @@ describe("call button in the message box", () => {
       expect(button(host, "Call Atlas")).toBeNull();
       await act(async () => button(frame(host), label)!.click());
       expect(frame(host).querySelector('[aria-label="Call unavailable"]')).not.toBeNull();
+      expect(frame(host).querySelector('[aria-label="Call unavailable"]')!.className).toContain("bottom-full");
       await type(host, "hi");
       expect(corner(host).getAttribute("aria-label")).toBe("Send message");
       expect(button(host, label)).toBeNull();

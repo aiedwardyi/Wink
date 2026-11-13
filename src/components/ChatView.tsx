@@ -1915,7 +1915,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
           call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
           onCall={!onLiveCall && callsSupported() ? startCall : undefined}
-          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} /> : undefined}
+          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
