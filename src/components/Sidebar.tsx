@@ -328,8 +328,7 @@ function RoomContextMenu({
       <TeamRoomSidebarActions group={group} onClose={onClose} />
       {!joined && <button
         onClick={() => {
-          if (group.hosted) confirmRoomDelete(group);
-          else dispatch({ type: "deleteGroup", groupId: group.id });
+          confirmRoomDelete(group);
           onClose();
         }}
         className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-danger hover:bg-raised/40"

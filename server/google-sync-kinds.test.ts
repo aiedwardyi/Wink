@@ -170,9 +170,9 @@ describe("Google reader kind recovery", () => {
     const reader = profile.match(/const isSyncOperationFile = .+/)![0].match(/json\|[a-z|]+/)![0];
     const google = source("./google-sync.ts").match(/const OPERATION_FILE = .+/)![0].match(/json\|[a-z|]+/)![0];
     expect({ revision: DRIVE_READER_REVISION, classifier: createHash("sha256").update(classifier).digest("hex"), own, reader, google }).toEqual({
-      revision: 2, classifier: "b8b6172ce68aeff03018551f0ac323b2bccfafcc9d1e4746e197ff0e2d90d8cd", own: ["notes", "paths", "pin", "style", "trash"], reader: "json|notes|paths|pin|style|trash", google: "json|notes|paths|pin|style|trash",
+      revision: 3, classifier: "812809fedc818f596bc0b773786755b8b6f4edc9d2116de137e5c09a05927a7f", own: ["notes", "paths", "pin", "style", "trash"], reader: "json|notes|paths|pin|style|trash|room", google: "json|notes|paths|pin|style|trash|room",
     });
-    for (const ext of ["json", ...own]) {
+    for (const ext of ["json", ...own, "room"]) {
       expect(drivePathRule(`changes/1-device-writer-op.${ext}`, IDS)).toBe("once");
       expect(drivePathRule(`changes/1-${IDS.profileDeviceId}-op.${ext}`, IDS)).toBe("own");
     }

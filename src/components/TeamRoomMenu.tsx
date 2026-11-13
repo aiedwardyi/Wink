@@ -20,7 +20,7 @@ import { trackFeature } from "@/lib/usage-stats";
 type Sheet = "join" | "rejoin" | "leave" | "remove" | "delete" | null;
 
 let sheet: Sheet = null;
-let roomTarget: { id: string; name: string } | null = null;
+let roomTarget: { id: string; name: string; hosted?: boolean } | null = null;
 const watchers = new Set<() => void>();
 
 function openSheet(next: Sheet) {
@@ -29,7 +29,7 @@ function openSheet(next: Sheet) {
 }
 
 export function confirmRoomDelete(group: Group) {
-  roomTarget = { id: group.id, name: group.name };
+  roomTarget = { id: group.id, name: group.name, hosted: Boolean(group.hosted) };
   openSheet("delete");
 }
 
@@ -295,6 +295,25 @@ export function TeamRoomDialogs() {
   const [leaveFailed, setLeaveFailed] = useState(false);
   const open = useSyncExternalStore(watch, () => sheet);
   const close = () => openSheet(null);
+  const [everyPc, setEveryPc] = useState(false);
+  useEffect(() => {
+    setEveryPc(false);
+    const target = roomTarget;
+    if (open !== "delete" || !target || target.hosted) return;
+    let live = true;
+    // only chat sync carries a delete to other PCs; a local delete still needs no confirm
+    void api("/api/profile-sync")
+      .then((body) => body?.configured === true && body?.syncChats === true, () => false)
+      .then((reach) => {
+        if (!live) return;
+        if (reach) return setEveryPc(true);
+        dispatch({ type: "deleteGroup", groupId: target.id });
+        openSheet(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, dispatch]);
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
   const leave = async () => {
     if (!joinedId || leaving) return;
@@ -360,11 +379,11 @@ export function TeamRoomDialogs() {
           {removeFailed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
         </ConfirmDialog>}
       </Presence>
-      <Presence open={open === "delete"}>
+      <Presence open={open === "delete" && (roomTarget?.hosted === true || everyPc)}>
         {(closing) => <ConfirmDialog
           closing={closing}
           title={t("teamRoom.deleteTitle", { name: roomTarget?.name ?? "" })}
-          body={t("teamRoom.deleteBody")}
+          body={roomTarget?.hosted ? t("teamRoom.deleteBody") : t("chrome.deleteGroupBodyAllPcs", { name: roomTarget?.name ?? "" })}
           confirmLabel={t("chrome.delete")}
           onCancel={close}
           onConfirm={() => {

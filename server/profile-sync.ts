@@ -48,6 +48,23 @@ const orderChanges = z.object({
   sectionOrder: z.array(ID).max(200).optional(),
   itemOrder: z.record(z.string().max(96), z.array(ID).max(500)).optional(),
 }).strict();
+// not strict: a later build adds a room field without a new extension
+const roomChanges = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  createdAt: z.number().int().positive().optional(),
+  threadId: ID.optional(),
+  dm: z.boolean().optional(),
+  bulletin: z.string().max(12_000).optional(),
+  section: z.string().trim().max(60).nullable().optional(),
+  pinned: z.boolean().optional(),
+  pinnedMessageId: z.string().max(96).nullable().optional(),
+  setupCompletedAt: z.number().int().nullable().optional(),
+  setupSkippedAt: z.number().int().nullable().optional(),
+  defaultResponder: z.union([
+    z.object({ kind: z.literal("member"), botId: ID }),
+    z.object({ kind: z.enum(["everyone", "mentions"]) }),
+  ]).optional(),
+}).catchall(z.json());
 
 const operationSchema = z.object({
   format: z.literal(PROFILE_SYNC_FORMAT),
@@ -57,13 +74,13 @@ const operationSchema = z.object({
   sequence: z.number().int().positive().max(2_000_000_000),
   recordedAt: z.number().int().positive().max(9_999_999_999_999),
   baseCheckpoint: z.string().trim().max(160).optional(),
-  entity: z.enum(["bot", "section", "order"]),
+  entity: z.enum(["bot", "section", "order", "room"]),
   entityId: ID,
   changes: z.record(z.string().max(64), z.json()).optional(),
   deleted: z.boolean().optional(),
 }).strict();
 
-export type SyncEntity = "bot" | "section" | "order";
+export type SyncEntity = "bot" | "section" | "order" | "room";
 
 export interface ProfileSyncOperation {
   format: typeof PROFILE_SYNC_FORMAT;
@@ -98,6 +115,11 @@ export interface SyncedSection {
   [key: string]: unknown;
 }
 
+export interface SyncedRoom {
+  id: string;
+  [key: string]: unknown;
+}
+
 export interface SyncOrder {
   sectionOrder: string[];
   itemOrder: Record<string, string[]>;
@@ -114,6 +136,7 @@ interface FieldVersion {
 export interface ProfileSyncState {
   bots: Record<string, SyncedBot>;
   sections: Record<string, SyncedSection>;
+  rooms: Record<string, SyncedRoom>;
   order: SyncOrder;
   tombstones: Record<string, ProfileSyncOperation>;
   conflicts: SyncConflict[];
@@ -212,11 +235,7 @@ function clone<T>(value: T): T {
 
 function validateChanges(operation: ProfileSyncOperation): Record<string, unknown> | undefined {
   if (!operation.changes) return undefined;
-  const schema = operation.entity === "bot"
-    ? portableBotChanges
-    : operation.entity === "section"
-      ? sectionChanges
-      : orderChanges;
+  const schema = { bot: portableBotChanges, section: sectionChanges, order: orderChanges, room: roomChanges }[operation.entity];
   const parsed = schema.safeParse(operation.changes);
   if (!parsed.success) throw new Error(`Invalid ${operation.entity} sync changes`);
   return parsed.data as Record<string, unknown>;
@@ -239,6 +258,7 @@ export function emptyProfileSyncState(): ProfileSyncState {
   return {
     bots: {},
     sections: {},
+    rooms: {},
     order: { sectionOrder: [], itemOrder: {} },
     tombstones: {},
     conflicts: [],
@@ -302,18 +322,14 @@ function setField(
   };
   if (!current || stamp(operation) >= `${String(current.recordedAt).padStart(14, "0")}:${current.deviceId}:${String(current.sequence).padStart(12, "0")}:${current.operationId}`) {
     state.fieldVersions[key] = nextVersion;
-    const target = operation.entity === "bot"
-      ? state.bots[operation.entityId] ?? { id: operation.entityId }
-      : operation.entity === "section"
-        ? state.sections[operation.entityId] ?? { id: operation.entityId }
-        : state.order;
     if (operation.entity === "order") {
       if (field === "sectionOrder") state.order.sectionOrder = [...(value as string[])];
       else if (field === "itemOrder") state.order.itemOrder = clone(value as Record<string, string[]>);
     } else {
-      (target as Record<string, unknown>)[field] = clone(value);
-      if (operation.entity === "bot") state.bots[operation.entityId] = target as SyncedBot;
-      else state.sections[operation.entityId] = target as SyncedSection;
+      const records = { bot: state.bots, section: state.sections, room: state.rooms }[operation.entity];
+      const target = records[operation.entityId] ?? { id: operation.entityId };
+      target[field] = clone(value);
+      records[operation.entityId] = target;
     }
   }
 }
@@ -338,6 +354,7 @@ export function applySyncOperations(
         state.tombstones[entityKey(operation)] = clone(operation);
         if (operation.entity === "bot") delete state.bots[operation.entityId];
         if (operation.entity === "section") delete state.sections[operation.entityId];
+        if (operation.entity === "room") delete state.rooms[operation.entityId];
       }
       markApplied(operation.operationId);
       continue;
@@ -385,11 +402,11 @@ export function syncOperationFileName(operation: ProfileSyncOperation): string {
   const safe = (value: string) => value.replace(/[^A-Za-z0-9._-]/g, "_");
   // Keep the extension lists in Drive mirror and Google sync aligned with this reader.
   const own = operation.entity === "bot" ? ownOpFields(operation.changes ?? {})[0] : undefined;
-  const ext = own?.[1] ?? "json";
+  const ext = operation.entity === "room" ? "room" : own?.[1] ?? "json";
   return `${String(operation.sequence).padStart(12, "0")}-${safe(operation.deviceId)}-${safe(operation.operationId)}.${ext}`;
 }
 
-const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash)$/.test(name);
+const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash|room)$/.test(name);
 
 export function writeSyncOperation(folder: string, operation: ProfileSyncOperation): string {
   const parsed = parseSyncOperation(operation);
