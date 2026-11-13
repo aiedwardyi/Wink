@@ -41,3 +41,23 @@ it("saves the Wink name only after IME confirmation finishes", async () => {
     await act(async () => root.unmount());
   }
 });
+
+it("cancels from the X without saving", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(RoomOwnName, { name: "Mina Park" })));
+    await act(async () => host.querySelector("button")!.click());
+    const input = host.querySelector("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Mina");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click());
+    expect(mock.api).not.toHaveBeenCalled();
+    expect(host.querySelector("input")).toBeNull();
+    expect(host.textContent).toContain("Mina Park");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

@@ -8,6 +8,7 @@ import { api, useStore } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
 import { DETAILS_ROW } from "./BotDetailsRows";
+import { RenameActions } from "./RenameActions";
 
 export function RoomOwnName({ name }: { name: string }) {
   const { t } = useI18n();
@@ -53,7 +54,7 @@ export function RoomOwnName({ name }: { name: string }) {
               }}
               className="min-w-0 flex-1 rounded-md border border-hairline/40 bg-inset px-2 py-1 text-[14px] text-ink outline-none focus:border-accent"
             />
-            <button type="button" disabled={saving} onClick={() => void save()} className="shrink-0 rounded-md px-2 py-1 text-[12px] text-accent-text hover:bg-control">{t("settings.profile.save")}</button>
+            <RenameActions disabled={saving} onSave={() => void save()} onCancel={() => { setEditing(false); setError(false); }} />
           </>
         ) : (
           <>
