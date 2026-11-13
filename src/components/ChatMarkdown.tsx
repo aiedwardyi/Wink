@@ -11,12 +11,14 @@ import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy } from "lucide-react";
 import { LinkedFolderLink } from "./LinkedFolderSheet";
+import { FileMenu, type FileMenuAt } from "./MediaMenu";
 import { ReadableImage } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
 import { ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { linkedFileSrc, showItem, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
@@ -436,6 +438,7 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
   const { t } = useI18n();
   const [reason, setReason] = useState("");
   const [onPc, setOnPc] = useState("");
+  const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   const terminal = isTerminalSkin(useSkin());
   const text = useContext(MarkdownTextContext);
@@ -484,12 +487,11 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
     }
   };
 
-  const menu = (event: MouseEvent) => {
-    const fileMenu = window.ogb?.fileMenu;
-    if (!fileMenu) return;
+  const menu = (event: MouseEvent<HTMLElement>) => {
+    if (!window.ogb?.openFile) return;
     event.preventDefault();
     setReason("");
-    fileMenu(filePath, base).catch((error) => setReason(error instanceof Error ? error.message : "That file could not be opened"));
+    setMenuAt({ x: event.clientX, y: event.clientY, opener: event.currentTarget });
   };
 
   // A file this PC doesn't have would only fail in the pane; open it the link's way instead.
@@ -512,6 +514,7 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
       >
         {children}
       </button>}
+      <FileMenu at={menuAt} path={filePath} base={base} onOpen={() => void open()} onError={setReason} onClose={() => setMenuAt(null)} />
       {onPc
         ? <span data-file-on-pc className="block break-keep [overflow-wrap:anywhere]">{t("chat.fileLink.onOtherPc", { name: onPc })}</span>
         : reason && <span className={`ml-1.5 text-[12px] ${desktop ? "text-danger" : "text-ink-secondary"}`}>{reasonKey ? t(reasonKey) : reason}</span>}
@@ -715,7 +718,7 @@ function ChatMarkdownComponent({
     for (const child of root.current?.children ?? []) {
       if (!seen.current.has(child) && fade) child.animate?.(
         [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }],
-        { duration: 400, easing: "ease-out" },
+        { duration: MOTION_LARGE_MS, easing: EASE_STANDARD },
       );
       seen.current.add(child);
     }

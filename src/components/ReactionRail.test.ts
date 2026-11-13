@@ -122,7 +122,7 @@ describe("reaction rail", () => {
     const bar = reactionBarSource();
     expect(bar).toContain("size-7");
     expect(bar).toContain("rounded-full");
-    expect(bar).toContain("hover:scale-110");
+    expect(bar).not.toContain("hover:scale-110");
     expect(bar).toContain("setPickerOpen(false)");
     expect(bar).toContain("Escape");
     expect(bar).toContain("aria-expanded");

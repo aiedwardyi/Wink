@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, ImageOff, LoaderCircle, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
-import { reducedMotion } from "@/lib/phone-swipe";
+import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import {
   atFit, fitView, imageFrame, KEY_STEP, panBy, resizeView, toggleZoomAt,
@@ -285,7 +285,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   const settle = () => {
     const stage = stageRef.current;
     if (stage && (dismiss.current || swipeX.current) && !reducedMotion()) {
-      stage.animate?.([{ transform: `translate3d(${swipeX.current}px, ${dismiss.current}px, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration: 160, easing: "ease-out" });
+      stage.animate?.([{ transform: `translate3d(${swipeX.current}px, ${dismiss.current}px, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration: SWIPE_MOTION_MS, easing: SWIPE_SPRING });
     }
     dismiss.current = 0;
     swipeX.current = 0;

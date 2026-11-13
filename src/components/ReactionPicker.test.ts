@@ -262,7 +262,7 @@ async function mount(anchorBottom: number, next: Layout = DESK) {
   await act(async () => {
     host.querySelector("button")?.click();
   });
-  const picker = document.querySelector("[data-reaction-picker]");
+  const picker = document.querySelector("[data-reaction-picker]:not([data-closing])");
   if (!(picker instanceof HTMLElement)) throw new Error("picker did not open");
   return { host, picker };
 }
@@ -300,7 +300,7 @@ async function mountPair(anchorBottom: number, next: Layout = DESK) {
 }
 
 function openPickers() {
-  return document.querySelectorAll("[data-reaction-picker]");
+  return document.querySelectorAll("[data-reaction-picker]:not([data-closing])");
 }
 
 function mousedown(target: Element) {
@@ -338,7 +338,7 @@ describe("reaction picker dismiss scoping", () => {
     await act(async () => {
       triggers[0].click();
     });
-    const button = document.querySelector("[data-reaction-picker] button");
+    const button = document.querySelector("[data-reaction-picker]:not([data-closing]) button");
     if (!button) throw new Error("picker did not open");
     await mousedown(button);
     expect(openPickers()).toHaveLength(1);
@@ -364,7 +364,7 @@ describe("reaction picker focus", () => {
     await act(async () => {
       triggers[0].click();
     });
-    const picker = document.querySelector("[data-reaction-picker]");
+    const picker = document.querySelector("[data-reaction-picker]:not([data-closing])");
     expect(picker?.contains(document.activeElement)).toBe(true);
   });
 
@@ -385,7 +385,7 @@ describe("reaction picker focus", () => {
     await act(async () => {
       triggers[0].click();
     });
-    const button = document.querySelector("[data-reaction-picker] button");
+    const button = document.querySelector("[data-reaction-picker]:not([data-closing]) button");
     if (!(button instanceof HTMLButtonElement)) throw new Error("picker did not open");
     await act(async () => {
       button.click();
@@ -479,7 +479,7 @@ describe("reaction picker reachability", () => {
     await act(async () => {
       host.dispatchEvent(new Event("scroll"));
     });
-    expect(document.querySelector("[data-reaction-picker]")).toBeNull();
+    expect(document.querySelector("[data-reaction-picker]:not([data-closing])")).toBeNull();
   });
 });
 
@@ -516,7 +516,7 @@ describe("reaction picker at the 600x480 floor", () => {
     await act(async () => {
       host.dispatchEvent(new Event("scroll"));
     });
-    expect(document.querySelector("[data-reaction-picker]")).toBeNull();
+    expect(document.querySelector("[data-reaction-picker]:not([data-closing])")).toBeNull();
   });
 
   it("takes the roomier side and stays on screen when the window itself is too short", async () => {

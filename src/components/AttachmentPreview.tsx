@@ -73,7 +73,7 @@ function Thumbnail({ image, onPreview }: { image: PreviewImage; onPreview: (open
         alt={image.name}
         loading="lazy"
         onError={retry.onError}
-        className="block max-h-[220px] w-full object-cover transition-transform duration-200 group-hover/image:scale-[1.015]"
+        className="block max-h-[220px] w-full object-cover transition-transform group-hover/image:scale-[1.015]"
       />
       <span className="absolute right-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-visible/image:opacity-100">
         <Maximize2 size={13} />

@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
+import { usePresence } from "@/lib/use-presence";
 import { alreadyInLanguage, useRoomTranslation, useTranslationAvailable } from "@/lib/room-translate";
 import type { PreviewImage } from "@/lib/media-viewer";
 import { isRoomPicture, ownerName, roomFileUrl, roomMessage, type JoinedPerson, type RoomFile, type RoomLine } from "@/lib/team-rooms";
@@ -50,7 +51,7 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
               rel="noreferrer"
               aria-label={t("viewer.download", { name: file.name })}
               title={t("viewer.downloadTitle")}
-              className="block rounded-lg hover:bg-raised/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="block rounded-lg hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
             </a>
@@ -192,7 +193,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
               title={t(translation.visible ? "teamRoom.showOriginal" : "teamRoom.translate")}
               aria-pressed={translation.visible}
               onClick={translation.toggle}
-              className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="flex size-8 items-center justify-center rounded-lg text-ink-secondary hover:bg-raised hover:text-ink"
             ><Languages size={16} /></button>}
           </span>}
           <div
@@ -233,6 +234,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
 }) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   const byId = useMemo(() => new Map(lines.map((line) => [line.id, line])), [lines]);
   const fileState = useRoomFilesState(base);
   const canTranslate = useTranslationAvailable(base);
@@ -300,15 +302,17 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   }, [fill]);
   return (
     <MediaViewerProvider threadId={base} messages={media}>
-      {menu?.kind === "message" && <MessageMenu
-        {...menu}
+      {shownMenu?.kind === "message" && <MessageMenu
+        key={`${shownMenu.x},${shownMenu.y}`}
+        {...shownMenu}
+        closing={menuClosing}
         onReply={onReply}
         onPin={(message) => notice?.set?.(notice.entryId === (message.roomEntryId ?? message.id) ? null : message.roomEntryId ?? message.id)}
-        onReact={onReact && ((emoji) => onReact(menu.target.message, emoji))}
+        onReact={onReact && ((emoji) => onReact(shownMenu.target.message, emoji))}
         onClose={() => setMenu(null)}
       />}
       {notice?.entryId && <RoomNotice base={base} line={lines.find((line) => (line.entryId ?? line.id) === notice.entryId)} text={notice.text} onJump={jump} />}
-      {menu?.kind === "selection" && <SelectionMenu {...menu} onClose={() => setMenu(null)} />}
+      {shownMenu?.kind === "selection" && <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} {...shownMenu} closing={menuClosing} onClose={() => setMenu(null)} />}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}

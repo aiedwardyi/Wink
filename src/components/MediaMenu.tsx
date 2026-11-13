@@ -1,17 +1,17 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, FolderOpen, Trash2, type LucideIcon } from "lucide-react";
+import { Copy, Download, ExternalLink, FolderOpen, Trash2, type LucideIcon } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { cn } from "@/lib/cn";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { MediaFile } from "@/lib/show-media";
-import { saveFile } from "@/lib/show-pane";
+import { saveFile, showName } from "@/lib/show-pane";
 import { hostRoomBase } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { Presence } from "@/lib/use-presence";
+import { Presence, usePresence } from "@/lib/use-presence";
 
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HOLD_MS, HOLD_SLOP, MENU_CLASS, menuKeyDown } from "./MessageMenu";
@@ -85,6 +85,7 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
   const copyable = !probe || readable === menu?.file;
   const actions = menu ? actionsFor(menu.file, roomId, localPath, readOnly, copyable) : [];
   useBackLayer(actions.length > 0, () => setMenu(null));
+  const { value: visible, closing } = usePresence(menu && actions.length > 0 ? { ...menu, actions } : null);
 
   useEffect(() => {
     const el = frame.current;
@@ -226,21 +227,21 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
   };
 
   return <>
-    {menu && actions.length > 0 && createPortal(
-      <div ref={box} role="menu" aria-label={menu.file.name} style={place} className={cn(MENU_CLASS, "z-[60] min-w-44")} onKeyDown={(event) => menuKeyDown(box, event)}>
-        {actions.map((action, n) => {
+    {visible && createPortal(
+      <div key={`${visible.x},${visible.y}`} ref={box} role="menu" aria-label={visible.file.name} data-closing={closing || undefined} inert={closing} style={place} className={cn(MENU_CLASS, "z-[60] min-w-44")} onKeyDown={(event) => menuKeyDown(box, event)}>
+        {visible.actions.map((action, n) => {
           const [label, Icon] = LABELS[action];
           return (
             <Fragment key={action}>
-              {action === "delete" && n > 0 && <div role="separator" className="my-1 border-t border-hairline/50" />}
-              <button type="button" role="menuitem" autoFocus={n === 0} onClick={() => run(action, menu.file)}
+              {action === "delete" && n > 0 && <div role="separator" className="mx-2 my-1 border-t border-hairline/40" />}
+              <button type="button" role="menuitem" autoFocus={n === 0} onClick={() => run(action, visible.file)}
                 className={cn(ITEM, MENU_ITEM_HOVER, action === "delete" ? "text-danger" : "text-ink")}>
                 <Icon size={16} />{t(label)}
               </button>
             </Fragment>
           );
         })}
-        {imageFailed?.file === menu.file && <p role="alert" className="max-w-56 px-3.5 py-2 text-[12px] text-danger">{t(imageFailed.action === "copy" ? "show.copyImageFailed" : "show.saveImageFailed")}</p>}
+        {imageFailed?.file === visible.file && <p role="alert" className="max-w-56 px-3.5 py-2 text-[12px] text-danger">{t(imageFailed.action === "copy" ? "show.copyImageFailed" : "show.saveImageFailed")}</p>}
       </div>, document.body)}
     <Presence open={deleting !== null}>
       {(leaving) => <ConfirmDialog closing={leaving} title={t("teamRoom.deleteFileTitle")} body={deleting?.name} confirmLabel={t("teamRoom.deleteFile")} confirmDisabled={busy} onConfirm={() => void remove()} onCancel={() => setDeleting(null)}>
@@ -248,4 +249,80 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
       </ConfirmDialog>}
     </Presence>
   </>;
+}
+
+type FileAction = "open" | "show" | "save" | "copyPath";
+const FILE_LABELS = { open: ["show.open", ExternalLink], show: ["show.showInFolder", FolderOpen], save: ["show.saveAs", Download], copyPath: ["chat.fileLink.copyPath", Copy] } satisfies Record<FileAction, [MessageKey, LucideIcon]>;
+
+export type FileMenuAt = { x: number; y: number; opener: HTMLElement };
+
+/** A chat file link's right-click menu, the Show pane's look with the native file menu's actions. */
+export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: FileMenuAt | null; path: string; base?: string; onOpen: () => void; onError?: (reason: string) => void; onClose: () => void }) {
+  const { t } = useI18n();
+  const box = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState({ top: 0, left: 0 });
+  const [localPath, setLocalPath] = useState<string | null>(null);
+  const { value: shown, closing } = usePresence(at);
+
+  useEffect(() => {
+    if (!at) return;
+    setLocalPath(null);
+    let alive = true;
+    // null for a folder or a missing file, so Save as stays off for both
+    void window.ogb?.localMediaFile?.({ path }).then((file) => { if (alive) setLocalPath(file); }, () => {});
+    return () => { alive = false; };
+  }, [at, path]);
+
+  useEffect(() => {
+    if (!at) return;
+    const inside = (event: Event) => event.target instanceof Node && Boolean(box.current?.contains(event.target));
+    const outside = (event: Event) => { if (!inside(event)) onClose(); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+      at.opener.focus({ preventScroll: true });
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    document.addEventListener("scroll", outside, true);
+    window.addEventListener("blur", onClose);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+      document.removeEventListener("scroll", outside, true);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [at, onClose]);
+
+  useLayoutEffect(() => {
+    if (!at || !box.current) return;
+    const { offsetWidth: width, offsetHeight: height } = box.current;
+    setPlace({ top: Math.max(EDGE, Math.min(at.y, window.innerHeight - height - EDGE)), left: Math.max(EDGE, Math.min(at.x, window.innerWidth - width - EDGE)) });
+  }, [at, localPath]);
+
+  if (!shown) return null;
+  const actions: FileAction[] = ["open"];
+  if (window.ogb?.showInFolder) actions.push("show");
+  if (localPath && window.ogb?.saveFile) actions.push("save");
+  actions.push("copyPath");
+  const run = (action: FileAction) => {
+    onClose();
+    shown.opener.focus({ preventScroll: true });
+    if (action === "open") onOpen();
+    else if (action === "show") void window.ogb?.showInFolder?.(path, base).catch((error) => onError?.(error instanceof Error ? error.message : "That file could not be opened"));
+    else if (action === "save") void window.ogb?.saveFile?.(localPath!).catch(() => {});
+    else void navigator.clipboard?.writeText(localPath ?? path).catch(() => {});
+  };
+  return createPortal(
+    <div key={`${shown.x},${shown.y}`} ref={box} role="menu" aria-label={showName(path)} data-file-menu="" data-closing={closing || undefined} inert={closing} style={place} className={cn(MENU_CLASS, "z-[60] min-w-44")} onKeyDown={(event) => menuKeyDown(box, event)}>
+      {actions.map((action, n) => {
+        const [label, Icon] = FILE_LABELS[action];
+        return (
+          <button key={action} type="button" role="menuitem" autoFocus={n === 0} onClick={() => run(action)} className={cn(ITEM, MENU_ITEM_HOVER, "text-ink")}>
+            <Icon size={16} />{t(label)}
+          </button>
+        );
+      })}
+    </div>, document.body);
 }

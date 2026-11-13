@@ -6,11 +6,11 @@ import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { placeTooltip } from "@/lib/tooltip-position";
-import { TOOLTIP_SHOW_MS } from "@/lib/tooltips";
+import { PLAIN_TOOLTIP_CLASS, TOOLTIP_SHOW_MS } from "@/lib/tooltips";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import type { InstanceInfo } from "@/state/store";
-import { HOLD_MS, HOLD_SLOP, MENU_CLASS } from "./MessageMenu";
+import { HOLD_MS, HOLD_SLOP } from "./MessageMenu";
 import { ProviderMark } from "./ProviderIcons";
 
 const OWNS_TAP = "button, a[href], [role='button'], [role='tab'], [tabindex]:not([tabindex='-1'])";
@@ -197,7 +197,7 @@ function EngineHover({ text, label, children, tapToShow }: { text: string; label
           data-engine-card=""
           data-closing={presence.closing || undefined}
           style={place ? { top: place.top, left: place.left } : { top: 0, left: 0, visibility: "hidden" }}
-          className={cn(MENU_CLASS, "pointer-events-none z-[70] max-w-[min(20rem,calc(100vw-1rem))] px-3.5 py-2 text-[14px] leading-snug text-ink [overflow-wrap:anywhere]")}
+          className={cn(PLAIN_TOOLTIP_CLASS, "[overflow-wrap:anywhere]")}
         >
           {text}
         </div>,
