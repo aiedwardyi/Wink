@@ -238,6 +238,8 @@ export function Composer({
   const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
     Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+  // only a line that member alone would answer joins its turn
+  const roomSteers = (message: string) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
@@ -503,7 +505,7 @@ export function Composer({
   const imageTargetsSupport = (message: string, after = false) => {
     if (room) return "supported";
     const responders = group
-      ? roomRespondersForComposer(message, members ?? [], group)
+      ? busy && !after && steerBot && roomSteers(message) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group)
       : bot
         ? [{ modelSelection: modelForNextSend(bot, { busy, canSteer: canSteer && !after }) }]
         : [];
@@ -620,7 +622,7 @@ export function Composer({
         copyText: entry.text, user: true, pinned: false, canPin: false,
         queued: {
           cancel: () => dropQueued(entry.draft.sendId),
-          sendNow: group && canSteer && roomLineSteers(entry.text, members ?? [], group.busyBotId) ? () => {
+          sendNow: group && roomSteers(entry.text) ? () => {
             // the hold may have flushed while its menu was open
             if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
             dropQueued(entry.draft.sendId);
@@ -673,7 +675,7 @@ export function Composer({
     : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
-  const busyChrome = composerBusyChrome({ busy, canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
+  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
@@ -743,7 +745,7 @@ export function Composer({
       locked: sendBlocked,
       isRoom: Boolean(group),
       busy,
-      canSteer: Boolean(group && canSteer && roomLineSteers(composerSendSourceText(inputRef.current?.value, text), members ?? [], group.busyBotId)),
+      canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
       after,
       heldCount: queuedRef.current.length,
     });

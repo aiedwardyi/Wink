@@ -112,6 +112,8 @@ describe("busy room Enter", () => {
 
   it("holds a line for another bot until the room settles", async () => {
     const ui = await mount([scout, pixel], room(scout.id, [scout.id, pixel.id]));
+    await ui.type("@Pixel take a look");
+    expect(ui.host.querySelector("button[aria-label='Send message']")).not.toBeNull();
     await ui.send("@Pixel take a look");
     expect(ui.sent()).toEqual([]);
     expect(ui.holds()).toBe(1);

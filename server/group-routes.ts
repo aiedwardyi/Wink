@@ -74,6 +74,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     closeOpenApprovals,
     releaseInterruptedBot,
   } = deps;
+  // a Stop that lands while a room send awaits its steer
+  const roomStops = new Map<string, number>();
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => store.bot(id)!), people);
   /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
   const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
@@ -440,8 +442,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const message = (await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId))
-            ?? startGroupTurn(current.id, text, replyTo, sendId);
+          const stops = roomStops.get(current.id);
+          const steered = await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId);
+          // a Stop during the steer await hands the line back, as a 1:1 Send now
+          if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId);
           return { ok: true as const, threadId, message };
         },
       );
@@ -464,6 +469,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       // Mark the whole room operation cancelled before awaiting the provider.
       // This covers setup-before-busy and responder handoffs, and makes every
       // queued responder observe cancellation before it can start.
+      roomStops.set(group.id, (roomStops.get(group.id) ?? 0) + 1);
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);

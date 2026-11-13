@@ -1,7 +1,11 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderInstance } from "./contracts.ts";
+import { createGroupRoutes } from "./group-routes.ts";
 import { steerRoomSend } from "./room-steer.ts";
+import { SendSequencer } from "./send-idempotency.ts";
 import type { BotRecord, GroupRecord, Message } from "./store.ts";
 
 const bot = (id: string, name: string, busy: boolean) => ({ id, name, busy, threadId: `t-${id}` }) as BotRecord;
@@ -60,5 +64,33 @@ describe("steerRoomSend", () => {
     const { deps, group, rows } = setup({ settles: true });
     await expect(steerRoomSend(deps, group, "too late")).rejects.toMatchObject({ status: 409 });
     expect(rows).toEqual([]);
+  });
+});
+
+describe("room send route", () => {
+  it("hands the line back when a Stop lands during the steer", async () => {
+    const { deps, group } = setup();
+    const room = { ...group, dm: true };
+    const startGroupTurn = vi.fn();
+    const routes = createGroupRoutes({
+      ...deps,
+      store: { ...deps.store, group: () => room, messagesFor: () => [] },
+      instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer: async () => {
+        room.busyBotId = null;
+        await routes.interrupt(Readable.from([]) as unknown as IncomingMessage, { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);
+        return false;
+      } } }),
+      sendSequencer: new SendSequencer(),
+      resolveReplyTarget: () => undefined,
+      startGroupTurn,
+      cancelGroupTurnOperations: vi.fn(),
+      taskResumes: { forgetThread: vi.fn() },
+      closeOpenApprovals: vi.fn(),
+    } as unknown as Parameters<typeof createGroupRoutes>[0]);
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    const body = JSON.stringify({ text: "also the tests", sendId: "send-0123456789abcdef" });
+    await routes.postMessage(Readable.from([body]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);
+    expect(startGroupTurn).not.toHaveBeenCalled();
+    expect(JSON.parse(res.end.mock.calls[0][0])).toMatchObject({ cancelled: true });
   });
 });
