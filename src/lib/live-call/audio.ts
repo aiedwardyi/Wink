@@ -103,6 +103,11 @@ export class CallAudio {
     return Math.min(1, 4 * (mic && this.mic ? Math.max(voice, this.rms(this.mic)) : voice));
   }
 
+  /** Raw loudness of the mic alone; 0 before capture. */
+  micLevel(): number {
+    return this.mic ? this.rms(this.mic) : 0;
+  }
+
   private rms(node: AnalyserNode): number {
     node.getFloatTimeDomainData(this.samples);
     let sum = 0;
