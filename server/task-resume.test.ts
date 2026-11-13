@@ -276,6 +276,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const groupStopDeps = {
     store, taskResumes,
     readBody: async () => ({}),
+    roomStops: new Map(),
     cancelGroupTurnOperations: () => operations.forEach((operation) => { operation.cancelled = true; }),
     cancelQueuedRoomParticipations: noop,
     registry: { get: () => undefined },
