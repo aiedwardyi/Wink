@@ -71,7 +71,7 @@ export function pickerRows(instances: InstanceInfo[], current: ModelSelection, p
     if (instance.driverKind === "antigravityAgent") {
       cells = [
         ...GEMINI_4.flatMap(([id, label]) => {
-          const options = catalog.filter((option) => new RegExp(`^${id}-(high|medium|low)$`).test(option.id));
+          const options = catalog.filter((option) => new RegExp(`^${id.replace(/\./g, "\\.")}-(high|medium|low)$`).test(option.id));
           return options.length ? [{ label, options }] : [];
         }),
         ...GEMINI_VERSIONS.flatMap((version) => {

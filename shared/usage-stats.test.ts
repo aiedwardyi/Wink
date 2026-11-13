@@ -199,6 +199,7 @@ describe("lists", () => {
     expect([...EFFORTS]).toEqual([...EFFORT_LEVELS, "auto"]);
     expect(ENGINES).toEqual(expect.arrayContaining(BUILT_IN_DRIVERS.map((driver) => driver.driverKind)));
     // Hydrogen waits for a relay deploy: the live relay drops events with a model it does not list, the app sends "custom".
+    // TODO: when Hydrogen joins MODELS, ship the relay with it and drop `pending` and the not.toContain below.
     const pending = new Set(["gemini-4-hydrogen"]);
     expect(MODELS).toEqual(expect.arrayContaining([...PICKER_MODEL_IDS, ...MODEL_INDEX_ENTRIES.map((entry) => entry.model)].filter((id) => !pending.has(id))));
     expect(MODELS).not.toContain("gemini-4-hydrogen");
