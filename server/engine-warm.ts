@@ -30,7 +30,11 @@ export async function warmEngines(input: {
     while (input.busy() || (input.settled && !input.settled(since))) await wait(IDLE_POLL_MS);
     const instance = input.instance(row.instanceId);
     if (!instance?.enabled || !instance.prepare || (input.admit && !input.admit(instance.driverKind))) continue;
-    if (await instance.prepare().then(() => true, () => false)) warmed.push(row.instanceId);
+    const ok = await instance.prepare().then(() => true, (error: unknown) => {
+      console.error(`[warm] ${row.instanceId} warm failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    });
+    if (ok) warmed.push(row.instanceId);
   }
   return warmed;
 }

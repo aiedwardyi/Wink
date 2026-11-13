@@ -98,9 +98,9 @@ describe("createSignInWarm", () => {
 
   it("runs one sign-in warm at a time", async () => {
     let open = 0;
+    let most = 0;
     const prepare = vi.fn(async () => {
-      open++;
-      expect(open).toBe(1);
+      most = Math.max(most, ++open);
       await new Promise((resolve) => setTimeout(resolve, 5));
       open--;
     });
@@ -111,8 +111,8 @@ describe("createSignInWarm", () => {
     });
     warm.arm([]);
     const first = warm.observe([row("muse")]);
-    await Promise.all([first, warm.observe([row("grok")])]);
-    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(await Promise.all([first, warm.observe([row("grok")])])).toEqual([["muse"], ["grok"]]);
+    expect(most).toBe(1);
   });
 });
 
