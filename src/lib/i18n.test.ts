@@ -188,7 +188,7 @@ describe("catalogs", () => {
 
   it("substitutes template values across different runtime values", () => {
     const phrases = [
-      ["composer.roomLead", "{name}에 메시지"],
+      ["composer.roomLead", "{name}에게 메시지 보내기"],
       ["room.hint.lead", "답변할 봇을 고르려면 @로 언급하세요."],
       ["chat.conversationAria", "대화 상대: {name}"],
       ["palette.noMatch", "“{query}” 검색 결과가 없습니다"],

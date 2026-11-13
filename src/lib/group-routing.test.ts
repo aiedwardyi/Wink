@@ -58,7 +58,7 @@ describe("group chrome phrases", () => {
     expect(everyone).toBe(translate("ko", "composer.roomEveryone", { name: "Launch" }));
     expect(everyone).not.toMatch(/everyone responds|Message Launch/i);
     const lead = groupComposerHint({ ...room, defaultResponder: { kind: "member", botId: "atlas" } satisfies { kind: "member"; botId: string } }, members, t);
-    expect(lead).toBe("Launch에 메시지");
+    expect(lead).toBe("Launch에게 메시지 보내기");
     expect(lead).toContain("Launch");
     expect(lead).not.toMatch(/Atlas responds/i);
   });
@@ -72,7 +72,7 @@ describe("group chrome phrases", () => {
       { ...room, defaultResponder: { kind: "member" as const, botId: "atlas" } },
     ];
     for (const group of modes) {
-      expect(groupComposerHint(group, members, t)).toBe(locale === "en" ? "Message Launch" : "Launch에 메시지");
+      expect(groupComposerHint(group, members, t)).toBe(locale === "en" ? "Message Launch" : "Launch에게 메시지 보내기");
     }
   });
 });

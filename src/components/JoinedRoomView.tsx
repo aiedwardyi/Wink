@@ -11,6 +11,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
 import { RoomTitle } from "./RoomTitle";
@@ -86,6 +87,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         <RoomTitle name={name} picture={<RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />} disabled={!room?.state} />
         {room && joined && <RoomAlertsBell chat={joinedSelection(roomId)} />}
       </div>
+      <AppErrorBanner />
       <TeamRoomTranscript
         key={base}
         lines={lines}
