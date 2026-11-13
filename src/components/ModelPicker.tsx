@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { lazy, Suspense, useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Atom, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Hexagon, Leaf, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
 import { shownModelSelection, useStore, type Bot, type ModelSelection } from "@/state/store";
@@ -25,6 +25,8 @@ import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } fr
 import { ModelChart } from "./ModelChart";
 import "./ModelPicker.css";
 import { switchVia, trackScreen } from "@/lib/usage-stats";
+
+const ModelMachine = lazy(() => import("./ModelMachine"));
 
 const EFFORT_EDGE_CLEARANCE = 130 / 2 + 38; // Half the horizontal step plus chevron clearance.
 
@@ -66,6 +68,7 @@ export function ModelPickerControl({
   const [draftSelection, setDraft] = useState(selection);
   const draft = withPickerEffort(state.instances.find((instance) => instance.instanceId === draftSelection.instanceId), draftSelection);
   const [customOpen, setCustomOpen] = useState(false);
+  const [machine, setMachine] = useState(false);
   useBackLayer(open && customOpen, () => setCustomOpen(false));
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
@@ -137,6 +140,7 @@ export function ModelPickerControl({
     trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : "model-dial") : "model-picker");
     setDraft(selection);
     setCustomOpen(false);
+    setMachine(false);
     setView(next);
     if (next !== "list") setStyle(next);
     setQuery("");
@@ -350,6 +354,12 @@ export function ModelPickerControl({
           if (presence.closing) return;
           event.stopPropagation();
           if (event.nativeEvent.isComposing) return;
+          if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.repeat && event.code === "KeyM") {
+            event.preventDefault();
+            setMachine(!machine);
+            if (machine) dialogRef.current?.focus();
+            return;
+          }
           if ((dialView || chartView) && dialRef.current?.key(event)) return;
           if (event.key === "Escape" || (event.altKey && !event.ctrlKey && !event.shiftKey && event.code === "KeyM")) {
             event.preventDefault();
@@ -493,6 +503,9 @@ export function ModelPickerControl({
           <button data-picker-action type="button" className="model-cross-binding" onClick={close}><kbd>Esc</kbd>{t("createBot.cancel")}</button>
         </footer>
         </>}
+        {machine && <Suspense fallback={null}>
+          <ModelMachine rows={rows} draft={draft} current={selection} canCommit={canCommit} onDraft={pick} onSave={save} onClose={() => { setMachine(false); dialogRef.current?.focus(); }}>{setup}</ModelMachine>
+        </Suspense>}
       </div>
     </div>
   );
