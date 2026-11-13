@@ -76,7 +76,6 @@ const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
 const PROSE_NAMES = ["wifi password", "password", "passcode", "pin", "code", "passphrase", "비밀번호"];
 const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|pin|code|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
-// All-letter codes overlap ordinary words, so only mixed letter/digit codes are masked.
 const ROOM_CODE = /(?<![\p{L}\p{N}_])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
 
 const CODE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\??\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -313,7 +312,7 @@ function secretPrefixStart(text: string, start: number): number {
   for (let i = 0; i < text.length; i++) {
     const suffix = text.slice(i);
     if (couldBePemBegin(suffix) || couldBeConfigKey(suffix)) return i;
-    if ((i === 0 || !WORD_CHAR.test(text[i - 1]!)) && couldBeProseSecret(suffix)) return i;
+    if ((suffix.startsWith("비") || i === 0 || !WORD_CHAR.test(text[i - 1]!)) && couldBeProseSecret(suffix)) return i;
     if (!atWordBoundary(text, i)) continue;
     if (couldBeKeyPrefix(suffix) || couldBeBearer(suffix) || couldBeKeyValue(suffix) || (i >= start && /^[2-9A-HJ-NP-Z]{1,6}$/.test(suffix))) return i;
   }
@@ -498,14 +497,15 @@ function redactText(text: string, start: number): string {
     const trimmed = body.trim();
     return trimmed ? `${open}\n${pemMask(body)}` : open;
   });
+  // wkr1: is a public URI prefix; its wki_ credential is masked separately.
+  out = out.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
+    (!quote && /^(?:in|leave)$/i.test(value)) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
   for (const re of KEY_PREFIXES) out = out.replace(re, (m) => mask(m));
   out = out.replace(BEARER, (_m, lead: string, tok: string) => `${lead}${mask(tok)}`);
   out = out.replace(KEY_VALUE, (m: string, key: string, sep: string, quote: string, value: string, at: number, all: string) =>
     isCodeValue(quote, value, all, at + m.length) ? m : `${key}${sep}${quote}${mask(value)}${quote}`);
   out = out.replace(CONFIG_KEY_FIELD, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${mask(value)}${quote}`);
   out = out.replace(ROOM_CODE, (value: string, at: number) => at >= start && /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
-  out = out.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
-    (!quote && /^(?:in|leave)$/i.test(value)) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
   return out;
 }
 

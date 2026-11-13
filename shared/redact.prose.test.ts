@@ -17,6 +17,10 @@ const secrets = [
   ['passcode = "1234"', "1234"],
   ["비밀번호는 bluefish42", "bluefish42"],
   ["비밀번호: 4471", "4471"],
+  ["WiFi비밀번호는 bluefish42", "bluefish42"],
+  ['password is "abc-K7PQ2M-def"', "abc-K7PQ2M-def"],
+  ["password is abc-K7PQ2M-def", "abc-K7PQ2M-def"],
+  ['passphrase is "abc-sk-ant-abcdefghijklmnop-def"', "abc-sk-ant-abcdefghijklmnop-def"],
   ["K7PQ2M", "K7PQ2M"],
   ["join (2ABCDE)!", "2ABCDE"],
 ];
@@ -43,6 +47,7 @@ const ordinary = [
   "password = getpass.getpass()",
   'password = request.form["password"]',
   "password = $DB_PASSWORD",
+  "code is wkr1:pc.relay.example:inv-1",
 ];
 
 describe("prose secrets and room codes", () => {
