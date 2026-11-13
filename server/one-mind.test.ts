@@ -41,6 +41,12 @@ describe("search_my_chats", () => {
     expect(text).toContain("You replied: Got it: starzum.com landing page");
   });
 
+  it("finds a line behind newer tool rows that repeat the word", () => {
+    const { store, rando } = starzum();
+    for (let run = 0; run < 50; run++) store.appendMessage(rando.threadId, { role: "bot", kind: "activity", tool: { name: `deploy starzum.com ${run}`, ok: true } });
+    expect(searchOwnerChats(store, ownerChats(rando, new Set()), "starzum", "Edward")).toContain("Edward: Plan for starzum.com");
+  });
+
   it("ranks by words when the phrase never appears together", () => {
     const { store, rando } = starzum();
     expect(searchOwnerChats(store, ownerChats(rando, new Set()), "starzum launch plan", "Edward")).toContain("Plan for starzum.com");
@@ -149,6 +155,26 @@ describe("room echo", () => {
     expect(roomEchoesSinceLastUserTurn(store.activePath(rando.threadId), new Set(), "Edward", rando.threadId)).toHaveLength(1);
     roomEchoesTaken(store, event(rando.threadId, "content.delta"));
     expect(roomEchoesSinceLastUserTurn(store.activePath(rando.threadId), new Set(), "Edward")).toEqual([]);
+  });
+
+  it("stays pending past a turn that ended before the model answered", () => {
+    const { store, rando, room, since, say } = roomTurn();
+    writeRoomEcho(store, rando, room, room.threadId, since, "Edward");
+    say(rando.threadId, "user", "first try");
+    roomEchoesSinceLastUserTurn(store.activePath(rando.threadId), new Set(), "Edward", rando.threadId);
+    roomEchoesTaken(store, event(rando.threadId, "turn.completed"));
+    const retry = say(rando.threadId, "user", "retry");
+    expect(roomEchoesSinceLastUserTurn(store.activePath(rando.threadId), new Set([retry.id]), "Edward").join("")).toContain("Landing page with a waitlist");
+  });
+
+  it("pairs the answer with the ask the turn was bound to", () => {
+    const w = world();
+    const room = w.store.createGroup("New group", [w.rando.id]);
+    const ask = w.say(room.threadId, "user", "@Rando what's the starzum plan?", { author: { kind: "person", id: "p1", name: "Mina" } });
+    w.say(room.threadId, "user", "lunch at noon?", { author: { kind: "person", id: "p2", name: "Joe" } });
+    const since = w.store.messagesFor(room.threadId).length;
+    w.say(room.threadId, "bot", "Landing page with a waitlist.");
+    expect(writeRoomEcho(w.store, w.rando, room, room.threadId, since, "Edward", ask.id)!.text).toContain("Mina said: \"@Rando what's the starzum plan?\"");
   });
 
   it("is nothing with no room activity", () => {

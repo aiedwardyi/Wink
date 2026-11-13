@@ -8,7 +8,6 @@ import { estimateContextTokens, isFallbackSummary } from "./context-compaction.t
 import type { RuntimeEvent } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { searchMessages, type SearchHit } from "./message-db.ts";
-import { endsNoteWindow } from "./pane-wake.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "./store.ts";
 
@@ -16,6 +15,7 @@ export const SEARCH_TOOL = "search_my_chats";
 export const SEARCH_CHIP = "Searched your 1:1: ";
 const QUERY_CHARS = 200;
 const HITS = 6;
+const PAGE = 40;
 const HIT_CHARS = 700;
 const REPLY_CHARS = 500;
 const TOPICS = 20;
@@ -41,8 +41,19 @@ export function hasOwnerChat(store: Pick<Store, "messagesFor">, threads: readonl
   return threads.some((id) => store.messagesFor(id).some(said));
 }
 
+// one chat's search is newest first with tool rows mixed in; page past them so they never crowd out a line
+function textHits(needle: string, threadId: string): SearchHit[] {
+  const hits: SearchHit[] = [];
+  for (let before: string | undefined; ;) {
+    const page = searchMessages(needle, PAGE, threadId, { before });
+    hits.push(...page.filter((hit) => hit.kind === "text"));
+    if (hits.length >= HITS || page.length < PAGE) return hits.slice(0, HITS);
+    before = page.at(-1)!.messageId;
+  }
+}
+
 function hitsFor(threads: readonly string[], query: string): SearchHit[] {
-  const text = (needle: string) => threads.flatMap((id) => searchMessages(needle, HITS, id)).filter((hit) => hit.kind === "text");
+  const text = (needle: string) => threads.flatMap((id) => textHits(needle, id));
   const phrase = text(query);
   if (phrase.length) return phrase.sort((a, b) => b.at - a.at).slice(0, HITS);
   // a model asks in words, the chat said them apart: rank by how many of the words a line holds
@@ -108,12 +119,14 @@ export function writeRoomEcho(
   roomThreadId: string,
   since: number,
   owner: string,
+  askId?: string,
 ): Message | null {
   const rows = store.messagesFor(roomThreadId);
   const own = (message: Message) => message.role === "bot" && message.from?.botId === bot.id;
   const answer = rows.slice(since).filter((message) => own(message) && said(message) && !message.queued && !message.quick && !message.comm).map((message) => message.text!.trim()).join("\n\n");
   if (!answer) return null;
-  const asked = rows.slice(0, since).findLast((message) => said(message) && !own(message));
+  const before = rows.slice(0, since);
+  const asked = (askId ? before.find((message) => message.id === askId && said(message)) : undefined) ?? before.findLast((message) => said(message) && !own(message));
   const asker = !asked ? owner : asked.role === "user" ? (asked.author?.name ?? owner) : (asked.from?.name ?? "A bot");
   const text = [
     `In ${JSON.stringify(group.name)}${asked ? `, ${asker} said: ${JSON.stringify(clip(asked.text!.trim(), ECHO_ASK))}` : ""}`,
@@ -134,16 +147,15 @@ export function roomEchoesSinceLastUserTurn(messages: readonly Message[], exclud
   let more = 0;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
-    if (excludeIds.has(message.id)) continue;
-    if (endsNoteWindow(message)) break;
-    if (!message.roomEcho || message.roomEcho.noted || !message.text?.trim()) continue;
+    // an echo waits for a turn that took it, not for the next user row: a failed turn leaves it pending
+    if (excludeIds.has(message.id) || !message.roomEcho || message.roomEcho.noted || !message.text?.trim()) continue;
+    ids.push(message.id);
     tokens += estimateContextTokens([{ text: message.text }]);
     if (tokens > ECHO_TOKENS) {
       more++;
       continue;
     }
     echoes.unshift(message.text);
-    ids.push(message.id);
   }
   if (turnThreadId) carried.set(turnThreadId, ids);
   if (!echoes.length) return [];

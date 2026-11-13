@@ -63,7 +63,7 @@ import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { joinedRooms, myRoomBotThreads } from "./rooms/joined.ts";
+import { joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -2008,6 +2008,8 @@ function routineThreadIds(): Set<string> {
 function sideThreadIds(): Set<string> {
   return new Set([...routineThreadIds(), ...myRoomBotThreads()]);
 }
+
+const notOwnerChats = () => new Set([...routineThreadIds(), ...roomTaskThreads()]);
 
 const pendingSyncFollows = new Set<string>();
 
@@ -6647,7 +6649,7 @@ async function runClaimedGroupMemberTurn(
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
-  const owned = group.dm ? [] : ownerChats(bot, sideThreadIds());
+  const owned = group.dm ? [] : ownerChats(bot, notOwnerChats());
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable);
@@ -6880,7 +6882,7 @@ async function runClaimedGroupMemberTurn(
   if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
-  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName);
+  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
@@ -7741,7 +7743,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return await internalRoutes.askBot(req, res);
       }
       if (method === "POST" && path === "/api/internal/my-chats") {
-        return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: sideThreadIds, owner: () => cfg.profile?.name?.trim() || "User" });
+        return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
       // The react tool: a bot leaving an emoji on the user's message, the
       // way the user already can on the bot's. Always targets the latest
