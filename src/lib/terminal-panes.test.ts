@@ -114,7 +114,7 @@ describe("useTerminalPanes", () => {
     }
   });
 
-  it.each([[16, true], [17, false]])("takes %i host pane labels for a bot: %s", async (size, taken) => {
+  it.each([[80, true], [81, false]])("takes %i host pane labels for a bot: %s", async (size, taken) => {
     const labels = Array.from({ length: size }, (_, index) => `w${index}`);
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ panes: { "bot-1": labels } })));
     const dispatch = vi.fn();

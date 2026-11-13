@@ -456,7 +456,7 @@ describe("usage stats from store actions", () => {
 
 describe("the look sent with usage stats", () => {
   it("is made of list values the schema takes", async () => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-picker-look" ? POISON[0] : null), setItem: () => {} });
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
     const { statsUi } = await import("./usage-stats-ui");
     const state = {
       e: "state", h: 1, pc: { cores: 8, ramGb: 16, scale: 100, screens: 1 }, engines: [],

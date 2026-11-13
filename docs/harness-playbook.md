@@ -255,3 +255,5 @@ its progress file and "continue from the uncommitted changes already here".
 - Close a worker's pane with terminal_close once its result is verified.
 - Squash-landed, unpushed worktrees: use the manual rules above.
 - Keep at most a few live panes; terminal_spawn lists the hard caps.
+- Short on home memory or panes: terminal_spawn `host` runs a one-line claude launch on a PC from ~/.orbit/remote-hosts.json; cwd is a folder there.
+- On a host, put the card text in the prompt (home paths don't exist there). Host panes don't resume.

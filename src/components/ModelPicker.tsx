@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Atom, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Hexagon, Leaf, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
+import { Atom, BookOpen, ChartSpline, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Gauge, Hexagon, Leaf, List, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
 import { shownModelSelection, useStore, type Bot, type ModelSelection } from "@/state/store";
 import { filterCustomModels } from "@/lib/custom-models";
 import { chipEffortLabel, chipEffortShortLabel, chipPhoneName,displayedChipEffort, engineBadgeText, modelChipText, modelChipTitle, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
@@ -19,7 +19,7 @@ import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
 import { loadModelPickerView, saveModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
-import { pickerLookSkin, usePickerLook } from "@/lib/picker-look";
+import { pickerLook, pickerLookSkin } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
 import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import { ModelChart } from "./ModelChart";
@@ -58,7 +58,7 @@ export function ModelPickerControl({
 }: ModelPickerProps & { store: PickerStore; accepted?: readonly AcceptedSend[] }) {
   const { t } = useI18n();
   const skin = useSkin();
-  const look = usePickerLook(skin);
+  const look = pickerLook(skin);
   const { state, dispatch, refreshInstances } = store;
   const shortcutEnabled = !contained && state.selectedId === bot.id;
   const selection = shownModelSelection(bot);
@@ -73,8 +73,6 @@ export function ModelPickerControl({
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
   const [view, setView] = useState(loadModelPickerView);
-  const [style, setStyle] = useState(view === "list" ? "dial" : view);
-  const listView = view === "list";
   const dialView = dial && dialFits && view === "dial";
   const chartView = dial && dialFits && view === "chart";
   useDialFontWarm(dial, open);
@@ -142,7 +140,6 @@ export function ModelPickerControl({
     setCustomOpen(false);
     setMachine(false);
     setView(next);
-    if (next !== "list") setStyle(next);
     setQuery("");
     focusComposerAfterCloseRef.current = false;
     switchingRef.current = switching;
@@ -399,12 +396,15 @@ export function ModelPickerControl({
       >
         <header className="model-cross-header">
           <h2 className="sr-only">{t("model.choose")}</h2>
-          {dial && dialFits && <button type="button" className="model-dial-view" onClick={() => {
-            const next = listView ? style : "list";
-            setView(next);
-            saveModelPickerView(next, "picker");
-            dialogRef.current?.focus();
-          }}>{t(!listView ? "model.dial.list" : style === "chart" ? "model.chart.view" : "model.dial.dial")}</button>}
+          {dial && dialFits && <div className="model-dial-view" role="group" aria-label={t("settings.pickerStyle.title")}>
+            {([["dial", Gauge], ["list", List], ["chart", ChartSpline]] as const).map(([id, Icon]) => (
+              <button key={id} type="button" aria-pressed={view === id} aria-label={t(`settings.pickerStyle.${id}`)} data-picker-view={id} onClick={() => {
+                setView(id);
+                saveModelPickerView(id, "picker");
+                dialogRef.current?.focus();
+              }}><Icon size={13} aria-hidden /><span>{t(`settings.pickerStyle.${id}`)}</span></button>
+            ))}
+          </div>}
           <button data-picker-action type="button" onClick={close} aria-label={t("createBot.cancel")}><X size={18} /></button>
         </header>
         {dialView ? <ModelDial rows={rows} draft={draft} canCommit={canCommit} onDraft={pick} onSave={save} handle={dialRef} stageRef={stageRef} bindingsId={bindingsId} />

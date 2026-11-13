@@ -706,7 +706,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
+          className="pointer-events-none fixed bottom-4 left-1/2 z-[110] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
         >
           {themeToast}
         </div>
