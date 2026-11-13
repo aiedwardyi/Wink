@@ -8,9 +8,9 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SkinPicker } from "./SkinPicker";
 
 let root: Root;
-const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Precision Dimmed", "Bronze", "Dim Sand", "Wink Day", "Notebook"];
+const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Dim Sand", "Wink Day", "Notebook"];
 const darkCount = 8;
-const kept = ["Wink Violet", "Wink Black", "Pewter", "Merlot"];
+const kept = ["Wink Violet", "Wink Black", "Pewter", "Precision Dimmed"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
 const names = () => tiles().map((button) => button.querySelector(".font-medium")?.textContent);
 const tagged = () => tiles().filter((button) => button.querySelector("[data-skin-new]")).map((button) => button.querySelector(".font-medium")?.textContent);
@@ -96,12 +96,12 @@ describe("featured themes", () => {
     expect(names()).toEqual([...featured.slice(0, darkCount), "Servo Gray", ...featured.slice(darkCount)]);
   });
 
-  it("keeps Merlot under More themes and gives an active extra theme the current-theme slot", async () => {
+  it("keeps Precision Dimmed under More themes and gives an active extra theme the current-theme slot", async () => {
     await mount("precision");
-    expect(names()).not.toContain("Merlot");
+    expect(names()).not.toContain("Precision Dimmed");
     await act(async () => root.unmount());
-    await mount("merlot");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Merlot", ...featured.slice(darkCount)]);
+    await mount("precision-dimmed");
+    expect(names()).toEqual([...featured.slice(0, darkCount), "Precision Dimmed", ...featured.slice(darkCount)]);
     await act(async () => root.unmount());
     await mount("kanagawa");
     expect(names()).toEqual([...featured.slice(0, darkCount), "Kanagawa", ...featured.slice(darkCount)]);
@@ -128,31 +128,33 @@ describe("featured themes", () => {
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the three new themes until tried in %s", async (locale) => {
     await mount("precision", locale);
-    expect(tagged()).toEqual(["Precision Dimmed", "Bronze", "Dim Sand"]);
+    expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
+    await act(async () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    expect(tagged()).toEqual(["Bronze", "Dim Sand", "Precision Dimmed"]);
   });
 
   it("drops the tag for good after a picker click", async () => {
     await mount("precision");
-    const dimmed = tiles().find((button) => button.querySelector(".font-medium")?.textContent === "Precision Dimmed")!;
-    await act(async () => dimmed.click());
+    const bronze = tiles().find((button) => button.querySelector(".font-medium")?.textContent === "Bronze")!;
+    await act(async () => bronze.click());
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
+    expect(tagged()).toEqual(["Dim Sand"]);
     await act(async () => root.unmount());
     await render();
-    expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
+    expect(tagged()).toEqual(["Dim Sand"]);
   });
 
   it("drops the tag after the theme hotkey applies it", async () => {
     await mount("precision");
-    await act(async () => applySkin(nextSkin("merlot")));
+    await act(async () => applySkin(nextSkin("precision-dimmed")));
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
+    expect(tagged()).toEqual(["Dim Sand"]);
   });
 
   it("drops the tag for a theme started on", async () => {
     await mount("dim-sand");
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Precision Dimmed", "Bronze"]);
+    expect(tagged()).toEqual(["Bronze"]);
   });
 });
