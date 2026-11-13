@@ -221,13 +221,13 @@ describe("SettingsPanel lean startup", () => {
     chrome.voiceAndStartupSettings = false;
   });
 
-  it("keeps Load Skills & Plugins off the idle surface", async () => {
+  it("shows Load Skills & Plugins for Claude bots", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
       createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })),
     );
-    expect(html).not.toContain("Load Skills");
+    expect(html).toContain("Load Skills");
   });
 
   it("shows Load skills and plugins on by default with no hint", async () => {
