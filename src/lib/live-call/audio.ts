@@ -1,8 +1,9 @@
 // One AudioContext per call: worklet capture out, 24 kHz voice in, dropped at once on barge-in.
-import { boop, ring } from "./call-sounds";
+import { boop } from "./call-sounds";
 import { CAPTURE_WORKLET } from "./capture-worklet";
 
 const VOICE_RATE = 24_000;
+const FADE_SAMPLES = 0.3 * VOICE_RATE;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
@@ -21,8 +22,8 @@ export class CallAudio {
   private readonly destination: MediaStreamAudioDestinationNode;
   private readonly output = new Audio();
   private mic: AnalyserNode | null = null;
-  private cutRing: (() => void) | null = null;
   private tailMs = 0;
+  private faded = 0;
   private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
   onStart: () => void = () => {};
@@ -91,17 +92,6 @@ export class CallAudio {
     }
   }
 
-  /** Straight to the call output: the meter stays the voice's. */
-  ring() {
-    this.stopRing();
-    this.cutRing = ring(this.ctx, this.destination);
-  }
-
-  stopRing() {
-    this.cutRing?.();
-    this.cutRing = null;
-  }
-
   /** Call before close(): the output stays open just long enough to finish it. */
   boop() {
     this.tailMs = boop(this.ctx, this.destination);
@@ -134,7 +124,8 @@ export class CallAudio {
     if (!pcm.length) return;
     const buffer = this.ctx.createBuffer(1, pcm.length, VOICE_RATE);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) data[i] = pcm[i]! / 32768;
+    // Only the call's first words ease in; every later reply starts at full level.
+    for (let i = 0; i < pcm.length; i++) data[i] = (pcm[i]! / 32768) * (this.faded < FADE_SAMPLES ? this.faded++ / FADE_SAMPLES : 1);
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.voice);
@@ -172,7 +163,6 @@ export class CallAudio {
   close() {
     this.closed = true;
     this.flush();
-    this.stopRing();
     this.node?.disconnect();
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     const release = () => {

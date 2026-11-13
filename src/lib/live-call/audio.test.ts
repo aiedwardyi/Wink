@@ -16,6 +16,7 @@ function setup() {
   const voice = analyser();
   const mic = analyser();
   const tones: Array<{ connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];
+  const buffers: Float32Array[] = [];
   const sources: Array<{ buffer: unknown; connect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; onended: (() => void) | null }> = [];
   const ctx = {
     state: "suspended",
@@ -24,7 +25,11 @@ function setup() {
     createAnalyser: vi.fn().mockReturnValueOnce(voice).mockReturnValueOnce(mic),
     createMediaStreamDestination: () => destination,
     createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
-    createBuffer: (_channels: number, length: number, rate: number) => ({ duration: length / rate, getChannelData: () => new Float32Array(length) }),
+    createBuffer: (_channels: number, length: number, rate: number) => {
+      const data = new Float32Array(length);
+      buffers.push(data);
+      return { duration: length / rate, getChannelData: () => data };
+    },
     createBufferSource: () => {
       const source = { buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null };
       sources.push(source);
@@ -41,7 +46,7 @@ function setup() {
     resume: vi.fn(async (): Promise<void> => { ctx.state = "running"; }),
     close: vi.fn(async () => {}),
   };
-  return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones };
+  return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -95,18 +100,19 @@ describe("CallAudio", () => {
     expect(ctx.close).toHaveBeenCalledOnce();
   });
 
-  it("rings through the call output, not the meter, and a second stop is harmless", async () => {
-    const { audio, ctx, tones, voice } = setup();
-    await audio.capture(() => {});
-    audio.ring();
-    expect(tones.length).toBeGreaterThan(0);
-    expect(tones.every((tone) => tone.start.mock.calls.length === 1)).toBe(true);
-    expect(voice.connect).not.toHaveBeenCalledWith(expect.objectContaining({ gain: expect.anything() }));
-    audio.stopRing();
-    audio.stopRing();
-    expect(tones.every((tone) => tone.stop.mock.calls.length >= 1)).toBe(true);
-    expect(ctx.close).not.toHaveBeenCalled();
-    audio.close();
+  it("eases in the call's first 300 ms of voice only", async () => {
+    const { audio, buffers } = setup();
+    const loud = (ms: number) => new Int16Array(ms * 24).fill(16_384);
+    audio.play(loud(200));
+    audio.play(loud(200));
+    audio.flush();
+    audio.play(loud(200));
+    const [first, second, later] = buffers;
+    expect(first![0]).toBe(0);
+    expect(first![2_400]).toBeCloseTo(1 / 6);
+    expect(second![0]).toBeCloseTo(1 / 3);
+    expect(second![2_400]).toBe(0.5);
+    expect(later!.every((sample) => sample === 0.5)).toBe(true);
   });
 
   it("lets the boop finish before releasing the output", async () => {
