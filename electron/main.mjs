@@ -18,6 +18,7 @@ import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./term
 import { createPaneCleanupWorker } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
+import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
@@ -342,6 +343,7 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
+  remote: createRemoteHosts({ hosts: async () => JSON.parse(await fs.promises.readFile(path.join(app.getPath("home"), ".orbit", "remote-hosts.json"), "utf8").catch(() => "{}")) }),
   scratchRoot,
   processes: paneProcesses,
   paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),

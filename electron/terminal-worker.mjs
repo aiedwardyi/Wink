@@ -13,7 +13,7 @@ export async function resolveWorkerLaunch(access, bridge, input, fetchImpl = fet
   return body.launch;
 }
 
-const quoteWindows = (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`;
+export const quoteWindows = (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`;
 
 export function managedWorkerCommand(worker, environment, platform, binDir) {
   const quote = platform === "win32" ? quoteWindows : (value) => `'${value.replace(/'/g, "'\\''")}'`;
