@@ -156,7 +156,10 @@ function want(src: string, clip: boolean, done: (url: string) => void): () => vo
   pump();
   return () => {
     set.delete(done);
-    if (!set.size && waiting.get(src) === set) waiting.delete(src);
+    if (!set.size && waiting.get(src) === set) {
+      waiting.delete(src);
+      clips.delete(src);
+    }
   };
 }
 
