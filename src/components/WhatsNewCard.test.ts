@@ -128,6 +128,28 @@ describe("whats new card", () => {
     }
   });
 
+  it("shows the Map on the left and Gemini 4 Hydrogen on the right in 1.0.263, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.263"];
+    expect(entry.tiles).toHaveLength(2);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.263");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(2);
+      expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
+      for (const [i, tile] of entry.tiles.entries()) {
+        expect(tiles[i].textContent).toContain(tile.line[locale]);
+        act(() => tiles[i].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
+        expect(tiles[i].textContent).toContain((tile.show as Record<typeof locale, string>)[locale]);
+      }
+    }
+    expect(entry.tiles[0].title.en).toContain("Map");
+    expect(entry.tiles[1].title.en).toContain("Gemini 4 Hydrogen");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
