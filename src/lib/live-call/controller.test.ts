@@ -2281,6 +2281,7 @@ describe("VOICE-HUSH: be quiet", () => {
     const audio = speaker();
     const { call, engine } = await started({}, audio);
     engine().events.heard("Nova, stop talking.");
+    engine().events.answering();
     engine().events.audio(pcm);
     expect(audio.played).toBe(0);
     expect(call.state().hushed).toBe(true);
@@ -2297,6 +2298,44 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(["That's an innovation", "Novas are bright", "Novak said"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false]);
     expect(callsVoice("Ask R2.D2 now", "R2.D2")).toBe(true);
     expect(callsVoice("Ask R2xD2 now", "R2.D2")).toBe(false);
+  });
+
+  it("hushes only when the quiet phrase is the whole line", () => {
+    for (const line of ["shut up", "Nova, be quiet please", "please stop talking", "쉿", "조용히 해", "이제 그만 말해", "좀 조용히 해 줘", "닥쳐"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, true]);
+    for (const line of ["영어로 말하지 마", "그렇게 길게 말하지 마세요", "거짓말하지 마.", "반말하지 마", "여기 조용해", "Well, stop talking about the tests and fix the build", "Shut up, really? That is great", "Okay, hush money is a thing", "조용히 말해줘", "그건 말하지 마시고 계속해"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, false]);
+  });
+
+  it.each([["그건 ", "말하지 마", "시고 계속해"], ["Nova, ", "stop talking", " about the tests and fix the build"]])("a fragment that passes through a quiet phrase never hushes: %s%s%s", async (...parts) => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    for (const part of parts) {
+      engine().events.heard(part);
+      engine().events.audio(pcm);
+      expect(call.state().hushed).toBeUndefined();
+    }
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(call.state().hushed).toBeUndefined();
+    expect(audio.played).toBe(parts.length + 1);
+  });
+
+  it("a whole quiet line hushes once it ends, and a wake is not undone by it", async () => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Be quiet.");
+    expect(call.state().hushed).toBeUndefined();
+    engine().events.heard(" Hey, what time is it?");
+    engine().events.heard(" Um");
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(call.state().hushed).toBeUndefined();
+    expect(audio.played).toBe(1);
+    engine().events.turnDone();
+    engine().events.heard("이제 그만 말해");
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(call.state().hushed).toBe(true);
+    expect(audio.played).toBe(1);
   });
 });
 

@@ -178,7 +178,6 @@ export class LiveCall {
   private doneTold = false;
   private generating = false;
   private quiet = false;
-  private hushedAt = -1;
   private soundAt = 0;
   private quietTimer?: ReturnType<typeof setTimeout>;
   private ran = false;
@@ -349,7 +348,7 @@ export class LiveCall {
         this.stir();
         this.heardBuf += text;
         this.caption("user", this.heardBuf);
-        this.hushFrom(this.heardBuf);
+        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName)) this.wake();
         if (this.softCut && this.deps.audio.playing) {
           this.softCut = false;
           this.cutPlaying();
@@ -698,7 +697,8 @@ export class LiveCall {
     const text = spokenText(this.heardBuf);
     this.heardBuf = "";
     this.lineIds.user = 0;
-    this.hushedAt = this.snapshot.hushed ? 0 : -1;
+    // Only a whole line hushes, so a fragment that passes through "...말하지 마" or a wake mid-line never does.
+    if (ended && !this.snapshot.hushed && asksForQuiet(text, this.deps.botName)) this.hush();
     if (!text) return;
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -930,24 +930,18 @@ export class LiveCall {
     this.engine?.sendText(item.text);
   }
 
-  // Only words after the hush can wake it: "Nova, be quiet" stays quiet.
-  private hushFrom(buf: string) {
-    if (!this.snapshot.hushed) {
-      if (!asksForQuiet(spokenText(buf))) return;
-      this.hushedAt = buf.length;
-      const share = this.deps.audio.heardShare();
-      this.deps.audio.flush();
-      this.flushSaid(share);
-      this.cutPlaying();
-      return this.set({ hushed: true });
-    }
-    if (callsVoice(spokenText(buf.slice(Math.max(0, this.hushedAt))), this.deps.botName)) this.wake();
+  // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
+  private hush() {
+    const share = this.deps.audio.heardShare();
+    this.deps.audio.flush();
+    this.flushSaid(share);
+    this.cutPlaying();
+    this.set({ hushed: true });
   }
 
   /** Talking again after a hush, by voice or a tap. */
   wake() {
     if (!this.snapshot.hushed) return;
-    this.hushedAt = -1;
     this.set({ hushed: undefined });
     this.release();
   }
