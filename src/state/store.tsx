@@ -19,7 +19,7 @@ import {
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
 import { answerText } from "../../shared/open-question";
-import { askUserWaiting } from "@/lib/open-question";
+import { canAnswerCard } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -316,7 +316,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "answerCard": {
       const bot = state.bots.find((candidate) => candidate.id === action.botId);
       const card = bot?.messages.find((message) => message.id === action.messageId)?.card;
-      if (bot && !askUserWaiting(visibleMessages(bot), action.messageId)) return state;
+      if (bot && !canAnswerCard(visibleMessages(bot), action.messageId)) return state;
       const patch: Partial<OptionCardData> = { answered: action.answer };
       // talking past the first-run quiz hides it; live asks stay until
       // resolved, and an ask_user question reads as answered, not dismissed
@@ -327,7 +327,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return patchCard(state, action.botId, action.messageId, { dismissed: true });
     case "answerGroupCard": {
       const group = state.groups.find((candidate) => candidate.id === action.groupId);
-      if (group && !askUserWaiting(group.messages, action.messageId)) return state;
+      if (group && !canAnswerCard(group.messages, action.messageId)) return state;
       return patchGroupCard(state, action.groupId, action.messageId, { answered: action.answer });
     }
     case "dismissGroupCard":
@@ -1577,11 +1577,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 message: behavior === "answer" ? action.answer : undefined,
               }),
             }).catch(showError);
-          } else if (!bot || askUserWaiting(visibleMessages(bot), action.messageId)) {
+          } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const text = card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer;
-            void persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
-              .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body: JSON.stringify({ text }) }).catch(showError));
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId });
+            void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
+              .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
           break;
         }
@@ -1599,12 +1599,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
-          const messages = stateRef.current.groups.find((group) => group.id === action.groupId)?.messages ?? [];
-          if (!askUserWaiting(messages, action.messageId)) break;
+          const room = stateRef.current.groups.find((group) => group.id === action.groupId);
+          const messages = room?.messages ?? [];
+          if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
-          void persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
-            .then((open) => open && wrapped({ type: "sendGroup", groupId: action.groupId, text }));
+          void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
+            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId }); }));
           break;
         }
         case "dismissGroupCard":

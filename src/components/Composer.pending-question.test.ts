@@ -133,7 +133,7 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
     expect(sent("PATCH", "/api/bots/asker/cards/ask-1").map((call) => call.body)).toEqual([{ answered: "Prod" }]);
-    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread" }]);
   });
 
   it("dismisses with the x", async () => {
@@ -167,7 +167,7 @@ describe("pinned ask_user question", () => {
     await act(async () => pinButton("Staging").click());
     expect(sent("PATCH", "/api/groups/room/cards/ask-1").map((call) => call.body)).toEqual([{ answered: "Staging" }]);
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
-      expect.objectContaining({ text: "Staging", sendId: expect.any(String) }),
+      expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
     ]);
   });
 });

@@ -360,7 +360,7 @@ describe("update reload during a send", () => {
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true }), [asking]);
     await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-old", answer: "Yes" }));
     const posted = fetch.mock.calls.find(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST");
-    expect(JSON.parse(String(posted?.[1]?.body)).text).toBe("Re: “Ship it?”\nYes");
+    expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ text: "Re: “Ship it?”\nYes", threadId: "t-bot" });
   });
 
   it.each([

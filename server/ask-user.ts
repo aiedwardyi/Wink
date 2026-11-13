@@ -110,10 +110,10 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
-/** A question already answered, dismissed or closed takes no second answer, such as a tap from a screen that missed the close. */
-export function askSettled(messages: readonly Message[], messageId: string): boolean {
-  for (const [message, state] of askStates(messages)) if (message.id === messageId) return state.state !== "waiting";
-  return false;
+/** The stored row of a question already answered, dismissed or closed: it takes no second answer, such as a tap from a screen that missed the close. */
+export function settledAsk(messages: readonly Message[], messageId: string): Message | null {
+  for (const [message, state] of askStates(messages)) if (message.id === messageId) return state.state === "waiting" ? null : message;
+  return null;
 }
 
 /** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
@@ -142,6 +142,7 @@ function closedNote(messages: readonly Message[], text: string, botId?: string):
 function openAsksNote(messages: readonly Message[], text: string, botId?: string): string[] {
   const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
   const states = [...askStates([...messages, typed])];
+  // `by` is the row itself, so identity marks what the typed message answered
   if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];
   const open = states.filter(([card, state]) => state.state === "waiting" && (!botId || card.from?.botId === botId)).map(([card]) => `"${card.card!.subtitle.trim()}"`);
   if (open.length < 2) return [];

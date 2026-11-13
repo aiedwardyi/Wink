@@ -63,8 +63,8 @@ export function askUserStatus(messages: readonly Message[], message: Message): A
   return status.state === "answered" ? { state: "answered", reply: status.reply } : status;
 }
 
-/** False once an ask_user card settled, so a stale tap cannot answer it again. */
-export function askUserWaiting(messages: readonly Message[], messageId: string): boolean {
+/** False only for an ask_user card that already settled, so a stale tap cannot answer it again. */
+export function canAnswerCard(messages: readonly Message[], messageId: string): boolean {
   const message = messages.find((candidate) => candidate.id === messageId);
   return !message || !isAskUserCard(message) || askUserStatus(messages, message).state === "waiting";
 }

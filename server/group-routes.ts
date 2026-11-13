@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { askSettled, askUserCardPatchSchema } from "./ask-user.ts";
+import { askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
@@ -475,9 +475,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const existing = store.messagesFor(group.threadId).find((msg) => msg.id === m![2]);
       if (!existing?.card?.askUser) return json(res, 404, { error: "no such card" });
       const patch = askUserCardPatchSchema.parse(await readBody(req));
-      if (patch.answered !== undefined && askSettled(store.activePath(group.threadId), existing.id)) {
-        return json(res, 409, { error: "question already settled", message: clientMessage(existing) });
-      }
+      const settled = patch.answered !== undefined && settledAsk(store.activePath(group.threadId), existing.id);
+      if (settled) return json(res, 409, { error: "question already settled", message: clientMessage(settled) });
       const card = { ...existing.card };
       if (patch.answered !== undefined) card.answered = patch.answered;
       if (patch.dismissed) card.dismissed = true;
