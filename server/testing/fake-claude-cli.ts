@@ -742,6 +742,16 @@ const playTurn = (prompt: JsonValue, held = false) => {
       if (process.env.FAKE_CLAUDE_PARTIAL_FAILS) {
         out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "half an answer" } } });
       }
+      // FAKE_CLAUDE_BLIP_TEXT fails the way the real CLI reports an API
+      // error: a synthetic assistant row and an error result, process kept
+      const blip = process.env.FAKE_CLAUDE_BLIP_TEXT;
+      if (blip) {
+        out({ type: "assistant", error: "authentication_failed", message: { id: `blip-${launched}`, model: "<synthetic>", role: "assistant", content: [{ type: "text", text: blip }] } });
+        out({ type: "result", subtype: "success", is_error: true, result: blip, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+        turnRunning = false;
+        finishIfDone();
+        return;
+      }
       process.stderr.write("claude: API error (503): service temporarily unavailable\n");
       process.exit(5);
     }

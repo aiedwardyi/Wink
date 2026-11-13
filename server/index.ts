@@ -172,7 +172,7 @@ import {
   type RequestOutcome,
   type RuntimeEvent,
 } from "./contracts.ts";
-import { BUSY_RESUME_DELAYS_MS, retryLine } from "./drivers/retry.ts";
+import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
@@ -3523,7 +3523,7 @@ bus.subscribe((event: RuntimeEvent) => {
   } else if (event.type === "turn.completed") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "turn.completed", { turnId: event.turnId });
   }
-  if (event.type === "turn.retrying" && event.delayMs >= BUSY_RESUME_DELAYS_MS[0]) busyResumeThreads.add(event.threadId);
+  if (event.type === "turn.retrying" && event.provider === "antigravityAgent" && event.delayMs >= BUSY_RESUME_DELAYS_MS[0]) busyResumeThreads.add(event.threadId);
   else if (event.type === "turn.started" || event.type === "turn.completed") busyResumeThreads.delete(event.threadId);
   if (event.type === "account.rate-limits.updated" && event.providerInstanceId) {
     const observedAt = event.observedAt ?? event.createdAt;
@@ -4001,18 +4001,16 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       break;
     }
-    case "turn.retrying":
+    case "turn.retrying": {
       // the driver is about to relaunch the turn after a transient failure;
-      // the activity chip keeps the bot visibly busy through the backoff
-      pushMessage({
-        role: "bot",
-        kind: "activity",
-        tool: {
-          name: retryLine(event, busyResumeThreads.has(event.threadId)),
-          ok: true,
-        },
-      });
+      // the activity chip keeps the bot visibly busy through the backoff,
+      // one chip per streak
+      const tool = { name: retryLine(event, busyResumeThreads.has(event.threadId)), ok: true };
+      const last = store.messagesFor(event.threadId).at(-1);
+      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchMessage(event.threadId, last.id, { tool });
+      else pushMessage({ role: "bot", kind: "activity", tool });
       break;
+    }
     case "runtime.error": {
       refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
