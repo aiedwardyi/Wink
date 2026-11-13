@@ -468,7 +468,7 @@ export const Transcript = memo(function Transcript({
               tabIndex={-1}
               {...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget })))}
               onContextMenu={menuTarget ? (e) => {
-                if (isTouchPrimary() || !(e.target instanceof Element)) return;
+                if (e.defaultPrevented || isTouchPrimary() || !(e.target instanceof Element)) return;
                 const kind = contextClickKind(e.target, e.clientX, e.clientY);
                 if (kind === "native") return;
                 e.preventDefault();
