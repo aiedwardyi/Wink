@@ -87,6 +87,15 @@ describe("MSP turns (fake host)", () => {
     expect(servers!.phone).toEqual({ transport: "stdio", command: "phone-cmd", args: ["phone.js"], env: { T: "phone" } });
   });
 
+  it("folds the ask-driven agents tools behind the catalog unless the switch says 0", () => {
+    const agents = { command: "agents-cmd", args: ["agents.js"], env: { T: "agents" } };
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents", OMB_WINK_TOOL_CATALOG: "1" });
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "0");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents" });
+    vi.unstubAllEnvs();
+  });
+
   it("mounts a cloud box computer through the computer proxy", () => {
     const servers = mspMcpServers(
       { computer: { kind: "box", boxId: "box-1", token: "box-token" } },

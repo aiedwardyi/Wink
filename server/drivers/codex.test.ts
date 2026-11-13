@@ -1036,6 +1036,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       ["computer/click", {}],
       ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
       ["terminal/terminal_read", {}],
+      ["terminal/terminal_playbook", {}],
     ])(
       "accepts %s with no card",
       async (target, extra) => {

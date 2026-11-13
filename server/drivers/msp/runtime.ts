@@ -33,6 +33,7 @@ import { startTurnTimer } from "../../turn-timing.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { warmFingerprint, warmToolsKey, type WarmEligibilityInput } from "../acp/warm-eligibility.ts";
 import { finishNative } from "../native.ts";
+import { experimentalAgents } from "../tool-catalog.ts";
 import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
@@ -183,7 +184,7 @@ export function mspMcpServers(
     };
     servers[name] = opts.wsl ? translateMspServerForWsl(stdio) : stdio;
   };
-  if (integrations?.agents) add("agents", integrations.agents);
+  if (integrations?.agents) add("agents", experimentalAgents(integrations.agents, true));
   if (integrations?.composio) add("composio", integrations.composio);
   if (integrations?.browser) add("browser", integrations.browser);
   if (integrations?.terminal) add("terminal", integrations.terminal);

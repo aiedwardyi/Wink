@@ -426,7 +426,7 @@ import { removeRotatingLog } from "./rotating-log.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
-import { harnessPlaybookPrompt } from "./harness-playbook.ts";
+import { createPlaybookGate, harnessPlaybookPrompt } from "./harness-playbook.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -3034,6 +3034,14 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
+const playbookGate = createPlaybookGate();
+// A recycled or switched provider session has a new cursor, so it reads the playbook again.
+function playbookSession(botId: string): string {
+  const threadId = workerTurns.activeThread(botId);
+  const instanceId = workerTurns.resolveWorkerTurn(botId)?.instanceId;
+  const cursor = threadId && instanceId ? store.taskByThread(botId, threadId)?.resumeCursors[instanceId] : undefined;
+  return JSON.stringify([botId, threadId, instanceId, cursor]);
+}
 const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
@@ -7760,8 +7768,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
+        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""));
+        if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
+      }
+      // terminal_playbook: the on-demand part, once per provider session.
+      if (method === "POST" && path === "/api/internal/worker-playbook") {
+        const from = store.bot(String((await readBody(req)).fromBotId ?? ""));
+        if (!from) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { text: playbookGate.read(playbookSession(from.id)) });
       }
       if (method === "POST" && path === "/api/internal/worker-launch") {
         await startupTiming.waitFor("accounts");
