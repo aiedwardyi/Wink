@@ -72,10 +72,18 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   useLayoutEffect(() => {
     const root = treeRef.current;
-    const row = root && [...root.querySelectorAll<HTMLElement>("[data-map-file]")].find(row => row.dataset.mapFile === worker?.path);
-    setPin(row ? row.offsetTop + row.offsetHeight / 2 - 4 : null);
-    if (row && chosen.follow) row.scrollIntoView?.({ block: "nearest" });
-  }, [worker?.path, worker?.editedAt, tree, closed, chosen.follow]);
+    if (!root) { setPin(null); return; }
+    if (!active) return;
+    const place = () => {
+      const row = [...root.querySelectorAll<HTMLElement>("[data-map-file]")].find(row => row.dataset.mapFile === worker?.path);
+      setPin(row ? row.offsetTop + row.offsetHeight / 2 - 4 : null);
+      if (row && chosen.follow) row.scrollIntoView?.({ block: "nearest" });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [worker?.path, worker?.editedAt, tree, closed, chosen.follow, active]);
 
   useEffect(() => {
     const edited = worker?.path;

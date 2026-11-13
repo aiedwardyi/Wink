@@ -11,13 +11,12 @@
 .map-tally { grid-column: 1 / -1; font-size: 12px; color: var(--color-ink-secondary); }
 .map-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; min-width: 180px; max-width: 270px; padding: 4px; border: 1px solid var(--color-hairline); border-radius: 8px; background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / .2); }
 .map-menu button { display: block; width: 100%; padding: 8px 10px; border-radius: 6px; text-align: left; overflow-wrap: anywhere; }
-.map-menu button:hover, .map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
+.map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
 .map-tree-scroll { flex: 0 1 auto; min-height: 64px; max-height: 36%; overflow: auto; border-bottom: 1px solid var(--color-hairline); scrollbar-width: thin; }
 .map-tree { position: relative; padding: 7px 10px 7px 20px; font: 12px/1.5 var(--font-mono, monospace); }
 .map-row { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 3px 6px 3px calc(6px + var(--depth) * 12px); text-align: left; }
 .map-row > svg { flex-shrink: 0; color: var(--color-ink-secondary); }
 .map-row[aria-selected="true"] { background: color-mix(in oklab, var(--color-accent) 10%, transparent); }
-.map-row:hover { background: var(--color-raised); }
 .map-row[data-hot] .map-file-name { color: var(--color-accent-text); }
 .map-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-counts { display: flex; flex-shrink: 0; gap: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -26,6 +25,10 @@
 .map-pointer { position: absolute; left: 7px; top: 0; width: 8px; height: 8px; border: 1px solid var(--color-accent); background: color-mix(in oklab, var(--color-accent) 24%, transparent); box-shadow: 0 0 7px color-mix(in oklab, var(--color-accent) 36%, transparent); transition: transform 180ms cubic-bezier(.2,.7,.2,1); pointer-events: none; }
 .map-flash { position: absolute; inset: 0; pointer-events: none; animation: map-flash 700ms ease-out both; }
 @keyframes map-flash { from { background: color-mix(in oklab, var(--color-accent) 20%, transparent); } to { background: transparent; } }
+@media (hover: hover) {
+  .map-menu button:hover { background: var(--color-raised); color: var(--color-accent-text); }
+  .map-row:hover { background: var(--color-raised); }
+}
 .map-diff-head { display: flex; align-items: center; gap: 8px; min-width: 0; flex-shrink: 0; padding: 10px 16px; border-bottom: 1px solid var(--color-hairline); font: 500 12px var(--font-mono, monospace); }
 .map-diff-head svg { flex-shrink: 0; color: var(--color-accent-text); }
 .map-diff-head span { min-width: 0; overflow-wrap: anywhere; }

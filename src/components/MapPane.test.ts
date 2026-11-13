@@ -28,6 +28,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   vi.stubGlobal("EventSource", vi.fn(function () { stream = { close }; return stream; }));
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); applyLocale("en"); });
@@ -95,4 +96,15 @@ it("lets a folder fold and reveals the edited file on the next hop", async () =>
   expect(host.querySelector('[role="treeitem"][aria-expanded="false"]')).not.toBeNull();
   await emit([{ ...workers[0], editedAt: 5 }]);
   expect(host.querySelector('[data-map-file="src/a.ts"]')).not.toBeNull();
+});
+
+it("repositions the pointer when the pane changes row sizes", async () => {
+  let resized: (() => void) | undefined;
+  vi.stubGlobal("ResizeObserver", vi.fn(function (callback: () => void) { resized = callback; return { observe() {}, disconnect() {} }; }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  const row = host.querySelector('[data-map-file="b.ts"]')!;
+  Object.defineProperties(row, { offsetTop: { value: 72 }, offsetHeight: { value: 20 } });
+  await act(async () => resized?.());
+  expect(host.querySelector<HTMLElement>(".map-pointer")?.style.transform).toBe("translateY(78px)");
 });
