@@ -84,7 +84,7 @@ async function gitFlow(root: string, base: string) {
   return {
     branch: name, total: count, pushed: Math.max(0, count - (Number(ahead.trim()) || 0)), ...web && { web },
     commits: log.split("\n").filter(Boolean).map(line => { const [sha, subject] = line.split("\x1f"); return { sha, subject: subject ?? "" }; }),
-    key: `${head.trim()}\0${remote?.[1] ?? ""}`, remote: Boolean(remote),
+    key: `${name}\0${head.trim()}\0${remote?.[1] ?? ""}`, remote: Boolean(remote),
   };
 }
 

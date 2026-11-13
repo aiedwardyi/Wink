@@ -104,6 +104,10 @@ it("stops asking gh about a merged PR and falls back quietly when gh fails", asy
     vi.setSystemTime(Date.now() + 3_600_000);
     await flows.flow(root, base);
     expect(merged).toHaveBeenCalledTimes(2);
+    git("checkout", "-qb", "feat/y");
+    git("update-ref", "refs/remotes/origin/feat/y", "HEAD");
+    await flows.flow(root, base);
+    expect(merged).toHaveBeenCalledTimes(4);
     const signedOut = vi.fn(async () => { throw Object.assign(new Error("gh auth login"), { code: 4 }); });
     const quiet = createMapFlow(signedOut);
     expect(await quiet.flow(root, base)).toMatchObject({ total: 1, pushed: 1, pr: null });
