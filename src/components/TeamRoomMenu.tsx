@@ -138,7 +138,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -150,7 +150,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
         role={closing ? undefined : "dialog"}
         aria-modal={!closing || undefined}
         aria-label={label}
-        className="animate-pop-in w-full max-w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl"
+        className="animate-pop-in w-full max-w-[380px] rounded-[24px] border border-hairline/50 bg-panel p-4 shadow-2xl shadow-black/50"
       >
         {children}
       </div>

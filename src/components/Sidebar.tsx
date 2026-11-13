@@ -256,7 +256,7 @@ function RoomContextMenu({
           dispatch({ type: "patchGroup", groupId: group.id, patch: { pinned: !group.pinned } });
           onClose();
         }}
-        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+        className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
       >
         {group.pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
         {group.pinned ? t("chrome.unpin") : t("chrome.pin")}
@@ -308,7 +308,7 @@ function RoomContextMenu({
             setDraft(group.name);
             setRenaming(true);
           }}
-          className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+          className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
         >
           <Pencil size={16} className="text-ink-secondary" />
           {t("chrome.renameChannel", { name: group.name })}
@@ -319,7 +319,7 @@ function RoomContextMenu({
           onClose();
           onMoveToSection(group.id);
         }}
-        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+        className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
       >
         <FolderPlus size={16} className="text-ink-secondary" />
         {t("chrome.moveToContext")}
@@ -423,7 +423,7 @@ function SectionPicker({
               onClick={() => assign(section)}
               className={cn(
                 "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]",
-                section === current ? "bg-raised text-ink" : "text-ink hover:bg-raised/70",
+                section === current ? "bg-raised text-ink" : cn("text-ink", MENU_ITEM_HOVER),
               )}
             >
               <span className="truncate">{section}</span>
@@ -546,7 +546,7 @@ function BotContextMenu({
           ? "cursor-default opacity-40"
           : opts?.danger
             ? "hover:bg-raised/40"
-            : "hover:bg-raised/70",
+            : MENU_ITEM_HOVER,
       )}
     >
       {icon}
@@ -673,6 +673,7 @@ export function Sidebar({
   const roomMenuPresence = usePresence(roomMenu);
   const roomSectionPickerPresence = usePresence(roomSectionPicker);
   const wizardPresence = usePresence(wizard);
+  const toast = usePresence(teamFeedback);
   const [query, setQuery] = useState("");
   const [savedCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const sidebarCollapsed = savedCollapsed || folded;
@@ -1527,7 +1528,8 @@ export function Sidebar({
       resetSectionDrag();
     },
   });
-  const pendingTeamUndo = teamFeedback?.undo;
+  const pendingTeamUndo = toast.value?.undo;
+  const pendingRestore = toast.value?.restoreBotId;
   const renderItem = (item: SidebarItem) => item.kind === "group" ? (
     <GroupListItem
       key={item.key}
@@ -2025,19 +2027,21 @@ export function Sidebar({
           />
         )}
       </Presence>
-      {teamFeedback &&
+      {toast.value &&
         createPortal(
           <div
             role="status"
+            data-closing={toast.closing || undefined}
+            inert={toast.closing}
             className={cn(
-              "fixed bottom-4 left-4 z-[60] max-w-[300px] rounded-xl border px-3.5 py-2.5 text-[13px] shadow-xl",
-              teamFeedback.error
-                ? "border-danger/30 bg-card text-danger"
-                : "border-hairline/50 bg-card text-ink",
+              "animate-pop-in fixed bottom-4 left-4 z-[60] max-w-[300px] rounded-xl border bg-panel px-3.5 py-2.5 text-[13px] shadow-2xl shadow-black/50",
+              toast.value.error
+                ? "border-danger/30 text-danger"
+                : "border-hairline/40 text-ink",
             )}
           >
             <div className="flex items-center gap-3">
-              <span>{teamFeedback.text}</span>
+              <span>{toast.value.text}</span>
               {pendingTeamUndo && (
                 <button
                   onClick={() => void undoTeamLoad(pendingTeamUndo)}
@@ -2046,9 +2050,9 @@ export function Sidebar({
                   {t("chrome.undo")}
                 </button>
               )}
-              {teamFeedback.restoreBotId && (
+              {pendingRestore && (
                 <button
-                  onClick={() => void undoTrash(teamFeedback.restoreBotId!)}
+                  onClick={() => void undoTrash(pendingRestore)}
                   className="rounded-md px-1.5 py-0.5 font-medium text-accent hover:bg-raised"
                 >
                   {t("chrome.undo")}
