@@ -109,7 +109,7 @@ const phoneRelayConfigSchema = z.object({
     .optional(),
 });
 // Picks from the earlier list keep their side.
-const OLD_VOICES: Record<string, LiveVoice> = { Kore: "Aoede", Charon: "Achird" };
+const OLD_VOICES: Record<string, LiveVoice> = { Kore: "Aoede", Charon: "Alnilam", Achird: "Alnilam" };
 const appConfigSchema = z.object({
   xai: z.object({ key: optionalText, url: optionalText }).optional(),
   gemini: z.object({ apiKey: optionalText }).optional(),
