@@ -37,8 +37,6 @@ vi.mock("@/lib/live-call/audio", () => ({
     play() {}
     flush() {}
     close() {}
-    ring() {}
-    stopRing() {}
     boop() {}
     heardShare() { return 1; }
     level() { return fakes.level; }
@@ -584,6 +582,19 @@ describe("live call in the message box", () => {
         await vi.waitFor(() => expect(host.textContent).toContain(line));
         expect(host.textContent).not.toContain(error);
       }
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("voice limit at start shows a plain line and leaves no live call", async () => {
+    fakes.token = () => Response.json({ error: "You exceeded your current quota" }, { status: 429 });
+    const { host, unmount } = await mount();
+    try {
+      await act(async () => button(host, "Call Atlas")!.click());
+      await vi.waitFor(() => expect(host.textContent).toContain("Out of voice for today. Keep typing, I'm still here."));
+      expect(host.textContent).not.toContain("quota");
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
       await unmount();
     }
