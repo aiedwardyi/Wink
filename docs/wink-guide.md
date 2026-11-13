@@ -54,7 +54,7 @@
 
 ## Skills
 
-- There is no skills switch. Wink adds its built-in skills (such as Phone Harness) only to turns whose message needs them.
+- Claude bots: Bot Details > Settings > Load Skills & Plugins (on by default). Off starts faster and uses fewer tokens. Wink adds its built-in skills (such as Phone Harness) only to turns whose message needs them.
 - Claude and Codex bots also use the user's own CLI skills and plugins. To stop one, remove it from that CLI's skills folder.
 
 ## Routines
