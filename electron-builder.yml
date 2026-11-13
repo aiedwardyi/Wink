@@ -117,6 +117,7 @@ mac:
     NSSpeechRecognitionUsageDescription: Wink transcribes your voice on-device to type messages for you.
     NSAccessibilityUsageDescription: Wink uses Accessibility when you let a bot control this Mac.
     NSScreenCaptureUsageDescription: Wink uses Screen Recording so bots can see this Mac before acting.
+    NSAppleEventsUsageDescription: Wink opens Terminal to install and sign in to AI engines.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
