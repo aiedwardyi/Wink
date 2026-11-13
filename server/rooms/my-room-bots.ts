@@ -7,7 +7,7 @@ import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
 import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 
-export type MyBotTurn = { working?: boolean; waiting?: boolean; error?: "failed" };
+export type MyBotTurn = { working?: boolean; since?: number; waiting?: boolean; error?: "failed" };
 
 export interface MyRoomBotDeps {
   client: Pick<GuestClient, "botSend" | "file">;
@@ -20,6 +20,7 @@ export interface MyRoomBotDeps {
   startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void): Promise<unknown>;
   messagesFor(threadId: string): Message[];
   changed(roomId: string): void;
+  interrupt(botId: string, threadId: string): Promise<void>;
 }
 
 type Waiting = { roomId: string; id: string; botId: string; after: number; entry: JoinedEntry };
@@ -53,6 +54,8 @@ export class MyRoomBotTurns {
   private readonly active = new Map<string, Waiting>();
   /** Head seq at the host's last Stop, per room. */
   private readonly stops = new Map<string, number>();
+  /** Room task threads the owner stopped; they settle without a failure row. */
+  private readonly stopped = new Set<string>();
   private readonly deps: MyRoomBotDeps;
 
   constructor(deps: MyRoomBotDeps) {
@@ -91,6 +94,20 @@ export class MyRoomBotTurns {
   stop(roomId: string): void {
     this.stops.set(roomId, joinedEntries(roomId, 1)[0]?.seq ?? 0);
     this.drain();
+  }
+
+  /** The owner's Stop: this PC's asks in the room end here; the host's bots are never touched. */
+  async stopMine(roomId: string): Promise<void> {
+    for (const row of this.waiting.filter((each) => each.roomId === roomId)) {
+      this.waiting.splice(this.waiting.indexOf(row), 1);
+      this.set(roomId, row.id, undefined);
+    }
+    this.stop(roomId);
+    for (const [threadId, run] of this.running) {
+      if (run.roomId !== roomId) continue;
+      this.stopped.add(threadId);
+      await this.deps.interrupt(run.botId, threadId);
+    }
   }
 
   private halted(roomId: string, seq: number): boolean {
@@ -144,7 +161,7 @@ export class MyRoomBotTurns {
       this.active.delete(bot.botId);
       return this.set(roomId, bot.id, { error: "failed" });
     }
-    this.set(roomId, bot.id, { working: true });
+    this.set(roomId, bot.id, { working: true, since: Date.now() });
     let mine: Running | undefined;
     try {
       let threadId = bot.threadId && this.deps.hasTask(local.id, bot.threadId) ? bot.threadId : null;
@@ -205,9 +222,10 @@ export class MyRoomBotTurns {
     const run = this.running.get(threadId);
     if (!run) return this.drain();
     this.running.delete(threadId);
+    const stopped = this.stopped.delete(threadId);
     try {
       const text = this.deps.messagesFor(threadId).slice(run.since).filter(shown).map((message) => message.text!.trim()).join("\n\n");
-      if (!text) return this.set(run.roomId, run.id, ok ? undefined : { error: "failed" });
+      if (!text) return this.set(run.roomId, run.id, ok || stopped ? undefined : { error: "failed" });
       const posted = await this.deps.client.botSend(run.roomId, run.id, text, run.entry.id);
       setMyRoomBotTurn(run.roomId, run.id, threadId, posted.ok ? posted.value.seq : run.entry.seq);
       this.set(run.roomId, run.id, posted.ok ? undefined : { error: "failed" });

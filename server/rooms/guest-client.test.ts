@@ -123,6 +123,15 @@ describe("room codes", () => {
     expect((await joinedRoute("POST", "/api/joined/rooms/missing/read", c, async () => ({ seq: 0 })))?.status).toBe(404);
   });
 
+  it("hands the owner's Stop to this PC's own room turns", async () => {
+    const stop = vi.fn(async () => {});
+    const c = guest();
+    vi.spyOn(c, "start").mockImplementation(() => {});
+    expect(await joinedRoute("POST", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop)).toEqual({ status: 200, body: { ok: true } });
+    expect(stop).toHaveBeenCalledWith("r1");
+    expect((await joinedRoute("GET", "/api/joined/rooms/r1/stop", c, async () => ({}), undefined, undefined, stop))?.status).toBe(404);
+  });
+
   it("keeps delayed teammate lines unread when an own-send reply leads the stream", async () => {
     saveJoined("r1", HOST, STATE.me, KEY);
     const line = (seq: number): JoinedEntry => ({ seq, id: `e${seq}`, at: seq, text: "Hi", author: { kind: "host", id: "host", name: "Edward" } });

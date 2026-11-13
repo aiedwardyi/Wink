@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { uploadAttachment } from "@/lib/composer-attachments";
-import { getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
+import { clearReplyDraft, getDraft, setDraft, setDraftAttachments } from "@/lib/drafts";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import type { JoinedView, TeamRoom } from "@/lib/team-rooms";
 import type { Message } from "@/state/store-types";
@@ -684,5 +684,64 @@ describe("room header", () => {
     await render();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-room-title]")!.click());
     expect(joined.dispatched).toEqual([{ type: "toggleSettings", open: true }]);
+  });
+});
+
+describe("joined room turns", () => {
+  beforeEach(() => {
+    joined.view!.state!.teamBots = [{ id: "tb1", name: "Pete", color: "blue", owner: "p1" }];
+  });
+
+  it("shows this PC's working bot like a 1:1 turn and swaps Send for Stop", async () => {
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true, since: Date.now() - 3000 }];
+    await render("joined");
+    expect(host.querySelector("[data-turn-mascot]")!.textContent).toContain("Pete is working");
+    expect(host.querySelector("[data-turn-mascot]")!.textContent).toContain("3s");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [String(path), init?.method])).toContainEqual(["/api/joined/rooms/r9/stop", "POST"]);
+  });
+
+  it("offers no Stop while the bot only waits, and keeps the wait row in the composer like a host room", async () => {
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", waiting: true }];
+    await render("joined");
+    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
+    expect(host.querySelector("[data-turn-mascot]")).toBeNull();
+    const row = host.querySelector<HTMLElement>("[data-my-bot-turn]")!;
+    expect(row.className).toContain("text-[12px]");
+    expect(row.className).toContain("px-1");
+  });
+});
+
+describe("room reply target", () => {
+  const entry = { seq: 1, id: "e1", at: Date.now(), author: { kind: "person", id: "p2", name: "Mina" }, text: "hello there", files: [] };
+  const chip = () => host.querySelector("button[aria-label='Cancel reply']");
+  const pick = () => act(async () => host.querySelector<HTMLButtonElement>('[data-mid="e1"] button[aria-label="Reply to message"]')!.click());
+
+  afterEach(() => clearReplyDraft("/api/joined/rooms/r9"));
+
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    (joined.view as unknown as { entries: unknown[] }).entries = [entry];
+  });
+
+  it("keeps the chip on Escape, like a 1:1 chat", async () => {
+    await render("joined");
+    await pick();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(chip()).not.toBeNull();
+  });
+
+  it("keeps the chip across a room switch and puts it back after a failed send", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ error: "offline" }, 500)));
+    await render("joined");
+    await pick();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).not.toBeNull();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).not.toBeNull();
   });
 });

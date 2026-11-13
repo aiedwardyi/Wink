@@ -23,12 +23,14 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { LinkedText } from "./LinkedText";
 import { DaySeparator } from "./DaySeparator";
 import { FileAttachmentRow } from "./FileAttachmentRow";
+import { PersonLabel } from "./GroupPeople";
 import { JumpToLatest } from "./JumpToLatest";
 import { MediaViewerProvider, useMediaViewer } from "./MediaViewerProvider";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
 import { RoomNotice } from "./RoomNotice";
+import { RoomPicture } from "./RoomPicture";
 import { MessageBoundary } from "./TurnPresence";
 
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
@@ -127,11 +129,12 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
           <BotAvatar bot={{ name: line.author.name, color: (line.color ?? DEFAULT_MAUS_COLOR) as MausColor }} state="happy" size={16} motion="none" motionKey={0} animated={false} />
           <span className="text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</span>
         </div>
-      ) : named && <div className="mt-1 pl-8 text-[11px] font-medium text-ink-secondary">{authorName ?? line.author.name}</div>}
+      ) : named && <div className="pl-7.5"><PersonLabel name={authorName ?? line.author.name} /></div>}
       <div
         ref={rowRef}
         data-mid={line.id}
         data-team-room-line={mine ? "mine" : "theirs"}
+        data-orbit-message={mine ? "user" : line.author.kind === "bot" ? "bot" : "peer"}
         className={cn("group relative flex w-full flex-col outline-none", mine ? "animate-msg-in items-end" : "items-start")}
         tabIndex={-1}
         {...holdToOpen((x, y, opener) => onMenu({ kind: "message", x, y, opener, target }))}
@@ -154,7 +157,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
       >
         {swiping && <MessageSquareReply aria-hidden size={18} className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=right]:opacity-[var(--bubble-swipe)] group-data-[armed=right]:scale-125 group-data-[armed=right]:text-accent" />}
         {swiping && !mine && <Languages aria-hidden size={18} className="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2 text-ink-secondary opacity-0 transition-transform group-data-[swipe=left]:opacity-[var(--bubble-swipe)] group-data-[armed=left]:scale-125 group-data-[armed=left]:text-accent" />}
-        <div ref={bubbleRef} className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
+        <div ref={bubbleRef} data-orbit-message-body data-strip={line.reactions?.length ? "" : undefined} className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !mine && "ml-8")}>
           <div
             data-message-hover-actions
             className={cn("pointer-events-none absolute bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100", mine ? "right-0" : "left-0")}
@@ -182,6 +185,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
             ><Languages size={16} /></button>}
           </span>}
           <div
+            data-orbit-message-content
             className={cn(
               "w-fit max-w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed break-words",
               line.author.kind !== "bot" && "whitespace-pre-wrap",
@@ -202,20 +206,25 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
               <RoomFileRows base={base} files={line.files} className={cn(line.text && "mt-2")} />
             </div>
           </div>
+          {(onReact || Boolean(line.reactions?.length)) && <ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={(emoji) => onReact?.(message, emoji)} className={cn(!onReact && "pointer-events-none")} />}
         </div>
-        {onReact
-          ? <ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={(emoji) => onReact(message, emoji)} className={cn("static mt-1 max-w-full translate-y-0", !mine && "ml-8")} />
-          : line.reactions?.length ? <div className={cn("pointer-events-none", !mine && "ml-8")}><ReactionChips threadId={base} message={message} corner={mine ? "right" : "left"} names={reactionNames} onToggle={() => {}} className="static mt-1 max-w-full translate-y-0" /></div> : null}
         <TimestampLabel at={line.at} />
       </div>
     </div>
   );
 }
 
+export interface RoomEmpty {
+  name: string;
+  members: readonly string[];
+  picture?: string;
+  retry?: unknown;
+}
+
 /** Follows the newest line while the reader is at the bottom, or just sent one. */
-export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply, onReact, reactionNames, notice }: {
+export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, loadOlder, people = [], hostName, onReply, onReact, reactionNames, notice, empty, presence }: {
   lines: RoomLine[]; mine: (line: RoomLine) => boolean; base: string; label: string; hasMore?: boolean; loadOlder?: (beforeCommit: () => void) => void; people?: JoinedPerson[]; hostName?: string; onReply: (message: Message) => void;
-  onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl;
+  onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl; empty?: RoomEmpty; presence?: ReactNode;
 }) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
@@ -332,6 +341,13 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
       >
         <div ref={logRef} data-swipe-list role="log" aria-live="polite" aria-label={label} className={cn("flex w-full flex-col gap-3 px-5 pb-4", CHAT_COLUMN_CLASS)}>
           {fileState.error && <div role="alert" className="text-[13px] text-danger">{t("teamRoom.folderError")}</div>}
+          {empty && !lines.length && !hasMore && (
+            <div data-room-empty className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
+              <RoomPicture src={empty.picture} size={64} retry={empty.retry} />
+              <div className="text-[17px] font-semibold text-ink">{empty.name}</div>
+              <div className="max-w-[360px] text-[14px] text-ink-secondary">{empty.members.join(", ")}</div>
+            </div>
+          )}
           {lines.map((line, index) => {
             const own = mine(line);
             const before = lines[index - 1];
@@ -343,6 +359,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
             const newDay = !before || new Date(before.at).toDateString() !== new Date(line.at).toDateString();
             return <TeamRoomRow key={line.id} line={visible} mine={own} named={named} newDay={newDay} onReply={onReply} base={base} authorName={authorName} canTranslate={canTranslate} quote={quote} onJump={jump} onMenu={setMenu} notice={notice} reactionNames={reactionNames} onReact={onReact} />;
           })}
+          {presence}
         </div>
       </div>
       {behind && <JumpToLatest bottom={8} onJump={jumpToLatest} />}

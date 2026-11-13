@@ -83,7 +83,7 @@ describe("this PC's bot in a joined room", () => {
     await turns.settled("private-task", false);
     await settle();
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([first.text]);
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true });
     thread.push({ id: "a1", at: 1, role: "bot", kind: "text", text: "First answer." });
     await turns.settled("task-1", true);
     await settle();
@@ -163,7 +163,7 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.client.botSend).not.toHaveBeenCalled();
     failed();
     await settle();
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true });
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Recovered." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Recovered.", next.id);
@@ -181,7 +181,7 @@ describe("this PC's bot in a joined room", () => {
     expect(prompt).toContain("Edward: Q3 is attached");
     expect(prompt).toContain("q3.pdf: C:\\cache\\q3.pdf");
     expect(prompt).not.toContain("Peter: @Pete-Coder");
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true });
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's done." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Chart's done.", ask.id);
@@ -231,7 +231,7 @@ describe("this PC's bot in a joined room", () => {
     turns.sent(ROOM, ask);
     await settle();
     await settle();
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true });
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's done." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Chart's done.", ask.id);
@@ -322,6 +322,36 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.heard(ROOM, line(edbot, "@Pete-Coder third", now()));
     await settle();
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual(["@Pete-Coder third"]);
+  });
+
+  it("stops only this room's own turn on the owner's Stop, without a failure row", async () => {
+    deps.interrupt = vi.fn(async () => {});
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder long job"));
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true, since: expect.any(Number) });
+    await turns.stopMine(ROOM);
+    await turns.stopMine("other-room");
+    expect(deps.interrupt).toHaveBeenCalledTimes(1);
+    expect(deps.interrupt).toHaveBeenCalledWith("local-pete", "task-1");
+    await turns.settled("task-1", false);
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+    expect(deps.client.botSend).not.toHaveBeenCalled();
+  });
+
+  it("drops a waiting ask on the owner's Stop", async () => {
+    deps.interrupt = vi.fn(async () => {});
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder later"));
+    await settle();
+    await turns.stopMine(ROOM);
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
   });
 
   it("keeps the header byte-for-byte when the room has no other bots", async () => {

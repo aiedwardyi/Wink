@@ -6435,6 +6435,11 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
   startTurn: (botId, threadId, prompt, typed, failed) => startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed }),
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  interrupt: async (botId, threadId) => {
+    const bot = store.bot(botId);
+    await (bot && botAccounts.instance(bot, threadId))?.adapter.interruptTurn(threadId).catch(() => {});
+    closeOpenApprovals(threadId);
+  },
 });
 const guestClient: GuestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
@@ -8743,7 +8748,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId));
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);

@@ -55,6 +55,11 @@ const openMenu = async (id: string) => {
 };
 
 describe("room reactions", () => {
+  it("tucks the chips into the bubble's edge like a 1:1 chat", async () => {
+    await render();
+    for (const id of ["e1", "e2"]) expect(row(id).querySelector("[data-orbit-message-body] > [data-message-reactions]")).not.toBeNull();
+  });
+
   it("shows a counted chip with people's names on hover, and a tap toggles through the room", async () => {
     const onReact = vi.fn();
     await render({ onReact });
