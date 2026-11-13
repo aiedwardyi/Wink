@@ -65,6 +65,8 @@ const statsSchema = z.object({
   doneGuard: count,
   hidden: z.object({ spans: count, ms }),
   reconnects: count,
+  micGaps: count,
+  unheard: count,
   closeCodes: z.array(z.number().int()).max(32),
   usage: z.object({ input: count, output: count, total: count }).partial(),
 }).partial();

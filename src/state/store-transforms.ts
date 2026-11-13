@@ -56,6 +56,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
     xai: frame.xai,
     gemini: frame.gemini,
+    liveCall: frame.liveCall,
     openaiCompat: frame.openaiCompat,
     composio: frame.composio,
     box: frame.box,
