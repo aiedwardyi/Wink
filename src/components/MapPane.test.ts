@@ -39,6 +39,7 @@ it("follows edits across workers, pins a worker, and keeps a manual file with Fo
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();
   expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("b");
+  expect(host.querySelector(".map-head")?.textContent).toBe("BETA");
   await click(".map-worker");
   await click('[role="menuitemradio"]:nth-child(2)');
   expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("a");
@@ -129,8 +130,16 @@ it("moves the arrow to the row just edited and shows the path when the worker le
   await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
   const row = host.querySelector('[data-map-file="b.ts"]')!;
   Object.defineProperties(row, { offsetLeft: { value: 220 }, offsetTop: { value: 48 } });
-  await act(async () => resized?.());
-  expect(host.querySelector<HTMLElement>(".map-pin")?.style.transform).toBe("translate(222px, 51px)");
+  for (const height of [24, 28]) {
+    Object.defineProperties(row.querySelector("i")!, { offsetLeft: { value: 7, configurable: true }, offsetTop: { value: height / 2 - 3.5, configurable: true }, offsetWidth: { value: 7, configurable: true }, offsetHeight: { value: 7, configurable: true } });
+    await act(async () => resized?.());
+    const [x, y] = host.querySelector<HTMLElement>(".map-pin")!.style.transform.match(/-?[\d.]+/g)!.map(Number);
+    const tip = { x: x + 2.2, y: y + 0.9 };
+    expect(tip.x).toBeGreaterThan(227);
+    expect(tip.x).toBeLessThan(234);
+    expect(tip.y).toBeGreaterThan(48 + height / 2 - 3.5);
+    expect(tip.y).toBeLessThan(48 + height / 2 + 3.5);
+  }
   expect(row.querySelector(".map-delta")?.textContent).toBe("+1");
   expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
   expect(host.querySelector(".map-step p")).toBeNull();

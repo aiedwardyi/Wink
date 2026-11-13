@@ -14,6 +14,8 @@ const copy = {
 const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
 const TRAIL = 6;
+// The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 17x18.
+const TIP = { x: 2.2, y: 0.9 };
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const folder = (path: string) => path.includes("/") ? name(path.slice(0, path.lastIndexOf("/"))) : "";
 type Step = { reason?: string; editedAt: number };
@@ -158,7 +160,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         }));
       } else setTrail([]);
       const row = list && [...list.querySelectorAll<HTMLElement>("[data-map-file]")].find(row => row.dataset.mapFile === worker?.path);
-      setPin(row ? { x: row.offsetLeft + 2, y: row.offsetTop + 3 } : null);
+      const square = row?.querySelector("i");
+      setPin(row && square ? { x: row.offsetLeft + square.offsetLeft + square.offsetWidth / 2 - TIP.x, y: row.offsetTop + square.offsetTop + square.offsetHeight / 2 - TIP.y } : null);
       if (row && chosen.follow) row.scrollIntoView?.({ block: "nearest" });
     };
     place();
@@ -214,7 +217,6 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
             {snapshot.workers.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={chosen.pinned === item.id} onClick={() => { setSelection({ ...chosen, worker: item.id, pinned: item.id, follow: true }); setMenu(false); }}>{item.nick}</button>)}
           </div>}
         </div>
-        <div className="map-task" title={worker.task}>{worker.task}</div>
       </header>
       {!worker.git ? <p className="map-empty" role="status">{c.notGit}</p> : <>
         <div className="map-top">

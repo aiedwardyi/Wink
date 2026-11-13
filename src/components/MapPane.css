@@ -4,7 +4,6 @@
 .map-worker { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 3px 7px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); font: 600 11px var(--font-sans, sans-serif); letter-spacing: .04em; }
 .map-worker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-worker i, .map-follow i, .map-step > i { width: 6px; height: 6px; flex-shrink: 0; background: var(--color-accent); }
-.map-task { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .map-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; min-width: 180px; max-width: 270px; padding: 4px; border: 1px solid var(--color-hairline); border-radius: 8px; background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / .2); }
 .map-menu button { display: block; width: 100%; padding: 8px 10px; border-radius: 6px; text-align: left; overflow-wrap: anywhere; }
 .map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }

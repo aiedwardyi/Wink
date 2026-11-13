@@ -122,12 +122,32 @@ it.each([1999, 2000, 2001])("caps tracked content at 2000 characters (%s)", leng
   expect(diff.capped).toBe(length > 2000);
 });
 
+it("never shows the bot's thread title as a worker's task", async () => {
+  const { root } = repo();
+  const deps = { panes: async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ENGINE-ROWS | opus" }, { sessionId: "pane-b", cwd: root, label: "BIG-PIC | sonnet" }], title: () => "Initialize as my Orbit teacher", subscribe: () => () => {} };
+  const feature = createMapPane(deps);
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", url);
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("BIG-PIC")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const { workers }: MapSnapshot = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim());
+  expect(workers.map(worker => worker.nick)).toEqual(["ENGINE-ROWS", "BIG-PIC"]);
+  expect(text).not.toContain("Initialize as my Orbit teacher");
+});
+
 it("does no work before opening, refreshes from real edit events, and stops on close", async () => {
   const { root, git } = repo();
   const read = vi.fn(async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ALPHA | script", main: false, exited: false }]);
   let listener: (() => void) | undefined;
   const unsub = vi.fn();
-  const feature = createMapPane({ panes: read, title: () => "Fix layout", subscribe: (_bot, next) => { listener = next; return unsub; } });
+  const feature = createMapPane({ panes: read, subscribe: (_bot, next) => { listener = next; return unsub; } });
   expect(read).not.toHaveBeenCalled();
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
