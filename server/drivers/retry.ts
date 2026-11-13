@@ -70,7 +70,7 @@ export function isResumeCursorRejected(stderr: string): boolean {
 
 // A CDN page in front of the provider (Cloudflare's challenge, its 5xx) is a
 // blip even when it comes back as a 403.
-const EDGE_PATTERN = /\bcloudflare\b|\battention required!|\bjust a moment\.\.\.|\bcf-ray\b/i;
+const EDGE_PATTERN = /\bcloudflare\b|\battention required!|\bjust a moment\b|\bcf-ray\b/i;
 
 const TRANSIENT_PATTERNS: Array<{ pattern: RegExp; reason: TransientReason }> = [
   { pattern: /\b(?:429|rate.?limit|too many requests)\b/i, reason: "rate_limited" },

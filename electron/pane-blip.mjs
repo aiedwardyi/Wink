@@ -28,11 +28,14 @@ export function nudgeApiBlip(session, screenText, at, busy, type) {
   const nudge = session.blipNudge ??= { count: 0, typedAt: 0, at: -Infinity };
   if (nudge.typedAt) {
     // text and Enter in one write lands as a paste that never submits
-    if (at - nudge.typedAt >= ENTER_AFTER_MS) {
-      nudge.typedAt = 0;
+    if (at - nudge.typedAt < ENTER_AFTER_MS) return true;
+    const ours = session.userInputAt < nudge.typedAt && screenText.includes(BLIP_NUDGE);
+    nudge.typedAt = 0;
+    // a user who edited or replaced the nudge keeps their draft unsent
+    if (ours) {
       type("\r");
+      return true;
     }
-    return true;
   }
   // the pane gets a moment to react before its old screen counts as stuck
   if (session.stallChangedAt <= nudge.at && at - nudge.at < NUDGE_AFTER_MS[0]) return true;
@@ -42,7 +45,9 @@ export function nudgeApiBlip(session, screenText, at, busy, type) {
     return false;
   }
   if (nudge.count >= NUDGE_AFTER_MS.length) return false;
-  if (session.userInputAt >= session.stallChangedAt || at - session.stallChangedAt < NUDGE_AFTER_MS[nudge.count]) return true;
+  // a user at the prompt owns the pane, and the usual STALLED path watches it
+  if (session.userInputAt >= session.stallChangedAt) return false;
+  if (at - session.stallChangedAt < NUDGE_AFTER_MS[nudge.count]) return true;
   nudge.count += 1;
   nudge.typedAt = at;
   nudge.at = at;

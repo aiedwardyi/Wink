@@ -4907,6 +4907,8 @@ test("a Claude blip gets three nudges with backoff, then STALLED", async (t) => 
     await f.advance(1);
     assert.equal(nudges(), index + 1);
     assert.equal(child.writes.at(-1), "Continue from where you were.");
+    child.data(claudeBlipScreen(Array(index + 1).fill(CLAUDE_BLIP).join("\r\n"), "Continue from where you were."));
+    await f.settle();
     await f.advance(1_000);
     assert.equal(child.writes.at(-1), "\r");
     child.data("\x1b[2J\x1b[H✻ Working… (1s · esc to interrupt)");
@@ -4941,3 +4943,41 @@ for (const [name, screen, nudged] of [
     assert.equal(f.children[0].writes.includes("Continue from where you were."), nudged);
   });
 }
+
+for (const [name, act] of [
+  ["the user edits it", (f, pane, child) => {
+    child.data(claudeBlipScreen(CLAUDE_BLIP, "Continue from where you were."));
+    f.host.write(f.event, pane.sessionId, "x");
+  }],
+  ["it never reaches the prompt", () => {}],
+]) {
+  test(`the blip nudge is not submitted when ${name}`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+    const child = f.children[0];
+    child.data(claudeBlipScreen(CLAUDE_BLIP));
+    await f.settle();
+    await f.advance(30_000);
+    const typed = child.writes.lastIndexOf("Continue from where you were.");
+    assert.ok(typed >= 0);
+    act(f, pane, child);
+    await f.settle();
+    await f.advance(1_000);
+    assert.equal(child.writes.slice(typed).includes("\r"), false);
+  });
+}
+
+test("a user typing at a blip leaves the pane to the STALLED note", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const child = f.children[0];
+  child.data(claudeBlipScreen(CLAUDE_BLIP));
+  await f.settle();
+  f.host.write(f.event, pane.sessionId, "x");
+  await f.advance(121_000);
+  assert.equal(child.writes.includes("Continue from where you were."), false);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: /);
+});

@@ -131,6 +131,7 @@ describe("provider blips", () => {
     expect(classifyError({ text: cloudflare })).toEqual({ transient: true, reason: "edge_error" });
     expect(classifyError({ exitCode: 1, stderr: cloudflare })).toEqual({ transient: true, reason: "edge_error" });
     expect(classifyError(new Error("403 <title>Just a moment...</title>"))).toEqual({ transient: true, reason: "edge_error" });
+    expect(classifyError({ text: "API Error: 403 Just a moment" })).toEqual({ transient: true, reason: "edge_error" });
     expect(classifyError(new Error("API Error: 502 Bad gateway | cf-ray: 8f1a2b3c4d5e6f70-ICN"))).toEqual({ transient: true, reason: "edge_error" });
   });
 
