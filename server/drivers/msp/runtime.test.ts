@@ -915,8 +915,9 @@ describe("MSP prewarm (fake host)", () => {
   let scratch: string;
   let rpcDump: string;
 
-  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true) => {
+  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true, warmPool?: WarmPool) => {
     const Driver = createMspDriver({
+      warmPool,
       driverKind: "museAgent",
       displayName: "MSP Prewarm",
       models: { default: "muse-spark-1.3", options: [] },
@@ -1051,6 +1052,22 @@ describe("MSP prewarm (fake host)", () => {
 
     expect(await runTurn("t-expired")).toMatchObject({ ok: true });
     expect(serveSpawns(spawn)).toBe(2);
+  });
+
+  it("a small PC holds a click-warmed host 60 s, then a Claude prepared session is admitted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const small = createWarmPool({ totalmem: () => 4 * 1024 ** 3, freemem: () => 3 * 1024 ** 3, cpus: () => 4 });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    await create(() => true, small);
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
+    const claude = () => small.reserve({ engine: "claudeAgent", instanceId: "claude", threadId: "t" }, "fp", { generation: 0, incarnation: "c", identity: "i" }, "speculative");
+    expect(claude()).toBe("denied");
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(claude()).not.toBe("denied");
+    await small.closeAll("test", { final: true });
   });
 
   it("keeps at most one idle prewarmed host", async () => {
