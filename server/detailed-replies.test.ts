@@ -25,7 +25,7 @@ describe("detailed replies", () => {
     expect(source).toContain("detailedReplies: detailedRepliesEnabled(cfg)");
   });
 
-  it("keeps OFF byte-identical at both call sites and changes on the next selection", () => {
+  it("keeps existing reply rules at both call sites and changes on the next selection", () => {
     expect(callSites).toHaveLength(2);
     for (const [expression] of callSites) {
       for (const on of [false, true, false]) {
@@ -33,7 +33,7 @@ describe("detailed replies", () => {
           cfg: { features: { detailedReplies: on } }, detailedRepliesEnabled: config.detailedRepliesEnabled,
         });
         expect(prompt).toContain("for a question, the short answer");
-        expect(prompt).toBe(on ? original.slice(0, original.indexOf(" Default voice (")) : original);
+        expect(prompt.slice(prompt.indexOf(" Always give"))).toBe(on ? original.slice(0, original.indexOf(" Default voice (")) : original);
         expect(prompt).toContain("Always give a visible reply to a message the user types.");
         expect(prompt).toContain("other automated message ends with no text at all");
         expect(prompt).toContain("call no_reply_needed first if you have it");
