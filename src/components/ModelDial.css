@@ -377,7 +377,7 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
   .dial-stage { --glow: .35; --accent-ink: oklch(from var(--accent) min(l, .45) c h); }
   .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) { --hot: oklch(.68 .26 var(--hue)); --halo: oklch(.8 .24 var(--hue)); --glow: .8; }
   .dial-stage[data-max] .dial-bar b { background-image: linear-gradient(90deg, oklch(.6 .25 20), oklch(.6 .25 90), oklch(.6 .25 150), oklch(.6 .25 240), oklch(.6 .25 300)); filter: none; }
-  .dial-shock { background: conic-gradient(in oklch, oklch(.66 .17 20), oklch(.66 .17 140), oklch(.66 .17 260), oklch(.66 .17 20)); }
+  .dial-shock { background: conic-gradient(in oklch, oklch(.68 .24 20), oklch(.68 .24 140), oklch(.68 .24 260), oklch(.68 .24 20)); }
   .dial-seg[data-on] .dial-mark.lit { color: var(--accent-ink); }
   .dial-card:not([aria-pressed="true"]) :is(.dial-card-line, .dial-card-badge) { color: var(--ink); }
   .dial-scene { opacity: 1; }
