@@ -114,6 +114,7 @@ import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from ".
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
 import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -961,9 +962,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
-  // The audio context is born in the tap: phones only let it play from one.
+  // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
   const startCall = useCallback(() => {
-    const ctx = new AudioContext();
+    const ctx = callAudio();
     void ctx.resume();
     placeCall(bot, ctx);
   }, [bot]);
