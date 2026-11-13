@@ -397,7 +397,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
           </button>
           <p className="vm-fine">
             <kbd>{LETTERS[0]}</kbd>-<kbd>{LETTERS[rows.length - 1]}</kbd> {t("model.chart.lab")} <kbd>1</kbd>-<kbd>{maxSlots}</kbd> {t("model.engineAxis")} <kbd>←</kbd><kbd>→</kbd> {t("model.modelAxis")} <kbd>Enter</kbd> {t("model.chart.pick")}
-            {corner && <> <kbd>{altKeyLabel()}</kbd><kbd>S</kbd> {t("model.style")}</>}
+            {corner && <> <kbd>{altKeyLabel()}</kbd><kbd>S</kbd> {t("model.style")} <kbd>{altKeyLabel()}</kbd><kbd>Shift</kbd><kbd>S</kbd> {t("model.style.next")}</>}
             <br />{t("model.dial.asOf", { date: MODEL_INDEX_AS_OF })}
           </p>
         </div>

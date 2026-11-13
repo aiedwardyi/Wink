@@ -27,6 +27,10 @@ export function saveModelPickerView(view: ModelPickerView, via?: "picker"): void
   for (const notify of watchers) notify();
 }
 
+export function nextPickerStyle(styles: readonly ModelPickerView[], shown: ModelPickerView): ModelPickerView {
+  return styles[(styles.indexOf(shown) + 1) % styles.length]!;
+}
+
 function subscribe(notify: () => void) {
   watchers.add(notify);
   return () => { watchers.delete(notify); };

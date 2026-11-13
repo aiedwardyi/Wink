@@ -12,7 +12,7 @@ import { readUsageMode } from "./usage-preferences";
 export function statsUi() {
   return {
     skin: readSkin(), shape: readGeometry(), pickerView: loadModelPickerView(),
-    pickerLook: pickedLook() ?? "follow",
+    pickerLook: pickedLook() === "theme" ? "follow" : pickedLook(),
     replyStyle: loadReplyStyle(), chatBox: rainbowBoxMode(), sidebar: loadSidebarSide(), vibration: vibrationEnabled(),
     usageMode: readUsageMode(), skinsTried: Math.min(99, readTriedSkins().length),
   };

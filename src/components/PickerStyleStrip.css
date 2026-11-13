@@ -40,14 +40,12 @@
   color: var(--pss-ink);
   font: 12px/1.3 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   text-align: left;
-  animation: pss-in 140ms ease-out;
+  transform-origin: top right;
 }
-
-@keyframes pss-in { from { opacity: 0; transform: translateY(-4px); } }
 
 .pss-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 8px; font-weight: 600; letter-spacing: .02em; }
 .pss-head small { font-size: 11px; font-weight: 400; color: var(--pss-dim); }
-.pss-look-head { margin-top: 14px; }
+.pss-tiles + .pss-head, .pss-more + .pss-head { margin-top: 14px; }
 .pss-keys { display: inline-flex; gap: 3px; }
 .pss-keys kbd { padding: 1px 5px; border: 1px solid var(--pss-edge); border-radius: 4px; font: 500 10.5px Inter, sans-serif; color: var(--pss-dim); }
 
@@ -97,6 +95,9 @@
   --pv-line: var(--color-hairline);
 }
 
+.pss-split { position: relative; display: block; }
+.pss-split > .pss-mini + .pss-mini { position: absolute; inset: 0; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+
 .pss-mini svg { display: block; width: 100%; height: 100%; }
 .pss-mini .f-face { fill: var(--pv-face); }
 .pss-mini .f-card { fill: var(--pv-card); }
@@ -106,7 +107,9 @@
 .pss-mini .s-line { stroke: var(--pv-line); }
 .pss-mini .s-acc { stroke: var(--picker-accent); }
 .pss-mini .s-dim { stroke: var(--pv-dim); }
-.pss-mini .f-floor { fill: color-mix(in srgb, var(--pv-face) 90%, #3b2441); }
+.pss-mini .s-ink { stroke: var(--pv-ink); }
+.pss-mini svg * { vector-effect: non-scaling-stroke; }
+.pss-mini svg .thick { vector-effect: none; }
 
 .pss-more {
   display: flex;
@@ -157,6 +160,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .picker-style-strip { animation: none; }
   .pss-tile, .pss-more svg { transition: none; }
 }
