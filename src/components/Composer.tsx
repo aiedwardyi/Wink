@@ -110,8 +110,8 @@ export type RoomPerson = { id: string; name: string; owner?: string };
 
 export type RoomBotStatus = { id: string; text: string; failed?: boolean };
 
-/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` ends this PC's own bots' turns only. */
-export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void };
+/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` backs the box's Stop. `chain` counts a live bot handoff. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
 
@@ -236,7 +236,9 @@ export function Composer({
   const threadId = group?.threadId ?? bot?.threadId ?? room?.base ?? "";
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
-  const stoppable = busy || Boolean(room?.onStop);
+  const chain = group?.botChain || room?.chain;
+  // room Stop also ends a handoff no host bot is working on
+  const stoppable = busy || Boolean(room?.onStop) || Boolean(group?.botChain);
   // a room steers into its working member's turn
   const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
@@ -1052,6 +1054,11 @@ export function Composer({
             {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
           </p>
         ))}
+        {chain ? (
+          <p data-bot-chain role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botChain", { n: chain })}
+          </p>
+        ) : null}
         {room?.status?.map((row) => (
           <p key={row.id} data-my-bot-turn role="status" className={cn("mb-1.5 px-1 text-[12px]", row.failed ? "text-danger" : "text-ink-secondary")}>
             {row.text}

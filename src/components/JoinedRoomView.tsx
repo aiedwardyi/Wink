@@ -76,7 +76,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
     const listed = teamBots?.find((candidate) => candidate.id === bot.id);
     return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor };
   });
-  const working = myTurns.some((bot) => bot.working);
+  const stoppable = myTurns.some((bot) => bot.working || bot.waiting);
   const seq = entries?.at(-1)?.seq;
   useEffect(() => {
     const read = () => {
@@ -145,7 +145,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
               onRestoreReply={restoreReply}
               offline={phase !== "live"}
               status={myTurns.flatMap((bot) => bot.waiting ? [{ id: bot.id, text: t("teamRoom.botBusy", { name: bot.name }) }] : bot.error ? [{ id: bot.id, text: t("teamRoom.botFailed", { name: bot.name }), failed: true }] : [])}
-              onStop={working ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
+              onStop={stoppable ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
+              chain={status === null ? room?.botChain : undefined}
             />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}

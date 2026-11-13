@@ -59,7 +59,7 @@ import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.t
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostSend } from "./rooms/send.ts";
+import { hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -1915,7 +1915,7 @@ function publicGroupState(group: GroupRecord) {
     working: groupIsWorking(group),
     waitingBotIds: group.hosted ? queuedRoomBotIds(group.id, group.threadId) : [],
     taskState: store.taskPacket(group.threadId) ?? undefined,
-    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
+    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice), botChain: liveBotChain(group as HostedGroup) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -6451,6 +6451,7 @@ const guestClient: GuestClient = new GuestClient({
   onBotLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
   onStop: (roomId) => myRoomBotTurns.stop(roomId),
   botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
+  botChain: (roomId) => myRoomBotTurns.chain(roomId),
   alert: roomAlert,
 });
 bus.subscribe((event: RuntimeEvent) => {
@@ -6985,7 +6986,11 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
-  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
+  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) {
+    // the host's line ends a handoff; no turn starts to say so
+    broadcast({ kind: "group", group: publicGroupState(group) });
+    return shared;
+  }
   if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
