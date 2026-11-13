@@ -2338,6 +2338,33 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(call.state().hushed).toBe(true);
     expect(audio.played).toBe(1);
   });
+
+  it("a tap wake is not undone by a quiet line heard before it", async () => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Be quiet.");
+    engine().events.answering();
+    engine().events.turnDone();
+    engine().events.heard("Be quiet.");
+    call.wake();
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(call.state().hushed).toBeUndefined();
+    expect(audio.played).toBe(1);
+  });
+
+  it("naming it in a quiet line while hushed keeps it quiet", async () => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Be quiet.");
+    engine().events.answering();
+    engine().events.turnDone();
+    engine().events.heard("Nova, be quiet please.");
+    engine().events.answering();
+    engine().events.audio(pcm);
+    expect(call.state().hushed).toBe(true);
+    expect(audio.played).toBe(0);
+  });
 });
 
 describe("MIC-HINT", () => {

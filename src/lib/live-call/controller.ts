@@ -178,6 +178,7 @@ export class LiveCall {
   private doneTold = false;
   private generating = false;
   private quiet = false;
+  private wokeAt = 0;
   private soundAt = 0;
   private quietTimer?: ReturnType<typeof setTimeout>;
   private ran = false;
@@ -348,7 +349,7 @@ export class LiveCall {
         this.stir();
         this.heardBuf += text;
         this.caption("user", this.heardBuf);
-        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName)) this.wake();
+        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName)) this.wake(0);
         if (this.softCut && this.deps.audio.playing) {
           this.softCut = false;
           this.cutPlaying();
@@ -695,10 +696,12 @@ export class LiveCall {
   // Speech cut off mid-line (a reconnect) is kept as a line but never answers a card or an offer.
   private flushHeard(ended = true) {
     const text = spokenText(this.heardBuf);
+    // Only a whole line said since the last wake hushes, so a fragment that passes through "...말하지 마" never does.
+    const quiet = ended && !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName);
     this.heardBuf = "";
+    this.wokeAt = 0;
     this.lineIds.user = 0;
-    // Only a whole line hushes, so a fragment that passes through "...말하지 마" or a wake mid-line never does.
-    if (ended && !this.snapshot.hushed && asksForQuiet(text, this.deps.botName)) this.hush();
+    if (quiet) this.hush();
     if (!text) return;
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -939,9 +942,10 @@ export class LiveCall {
     this.set({ hushed: true });
   }
 
-  /** Talking again after a hush, by voice or a tap. */
-  wake() {
+  /** Talking again after a hush, by voice or a tap; a tap leaves what was already heard out of the next hush check. */
+  wake(from = this.heardBuf.length) {
     if (!this.snapshot.hushed) return;
+    this.wokeAt = from;
     this.set({ hushed: undefined });
     this.release();
   }
