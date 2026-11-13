@@ -4,7 +4,6 @@
 import { z } from "zod";
 
 import { holdReload } from "./reload-hold.ts";
-import { shrinkImage } from "./shrink-image.ts";
 
 export type PasteAttachment = {
   kind: "paste";
@@ -204,7 +203,7 @@ export function shrinksImage(file: { type: string; size: number }): boolean {
 /** The saved smaller copy of a big picture, or undefined when none fits. */
 export async function shrunkImagePath(
   file: Blob & { name: string },
-  shrink: (file: Blob, maxBytes: number) => Promise<Blob | null> = shrinkImage,
+  shrink: (file: Blob, maxBytes: number) => Promise<Blob | null>,
   uploader: (file: File) => Promise<{ path: string }> = uploadAttachmentFile,
 ): Promise<string | undefined> {
   try {
@@ -509,13 +508,14 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
     allowImages: boolean;
     getPath: (file: T) => string;
     uploadImage: (file: T, allowImages: boolean) => Promise<Attachment | null>;
+    /** Saves a big picture's smaller copy; the browser passes shrunkPicture. */
     shrunkPath?: (file: T) => Promise<string | undefined>;
     t: (key: "composer.uploadTooBig" | "composer.uploadFailed", vars?: Record<string, string | number>) => string;
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
   const { allowImages, getPath, uploadImage, t } = _opts;
-  const shrunkPath = _opts.shrunkPath ?? (async (file: T) => (file instanceof Blob ? shrunkImagePath(file) : undefined));
+  const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
   const tooBig: string[] = [];

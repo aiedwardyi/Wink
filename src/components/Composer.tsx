@@ -56,6 +56,7 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
@@ -664,6 +665,7 @@ export function Composer({
       allowImages: engineSupportsImages,
       getPath: pathForFile,
       uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
     // Keep file-specific failures beside the attachments. A successful

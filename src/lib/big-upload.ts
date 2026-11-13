@@ -3,8 +3,9 @@
 // after any error the client asks for it and carries on from there.
 import { z } from "zod";
 
-import { shrunkImagePath, UPLOAD_MAX_BYTES } from "./composer-attachments.js";
+import { UPLOAD_MAX_BYTES } from "./composer-attachments.js";
 import { holdReload } from "./reload-hold.js";
+import { shrunkPicture } from "./shrink-image.js";
 
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 ** 2;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 30000];
@@ -281,7 +282,7 @@ function pump() {
       onProgress: (sent) => setJob(id, { sent }),
       onPhase: (phase) => setJob(id, { phase }),
     }),
-    job.shrink && job.file instanceof Blob ? shrunkImagePath(job.file) : undefined,
+    job.shrink && job.file instanceof Blob ? shrunkPicture(job.file) : undefined,
   ]).then(([done, preview]) => {
     const result = preview ? { ...done, preview } : done;
     if (jobs.has(id)) job.save?.(result, uploadId);
