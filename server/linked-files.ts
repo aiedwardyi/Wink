@@ -193,9 +193,11 @@ function decodedRuns(text: string): string {
   return text.includes("%") ? text.replace(/(?:%[0-9a-f]{2})+/gi, decodeHref) : text;
 }
 
-function escapeAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll("\t", "&#9;").replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
+const ENTITY: Record<string, string> = { quot: "\"", lt: "<", gt: ">", amp: "&" };
+
+function attachedFiles(text: string): string[] {
+  return [...text.matchAll(/<attached-file\s+path="([^"]*)"/g)].map(([, path]) =>
+    path!.replace(/&(?:#(\d+)|(\w+));/g, (entity, code?: string, name?: string) => (code ? String.fromCharCode(Number(code)) : ENTITY[name!] ?? entity)));
 }
 
 function contentDisposition(name: string, attachment: boolean): string {
@@ -267,10 +269,10 @@ function folderGrant(folder: string, roots: readonly string[]): string | null {
 function linkingMessages(options: ServeLinkedFileOptions, target: string, folder = false): { id: string; roots: readonly string[] }[] {
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
-  const picture = !folder && mediaType(target)?.startsWith("image/") ? `<attached-file path="${escapeAttribute(target)}"` : "";
+  const picture = !folder && mediaType(target)?.startsWith("image/");
   for (const message of options.messages) {
     // A picture the user attached by path shows on its own file chip.
-    if (picture && message.role === "user" && message.text?.includes(picture)) {
+    if (picture && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
       hits.push({ id: message.id, roots: [] });
       continue;
     }
