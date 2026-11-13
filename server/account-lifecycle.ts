@@ -54,7 +54,8 @@ export class AccountLifecycle {
 
   // undefined until restore can answer per account: before it starts, or while a drain may still move routing.
   restoredFor(of: string): Promise<void> | undefined {
-    return this.restoring && (this.restoring.get(this.bots?.routedAccount(of) ?? "") ?? Promise.resolve());
+    if (!this.restoring || !this.bots) return undefined;
+    return this.restoring.get(this.bots.routedAccount(of) ?? "") ?? Promise.resolve();
   }
 
   async restore() {

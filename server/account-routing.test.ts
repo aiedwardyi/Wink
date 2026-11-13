@@ -94,14 +94,16 @@ async function fixture(empty = false, of = "claude") {
   const useDefault = (id: string) => request("POST", `/api/accounts/${id}/default`);
   const resolve = () => controller.bots?.resolve(bot) ?? bot.modelSelection;
   const notes = () => noteGenerator(registry.instances(), controller.bots?.noteAccount());
-  const patchModel = async (selection: ModelSelection, startup?: Promise<unknown>, extra: Record<string, unknown> = {}) => {
-    const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
-      checkedModelSelection: (raw: unknown) => {
-        try { return { ok: true, selection: controller.bots?.checkSelection(raw as ModelSelection) ?? raw as ModelSelection }; }
-        catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
-      },
-      restoreWait: (of?: string) => (of === undefined ? undefined : controller.restoredFor(of)) ?? startup,
-    } as unknown as Parameters<typeof createBotRoutes>[0]);
+  let startup: Promise<unknown> | undefined;
+  const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
+    checkedModelSelection: (raw: unknown) => {
+      try { return { ok: true, selection: controller.bots?.checkSelection(raw as ModelSelection) ?? raw as ModelSelection }; }
+      catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
+    },
+    restoreWait: (of?: string) => (of === undefined ? undefined : controller.restoredFor(of)) ?? startup,
+  } as unknown as Parameters<typeof createBotRoutes>[0]);
+  const patchModel = async (selection: ModelSelection, wait?: Promise<unknown>, extra: Record<string, unknown> = {}) => {
+    startup = wait;
     let status = 0;
     const req = Object.assign(Readable.from([JSON.stringify({ modelSelection: selection, ...extra })]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     const res = { writeHead: (code: number) => { status = code; }, end: () => {} } as unknown as ServerResponse;
@@ -247,6 +249,23 @@ describe("engine default account routing", () => {
     await Promise.all([toAccount, rename, restoring]);
     expect(statuses).toEqual(["switch 200", "rename 200"]);
     expect(f.bot.name).toBe("Renamed");
+  });
+
+  it("keeps the latest model pick when an earlier one waits for a restoring account", async () => {
+    const f = await fixture();
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    const instance = f.registry.get(f.added[0].id)!;
+    const snapshot = instance.snapshot.bind(instance);
+    let verify!: () => void;
+    const verified = new Promise<void>((resolve) => { verify = resolve; });
+    vi.spyOn(instance, "snapshot").mockImplementation(async (options) => { await verified; return snapshot(options); });
+    const restoring = f.controller.restore();
+    const first = f.patchModel({ instanceId: "claude", model: "claudeAgent-1" }, restoring);
+    const latest = f.patchModel({ instanceId: "codex", model: "codex-1" }, restoring);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    verify();
+    expect(await Promise.all([first, latest, restoring.then(() => 0)])).toEqual([200, 200, 0]);
+    expect(f.bot.modelSelection.instanceId).toBe("codex");
   });
 
   it.each(["stopped", "missing"])("asks for a choice for a %s default account", async (reason) => {

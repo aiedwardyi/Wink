@@ -68,7 +68,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
     activeVpsThreads,
     resumePaneWakes,
   } = deps;
-  const applyProfile = (id: string, input: BotProfilePatchInput) => {
+  const patchTurns = new Map<string, Promise<unknown>>();
+  const applyProfile =(id: string, input: BotProfilePatchInput) => {
     const parsed = parseBotProfilePatch(input, true);
     if (!parsed.ok) return { status: 400, error: parsed.error };
     if (parsed.patch.avatarUrl && !storedAvatarExists(parsed.patch.avatarUrl)) {
@@ -267,9 +268,13 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
       // A plain model switch waits only for its engine's account; any other edit keeps the whole startup wait.
+      // Edits to one bot still land in arrival order, so an earlier pick held for its account never overwrites a later one.
       const target = (body.modelSelection as { instanceId?: unknown } | null | undefined)?.instanceId;
       const switchOnly = Object.keys(body).every((key) => ["modelSelection", "holdForSwitch", "requireAvailableModel"].includes(key));
-      await deps.restoreWait?.(switchOnly && typeof target === "string" ? target.trim() : undefined);
+      const turn = (patchTurns.get(m[1]) ?? Promise.resolve()).then(() => deps.restoreWait?.(switchOnly && typeof target === "string" ? target.trim() : undefined));
+      patchTurns.set(m[1], turn);
+      await turn;
+      if (patchTurns.get(m[1]) === turn) patchTurns.delete(m[1]);
       const existingBot = store.bot(m[1]);
       if (body.requireAvailableModel !== undefined && typeof body.requireAvailableModel !== "boolean") {
         return json(res, 400, { error: "requireAvailableModel must be true or false" });
