@@ -8,6 +8,7 @@ import * as context from "./context-compaction.ts";
 import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
+import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
@@ -67,7 +68,7 @@ function summarizedChat() {
     expect(ready.compaction).toBeUndefined();
     const prepared = landed ? { ...ready, compaction: store.activePath(threadId).find((row) => row.id === summary.id)!.compaction } : ready;
     const turn = prepareTurn({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge,
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge,
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
