@@ -6,7 +6,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks } from "./ChatMarkdown";
+import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
 import { applyLocale } from "@/lib/i18n";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
@@ -17,6 +17,11 @@ vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code
 
 beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
+
+// warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
+it("warms the parser outside a render", () => {
+  expect(() => warmMarkdown()).not.toThrow();
+});
 
 describe("ChatMarkdown streaming", () => {
   it("preserves code card identity and spoiler state across deltas and settle", async () => {
