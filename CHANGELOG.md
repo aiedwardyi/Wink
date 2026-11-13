@@ -2,6 +2,23 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.260] - 2026-11-13
+
+### Added
+- The model picker has a Chart style beside Dial and List: each model is a cost and intelligence line with effort stops.
+
+### Changed
+- The call button lives in the message box: Call when idle, Send while typing, Stop while busy, and End with Mute beside it during a call. The header no longer has a call button.
+- Picture and file menus work the same everywhere, and menus, pickers and close buttons share one hover style. On phones, Copy appears for Wink pictures and readable outside pictures.
+- In team rooms, host bots name each team bot and its owner and hand off through the owner; an @name that matches no one reaches no one.
+- The call voice says each reply once, stops re-offering the same change, and sticks to what the chat shows.
+
+### Fixed
+- Linked HTML pages render in Show, and HTML files open in your default app.
+- Teammates see the room's Bots again after upgrading.
+- The phone Memory page shows its map with a Retry when the memory read hangs, instead of only Auto Notes and Memory File.
+- Pictures teammates post in a group now reach the bots.
+
 ## [1.0.259] - 2026-11-13
 
 ### Added
