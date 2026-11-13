@@ -64,6 +64,15 @@ describe("composer stop", () => {
     expect(stopButton().className).toEqual(expect.stringContaining("bg-ink text-app"));
   });
 
+  it("shows only Stop in the empty corner while busy", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(Composer, { bot, onCall: vi.fn() })));
+    expect(stopButton()).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Call Stopper"]')).toBeNull();
+  });
+
   it("marks Stop for skin styling without changing its size or labels", async () => {
     await mount(bot);
     expect(stopButton().getAttribute("data-orbit-composer-stop")).toBe("");
