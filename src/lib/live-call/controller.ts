@@ -187,6 +187,7 @@ export class LiveCall {
   private frameAt = 0;
   private micMisses = 0;
   private micTimer?: ReturnType<typeof setInterval>;
+  private readyTimer?: ReturnType<typeof setTimeout>;
   private turnHadAudio = false;
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
@@ -301,11 +302,12 @@ export class LiveCall {
     const engine = this.deps.engine();
     this.engine = engine;
     const mine = () => this.engine === engine && !this.ended;
-    const stuck = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
     const events: LiveEvents = {
       ready: () => {
         if (!mine()) return;
-        clearTimeout(stuck);
+        clearTimeout(this.readyTimer);
         this.connected = true;
         this.wasLive = true;
         this.deps.audio.stopRing();
@@ -1007,6 +1009,7 @@ export class LiveCall {
     clearTimeout(this.quietTimer);
     clearTimeout(this.settleTimer);
     clearInterval(this.micTimer);
+    clearTimeout(this.readyTimer);
     engine?.close();
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;
