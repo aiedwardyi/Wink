@@ -287,6 +287,7 @@ import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsRespon
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
+import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -3067,7 +3068,7 @@ const accountRuntime = createAccountRuntime({
     usageBoard.touch(); void accountUpdates(id);
   },
   rateLimits: rateLimitsByInstance, saveRateLimits: () => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.touch(); }, usage: refreshUsage, availability: automaticAvailability,
-  invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
+  invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
   onMainChanged: (change) => { accountNotices.mainChanged(change); usageBoard.recordMain(change); },
 });
@@ -7654,6 +7655,7 @@ const threadRoutes = createThreadRoutes({
   approvalBus,
 });
 const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
+const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -7813,7 +7815,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if ("skipped" in note) return json(res, 200, { skipped: true });
         return json(res, 201, { messageId: note.messageId });
       }
-      // terminal_spawn, before the pane opens: the engine's usage left, or a hold on a nearly empty window.
+      // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
@@ -7821,7 +7823,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
-        return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
+        return json(res, 200, await spawnUsage(String(body.command ?? "")));
       }
       // terminal_playbook: the on-demand part, once per provider session.
       if (method === "POST" && path === "/api/internal/worker-playbook") {
@@ -8416,6 +8418,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/terminal/pane-counts") {
       const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
       return json(res, counts.status, counts.body);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo)$/);
+    if (m) {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return await workerMap.handle(req, res, m[1], m[2], url);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/terminal-cwd$/);
     if (m && method === "GET") {

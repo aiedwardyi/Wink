@@ -1,9 +1,9 @@
-// Usage left for the engine a terminal_spawn launches, and a hold on a nearly empty window.
+// Usage left for the engine a terminal_spawn launches.
 import type { RateLimitWindow } from "./contracts.ts";
 import type { RateLimitsMap, RateLimitsReport } from "./rate-limits-store.ts";
 
 type Engine = { name: string; instanceId: string };
-type SpawnUsage = { hold?: string; line?: string };
+type SpawnUsage = { line?: string };
 export type SpawnAccount = { readonly id: string; readonly generation: number; readonly name: string };
 
 // First words of the terminal_spawn templates, each with its engine's default instance.
@@ -20,9 +20,6 @@ const ENV_STATEMENT = /^\s*\$env:(\w+)\s*=\s*(?:'[^']*'|"[^"]*"|[^\s;]+)\s*;/i;
 const OTHER_HOME = new Set(["CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"]);
 const STALE_MS = 5 * 60_000;
 const REFRESH_CAP_MS = 3_000;
-const REPEAT_MS = 2 * 60_000;
-const SESSION_MIN_LEFT = 25;
-const WEEKLY_MIN_LEFT = 10;
 const CLOCK = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 export function spawnEngine(command: string): Engine | null {
@@ -58,7 +55,6 @@ type Deps = {
 
 export function createSpawnUsage(deps: Deps) {
   const now = deps.now ?? Date.now;
-  const held = new Map<string, { at: number; instanceId: string }>();
   const refreshed = async (instanceId: string) => {
     const result = await deps.refresh(instanceId, deps.rateLimits.get(instanceId));
     const current = deps.rateLimits.get(instanceId);
@@ -67,7 +63,7 @@ export function createSpawnUsage(deps: Deps) {
       deps.save(instanceId, result.report);
     }
   };
-  const usage = async (botId: string, label: string, command: string, account?: SpawnAccount, recovery = false): Promise<SpawnUsage> => {
+  return async (command: string, account?: SpawnAccount): Promise<SpawnUsage> => {
     const engine = account ? { name: account.name, instanceId: account.id } : spawnEngine(command);
     // Legacy panes do not inherit the instance's account environment.
     if (!engine || (!account && Object.keys(deps.environment(engine.instanceId) ?? {}).some((name) => OTHER_HOME.has(name.toUpperCase())))) return {};
@@ -79,22 +75,11 @@ export function createSpawnUsage(deps: Deps) {
     const session = live.find((window) => window.id === "five_hour");
     const weekly = live.find((window) => window.id === "seven_day");
     if (!session && !weekly) return {};
-    const text = (suffix: string) => [
-      session && `5h ${left(session)}%${suffix}${session.resetsAt === null ? "" : ` (resets ${CLOCK.format(session.resetsAt)})`}`,
-      weekly && `weekly ${left(weekly)}%${suffix}`,
+    const text = [
+      session && `5h ${left(session)}%${session.resetsAt === null ? "" : ` (resets ${CLOCK.format(session.resetsAt)})`}`,
+      weekly && `weekly ${left(weekly)}%`,
     ].filter(Boolean).join(", ");
-    const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && (recovery || window.resetsAt !== null) && left(window) < min;
     const name = deps.nameOf?.(engine.instanceId, engine.name) ?? engine.name;
-    for (const [key, heldAt] of held) if (at - heldAt.at > REPEAT_MS) held.delete(key);
-    const key = JSON.stringify(account ? [botId, label, command, account.id, account.generation] : [botId, label, command]);
-    if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && (recovery || !held.has(key))) {
-      if (!recovery) held.set(key, { at, instanceId: engine.instanceId });
-      return { hold: `Held: ${name} ${text(" left")}. Pick another engine, or send the same spawn again within 2 min to launch anyway.` };
-    }
-    if (!recovery) held.delete(key);
-    return { line: `${name} usage left: ${text("")}.` };
+    return { line: `${name} usage left: ${text}.` };
   };
-  return Object.assign(usage, { invalidate: (instanceId: string) => {
-    for (const [key, hold] of held) if (hold.instanceId === instanceId) held.delete(key);
-  } });
 }

@@ -242,8 +242,8 @@ describe("terminal proxy", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("returns a usage hold as a plain result and opens no pane", async () => {
-    const hold = "Held: Codex 5h 15% left (resets 13:40), weekly 87% left. Pick another engine, or send the same spawn again within 2 min to launch anyway.";
+  it("returns a spawn hold as a plain result and opens no pane", async () => {
+    const hold = "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
     const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify(String(url).includes("/spawn-usage") ? { hold } : { sessionId: "p1", generation: 1 }), { status: 200 }));
     const config = { ...CONFIG, harness: "http://127.0.0.1:2", commsToken: "comms" };
