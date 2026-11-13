@@ -169,6 +169,15 @@ describe("Sidebar needs-you glow", () => {
     expect(pulse).toMatch(/opacity:\s*0\b/);
   });
 
+  it("pulses a few times then holds the ring, and stops while the window is hidden", () => {
+    const rule = css.match(/\.needs-you-glow::after \{(.*?)\}/s)?.[1] ?? "";
+    const animation = rule.match(/animation:\s*needs-you-pulse([^;]*);/)?.[1] ?? "";
+    expect(animation).not.toBe("");
+    expect(animation).not.toContain("infinite");
+    expect(rule).toMatch(/opacity:\s*1\b/);
+    expect(css).toMatch(/html\[data-orbit-idle="hidden"\] \.needs-you-glow::after \{[^}]*animation:\s*none/);
+  });
+
   it("pulses while a fired routine is unseen, on rows, rail, collapsed and hidden sections, and settles on open", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     window.localStorage.setItem(SIDEBAR_COLLAPSED_SECTIONS_KEY, JSON.stringify(["section:Ops"]));
