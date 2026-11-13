@@ -265,6 +265,32 @@ export function peerCardRows(): Array<{ threadId: string; id: string }> {
     .all() as Array<{ threadId: string; id: string }>;
 }
 
+/** A quick ask with no answer row, found without loading the thread. */
+export function hasUnansweredQuickAsk(threadId: string): boolean {
+  return Boolean(db().prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
+    AND json_extract(json, '$.quick.state') = 'asked'
+    AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
+      AND json_extract(json, '$.quick.askId') IS NOT NULL) LIMIT 1`).get(threadId, threadId));
+}
+
+/** The active path newest first, one row at a time, or null when the thread has no stored leaf. */
+export function activePathBack(threadId: string): Iterable<Message> | null {
+  const leaf = (db().prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id;
+  if (!leaf) return null;
+  const row = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?");
+  return (function* () {
+    const seen = new Set<string>();
+    for (let id: string | null | undefined = leaf; id && !seen.has(id); ) {
+      seen.add(id);
+      const found = row.get(threadId, id) as { json: string } | undefined;
+      if (!found) return;
+      const message = rowToMessage(found);
+      yield message;
+      id = message.parentId;
+    }
+  })();
+}
+
 /** Newest message time without loading the transcript. */
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;

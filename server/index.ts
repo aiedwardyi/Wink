@@ -291,7 +291,7 @@ import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
-import { hasLocalUndeliveredPaneNote, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
+import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
 import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
@@ -9082,13 +9082,7 @@ startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => pho
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
 startupTiming.measure("paneWake", () => {
-  for (const bot of store.bots) {
-    const task = store.taskByThread(bot.id, bot.threadId);
-    const deliveredId = task?.paneNotesDeliveredId;
-    if (deliveredId !== undefined && hasLocalUndeliveredPaneNote(store.activePath(bot.threadId), deliveredId ?? undefined, profileSyncSettings.deviceId, task?.paneNotesSkippedId)) {
-      paneWake.noteArrived(bot.id, bot.threadId);
-    }
-  }
+  for (const { botId, threadId } of bootPaneWakes(store, profileSyncSettings.deviceId)) paneWake.noteArrived(botId, threadId);
 });
 // Saved probes steer automatic picks until the deferred refresh lands.
 rememberAutomaticAvailability(registry.describeSaved());
