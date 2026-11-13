@@ -122,7 +122,7 @@ describe("quick route", () => {
     await h.settled();
     const [ask, answer] = h.rows().slice(-2);
     expect(ask).toMatchObject({ role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
-    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", quick: { state: "answer", askId: ask!.id } });
+    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", engine: "claudeAgent", quick: { state: "answer", askId: ask!.id } });
     expect(h.steer).not.toHaveBeenCalled();
     const retry = await h.send({ text: QUESTION, sendId: "send-quick-0000000001" });
     expect(retry.data).toMatchObject({ quick: true, message: { id: ask!.id } });

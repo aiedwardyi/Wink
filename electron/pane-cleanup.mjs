@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { createWorkerPeak } from "./worker-peak.mjs";
 
 const DAY_MS = 24 * 60 * 60_000;
 const SWEEP_MS = 6 * 60 * 60_000;
@@ -250,7 +251,7 @@ export async function readCleanupPins(dataDir) {
   return pins;
 }
 
-export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.defaultApp ? process.env.OMB_USER_DATA || "dev" : "app", budget = SWEEP_BUDGET, warn = () => {} }) {
+export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.defaultApp ? process.env.OMB_USER_DATA || "dev" : "app", budget = SWEEP_BUDGET, peakFile = null, warn = () => {} }) {
   tempRoot = resolveTempRoot(tempRoot);
   const git = (cwd, args) => runGit(cwd, args, setPriority);
   const file = path.join(home, ".orbit", "pane-ledger.json");
@@ -264,6 +265,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   entries = entries.filter((entry) => entry && typeof entry.id === "string" && typeof entry.cwd === "string" && typeof entry.tempRoot === "string");
   // Rows from before instance ids stay closable by any instance.
   for (const entry of entries) if (!entry.closedAt && (entry.instance ?? instance) === instance) entry.closedAt = now();
+  const peak = peakFile ? createWorkerPeak(peakFile, entries.filter((entry) => (entry.instance ?? instance) === instance), now, warn) : null;
   let panes = () => [];
   let tail = Promise.resolve();
   let timer = null;
@@ -790,6 +792,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       const root = resolveTempRoot(session.tempRoot || tempRoot);
       entries.push({ id: session.id, instance, botId: session.botId, label: session.label, cwd: session.cwd, tempRoot: root, scratch: nick(session.label) ? path.resolve(root, `wink-${nick(session.label)}`) : null, openedAt: now(), closedAt: null, keep: false, reported: false });
       save();
+      peak?.live(entries.filter((entry) => !entry.closedAt && entry.instance === instance).length);
     },
     exited(session) {
       const entry = entries.findLast((candidate) => candidate.id === session.id);
@@ -899,7 +902,7 @@ if (!isMainThread && workerData?.paneCleanup) {
     asks.set(id, resolve);
     parentPort.postMessage({ type: "panes", id });
   });
-  const cleanup = createPaneCleanup({ ...options, pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
+  const cleanup = createPaneCleanup({ ...options, peakFile: path.join(dataDir, "worker-peak.json"), pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
   parentPort.on("message", async ({ type, id, session, keep, panes: open }) => {
     if (type === "panes") {
       asks.get(id)?.(open);

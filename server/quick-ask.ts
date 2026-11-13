@@ -266,7 +266,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {

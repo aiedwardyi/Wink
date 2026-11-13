@@ -285,7 +285,8 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
       const at = line.at !== undefined ? Math.min(line.at, now()) : undefined;
       const row = store.appendMessage(bot.threadId, line.who === "user"
         ? { role: "user", kind: "text", text, call: { id: callId }, ...(at ? { at } : {}) }
-        : { role: "bot", kind: "text", text, call: { id: callId, voice: true }, ...(at ? { at } : {}) });
+        // Gemini Live speaks the call, whatever engine the bot chats on.
+        : { role: "bot", kind: "text", text, engine: "geminiAgent", call: { id: callId, voice: true }, ...(at ? { at } : {}) });
       ids.push(row.id);
     }
     return json(res, 200, { ids });

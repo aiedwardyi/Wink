@@ -368,9 +368,9 @@ describe("call lines and end", () => {
     expect(status).toBe(200);
     expect(data.ids).toHaveLength(2);
     const rows = h.store.activePath(h.bot.threadId).slice(-2);
-    expect(rows.map(({ role, kind, text, call }) => ({ role, kind, text, call }))).toEqual([
-      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId } },
-      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true } },
+    expect(rows.map(({ role, kind, text, call, engine }) => ({ role, kind, text, call, engine }))).toEqual([
+      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId }, engine: undefined },
+      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true }, engine: "geminiAgent" },
     ]);
   });
 
