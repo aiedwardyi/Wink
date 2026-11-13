@@ -27,7 +27,8 @@ it("follows only the pinned worker and releases a departed pin", () => {
   expect(mapFollow(pinned, [])).toMatchObject({ worker: null, path: null, pinned: null });
 });
 
-it("keeps an unfollowed deleted file selected until the user chooses another", () => {
-  const manual = { ...initial, follow: false, worker: "a", path: "gone.ts" };
-  expect(mapFollow(manual, workers)).toEqual(manual);
+it("moves an unfollowed selection off a file that is no longer changed", () => {
+  const manual = { ...initial, follow: false, worker: "a", path: "reverted.ts" };
+  expect(mapFollow(manual, workers)).toEqual({ ...manual, path: "a.ts" });
+  expect(mapFollow(manual, [{ ...workers[0], path: undefined, files: [] }, workers[1]])).toEqual({ ...manual, path: null });
 });
