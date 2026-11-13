@@ -1,6 +1,4 @@
 .map-pane { container: map-pane / inline-size; }
-.map-pane { --map-w0: #80848f; --map-w1: #929fff; --map-w2: #b26e25; --map-w3: #2fa290; --map-w4: #1885d0; --map-w5: #91669f; --map-w6: #23cce6; }
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .map-pane { --map-w0: #8c8476; --map-w1: #374ca6; --map-w2: #b26d07; --map-w3: #059579; --map-w4: #3982d2; --map-w5: #652d6e; --map-w6: #057189; }
 .map-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); }
 .map-worker-menu { position: relative; min-width: 0; flex-shrink: 0; max-width: 50%; }
 .map-worker { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 3px 7px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); font: 600 11px var(--font-sans, sans-serif); letter-spacing: .04em; }
