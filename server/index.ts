@@ -52,6 +52,7 @@ import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { createRoomLanes, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -286,6 +287,7 @@ import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsRespon
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
+import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -1787,8 +1789,7 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
   const instance = botAccounts.instance(bot);
-  const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
-  if (busyGroup) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
+  for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
@@ -2938,8 +2939,8 @@ function flushInterruptedTask(
   return next ? persistTaskPacket(next) : null;
 }
 
-function releaseInterruptedBot(botId: string, threadId: string) {
-  stopScreenPoller(botId);
+function releaseInterruptedBot(botId: string, threadId: string, lane = roomLanes.thread(botId) === threadId) {
+  if (!lane) stopScreenPoller(botId);
   if (activeVpsThreads.get(botId) === threadId) activeVpsThreads.delete(botId);
   const group = store.groupByThread(threadId);
   const speaker = groupSpeakers.get(threadId);
@@ -2948,7 +2949,7 @@ function releaseInterruptedBot(botId: string, threadId: string) {
     const addedMessage = unreadTurns.settle(threadId, undefined, store.messagesFor(threadId));
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
   }
-  if (store.bot(botId)?.busy) store.setActivity(botId, "idle");
+  if (!lane && store.bot(botId)?.busy) store.setActivity(botId, "idle");
 }
 
 /** Put a notification on the wire. Clients decide what to do with it — a
@@ -3129,6 +3130,8 @@ const watchdog = new TurnWatchdog({
         turnsAtWrite: store.taskByThread(turn.botId, turn.threadId)?.usage?.turns ?? 0,
       }));
     }
+    // read now: the stalled turn's own terminal event can settle the lane before the grace ends
+    const lane = roomLanes.thread(turn.botId) === turn.threadId;
     const instance = bot ? botAccounts.instance(bot, turn.threadId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
@@ -3159,7 +3162,8 @@ const watchdog = new TurnWatchdog({
         store.patchGroup(group.id, { busyBotId: null, unread: true });
       }
       const currentBot = store.bot(turn.botId);
-      if (currentBot?.busy) {
+      roomLanes.settle(turn.threadId);
+      if (currentBot?.busy && !lane) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
         store.setActivity(currentBot.id, "idle");
@@ -3170,6 +3174,8 @@ const watchdog = new TurnWatchdog({
         paneWake.settled();
         drainConnectorResumes();
         drainSecretResumes();
+      } else if (lane) {
+        drainQueuedSends();
       }
     }, 6_000);
     release.unref?.();
@@ -3925,7 +3931,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const card = store.messagesFor(event.threadId).find((candidate) => candidate.id === message.id)?.card;
         if (!card || card.answered) return;
         // the bot is not working now — it is waiting on a person
-        if (asker.busy) store.setActivity(asker.id, "waiting-on-you");
+        if (asker.busy && roomLanes.thread(asker.id) !== event.threadId) store.setActivity(asker.id, "waiting-on-you");
         notify(buildNotification(
           permission ? "approval" : "question",
           asker,
@@ -3967,7 +3973,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "request.resolved": {
       // answered (by whoever): the turn is working again, unless it settled
       const waiting = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
-      if (waiting?.activity === "waiting-on-you") store.setActivity(waiting.id, "working");
+      if (waiting?.activity === "waiting-on-you" && roomLanes.thread(waiting.id) !== event.threadId) store.setActivity(waiting.id, "working");
       const messageId = event.requestId ? askMessageByRequest.get(`${event.threadId}:${event.requestId}`) : null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
@@ -4189,11 +4195,13 @@ bus.subscribe((event: RuntimeEvent) => {
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
-        if (speakingBot?.busy) {
+        if (speakingBot?.busy && roomLanes.thread(speakingBot.id) !== event.threadId) {
           store.setActivity(speakingBot.id, "idle");
           // Channel replies only affect the channel unread state.
         }
       }
+      // after a Stop already cleared the speaker too
+      roomLanes.settle(event.threadId);
       // Before the queue drain subscribers append the next send.
       const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
@@ -4501,7 +4509,7 @@ function drainQueuedSends() {
       continueQueuedDrainIfIdle(store, botId, drainQueuedSends, botHasActiveTurn);
       rerunIfIdle();
     });
-  }, (botId) => botHasActiveTurn(botId) || taskResumes.blocksQueuedSend(botId));
+  }, (botId) => botHasActiveTurn(botId) || taskResumes.blocksQueuedSend(botId), roomLanes.free);
   myRoomBotTurns.drain();
 }
 
@@ -4665,11 +4673,11 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. Put anything skipped or failed first; keep it short and drop nothing." +
+  " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never a vague 'we', and call a cause likely until you reproduce it. Quote a number only from a source you opened, and say which run, file or date it came from. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. Judge the user's ideas on merit and say plainly when one is wrong or low value; when you change your mind, name what convinced you. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
-  " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
+  " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
 const DETAILED_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS;
 
@@ -4710,6 +4718,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+const roomLanes = createRoomLanes();
 
 /** Live ownership resolved BY BOT: this bot still holds the thread it was
  * working on, or the thread being asked about is held by someone. Both
@@ -6468,15 +6477,18 @@ async function runGroupMemberTurn(
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
-  if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
+  // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
+  const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
+    botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
+  if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
     if (!claimHeld) return;
     claimHeld = false;
-    takeStartingHold(botId)();
-    turnStartClaims.delete(botId);
+    takeStartingHold(lane ? laneKey(botId) : botId)();
+    if (!lane) turnStartClaims.delete(botId);
   };
   try {
     return await runClaimedGroupMemberTurn(
@@ -6493,13 +6505,19 @@ async function runGroupMemberTurn(
       excludeIds,
       rootId,
       authority,
+      lane,
     );
   } finally {
     releaseTurnStart();
-    queueMicrotask(() => continueQueuedDrainIfIdle(store, botId, () => {
-      drainQueuedSends();
-      paneWake.settled();
-    }, botHasActiveTurn));
+    if (lane) {
+      roomLanes.release(botId, threadId);
+      queueMicrotask(drainQueuedSends);
+    } else {
+      queueMicrotask(() => continueQueuedDrainIfIdle(store, botId, () => {
+        drainQueuedSends();
+        paneWake.settled();
+      }, botHasActiveTurn));
+    }
   }
 }
 
@@ -6519,8 +6537,11 @@ async function runClaimedGroupMemberTurn(
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
   authority?: string,
+  // the bot's second lane: no busy flag, no hands, and a Stop keyed apart from the 1:1
+  lane = false,
 ): Promise<boolean> {
-  const epoch = currentTurnEpoch(botId);
+  const turnKey = lane ? laneKey(botId) : botId;
+  const epoch = currentTurnEpoch(turnKey);
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
   const bot = store.bot(botId);
@@ -6530,7 +6551,7 @@ async function runClaimedGroupMemberTurn(
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
-  if (bot.busy) {
+  if (bot.busy && !lane) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   // Capture before any await. startGroupTurn persists the next instruction
@@ -6570,7 +6591,7 @@ async function runClaimedGroupMemberTurn(
     onDispatchError?.(message);
     return true;
   }
-  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
+  startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
@@ -6651,7 +6672,7 @@ async function runClaimedGroupMemberTurn(
   // processes, interleaved token spend, and an interrupt that only ever
   // reached one of them.
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-  if (bot.shareTerminalWithChat !== false) {
+  if (!lane && bot.shareTerminalWithChat !== false) {
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
@@ -6663,7 +6684,7 @@ async function runClaimedGroupMemberTurn(
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
-    instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
+    !lane && instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
     availableSkills(),
   );
   if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
@@ -6695,14 +6716,17 @@ async function runClaimedGroupMemberTurn(
   const readyBot = store.bot(bot.id);
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
-  if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  // automatic routing can resolve to an engine that cannot run read-only
+  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
-  store.setActivity(bot.id, "working", threadId);
-  dispatchedThreads.set(bot.id, threadId);
-  keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
-  const releaseStarting = takeStartingHold(bot.id);
+  if (!lane) {
+    store.setActivity(bot.id, "working", threadId);
+    dispatchedThreads.set(bot.id, threadId);
+    keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
+  }
+  const releaseStarting = takeStartingHold(turnKey);
   releaseTurnStart?.();
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -6776,7 +6800,7 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     CORPUS_SEARCH_INSTRUCTIONS +
-    (workspace ? `\n${memorySystemPrompt(bot.id).trim()}` : "") +
+    (workspace ? `\n${memorySystemPrompt(bot.id, lane).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
     harnessPlaybookPrompt(Boolean(integrations.terminal));
@@ -6832,19 +6856,20 @@ async function runClaimedGroupMemberTurn(
     const accountNote = accountNotices.forTurn(bot.id);
     if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId) });
     dispatchAdapterTurn(threadId, () => {
-      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
+      if (currentTurnEpoch(turnKey) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
       }
       const live = providerReload.started(threadId, selection.instanceId);
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
-      workerTurns.capture(bot.id, threadId, live);
-      pendingInterruptThreads.started(threadId, bot.id, epoch);
+      if (!lane) workerTurns.capture(bot.id, threadId, live);
+      pendingInterruptThreads.started(threadId, turnKey, epoch);
       return live.adapter.sendTurn({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
         // A teammate's request never waits on the host's approval card.
         approval: authority || bot.autoApprove ? "auto" : "ask",
+        ...(lane ? { readOnly: true as const } : {}),
         attended: !isUnattended(bot.id),
         cwd,
         integrations,
@@ -6852,17 +6877,17 @@ async function runClaimedGroupMemberTurn(
       });
     })
       .then((started) => {
-        bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+        bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
         accountNote.commit();
         releaseStarting();
         boardTurnStarted(bot.id, threadId, started.turnId);
-        if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
+        if (started.turnId && currentTurnEpoch(turnKey) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
       .catch((err) => {
         releaseStarting();
-        pendingInterruptThreads.bind(threadId, bot.id, epoch);
+        pendingInterruptThreads.bind(threadId, turnKey, epoch);
         providerReload.settled(threadId);
         workerTurns.settled(threadId);
         if (err?.cancelled) {
@@ -6882,6 +6907,7 @@ async function runClaimedGroupMemberTurn(
         finish("dispatch_failed");
       });
   });
+  if (lane) roomLanes.release(bot.id, threadId, outcome === "stalled" || outcome === "timed_out");
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
@@ -6896,7 +6922,7 @@ async function runClaimedGroupMemberTurn(
     groupSpeakers.delete(threadId);
     const addedMessage = turnAddedMessage(store.messagesFor(threadId), messagesAtStart);
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
-    if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+    if (!lane && store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
   }
   if (outcome === "dispatch_failed") {
     // No turn.completed follows a rejected room dispatch. Anything that was
@@ -7449,6 +7475,7 @@ const groupRoutes = createGroupRoutes({
   flushInterruptedTask,
   closeOpenApprovals,
   releaseInterruptedBot,
+  roomLaneThread: roomLanes.thread,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -7581,6 +7608,7 @@ const botChatRoutes = createBotChatRoutes({
   markThreadInterrupted,
   flushInterruptedTask,
   releaseInterruptedBot,
+  roomLaneThread: roomLanes.thread,
   clearUnattended,
   routines: routines!,
   busyResumeThreads,
@@ -7627,6 +7655,7 @@ const threadRoutes = createThreadRoutes({
   approvalBus,
 });
 const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
+const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -8389,6 +8418,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/terminal/pane-counts") {
       const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
       return json(res, counts.status, counts.body);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo)$/);
+    if (m) {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return await workerMap.handle(req, res, m[1], m[2], url);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/terminal-cwd$/);
     if (m && method === "GET") {

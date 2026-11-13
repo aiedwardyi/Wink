@@ -92,11 +92,11 @@ describe("right slot", () => {
     await act(async () => showItem({ threadId: "t1", path: "C:\\w\\a.png", kind: "image" }));
     await openWatch();
     const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
-    expect(tabs()).toEqual(["Show", "Media", "Check*"]);
+    expect(tabs()).toEqual(["Show", "Media", "Check*", "Map"]);
     const img = document.querySelector(".show-pane img");
     expect(img).toBeTruthy();
     await act(async () => button(".show-pane-tabs [role=tab]").click());
-    expect(tabs()).toEqual(["Show*", "Media", "Check"]);
+    expect(tabs()).toEqual(["Show*", "Media", "Check", "Map"]);
     expect(document.querySelector(".show-pane img")).toBe(img);
     expect(document.querySelector(".show-pane .verify-watch-url")).toBeTruthy();
   });
@@ -106,7 +106,7 @@ describe("right slot", () => {
     await pick("b2");
     await act(async () => (await until(() => button("button[data-show-pane-button]")) as HTMLButtonElement).click());
     await until(watchPanel);
-    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media"]);
+    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media", "Map"]);
   });
 
   it("picking another bot closes the slot, and the same bot again keeps it", async () => {

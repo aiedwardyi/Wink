@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
@@ -17,6 +18,61 @@ vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code
 
 beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
+
+describe("web links", () => {
+  it.each(["README.md", "deploy.sh", "file.ts", "notes.ai", "v1.0.259", "e.g.", "file.tsx", "file.js", "file.json", "file.py", "file.txt", "file.yml", "file.log", "www.notes.ai", "example.technology"])("keeps %s plain in user and bot text", (text) => {
+    for (const Component of [LinkedText, ChatMarkdown]) {
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+      expect(host.querySelector("a")).toBeNull();
+      expect(host.textContent).toBe(text);
+    }
+  });
+
+  it.each([["user", LinkedText], ["bot", ChatMarkdown]] as const)("links common domains in %s text", (kind, Component) => {
+    const text = "starzum.com x.co.kr www.x.io";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", "https://x.co.kr", kind === "bot" ? "http://www.x.io" : "https://www.x.io",
+    ]);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each([
+    ["https://example.com/Edward's-notes", "https://example.com/Edward's-notes"],
+    ["www.starzum.com/Edward's-notes", "https://www.starzum.com/Edward's-notes"],
+    ["'www.starzum.com/notes'", "https://www.starzum.com/notes"],
+  ])("keeps apostrophes inside %s and surrounding quotes outside", (text, href) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(LinkedText, { text }));
+    expect(host.querySelector("a")?.getAttribute("href")).toBe(href);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each(["https://starzum.com", "www.x.io", "http://x.co.kr", "https://notes.ai", "http://x.io/a", "https://STARZUM.COM", "https://example.technology", "https://한글.kr"])("links %s in a bot reply", (text) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
+    const link = host.querySelector("a");
+    expect(link?.textContent).toBe(text);
+    const href = text.startsWith("http") ? text : `${text.startsWith("www.") ? "http" : "https"}://${text}`;
+    expect(new URL(link?.getAttribute("href") ?? "about:blank").href).toBe(new URL(href).href);
+    expect(link?.target).toBe("_blank");
+  });
+
+  it("keeps files, versions, code and existing email links unchanged", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "file.ts v1.0.259 e.g. `starzum.com` person@example.com [notes](file.ts)" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["mailto:person@example.com"]);
+    expect(host.querySelector("code")?.textContent).toBe("starzum.com");
+  });
+
+  it("leaves explicit markdown labels and paths intact and trims sentence punctuation", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(starzum.com/a(b)). [starzum.com](https://example.org) [www.notes.ai](https://www.notes.ai) ./starzum.com wrong.invalidtld file.ts" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org", "https://www.notes.ai"]);
+  });
+});
 
 // warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
 it("warms the parser outside a render", () => {

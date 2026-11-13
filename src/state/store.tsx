@@ -2272,6 +2272,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               frame.notification,
               (target) => openNotificationTarget(dispatch, target, stateRef.current),
               visibleNotificationThread(stateRef.current),
+              notificationGroup(stateRef.current, frame.notification)?.id,
             );
           }
           break;

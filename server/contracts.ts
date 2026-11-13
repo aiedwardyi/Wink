@@ -212,6 +212,8 @@ export interface SendTurnInput {
   systemUpdate?: string;
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
+  /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */
+  readOnly?: true;
   /** A person is present for this turn. Only then does background work it
    * starts keep Auto approvals for desktop control after it settles. */
   attended?: boolean;
@@ -330,6 +332,8 @@ export interface ProviderAdapter {
     /** True when `steer` calls its `consumed` callback, so the caller can
      * tell a message the model took in from one a Stop or failure dropped. */
     steerConsumed?: boolean;
+    /** True when the driver honours SendTurnInput.readOnly. */
+    readOnlyTurns?: boolean;
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;

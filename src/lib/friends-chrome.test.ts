@@ -137,9 +137,7 @@ describe("friends chrome call sites keep the feature code", () => {
     expect(groupView).toContain('t("room.workingFolder")');
     expect(groupView).toContain('t("room.workingFolderHelp")');
     expect(groupView).toContain('t("room.chooseSharedFolder")');
-    expect(groupView).toContain('t("room.projectFolderChip")');
     expect(groupView).toContain('t("room.setupBody")');
-    expect(groupView).toContain("<RoomWorkingFolderChip");
     expect(groupView).not.toMatch(/Start a new task/);
     expect(groupView).not.toMatch(/Fixed for this task/);
   });

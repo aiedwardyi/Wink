@@ -13,6 +13,7 @@ describe("room translation", () => {
     ["출시 준비 끝났어요.", "ko", true],
     ["Launch is ready", "en", true],
     ["Launch is ready", "ko", false],
+    ["출시 준비를 모두 마쳤어요. (For Eddie: ready)", "en", false],
     ["PR #1304 머지했어요", "en", false],
     ["PR #1304 머지했어요", "ko", true],
     ["abc 가나다", "ko", true],

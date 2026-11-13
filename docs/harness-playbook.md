@@ -62,7 +62,7 @@ to disk first, then spawn the worker with `Read <card path> and do it.`
 # NICKNAME | MODEL | EFFORT | FRESH|CURRENT
 
 ## Purpose
-What to build or fix, and why. Two to five lines.
+What to build or fix, and why. Two to five lines. Quote the user's latest words verbatim.
 
 ## Acceptance
 - Checkable outcomes: behavior, tests that must pass, typecheck clean.
@@ -79,7 +79,7 @@ What to build or fix, and why. Two to five lines.
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
 - Keep sound off the speakers: test browsers keep `--mute-audio`; a clip that needs sound captures it without playing it, or adds it afterwards.
 - Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.
-- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.
+- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
@@ -237,7 +237,7 @@ While workers run, a routine status reply is one tally line ("2 of 4 ready.
 If a report says FAIL or BLOCKED, read the pane with terminal_read, decide, and
 either answer the worker with terminal_send or tell the user.
 
-Before you answer a worker's question for the user, check it covers every item the user named.
+Before you relay a worker's plan or answer its question, check it against every item and limit the user named last.
 
 Follow-ups use the card rule: write long instructions to a file, then send one
 line, `Read <file path> and do it.`

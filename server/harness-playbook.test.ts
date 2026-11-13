@@ -179,7 +179,8 @@ describe("harness playbook", () => {
     expect(prompt).toContain("- Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.");
     expect(prompt).toContain("- No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.");
     expect(prompt).toContain("- Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.");
-    expect(prompt).toContain("Before you answer a worker's question for the user, check it covers every item the user named.");
+    expect(prompt).toContain("Quote the user's latest words verbatim.");
+    expect(prompt).toContain("Before you relay a worker's plan or answer its question, check it against every item and limit the user named last.");
   });
 
   it("writes the built list before building and quotes it in cards", () => {
@@ -261,7 +262,7 @@ describe("harness playbook", () => {
 
   it("sizes heavy local runs to the PC", () => {
     expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain(
-      "- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.",
+      "- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.",
     );
   });
 
@@ -273,7 +274,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(14701);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(14819);
   });
 
   it("fills the worktree path from the configured root", () => {

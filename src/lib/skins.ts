@@ -71,7 +71,7 @@ export const SKIN_IDS = [
   "folio",
   "inkwell",
   "graphite",
-  "moss",
+  "merlot",
   "precision-dimmed",
   "bronze",
   "dim-sand",
@@ -147,7 +147,7 @@ export const SKINS: readonly Skin[] = [
   { id: "folio", name: "Folio" },
   { id: "inkwell", name: "Inkwell" },
   { id: "graphite", name: "Graphite" },
-  { id: "moss", name: "Moss" },
+  { id: "merlot", name: "Merlot" },
   { id: "precision-dimmed", name: "Precision Dimmed" },
   { id: "bronze", name: "Bronze" },
   { id: "dim-sand", name: "Dim Sand" },
@@ -225,6 +225,7 @@ export function readSkin(): SkinId {
     if (stored === "catppuccin-mocha") return "catppuccin-frappe";
     if (stored === "tui-commander") return "tui-slate";
     if (stored === "tui-vga") return "tui-smoke";
+    if (stored === "moss") return "merlot";
     return isSkinId(stored) ? stored : DEFAULT_SKIN;
   } catch {
     return DEFAULT_SKIN;
