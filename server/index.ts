@@ -52,6 +52,7 @@ import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
+import { createRoomLanes, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -2934,8 +2935,8 @@ function flushInterruptedTask(
   return next ? persistTaskPacket(next) : null;
 }
 
-function releaseInterruptedBot(botId: string, threadId: string) {
-  stopScreenPoller(botId);
+function releaseInterruptedBot(botId: string, threadId: string, lane = roomLanes.thread(botId) === threadId) {
+  if (!lane) stopScreenPoller(botId);
   if (activeVpsThreads.get(botId) === threadId) activeVpsThreads.delete(botId);
   const group = store.groupByThread(threadId);
   const speaker = groupSpeakers.get(threadId);
@@ -2944,7 +2945,7 @@ function releaseInterruptedBot(botId: string, threadId: string) {
     const addedMessage = unreadTurns.settle(threadId, undefined, store.messagesFor(threadId));
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
   }
-  if (store.bot(botId)?.busy) store.setActivity(botId, "idle");
+  if (!lane && store.bot(botId)?.busy) store.setActivity(botId, "idle");
 }
 
 /** Put a notification on the wire. Clients decide what to do with it — a
@@ -3155,7 +3156,7 @@ const watchdog = new TurnWatchdog({
         store.patchGroup(group.id, { busyBotId: null, unread: true });
       }
       const currentBot = store.bot(turn.botId);
-      if (currentBot?.busy) {
+      if (currentBot?.busy && roomLanes.thread(currentBot.id) !== turn.threadId) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
         store.setActivity(currentBot.id, "idle");
@@ -3918,7 +3919,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const card = store.messagesFor(event.threadId).find((candidate) => candidate.id === message.id)?.card;
         if (!card || card.answered) return;
         // the bot is not working now — it is waiting on a person
-        if (asker.busy) store.setActivity(asker.id, "waiting-on-you");
+        if (asker.busy && roomLanes.thread(asker.id) !== event.threadId) store.setActivity(asker.id, "waiting-on-you");
         notify(buildNotification(
           permission ? "approval" : "question",
           asker,
@@ -4182,7 +4183,7 @@ bus.subscribe((event: RuntimeEvent) => {
         groupSpeakers.delete(event.threadId);
         store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
         const speakingBot = store.bot(speaker.botId);
-        if (speakingBot?.busy) {
+        if (speakingBot?.busy && roomLanes.thread(speakingBot.id) !== event.threadId) {
           store.setActivity(speakingBot.id, "idle");
           // Channel replies only affect the channel unread state.
         }
@@ -4494,7 +4495,7 @@ function drainQueuedSends() {
       continueQueuedDrainIfIdle(store, botId, drainQueuedSends, botHasActiveTurn);
       rerunIfIdle();
     });
-  }, (botId) => botHasActiveTurn(botId) || taskResumes.blocksQueuedSend(botId));
+  }, (botId) => botHasActiveTurn(botId) || taskResumes.blocksQueuedSend(botId), roomLanes.free);
   myRoomBotTurns.drain();
 }
 
@@ -4703,6 +4704,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
+const roomLanes = createRoomLanes(threadHasLiveTurn);
 
 /** Live ownership resolved BY BOT: this bot still holds the thread it was
  * working on, or the thread being asked about is held by someone. Both
@@ -6460,15 +6462,16 @@ async function runGroupMemberTurn(
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
-  if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
+  const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) && roomLanes.claim(botId, threadId);
+  if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
     if (!claimHeld) return;
     claimHeld = false;
-    takeStartingHold(botId)();
-    turnStartClaims.delete(botId);
+    takeStartingHold(lane ? laneKey(botId) : botId)();
+    if (!lane) turnStartClaims.delete(botId);
   };
   try {
     return await runClaimedGroupMemberTurn(
@@ -6485,13 +6488,19 @@ async function runGroupMemberTurn(
       excludeIds,
       rootId,
       authority,
+      lane,
     );
   } finally {
     releaseTurnStart();
-    queueMicrotask(() => continueQueuedDrainIfIdle(store, botId, () => {
-      drainQueuedSends();
-      paneWake.settled();
-    }, botHasActiveTurn));
+    if (lane) {
+      roomLanes.release(botId, threadId);
+      queueMicrotask(drainQueuedSends);
+    } else {
+      queueMicrotask(() => continueQueuedDrainIfIdle(store, botId, () => {
+        drainQueuedSends();
+        paneWake.settled();
+      }, botHasActiveTurn));
+    }
   }
 }
 
@@ -6511,8 +6520,11 @@ async function runClaimedGroupMemberTurn(
   excludeIds?: ReadonlySet<string>,
   rootId: string | null = null,
   authority?: string,
+  // the bot's second lane: no busy flag, no hands, and a Stop keyed apart from the 1:1
+  lane = false,
 ): Promise<boolean> {
-  const epoch = currentTurnEpoch(botId);
+  const turnKey = lane ? laneKey(botId) : botId;
+  const epoch = currentTurnEpoch(turnKey);
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
   const bot = store.bot(botId);
@@ -6522,7 +6534,7 @@ async function runClaimedGroupMemberTurn(
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
-  if (bot.busy) {
+  if (bot.busy && !lane) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
   // Capture before any await. startGroupTurn persists the next instruction
@@ -6562,7 +6574,7 @@ async function runClaimedGroupMemberTurn(
     onDispatchError?.(message);
     return true;
   }
-  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
+  startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
   const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
@@ -6643,7 +6655,7 @@ async function runClaimedGroupMemberTurn(
   // processes, interleaved token spend, and an interrupt that only ever
   // reached one of them.
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-  if (bot.shareTerminalWithChat !== false) {
+  if (!lane && bot.shareTerminalWithChat !== false) {
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
@@ -6653,7 +6665,7 @@ async function runClaimedGroupMemberTurn(
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
-    instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
+    !lane && instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
     availableSkills(),
   );
   if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
@@ -6685,14 +6697,16 @@ async function runClaimedGroupMemberTurn(
   const readyBot = store.bot(bot.id);
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
-  if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  if (lane ? threadHasLiveTurn(threadId) : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
-  store.setActivity(bot.id, "working", threadId);
-  dispatchedThreads.set(bot.id, threadId);
-  keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
-  const releaseStarting = takeStartingHold(bot.id);
+  if (!lane) {
+    store.setActivity(bot.id, "working", threadId);
+    dispatchedThreads.set(bot.id, threadId);
+    keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
+  }
+  const releaseStarting = takeStartingHold(turnKey);
   releaseTurnStart?.();
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -6764,7 +6778,7 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     CORPUS_SEARCH_INSTRUCTIONS +
-    (workspace ? `\n${memorySystemPrompt(bot.id).trim()}` : "") +
+    (workspace ? `\n${memorySystemPrompt(bot.id, lane).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
     harnessPlaybookPrompt(Boolean(integrations.terminal));
@@ -6820,13 +6834,13 @@ async function runClaimedGroupMemberTurn(
     const accountNote = accountNotices.forTurn(bot.id);
     if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId) });
     dispatchAdapterTurn(threadId, () => {
-      if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
+      if (currentTurnEpoch(turnKey) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
       }
       const live = providerReload.started(threadId, selection.instanceId);
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
-      workerTurns.capture(bot.id, threadId, live);
-      pendingInterruptThreads.started(threadId, bot.id, epoch);
+      if (!lane) workerTurns.capture(bot.id, threadId, live);
+      pendingInterruptThreads.started(threadId, turnKey, epoch);
       return live.adapter.sendTurn({
         threadId,
         text: accountNote.text ? `${accountNote.text}
@@ -6842,17 +6856,17 @@ ${text}` : text,
       });
     })
       .then((started) => {
-        bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+        bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
         accountNote.commit();
         releaseStarting();
         boardTurnStarted(bot.id, threadId, started.turnId);
-        if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
+        if (started.turnId && currentTurnEpoch(turnKey) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
       .catch((err) => {
         releaseStarting();
-        pendingInterruptThreads.bind(threadId, bot.id, epoch);
+        pendingInterruptThreads.bind(threadId, turnKey, epoch);
         providerReload.settled(threadId);
         workerTurns.settled(threadId);
         if (err?.cancelled) {
@@ -6872,6 +6886,7 @@ ${text}` : text,
         finish("dispatch_failed");
       });
   });
+  if (lane) roomLanes.release(bot.id, threadId);
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.
@@ -6885,7 +6900,7 @@ ${text}` : text,
     groupSpeakers.delete(threadId);
     const addedMessage = turnAddedMessage(store.messagesFor(threadId), messagesAtStart);
     store.patchGroup(group.id, { busyBotId: null, ...(addedMessage ? { unread: true } : {}) });
-    if (store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
+    if (!lane && store.bot(bot.id)?.busy) store.setActivity(bot.id, "idle");
   }
   if (outcome === "dispatch_failed") {
     // No turn.completed follows a rejected room dispatch. Anything that was
@@ -7438,6 +7453,7 @@ const groupRoutes = createGroupRoutes({
   flushInterruptedTask,
   closeOpenApprovals,
   releaseInterruptedBot,
+  roomLaneThread: roomLanes.thread,
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,
@@ -7570,6 +7586,7 @@ const botChatRoutes = createBotChatRoutes({
   markThreadInterrupted,
   flushInterruptedTask,
   releaseInterruptedBot,
+  roomLaneThread: roomLanes.thread,
   clearUnattended,
   routines: routines!,
   busyResumeThreads,

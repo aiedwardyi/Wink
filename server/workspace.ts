@@ -263,7 +263,7 @@ const LESSON_RULE =
  * first "hey" does not start with a memory scan. Content from other bots or
  * imported files must never be recorded as fact: memory is a prompt-injection
  * persistence vector the moment a bot copies untrusted text into it. */
-export function memorySystemPrompt(botId: string): string {
+export function memorySystemPrompt(botId: string, readOnly = false): string {
   const memory = loadMemory(botId);
   // sync keeps one copy as the file; the set-aside one can hold the newest notes, and only the bot can merge them
   const parked = listMemoryTopics(botId)
@@ -271,6 +271,14 @@ export function memorySystemPrompt(botId: string): string {
     .filter((name) => PARKED_COPY.test(name));
   const memoryFile = join(workspaceDir(botId), "MEMORY.md");
   const topicDir = join(workspaceDir(botId), "memory");
+  // a room lane runs beside the busy 1:1, which stays the one writer
+  if (readOnly) {
+    return (
+      ` Your private long-term memory file is ${JSON.stringify(memoryFile)}, with longer notes in ${JSON.stringify(topicDir)}.` +
+      " Read it as you need; this turn runs beside your busy 1:1 chat, so leave memory edits, and files your 1:1 is editing, to your 1:1." +
+      (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "")
+    );
+  }
   // never "shown at the start of every session" here: that sends a new bot
   // hunting through MEMORY.md before it answers "hey"
   if (!memory && !parked.length) {

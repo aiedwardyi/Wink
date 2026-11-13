@@ -58,7 +58,7 @@ describe("summary grace dispatch", () => {
     new Function("scope", `with (scope) { ${claim} }`)({
       store: { messagesFor: () => [], setActivity: () => {} },
       bot: { id: "bot" }, threadId: "room", dispatchedThreads: new Map(), releaseTurnStart: undefined,
-      keepGoing: { turnStarted }, hop, cardContinuation,
+      keepGoing: { turnStarted }, hop, cardContinuation, lane: false, turnKey: "bot",
       takeStartingHold: () => () => {},
     });
     expect(turnStarted).toHaveBeenCalledWith("bot", "room", byUser);

@@ -87,6 +87,8 @@
 //                      what each turn of a retained process was sent
 //   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
 //                      stdin, then creates this file
+//   FAKE_CLAUDE_HOLD_DIR  path; a prompt whose last hold:<name> is that name
+//                      answers only once <dir>/<name> exists
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
 //   FAKE_CLAUDE_FORK_MODE / FAKE_CLAUDE_FORK_FIXTURE  what a --fork-session
@@ -632,9 +634,20 @@ const playThinkSteer = (prompt: JsonValue) => {
   }, 100);
 };
 
-const playTurn = (prompt: JsonValue) => {
+const playTurn = (prompt: JsonValue, held = false) => {
   turnRunning = true;
   steered = [];
+  const hold = !held && process.env.FAKE_CLAUDE_HOLD_DIR ? [...promptText(prompt).matchAll(/\bhold:([\w-]+)/g)].at(-1)?.[1] : undefined;
+  if (hold) {
+    out({ type: "system", subtype: "init", session_id: sessionId, model });
+    const gate = join(process.env.FAKE_CLAUDE_HOLD_DIR!, hold);
+    const poll = setInterval(() => {
+      if (!existsSync(gate)) return;
+      clearInterval(poll);
+      playTurn(prompt, true);
+    }, 10);
+    return;
+  }
   if (mode.startsWith("usage-limit") || mode === "usage-warning") {
     const reset = Number(process.env.FAKE_CLAUDE_RESET_AT);
     const message = process.env.FAKE_CLAUDE_FAILURE_TEXT ?? "You've hit your limit. Send Continue after it resets.";

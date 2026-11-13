@@ -9,6 +9,7 @@ import type { ProviderRegistry } from "./harness/registry.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
+import { laneKey } from "./room-lane.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
@@ -25,6 +26,7 @@ type GroupRouteDeps = {
   clientMessage: (message: Message) => Message;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
+  roomLaneThread?: (botId: string) => string | undefined;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
@@ -42,7 +44,7 @@ type GroupRouteDeps = {
   markThreadInterrupted: (threadId: string, botId: string, epoch: number) => void;
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
-  releaseInterruptedBot: (botId: string, threadId: string) => void;
+  releaseInterruptedBot: (botId: string, threadId: string, lane?: boolean) => void;
 };
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
@@ -74,15 +76,18 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
   const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
     const busy = store.bot(botId);
     const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
+    // read before the interrupt: the lane lets go of the thread when the turn ends
+    const lane = deps.roomLaneThread?.(botId) === threadId;
     if (busy) {
-      const epoch = bumpTurnEpoch(busy.id) - 1;
-      markThreadInterrupted(threadId, busy.id, epoch);
+      const key = lane ? laneKey(busy.id) : busy.id;
+      const epoch = bumpTurnEpoch(key) - 1;
+      markThreadInterrupted(threadId, key, epoch);
       flushInterruptedTask(threadId, busy.id, "stop");
     }
     await instance?.adapter.interruptTurn(threadId).catch(() => {});
     closeOpenApprovals(threadId);
     if (ended) await ended().catch(() => {});
-    if (busy) releaseInterruptedBot(busy.id, threadId);
+    if (busy) releaseInterruptedBot(busy.id, threadId, lane);
   };
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
