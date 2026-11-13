@@ -1,0 +1,108 @@
+# Unsigned Apple silicon dmg, built on a real macOS runner and published as a
+# workflow artifact for hands-on testing. Not a release build: there is no
+# Developer ID yet, so the app is ad-hoc signed (arm64 refuses to launch
+# code with no signature at all) and Gatekeeper needs a right-click Open.
+name: Package macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit/tag/branch to build (defaults to the branch this is run from)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Unsigned dmg (arm64)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: clean build outputs
+        run: rm -rf dist dist-server release
+      - run: pnpm package:prepare
+      - run: pnpm build:speech
+      - run: pnpm build:cua
+      # identity "-" is ad-hoc signing; null would skip signing and leave an
+      # arm64 bundle whose modified Info.plist breaks Electron's own signature
+      - run: pnpm exec electron-builder --mac dmg --arm64 --publish never -c.mac.identity=-
+      - name: report what was built
+        run: |
+          echo "version: $(node -p "require('./package.json').version")"
+          echo "commit:  $(git rev-parse HEAD)"
+          ls -lh release/*.dmg
+      - name: verify the packaged tree
+        run: |
+          app=release/mac-arm64/Wink.app
+          res=$app/Contents/Resources
+          fail=0
+          for f in server/packaged-boot.js server/index.js ui/index.html app-update.yml \
+            cloudflared/cloudflared cua-driver/cua-driver \
+            "OpenMausBot Speech.app/Contents/MacOS/speech-helper"; do
+            [ -f "$res/$f" ] || { echo "::error::missing $res/$f"; fail=1; }
+          done
+          pty=$(find "$res/terminal/node-pty" -name pty.node \( -path '*darwin-arm64*' -o -path '*build/Release*' \) | head -1)
+          [ -n "$pty" ] || { echo "::error::missing node-pty pty.node for darwin-arm64"; fail=1; }
+          helper=$(find "$res/terminal/node-pty" -name spawn-helper -perm -u+x \( -path '*darwin-arm64*' -o -path '*build/Release*' \) | head -1)
+          [ -n "$helper" ] || { echo "::error::missing executable node-pty spawn-helper"; fail=1; }
+          lipo -archs "$app/Contents/MacOS/Wink" | grep -qw arm64 || { echo "::error::main binary is not arm64"; fail=1; }
+          codesign --verify --deep --strict "$app" || { echo "::error::app bundle signature does not verify"; fail=1; }
+          codesign -dv "$app" 2>&1 | grep -E "Signature|TeamIdentifier|flags" || true
+          grep -q "repo: orbit-releases" "$res/app-update.yml" || {
+            echo "::error::app-update.yml does not point at orbit-releases"; fail=1; }
+          echo "--- app-update.yml ---"; cat "$res/app-update.yml" 2>/dev/null || true
+          exit $fail
+      - name: start the packaged server
+        run: |
+          res=release/mac-arm64/Wink.app/Contents/Resources
+          HOME="$RUNNER_TEMP/omb-smoke" OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 1 90); do
+            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
+              echo "packaged server answered /api/health"
+              kill $pid 2>/dev/null || true
+              exit 0
+            fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 1
+          done
+          echo "::error::the packaged server never served /api/health"
+          cat "$RUNNER_TEMP/server.log" || true
+          kill $pid 2>/dev/null || true
+          exit 1
+      # The real app, end to end: window opens, preload bridge answers, the
+      # renderer reaches the bundled server. macOS keeps the app alive after
+      # the smoke closes its window, so stop it once the verdict is logged.
+      - name: launch the packaged app
+        run: |
+          OMB_SMOKE_TEST=1 release/mac-arm64/Wink.app/Contents/MacOS/Wink > "$RUNNER_TEMP/app.log" 2>&1 &
+          pid=$!
+          verdict=""
+          for _ in $(seq 1 120); do
+            if grep -q "\[smoke\] renderer-ready" "$RUNNER_TEMP/app.log"; then verdict=ok; break; fi
+            if grep -q "renderer-failed" "$RUNNER_TEMP/app.log"; then break; fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 1
+          done
+          kill $pid 2>/dev/null || true
+          grep -E "\[smoke\]|renderer-" "$RUNNER_TEMP/app.log" || tail -50 "$RUNNER_TEMP/app.log"
+          [ "$verdict" = ok ] || { echo "::error::the packaged app never reported renderer-ready"; exit 1; }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-unsigned-dmg-arm64
+          path: release/*.dmg
+          if-no-files-found: error
+          retention-days: 14
