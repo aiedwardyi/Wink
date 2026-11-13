@@ -152,7 +152,7 @@ export function createMapPane(deps: MapPaneDeps) {
     if (!record?.base || !file) return json(res, 404, { error: "No such changed file" });
     const inside = relative(record.root, resolve(record.root, path));
     if (inside.startsWith("..") || isAbsolute(inside)) return json(res, 403, { error: "File is outside the working folder" });
-    try { return json(res, 200, await mapFileDiff(record.root, record.base, file)); }
+    try { return json(res, 200, await mapFileDiff(record.root, record.base, file, url.searchParams.get("whole") === "1")); }
     catch { return json(res, 503, { error: "Could not read the diff" }); }
   }
 

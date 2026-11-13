@@ -95,9 +95,24 @@ it("keeps a deleted file diff separate from its replacement directory", async ()
   ]);
 });
 
+it("reads the whole file with its changes marked", async () => {
+  const { root, git } = repo();
+  const text = (six: string) => Array.from({ length: 12 }, (_, index) => index === 5 ? six : `line ${index + 1}`).join("\n") + "\n";
+  writeFileSync(join(root, "file.ts"), text("line 6"));
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "long");
+  writeFileSync(join(root, "file.ts"), text("line six"));
+  const base = git("rev-parse", "HEAD");
+  const [file] = await mapFiles(root, base);
+  expect((await mapFileDiff(root, base, file)).lines.map(line => line.kind)).toEqual(["fold", ...Array(3).fill("context"), "remove", "add", ...Array(3).fill("context"), "fold"]);
+  const whole = await mapFileDiff(root, base, file, true);
+  expect(whole.lines.map(line => line.kind)).toEqual([...Array(5).fill("context"), "remove", "add", ...Array(6).fill("context")]);
+  expect(whole.lines.at(-1)).toEqual({ kind: "context", text: "line 12", line: 12 });
+});
+
 it("folds unchanged runs between unified hunks and caps rendered lines", () => {
   const diff = mapDiffLines("@@ -20,1 +20,1 @@\n-old\n+new\n@@ -50,1 +50,1 @@\n-next\n+last\n");
-  expect(diff.lines.filter(line => line.kind === "fold").map(line => line.count)).toEqual([19, 29]);
+  expect(diff.lines.filter(line => line.kind === "fold").map(line => [line.line, line.count])).toEqual([[1, 19], [21, 29]]);
   expect(mapDiffLines("@@ -1,0 +1,1000 @@\n" + "+x\n".repeat(1000))).toMatchObject({ capped: true });
 });
 

@@ -161,3 +161,62 @@ it("keeps the step title, breadcrumb and diff on one file through every hop", as
   await settle();
   expect(view()).toEqual(["a.ts", "src/a.ts", undefined, "1+edit in src/a.ts"]);
 });
+
+it("steps through the changed files with Up and Down only where the Map has focus", async () => {
+  const scrolled = vi.fn();
+  const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const path = () => host.querySelector("[data-map-path]")?.getAttribute("data-map-path");
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: [...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }] }]);
+  for (const item of host.querySelectorAll<HTMLElement>("[data-map-file]")) item.scrollIntoView = () => scrolled(item.dataset.mapFile);
+  const row = host.querySelector('[data-map-file="src/a.ts"]')!;
+  await key(row, { key: "ArrowDown" });
+  expect(path()).toBe("src/manual.ts");
+  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+  expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/manual.ts");
+  expect(scrolled).toHaveBeenLastCalledWith("src/manual.ts");
+  expect(document.activeElement?.getAttribute("data-map-file")).toBe("src/manual.ts");
+  await key(row, { key: "ArrowDown" });
+  await key(row, { key: "ArrowDown" });
+  expect(path()).toBe("src/z.ts");
+  expect(host.querySelector(".map-path b")?.textContent).toBe("z.ts");
+  await key(row, { key: "ArrowUp" });
+  await key(row, { key: "ArrowUp" });
+  const count = reads().length;
+  await key(row, { key: "ArrowUp" });
+  expect(path()).toBe("src/a.ts");
+  expect(reads()).toHaveLength(count);
+  expect(host.querySelector(".map-step p")?.textContent).toBe("src/a.ts");
+  for (const [target, init] of [[row, { key: "ArrowDown", ctrlKey: true }], [row, { key: "j" }], [host.querySelector(".map-worker")!, { key: "ArrowDown" }], [document.body, { key: "ArrowDown" }]] as const) await key(target, init);
+  const field = document.createElement("textarea");
+  host.querySelector(".map-code")!.append(field);
+  await key(field, { key: "ArrowDown" });
+  expect(path()).toBe("src/a.ts");
+});
+
+it("opens a folded run in place and keeps the whole file on while the pane is open", async () => {
+  vi.mocked(fetch).mockImplementation(async url => {
+    const query = new URL(String(url), "http://test").searchParams;
+    if (!query.get("path")) return Response.json(repo);
+    const edit = { kind: "add", text: `edit in ${query.get("path")}`, line: 3 };
+    return Response.json({ lines: query.get("whole") === "1" ? [{ kind: "context", text: "one", line: 1 }, { kind: "context", text: "two", line: 2 }, edit] : [{ kind: "fold", text: "", count: 2, line: 1 }, edit] });
+  });
+  const rows = () => [...host.querySelectorAll(".map-code-row code, .map-gap")].map(row => row.textContent);
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([workers[0]]);
+  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
+  expect(host.querySelector(".map-whole")?.textContent).toBe("전체 파일");
+  await click("button.map-gap");
+  expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
+  expect(String(reads().at(-1)?.[0])).toContain("whole=1");
+  await click('[data-map-file="src/manual.ts"]');
+  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/manual.ts"]);
+  await click(".map-whole");
+  expect(host.querySelector(".map-whole")?.getAttribute("aria-pressed")).toBe("true");
+  expect(rows()).toEqual(["one", "two", "edit in src/manual.ts"]);
+  await click('[data-map-file="src/a.ts"]');
+  expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
+  expect(host.querySelector(".map-code-row[data-kind='add']")).not.toBeNull();
+  await click(".map-whole");
+  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
+});
