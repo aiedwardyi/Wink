@@ -32,6 +32,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
 import { groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { ChatOptionChips } from "./ChatOptionChips";
 import { AskUserRecord } from "./AskUserRecord";
 import { MemorySaveChip, MemorySaveRun } from "./MemorySaveChip";
@@ -626,7 +627,7 @@ export const Transcript = memo(function Transcript({
                         <AttachedImageGallery paths={attachedImages.images} />
                       )}
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
-                      {roomBase ? <RoomLineText base={roomBase} entryId={person ? m.roomEntryId : undefined} text={attachedImages?.display ?? m.text ?? ""} canTranslate={canTranslate} /> : attachedImages?.display ?? m.text}
+                      {roomBase ? <RoomLineText base={roomBase} entryId={person ? m.roomEntryId : undefined} text={attachedImages?.display ?? m.text ?? ""} canTranslate={canTranslate} /> : <LinkedText text={attachedImages?.display ?? m.text ?? ""} />}
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
                     </>

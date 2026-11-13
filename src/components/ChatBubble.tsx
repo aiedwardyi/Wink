@@ -4,6 +4,7 @@ import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Penc
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { ReplyQuote } from "./ReplyQuote";
 import { AttachedImageGallery } from "./AttachmentPreview";
 import { FileAttachmentRows } from "./FileAttachmentRow";
@@ -468,7 +469,7 @@ const Bubble = memo(function Bubble({
               <div
                 className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
               >
-                {visibleText}
+                <LinkedText text={visibleText} />
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(visibleText && "mt-2")} />}
               {message.steered && (

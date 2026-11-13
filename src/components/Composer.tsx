@@ -74,7 +74,7 @@ import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
-import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useRainbowBox } from "@/lib/rainbow-box";
@@ -101,9 +101,9 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; agent?: boolean };
+type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; agent?: boolean; owner?: string; label?: string };
 
-export type RoomPerson = { id: string; name: string };
+export type RoomPerson = { id: string; name: string; owner?: string };
 
 /** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. */
 export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean };
@@ -550,15 +550,18 @@ export function Composer({
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
+    const people = room?.people ?? (group?.hosted ? roomPeople(group) : []);
     const pool: MentionChoice[] = room
       ? [
-          ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, agent: true })),
+          ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
           ...(room.people ?? []).map((person) => ({ id: person.id, name: person.name, person: true })),
         ]
       : group
       ? [
           { id: "__everyone__", name: "everyone" },
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
+          ...(group.hosted ? roomTeamBots(group) : []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
+          ...people.map((person) => ({ id: person.id, name: person.name, person: true })),
         ]
       : state.bots
           .filter((member) => member.id !== bot?.id && !member.hidden)
@@ -567,8 +570,11 @@ export function Composer({
     // "@Scout " — the full name plus a space — is a COMPLETED tag, not a
     // search: keep the picker closed so Enter sends instead of re-picking
     if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
-    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots]);
+    return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6).map((peer) => {
+      const owner = peer.owner && people.find((person) => person.id === peer.owner);
+      return owner ? { ...peer, label: t("teamRoom.botOwner", { name: peer.name, owner: owner.name }) } : peer;
+    });
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(pickerOpen, () => setDismissedAt(mention?.start ?? null));
 
@@ -1046,7 +1052,7 @@ export function Composer({
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
+                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
                 <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}

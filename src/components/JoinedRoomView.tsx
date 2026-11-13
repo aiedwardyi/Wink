@@ -32,8 +32,6 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const teamBots = room?.state?.teamBots;
   const bots = useMemo(() => (teamBots?.length ? [...(hostBots ?? []), ...teamBots] : hostBots), [hostBots, teamBots]);
   const myBots = room?.myBots;
-  // Only this PC's own room bots answer this PC; the host's bots answer everyone.
-  const askable = useMemo(() => [...(hostBots ?? []), ...(teamBots ?? []).filter((bot) => myBots?.some((mine) => mine.id === bot.id))], [hostBots, teamBots, myBots]);
   const first = entries?.[0]?.seq;
   const loadOlder = useCallback((beforeCommit: () => void) => {
     // Held per oldest row, so a scroll before the bigger page lands asks once; nothing more stops it.
@@ -116,7 +114,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
               const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
               return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
             })}
-            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
+            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={bots} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}
       </div>
