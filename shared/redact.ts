@@ -76,6 +76,7 @@ const KEY_VALUE =
   /\b((?:[A-Za-z0-9_-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key)(?:[_-]?key)?s?)(["']?\s*[=:]\s*)(["']?)([A-Za-z0-9._~+/=!@#$%^*?-]{8,})\3/gi;
 /** Room memory only: chat says "the code is ready", "my pin is on the fridge" and "#3B82F6". */
 const PROSE_SECRET = /((?:\b(?:wifi[ \t]+password|password|passcode|passphrase)\b[ \t]*(?:is[ \t]+|[:=][ \t]*)|비밀번호(?:는|가)?[ \t]*(?:[:=][ \t]*)?))(["']?)((?!\$\{)[A-Za-z0-9._~+/=!@#$%^*?-]+)\2/gi;
+/** 4+ chars with a digit or symbol; plain words ("stored", "opensesame") stay prose. */
 const PROSE_VALUE = /^(?=.{4}).*[\d!@#$%^*?~+=]/;
 const ROOM_CODE = /(?<![\p{L}\p{N}_#])[2-9A-HJ-NP-Z]{6}(?![\p{L}\p{N}_])/gu;
 
