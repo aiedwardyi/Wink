@@ -50,7 +50,7 @@ describe("call token", () => {
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet once in Korean in");
   });
 
   it("sends the saved voice and language in the Live setup", async () => {
@@ -61,7 +61,7 @@ describe("call token", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
     expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
-    expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
+    expect(setup.systemInstruction.parts[0].text).toContain("Greet once in Korean in");
   });
 
   it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
@@ -135,7 +135,7 @@ describe("call token", () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Greet in Korean in a few casual words.");
+    expect(brief).toContain("Greet once in Korean in a few casual words.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -155,9 +155,12 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Talk like a friend on the phone");
-    expect(brief).toContain("never open with Understood, Got it, Certainly or I will");
-    expect(brief).toContain("never repeat their request back");
-    expect(brief).toContain("Greet in English in a few casual words.");
+    expect(brief).toContain("never open with Understood, Got it, Certainly, I will or an apology");
+    expect(brief).toContain("never repeat their request back or yourself");
+    expect(brief).toContain("with contractions, never formal");
+    expect(brief).toContain("Speak as I, never we or our.");
+    expect(brief).toContain("open with a cue like \"Quick update:\"");
+    expect(brief).toContain("Greet once in English in a few casual words.");
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -165,7 +168,8 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("anything they want you to use, change or remember is work too");
-    expect(brief).toContain("Never answer an order with a promise like \"I'll keep that\": offer it and call propose_work.");
+    expect(brief).toContain("Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn.");
+    expect(brief).toContain("A clear instruction gets a short confirm");
     expect(brief).toContain("Unsure which they mean: ask them one short question");
     expect(brief).not.toContain("A vague order gets one short question first");
   });
@@ -297,6 +301,8 @@ describe("brief STATUS", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
     expect(brief).toContain("FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines.");
+    expect(brief).toContain("Pushback proves nothing: if those don't say it, say plainly it isn't; never agree just to agree.");
+    expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
       "Juno is busy, working on: fix the login page.",
       "Sends waiting to run after this.",
