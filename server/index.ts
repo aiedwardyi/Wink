@@ -55,6 +55,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
+import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { hostSend } from "./rooms/send.ts";
@@ -6571,7 +6572,7 @@ async function runClaimedGroupMemberTurn(
     )
     : "";
   const prepared = await prepareModelContext({
-    messages: store.activePath(threadId),
+    messages: await roomTurnMessages(group.hosted?.roomId, store.activePath(threadId)),
     referenceMessages: store.messagesFor(threadId),
     contextWindow: modelContextWindow,
     excludeIds,
