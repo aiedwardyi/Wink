@@ -60,15 +60,18 @@ export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
 
-const QUIET = /\b(?:be quiet|keep quiet|stay quiet|quiet down|stop talking|shut up|hush|shh+|zip it)\b|조용(?:히|해)|그만 말|말하지\s?마|닥쳐|쉿/i;
+// A command, not a mention: English opens its clause with it, Korean closes one ("조용히 말해줘" asks for soft speech).
+const QUIET_EN = /(?:^|[.,!?;]\s*)(?:(?:please|just|ok(?:ay)?|now|wait|hey|(?:can|could|would|will) you)\s+)*(?:be quiet|keep quiet|stay quiet|quiet down|stop talking|shut up|hush|shh+|zip it)\b/i;
+const QUIET_KO = /(?:조용(?:해|히\s?(?:좀\s?)?해|히\s?있어)|그만\s?말해|말하지\s?마|닥쳐|쉿)\s?(?:요|줘|봐|라|세요|주세요)?[\s~…]*(?:$|[.,!?])/;
 
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
 export function asksForQuiet(heard: string): boolean {
-  return QUIET.test(heard);
+  return QUIET_EN.test(heard.trim()) || QUIET_KO.test(heard);
 }
 
 /** Talking to the voice again: its name or a "hey". */
 export function callsVoice(heard: string, name: string): boolean {
-  const own = name.trim().toLowerCase();
-  return /\bhey\b|헤이/i.test(heard) || (own !== "" && heard.toLowerCase().includes(own));
+  const own = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Whole name only, though a Korean particle may follow it ("Nova야").
+  return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])${own}(?![a-z0-9])`, "iu").test(heard));
 }

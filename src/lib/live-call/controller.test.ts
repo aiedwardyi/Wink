@@ -4,6 +4,7 @@ import { LIVE_VAD, type CallLine } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
 import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
+import { asksForQuiet, callsVoice } from "./guard";
 
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
@@ -2287,6 +2288,15 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(call.state().hushed).toBeUndefined();
     engine().events.audio(pcm);
     expect(audio.played).toBe(1);
+  });
+
+  it("hushes on a command, not on talk about quiet, and wakes on the whole name", () => {
+    for (const line of ["잠깐만, 조용해.", "조용히 좀 해줘", "말하지 마세요", "쉿!", "Be quiet.", "Hold on, be quiet.", "Can you stop talking?", "Okay just shut up"]) expect([line, asksForQuiet(line)]).toEqual([line, true]);
+    for (const line of ["Can you make the app stop talking when I mute it?", "Do not stop talking", "조용히 말해줘", "조용한 카페 찾아줘", "He told me to be quiet"]) expect([line, asksForQuiet(line)]).toEqual([line, false]);
+    expect(["Nova, you there?", "노바야", "Hey"].map((h) => callsVoice(h, h === "노바야" ? "노바" : "Nova"))).toEqual([true, true, true]);
+    expect(["That's an innovation", "Novas are bright", "Novak said"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false]);
+    expect(callsVoice("Ask R2.D2 now", "R2.D2")).toBe(true);
+    expect(callsVoice("Ask R2xD2 now", "R2.D2")).toBe(false);
   });
 });
 
