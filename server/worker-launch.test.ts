@@ -525,7 +525,7 @@ describe("trusted worker accounts", () => {
     const accounts = new AccountService(join(DATA_DIR, `mid-turn-${++serial}`), () => ({ codex: { driver: "codex" } }));
     const turns = captures!.createWorkerTurns();
     runInNewContext(ts.transpile(dispatches[index], { target: ts.ScriptTarget.ES2022 }), {
-      accounts, workerTurns: turns, bot: { id: "bot" }, threadId: "thread", live: { instanceId: "codex", driverKind: "codex" },
+      accounts, workerTurns: turns, bot: { id: "bot" }, threadId: "thread", lane: false, live: { instanceId: "codex", driverKind: "codex" },
     });
     const usage = Object.assign(vi.fn(async () => ({})), { invalidate() {} });
     const prepare = workers!.createWorkerLaunch({ enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: turns.resolveWorkerTurn,
