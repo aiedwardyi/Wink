@@ -301,7 +301,7 @@ describe("brief STATUS", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
     expect(brief).toContain("FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines.");
-    expect(brief).toContain("Pushback proves nothing: if those don't say it, say plainly it isn't; never agree just to agree.");
+    expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
     expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
       "Juno is busy, working on: fix the login page.",

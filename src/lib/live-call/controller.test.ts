@@ -655,6 +655,20 @@ describe("VOICE-SNAGS", () => {
     expect(engine().results).toEqual([{ id: "t1", result: "sent" }]);
   });
 
+  it("a yes to a short confirm of their instruction is the confirmation too", async () => {
+    const { call, engine, posts } = await started();
+    engine().events.heard("I want you to look at the transcripts.");
+    engine().events.answering();
+    engine().events.said("Looking at the transcripts, okay?");
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Look at the transcripts." } }]);
+    expect(call.state().pending).toBeUndefined();
+    await flush();
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Look at the transcripts."]);
+  });
+
   it("an offer made in the turn that calls propose_work still waits for a yes", async () => {
     const { call, engine } = await started();
     engine().events.said("Want me to check the status?");
