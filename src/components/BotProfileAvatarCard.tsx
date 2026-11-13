@@ -181,7 +181,7 @@ export function BotProfileAvatarCard({
                       aria-pressed={selectedAvatar === choice}
                       onClick={() => onPatch({ mascotStyle: choice })}
                       className={cn(
-                        "flex h-[68px] min-w-0 items-center justify-center rounded-lg bg-card transition-colors hover:bg-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border",
+                        "flex h-[68px] min-w-0 items-center justify-center rounded-lg bg-card hover:bg-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border",
                         selectedAvatar === choice && "ring-2 ring-accent-border",
                       )}
                       title={label}

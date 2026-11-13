@@ -25,7 +25,7 @@ type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string
 type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?: number };
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
-const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text";
+const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink";
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;

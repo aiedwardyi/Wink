@@ -139,7 +139,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby="onboarding-title"
-        className={`flex max-h-full w-full flex-col overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
+        className={`flex max-h-full w-full flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
           step === 1 ? "max-w-[680px]" : "max-w-[560px]"
         }`}
       >
@@ -153,7 +153,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <button
               type="button"
               onClick={retryInstances}
-              className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
+              className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110"
             >
               {t("onboarding.phoneTryAgain")}
             </button>
@@ -186,7 +186,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 trackOnboard("engine");
                 setStep(1);
               }}
-              className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40`}
+              className={`${instancesError ? "mt-3" : "mt-6"} w-full rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40`}
             >
               {instancesError ? t("onboarding.tryAgain") : !instances ? t("onboarding.checking") : emptyConnect ? t("noEngines.title") : t("onboarding.continue")}
             </button>

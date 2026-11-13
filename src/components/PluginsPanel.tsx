@@ -643,7 +643,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
                           setAliasDraft("");
                         } else void connect(card.slug);
                       }}
-                      className="flex min-w-[88px] items-center justify-center gap-1.5 rounded-full bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-40"
+                      className="flex min-w-[88px] items-center justify-center gap-1.5 rounded-full bg-raised px-3 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
                     >
                       {busy ? (
                         <Loader2 size={13} className="mx-auto animate-spin" />
@@ -677,7 +677,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
                               type="button"
                               disabled={busy}
                               onClick={() => setDisconnecting({ slug: card.slug, label: card.label, account })}
-                              className="rounded-md px-2 py-1 text-[11px] text-ink-secondary transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+                              className="rounded-md px-2 py-1 text-[11px] text-ink-secondary hover:bg-danger/10 hover:text-danger disabled:opacity-40"
                               aria-label={t("plugins.disconnectAccount", { identity: account.alias || account.id, service: card.label })}
                             >
                               {t("plugins.disconnect")}
@@ -737,7 +737,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
                   type="button"
                   disabled={refreshing}
                   onClick={() => void loadConnectionInventory(true)}
-                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-50"
+                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
                 >
                   <RefreshCw size={13} className={cn(refreshing && "animate-spin")} />
                   Retry
