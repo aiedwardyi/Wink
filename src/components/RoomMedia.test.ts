@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia } from "@/lib/media-index";
+import { PHONE_QUERY } from "@/lib/phone-swipe";
 import { closeShow, showMedia, useMediaThread } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { ShowPane } from "./ShowPane";
@@ -64,6 +65,7 @@ const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>(
 const filesTab = () => act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === "Files")!.click());
 const fileRow = (name: string) => [...host.querySelectorAll("[data-media-file]")].find((row) => row.querySelector("span span")!.textContent === name)!;
 const confirmButton = () => [...document.querySelectorAll<HTMLButtonElement>('[aria-modal="true"] button')].find((button) => button.textContent === "Delete")!;
+const phone = () => vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query === PHONE_QUERY, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList);
 
 it("right-click on a room file deletes it after the same confirm, and Media lists again", async () => {
   await open(roomSource);
@@ -184,6 +186,40 @@ it("copies an external picture through the desktop image reader", async () => {
   await act(async () => item("Copy image").click());
   expect(readMediaImage).toHaveBeenCalledWith(src);
   expect(calls).not.toContain(`GET ${src}`);
+});
+
+it("hides only Copy for a phone image the page cannot read", async () => {
+  phone();
+  const src = "https://images.example.test/private.png";
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input, init) => String(input) === src ? Promise.reject(new TypeError("CORS blocked")) : original(input, init));
+  await open({ threadId: "t1", messages: [{ id: "p1", role: "bot", kind: "text", at: 1, text: `![picture](${src})` }] });
+  const tile = document.querySelector("[data-media-grid] button")!;
+  expect(rightClick(tile).defaultPrevented).toBe(true);
+  await settle();
+  expect(items()).toEqual(["Save as"]);
+  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+  await act(async () => (tile as HTMLButtonElement).click());
+  expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
+});
+
+it("keeps Copy for Wink's own attachment pictures on a phone", async () => {
+  phone();
+  await open({ threadId: "t1", messages: [{ id: "p1", role: "user", kind: "text", at: 1, text: '<attached-image path="C:\\att\\phone.png" />' }] });
+  rightClick(document.querySelector("[data-media-grid] button")!);
+  await settle();
+  expect(items()).toEqual(["Copy image", "Save as"]);
+});
+
+it("keeps Copy for an external phone picture when CORS permits reading it", async () => {
+  phone();
+  const src = "https://images.example.test/public.png";
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input, init) => String(input) === src ? Promise.resolve(new Response("png", { headers: { "content-type": "image/png" } })) : original(input, init));
+  await open({ threadId: "t1", messages: [{ id: "p1", role: "bot", kind: "text", at: 1, text: `![picture](${src})` }] });
+  rightClick(document.querySelector("[data-media-grid] button")!);
+  await settle();
+  expect(items()).toEqual(["Copy image", "Save as"]);
 });
 
 it("saves an external picture through the desktop save dialog", async () => {

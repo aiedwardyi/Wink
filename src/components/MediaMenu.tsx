@@ -10,6 +10,7 @@ import type { MediaFile } from "@/lib/show-media";
 import { saveFile } from "@/lib/show-pane";
 import { hostRoomBase } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Presence } from "@/lib/use-presence";
 
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -22,13 +23,20 @@ const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px]";
 type Action = "copy" | "save" | "show" | "delete";
 const LABELS: Record<Action, [MessageKey, LucideIcon]> = { copy: ["show.copyImage", Copy], save: ["show.saveAs", Download], show: ["show.showInFolder", FolderOpen], delete: ["teamRoom.deleteFile", Trash2] };
 
-function actionsFor(file: MediaFile, roomId?: string, localPath?: string | null, readOnly = false): Action[] {
+function actionsFor(file: MediaFile, roomId?: string, localPath?: string | null, readOnly = false, copyable = true): Action[] {
   const actions: Action[] = [];
-  if (file.image && file.src) actions.push("copy");
+  if (file.image && file.src && copyable) actions.push("copy");
   if (file.src || (localPath && window.ogb?.saveFile)) actions.push("save");
   if (localPath && window.ogb?.showInFolder) actions.push("show");
   if (roomId && !readOnly) actions.push("delete");
   return actions;
+}
+
+function sameOrigin(src: string): boolean {
+  try {
+    const url = new URL(src, window.location.href);
+    return url.protocol === "data:" || url.origin === window.location.origin;
+  } catch { return false; }
 }
 
 async function imagePng(src: string): Promise<Blob> {
@@ -60,18 +68,22 @@ function fileAt(frame: HTMLElement, files: readonly MediaFile[], target: EventTa
 
 export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject<HTMLDivElement | null>; files: readonly MediaFile[] | null; roomId?: string; readOnly: boolean }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   const [menu, setMenu] = useState<{ file: MediaFile; x: number; y: number } | null>(null);
   const [place, setPlace] = useState({ top: 0, left: 0 });
   const [deleting, setDeleting] = useState<MediaFile | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [localPath, setLocalPath] = useState<string | null>(null);
+  const [readable, setReadable] = useState<MediaFile | null>(null);
   const [imageFailed, setImageFailed] = useState<{ file: MediaFile; action: "copy" | "save" } | null>(null);
   const shown = useRef(files);
   shown.current = files;
   const box = useRef<HTMLDivElement>(null);
   const saving = useRef(false);
-  const actions = menu ? actionsFor(menu.file, roomId, localPath, readOnly) : [];
+  const probe = Boolean(phone && !window.ogb?.readMediaImage && menu?.file.image && menu.file.src && !sameOrigin(menu.file.src));
+  const copyable = !probe || readable === menu?.file;
+  const actions = menu ? actionsFor(menu.file, roomId, localPath, readOnly, copyable) : [];
   useBackLayer(actions.length > 0, () => setMenu(null));
 
   useEffect(() => {
@@ -84,6 +96,7 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
       const file = list && fileAt(el, list, target);
       if (!file) return false;
       setLocalPath(null);
+      setReadable(null);
       setImageFailed(null);
       setMenu({ file, x, y });
       return true;
@@ -141,6 +154,15 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
   }, [menu]);
 
   useEffect(() => {
+    if (!menu || !probe) return;
+    let alive = true;
+    void fetch(menu.file.src!).then((response) => response.ok ? response.blob() : null).then((blob) => {
+      if (alive && blob) setReadable(menu.file);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [menu, probe]);
+
+  useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => {
       if (!(event.target instanceof Node && box.current?.contains(event.target))) setMenu(null);
@@ -163,7 +185,7 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
     if (!menu || !box.current) return;
     const { offsetWidth: width, offsetHeight: height } = box.current;
     setPlace({ top: Math.max(EDGE, Math.min(menu.y, window.innerHeight - height - EDGE)), left: Math.max(EDGE, Math.min(menu.x, window.innerWidth - width - EDGE)) });
-  }, [menu, localPath, imageFailed, readOnly]);
+  }, [menu, localPath, imageFailed, readOnly, copyable]);
 
   const run = (action: Action, file: MediaFile) => {
     if (action === "copy") {
