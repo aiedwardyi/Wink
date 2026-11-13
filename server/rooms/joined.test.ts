@@ -136,3 +136,53 @@ describe("a copy held from before bot lines", () => {
     expect(joinedRoom("r1")?.state?.bots).toEqual([WINK]);
   });
 });
+
+describe("a copy held from before teammates' bots", () => {
+  it.each([false, true])("takes teammates' bots after the host upgraded first (host bot %s)", (withBot) => {
+    const bots = withBot ? [WINK] : [];
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", { ...state(4), bots });
+    const incoming = { ...state(5), bots, teamBots: [] };
+    const { teamBots: _teamBots, ...held } = incoming;
+    expect(setJoinedState("r1", held)).toBe(true);
+    expect(joinedRoom("r1")?.state?.teamBots).toBeUndefined();
+    expect(setJoinedState("r1", incoming)).toBe(true);
+    expect(joinedRoom("r1")?.state?.teamBots).toEqual([]);
+    expect(setJoinedState("r1", incoming)).toBe(false);
+  });
+
+  it("takes a populated teammate roster at the held version", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", state(5));
+    const teamBots = [{ ...WINK, owner: ME.id }];
+    expect(setJoinedState("r1", { ...state(5), teamBots })).toBe(true);
+    expect(joinedRoom("r1")?.state?.teamBots).toEqual(teamBots);
+    expect(setJoinedState("r1", { ...state(5), teamBots: [] })).toBe(false);
+    expect(joinedRoom("r1")?.state?.teamBots).toEqual(teamBots);
+  });
+
+  it("keeps an old host's equal-version state unchanged", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", state(5));
+    expect(setJoinedState("r1", state(5, "Changed"))).toBe(false);
+    expect(joinedRoom("r1")?.state).toMatchObject({ roomName: "Team", bots: [] });
+    expect(joinedRoom("r1")?.state?.teamBots).toBeUndefined();
+  });
+
+  it("never repairs a roster from an older version", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", state(5));
+    expect(setJoinedState("r1", { ...state(4), teamBots: [] })).toBe(false);
+    expect(joinedRoom("r1")?.state?.teamBots).toBeUndefined();
+  });
+
+  it("takes the roster on a fresh join and a newer state", () => {
+    saveJoined("r1", HOST, ME, KEY);
+    expect(setJoinedState("r1", { ...state(5), teamBots: [] })).toBe(true);
+    expect(joinedRoom("r1")?.state?.teamBots).toEqual([]);
+    saveJoined("r1", HOST, ME, KEY);
+    setJoinedState("r1", state(4));
+    expect(setJoinedState("r1", { ...state(5), teamBots: [] })).toBe(true);
+    expect(joinedRoom("r1")?.state?.teamBots).toEqual([]);
+  });
+});

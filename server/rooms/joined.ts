@@ -384,10 +384,10 @@ export function joinedCursor(roomId: string): number {
   return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
-/** Keeps the highest version; an older state is ignored, and a held state without bots takes them at its version. */
+/** An equal-version state can fill a bot roster a previous build did not keep. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND json_extract(state, '$.bots') IS NULL))")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
+    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */

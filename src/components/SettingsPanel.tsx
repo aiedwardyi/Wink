@@ -36,6 +36,7 @@ import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
+import { RenameActions } from "./RenameActions";
 import { useMemoryClean } from "@/lib/memory-clean";
 import { memoryTargetLine } from "@/lib/memory-recent";
 import { botAsks } from "@/lib/asks";
@@ -556,6 +557,8 @@ export function SettingsPanel({
   };
   const paging = useDetailsTabs(pagesRef, phone, closing, memoryTab, showTab);
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
+  const [nameBefore, setNameBefore] = useState<{ id: string; name: string } | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
   const patch = (
     p: Partial<
       Pick<
@@ -580,6 +583,11 @@ export function SettingsPanel({
       >
     > & { acknowledgeLocalAuto?: boolean },
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
+  // the name saves as you type, so cancel writes the focus-time name back
+  const restoreName = () => {
+    if (nameBefore?.id === bot.id && nameBefore.name !== bot.name) patch({ name: nameBefore.name });
+    nameInput.current?.blur();
+  };
   const activeState = stateForBot(bot);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -721,12 +729,27 @@ export function SettingsPanel({
                   </Fold>
                 </div>
                 <Field label={t("bot.name")}>
-                  <input
-                    className={DETAILS_INPUT}
-                    maxLength={BOT_PROFILE_LIMITS.name}
-                    value={bot.name}
-                    onChange={(e) => patch({ name: e.target.value })}
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={nameInput}
+                      aria-label={t("bot.name")}
+                      className={DETAILS_INPUT}
+                      maxLength={BOT_PROFILE_LIMITS.name}
+                      value={bot.name}
+                      onChange={(e) => patch({ name: e.target.value })}
+                      onFocus={() => setNameBefore({ id: bot.id, name: bot.name })}
+                      onBlur={() => setNameBefore(null)}
+                      onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing) return;
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          restoreName();
+                        }
+                      }}
+                    />
+                    {nameBefore?.id === bot.id && <RenameActions onSave={() => nameInput.current?.blur()} onCancel={restoreName} />}
+                  </div>
                 </Field>
                 <Field label={t("bot.title")}>
                   <input

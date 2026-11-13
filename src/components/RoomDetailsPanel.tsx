@@ -18,6 +18,7 @@ import { useStore, type Group } from "@/state/store";
 
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { RenameActions } from "./RenameActions";
 import { useRoomAlerts } from "./RoomAlertsBell";
 import { RoomDetailsBots } from "./RoomDetailsBots";
 import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
@@ -159,22 +160,25 @@ function HostRoom({ group, phone }: { group: Group; phone: boolean }) {
             </button>
           </>
         ) : (
-          <input
-            autoFocus
-            aria-label={t("bot.name")}
-            className={DETAILS_INPUT}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onBlur={saveName}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
-              if (event.key === "Enter") saveName();
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setName(null);
-              }
-            }}
-          />
+          <>
+            <input
+              autoFocus
+              aria-label={t("bot.name")}
+              className={DETAILS_INPUT}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={saveName}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === "Enter") saveName();
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setName(null);
+                }
+              }}
+            />
+            <RenameActions onSave={saveName} onCancel={() => setName(null)} />
+          </>
         )}
       </div>
       <div className={cn(DETAILS_BOX, "mt-4")}>

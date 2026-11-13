@@ -149,6 +149,26 @@ describe("Room details", () => {
     expect(section("room").querySelector("input")).toBeNull();
   });
 
+  it.each([
+    ["Save name", ["Studio"]],
+    ["Cancel", []],
+  ])("%s beside the name input decides the rename, not the blur its press causes", async (label, saved) => {
+    await open({ group: { ...group, name: "Channel" } });
+    await act(async () => button("Rename").click());
+    const name = section("room").querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "Studio");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const press = button(label);
+    await act(async () => {
+      if (press.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))) name.blur();
+      press.click();
+    });
+    expect(mock.dispatched.flatMap((action) => action.type === "patchGroup" && "name" in action.patch ? [action.patch.name] : [])).toEqual(saved);
+    expect(section("room").querySelector("input")).toBeNull();
+  });
+
   it("sits in Bot details' slot: 400px on desktop, full width on a phone", async () => {
     await open({ group });
     const panel = host.querySelector<HTMLElement>("aside[data-room-details]")!;

@@ -3,10 +3,9 @@ import path from "node:path";
 
 import { fileMenuTemplate } from "./context-menu.mjs";
 
-// Types the OS default app may launch. Anything else (executables, scripts,
-// shortcuts, html, no extension) is only revealed in its folder, never run.
+// Unlisted types are revealed in their folder, never launched.
 export const OPENABLE_EXTENSIONS = new Set([
-  "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "txt", "md", "csv", "json", "rtf", "odt", "ods", "odp",
+  "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "txt", "md", "csv", "json", "rtf", "odt", "ods", "odp", "html", "htm",
   "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "mp3", "wav", "m4a", "mp4", "mov", "webm",
 ]);
 
