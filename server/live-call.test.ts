@@ -176,6 +176,25 @@ describe("call token", () => {
     expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
   });
 
+  it("brief answers the question asked first; role and notes never decline it", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Teacher", description: "your Wink project teacher. Protect Wink's direction. Avoid feature sprawl." }, { seedMessages: false });
+    mkdirSync(workspaceDir(bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(bot.id), "MEMORY.md"), "- NO PRIVACY PICKS: he ruled no permission/privacy steps for now; never offer that pick.");
+    await h.post("token", {}, bot.id);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notesAt = brief.indexOf("YOUR NOTES:\n");
+    expect(brief.slice(notesAt)).toContain("NO PRIVACY PICKS");
+    expect(brief.indexOf("Avoid feature sprawl.")).toBeLessThan(notesAt);
+    const answer = brief.indexOf("ANSWER: Answer what they asked, directly, first.");
+    expect(answer).toBeGreaterThan(-1);
+    expect(answer).toBeLessThan(notesAt);
+    expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
+    expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
+    expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+  });
+
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
     const h = harness();
     await h.post("token");
@@ -319,7 +338,7 @@ describe("brief STATUS", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
-    expect(brief).toContain("FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
     expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
     expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
