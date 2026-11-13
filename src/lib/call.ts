@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from "react";
 
 import { speaker } from "./tts";
+import { trackFeature, trackScreen } from "./usage-stats";
 
 let current: string | null = null;
 const watchers = new Set<() => void>();
@@ -22,6 +23,8 @@ export function currentCall(): string | null {
   return current;
 }
 
+let startedAt = 0;
+
 export function startCall(targetId: string) {
   if (current === targetId) return;
   // Switching calls must silence both halves before ownership changes; the
@@ -29,6 +32,9 @@ export function startCall(targetId: string) {
   speaker.stop();
   void window.ogb?.speechStop();
   current = targetId;
+  startedAt = performance.now();
+  trackScreen("call");
+  trackFeature("call.start");
   notify();
 }
 
@@ -38,6 +44,7 @@ export function endCall(targetId?: string): boolean {
   if (targetId && current !== targetId) return false;
   if (current === null) return false;
   current = null;
+  trackFeature("call.end", { ms: performance.now() - startedAt });
   speaker.stop();
   void window.ogb?.speechStop();
   notify();

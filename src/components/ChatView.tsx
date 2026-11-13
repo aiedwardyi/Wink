@@ -123,6 +123,7 @@ import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
 
 const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
 const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
+export const warmCallViews = () => Promise.all([LiveCallBar.preload(), LiveCallBox.preload()]);
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -1584,7 +1585,6 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <ShowPaneButton threadId={bot.threadId} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
-          {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
       </div>
 
@@ -1915,6 +1915,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
           call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
           onCall={!onLiveCall && callsSupported() ? startCall : undefined}
+          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} /> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>

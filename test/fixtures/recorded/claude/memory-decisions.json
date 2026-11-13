@@ -1,0 +1,14 @@
+{
+  "stamp": {
+    "engine": "claude",
+    "cliVersion": "2.1.323",
+    "recordedAt": "2026-11-12T22:32:38.945Z",
+    "sourcePc": "home",
+    "source": "ClaudeDriver.generateText via noteGenerator, lean and ephemeral, on a scratch CLAUDE_CONFIG_DIR login copy; text output contains no ids",
+    "model": "claude-haiku-5-5",
+    "prompt": "You pick durable facts and decisions out of the user's own chat messages, for their notes file.\n\nRules:\n- Use only USER LINES. Never guess, infer or add anything they did not say.\n- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.\n- Skip one-off requests, questions, task details, and anything CURRENT NOTES already says.\n- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.\n- CONTEXT is the end of the bot's message just before a user line. Use it only to see what a short answer like \"the second one\" or \"yes\" picked. The pick must still be in the user's own line; quote that line.\n- kind: \"decision\" or \"fact\". A decision names one thing and its pick, 100 characters max, for example \"Picker look follows the theme\". At most 3 decisions, one per thing.\n- Never record passwords, PINs, codes, keys, tokens, account numbers or one-time codes.\n- fact: one short plain line about the user, for example \"38 years old\" or \"Can't read Korean\".\n- quote: the user's exact words that state the fact, copied verbatim, 120 characters max.\n- replaces: only when the fact makes a CURRENT NOTES line untrue or outdated, that whole line copied exactly. Otherwise leave it out.\n\nReply with JSON only: [{\"kind\": \"fact\", \"fact\": \"...\", \"quote\": \"...\", \"replaces\": \"...\"}], or [] when nothing qualifies.\n\nCURRENT NOTES:\n<notes>\n(empty)\n</notes>\n\nUSER LINES:\n<user_lines>\n<context>Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it.</context>\nthe second one\n\nI use pnpm for my projects.\n</user_lines>"
+  },
+  "reply": {
+    "text": "```json\n[{\"kind\": \"decision\", \"fact\": \"Model picker look follows the app theme\", \"quote\": \"the second one\", \"replaces\": \"\"}, {\"kind\": \"fact\", \"fact\": \"Uses pnpm for projects\", \"quote\": \"I use pnpm for my projects.\", \"replaces\": \"\"}]\n```"
+  }
+}

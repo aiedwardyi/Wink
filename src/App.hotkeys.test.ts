@@ -295,7 +295,7 @@ describe("theme cycle shortcut", () => {
     expect(handler()).toContain('e.altKey && !mod && e.shiftKey && e.code === "KeyT"');
     expect(handler()).toContain("if (e.repeat || e.isComposing) return;");
     expect(handler()).toContain("nextSkin(current)");
-    expect(handler()).toContain("applySkin(next)");
+    expect(handler()).toContain('applySkin(next, "hotkey")');
     expect(handler()).toContain("setThemeToast(");
   });
 

@@ -37,6 +37,7 @@ import {
 } from "@/lib/sidebar-layout";
 import {
   api,
+  shownProfile,
   useStore,
   type Bot,
   type Group,
@@ -57,7 +58,7 @@ import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
 import { GroupWizard } from "./GroupWizard";
 import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./SidebarRooms";
-import { TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
+import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -114,6 +115,7 @@ import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
 import { useJoinedRooms } from "@/lib/joined-rooms";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
@@ -325,7 +327,8 @@ function RoomContextMenu({
       <TeamRoomSidebarActions group={group} onClose={onClose} />
       {!joined && <button
         onClick={() => {
-          dispatch({ type: "deleteGroup", groupId: group.id });
+          if (group.hosted) confirmRoomDelete(group);
+          else dispatch({ type: "deleteGroup", groupId: group.id });
           onClose();
         }}
         className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-danger hover:bg-raised/40"
@@ -624,6 +627,7 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
+  const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -645,10 +649,13 @@ export function Sidebar({
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
+  useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
+  useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
+  useEffect(() => { if (archivedBotsOpen) trackScreen("archived"); }, [archivedBotsOpen]);
   const [trashOpen, setTrashOpen] = useState(false);
   const [trashBots, setTrashBots] = useState<TrashedBot[]>([]);
   const [exportingTeam, setExportingTeam] = useState(false);
@@ -914,7 +921,10 @@ export function Sidebar({
     return () => {
       const progress = motions[0]?.effect?.getComputedTiming().progress;
       if (progress != null) shownSidebarWidth.current = from + (sidebarDisplayWidth - from) * progress;
-      for (const motion of motions) motion.cancel();
+      for (const motion of motions) {
+        motion.finished.catch(() => undefined);
+        motion.cancel();
+      }
       ghost.style.width = "";
       if (raised) raised.style.zIndex = "";
     };
@@ -1008,6 +1018,7 @@ export function Sidebar({
   }, [deleteTarget]);
 
   const exportAllBots = async () => {
+    trackFeature("export");
     setExportingTeam(true);
     setTeamFeedback(null);
     try {
@@ -1874,10 +1885,10 @@ export function Sidebar({
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
           >
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} pending={!state.config} />
-            {state.config ? (
+            <InitialsAvatar initials={profileInitials(profile?.profile)} imageUrl={profile?.profile?.avatarUrl} size={28} pending={!profile} />
+            {profile ? (
               <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-                {state.config.profile?.name?.trim() || state.config.profile?.email?.trim() || t("chrome.you")}
+                {profile.profile?.name?.trim() || profile.profile?.email?.trim() || t("chrome.you")}
               </span>
             ) : (
               <span aria-hidden="true" className={cn("h-3 w-20 animate-pulse rounded-full bg-raised motion-reduce:animate-none", density === "icons" && "hidden")} />

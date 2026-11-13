@@ -6,10 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, type Bot } from "@/state/store";
 import { applyLocale } from "@/lib/i18n";
 import { LiveCall } from "@/lib/live-call/controller";
+import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
+import * as desktop from "./DesktopCapabilities";
 
 const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; texts: string[] }>, level: 0, micError: "", capture: vi.fn(), config: undefined as (() => Promise<Response>) | undefined, token: undefined as (() => Response | Promise<Response>) | undefined, messages: undefined as (() => Response) | undefined, key: false, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
@@ -169,6 +171,27 @@ describe("call button in the message box", () => {
       expect(host.querySelector('button[aria-label^="Call"]')).toBeNull();
       await type(host, "hi");
       expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("keeps the keyless desktop call setup in the composer", async () => {
+    Object.assign(window, { ogb: { speechStart: vi.fn() } });
+    vi.spyOn(desktop, "useDesktopCapabilities").mockReturnValue({
+      ready: true,
+      capabilities: { ...initialDesktopCapabilities(), dictation: { available: true, engine: "apple-speech", onDevice: true } },
+    });
+    const { host, unmount } = await mount();
+    const label = "Set up a voice in an agent profile to make calls";
+    try {
+      expect(button(frame(host), label)).not.toBeNull();
+      expect(button(host, "Call Atlas")).toBeNull();
+      await act(async () => button(frame(host), label)!.click());
+      expect(frame(host).querySelector('[aria-label="Call unavailable"]')).not.toBeNull();
+      await type(host, "hi");
+      expect(corner(host).getAttribute("aria-label")).toBe("Send message");
+      expect(button(host, label)).toBeNull();
     } finally {
       await unmount();
     }

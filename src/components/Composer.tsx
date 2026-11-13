@@ -70,7 +70,7 @@ import {
 } from "@/lib/composer-busy";
 import { composerIsBusy } from "@/lib/send-accept";
 import { composerEnterIntent, isComposerEnterKey } from "@/lib/composer-enter";
-import { holdToSendAfter } from "@/lib/send-hold";
+import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
@@ -87,6 +87,7 @@ import { useCatchingUp } from "@/lib/use-catching-up";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MessageMenu, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
+import { trackFeature } from "@/lib/usage-stats";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -220,6 +221,7 @@ export function Composer({
   focusBlocked = false,
   call,
   onCall,
+  callButton,
 }: {
   bot?: Bot;
   group?: Group;
@@ -240,6 +242,7 @@ export function Composer({
   call?: (box: { closing: boolean }) => ReactNode;
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
+  callButton?: ReactNode;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -328,6 +331,7 @@ export function Composer({
       let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
       const kept = next.filter((a) => a.kind !== "upload" || room-- > 0);
       if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
+      if (kept.length) trackFeature("attach.add", { n: kept.length });
       flushSync(() => editAttachments((prev) => [...prev, ...kept]));
       for (const upload of uploads) {
         if (kept.some((a) => a.id === upload.id)) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id));
@@ -758,6 +762,7 @@ export function Composer({
     }
     const t = composeMessage(liveText, attachments);
     if (!t) return;
+    markSent();
     hapticTick();
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
@@ -1356,6 +1361,7 @@ export function Composer({
           {busy && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
+              if (stopTooSoon()) return;
               if (group) stopRoom(group.id);
               else if (bot && !stopping) {
                 const botId = bot.id;
@@ -1435,7 +1441,7 @@ export function Composer({
           </button>
           </>
           )}
-          {onCall && bot && !hasContent && !sendBlocked && !callSlot.mounted && (
+          {(callButton || onCall) && bot && !busy && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
             <button
               type="button"
               onClick={onCall}
@@ -1445,7 +1451,7 @@ export function Composer({
             >
               <Phone size={16} />
             </button>
-          )}
+          ))}
           </div>
         </div>
         </div>

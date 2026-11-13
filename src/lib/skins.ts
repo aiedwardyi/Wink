@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from "react";
 import monoHudCss from "@/skins/mono-hud.css?inline";
 import toolSkinsCss from "@/skins/tool-skins.css?inline";
+import { trackSetting } from "./usage-stats";
 
 export const SKIN_IDS = [
   "wink",
@@ -244,7 +245,8 @@ export function readTriedSkins(): SkinId[] {
  * paint (main.tsx) and again on every change from the picker — a stamped
  * attribute rather than a class so it can never collide with Tailwind.
  */
-export function applySkin(id: SkinId): void {
+export function applySkin(id: SkinId, via?: "hotkey"): void {
+  trackSetting("skin", document.documentElement.dataset.skin, id, via, KEY);
   document.documentElement.dataset.skin = id;
   const kind = TOOL_SKIN_IDS.has(id) ? "tool" : HUD_SKIN_IDS.has(id) ? "mono-hud" : "";
   const extra = document.head.querySelector<HTMLElement>("style[data-skin-extra]");

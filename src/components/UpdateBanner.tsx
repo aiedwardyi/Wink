@@ -8,6 +8,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { isTransientUpdateError } from "../../shared/update-error.mjs";
+import { trackUpdate } from "@/lib/usage-stats";
 
 // The one action button in the card. Disabled drops the accent fill for the
 // flat raised grey — the "I heard you" the click needs while the main process
@@ -127,6 +128,7 @@ export function UpdateBanner() {
             <button
               onClick={() => {
                 setPending("download");
+                trackUpdate("clicked", s.version);
                 void updater.download();
               }}
               disabled={pending !== null}

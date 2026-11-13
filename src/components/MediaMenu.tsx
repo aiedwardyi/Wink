@@ -111,7 +111,12 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
     const outside = (event: PointerEvent) => {
       if (!(event.target instanceof Node && box.current?.contains(event.target))) setMenu(null);
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // The pane closes on an Escape nobody took.
+      event.preventDefault();
+      setMenu(null);
+    };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     return () => {

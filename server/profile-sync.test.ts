@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ import {
   dropSyncedBot,
   emptyProfileSyncState,
   importedSyncAvatarCrop,
+  loadOrCreateSyncWorkspace,
   loadProfileSyncSettings,
   localIdForSyncId,
   markImported,
@@ -211,6 +212,33 @@ describe("profile sync operations", () => {
     const settings = saveProfileSyncSettings(root, loadProfileSyncSettings(root));
     expect(() => saveProfileSyncSettings(root, { ...settings, openThread: "z-open" } as typeof settings)).toThrow();
     expect(JSON.parse(readFileSync(join(root, "profile-sync.json"), "utf8"))).toEqual(settings);
+  });
+
+  it("never carries usage stats: not the switch, the install id, the queue or the session marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-stats-"));
+    const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-stats-folder-"));
+    roots.push(root, folder);
+    const stats = { "analytics.json": "{\"enabled\":true}", "stats-id": "0123456789abcdef0123456789abcdef", "stats-queue.ndjson": "{\"e\":\"screen\"}\n", "stats-active": "{\"start\":1}" };
+    for (const [name, text] of Object.entries(stats)) writeFileSync(join(root, name), text);
+    const settings = saveProfileSyncSettings(root, loadProfileSyncSettings(root));
+    for (const field of ["statsId", "analytics", "stats"]) {
+      expect(() => saveProfileSyncSettings(root, { ...settings, [field]: stats["stats-id"] } as typeof settings), field).toThrow();
+    }
+    loadOrCreateSyncWorkspace(folder, "workspace-1");
+    writeSyncOperation(folder, operation());
+    writeSyncAvatarAsset(folder, Buffer.from([1, 2, 3]), "png");
+    const shared = readdirSync(folder, { recursive: true }).map(String);
+    expect(shared.length).toBeGreaterThan(2);
+    for (const name of shared) {
+      expect(name).not.toMatch(/stats|analytics/);
+      const path = join(folder, name);
+      if (statSync(path).isFile()) expect(readFileSync(path, "latin1")).not.toContain(stats["stats-id"]);
+    }
+    expect(readFileSync(join(root, "profile-sync.json"), "utf8")).not.toMatch(/stats|analytics/);
+    for (const [name, text] of Object.entries(stats)) expect(readFileSync(join(root, name), "utf8")).toBe(text);
+    for (const file of ["profile-sync.ts", "google-sync.ts", "device-sync.ts", "memory-sync.ts", "picture-sync.ts", "thread-sync.ts", "thread-sync-v2.ts", "thread-sync-v2-store.ts", "sync-roots.ts"]) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8"), file).not.toMatch(/stats-id|stats-queue|stats-active|analytics\.json|usage-stats/);
+    }
   });
 
   it("keeps a delete tombstone from being undone by delayed offline edits", () => {

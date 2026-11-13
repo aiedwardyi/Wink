@@ -64,6 +64,13 @@ function parseMuseText(stdout: string): string {
   return text;
 }
 
+/** Muse's goal and verify judges re-read the chat after every turn. An unknown -c key refuses the run and `wsl` hands argv to a shell, so only native 1.4.15+ gets the switch. */
+export function museServeArgs(version: string | null, wsl: boolean): string[] {
+  const [major = 0, minor = 0, patch = 0] = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "")?.slice(1).map(Number) ?? [];
+  const hasRoster = major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 15)));
+  return hasRoster && !wsl ? ["-c", "run.reminder_roster.agents=[]"] : [];
+}
+
 export const MspMuseAgentDriver = createMspDriver({
   driverKind: "museAgent",
   displayName: "Meta Muse",
@@ -83,6 +90,7 @@ export const MspMuseAgentDriver = createMspDriver({
   classifyError: classifyMuseError,
   wslProbeWrapper: museWslFallbackCli,
   wslResolveCli: resolveWslMuseCli,
+  serveArgs: museServeArgs,
   text: ({ cli, env }) => createCliText({
     name: "Muse",
     model: MSP_MUSE_MODELS.default,

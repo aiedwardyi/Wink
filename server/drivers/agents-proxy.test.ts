@@ -196,6 +196,10 @@ beforeAll(async () => {
           res.writeHead(403, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "source thread does not belong to sender" }));
         }
+        if (lastAskUserBody.close) {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ closed: true }));
+        }
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-ask" }));
       });
@@ -458,6 +462,16 @@ describe("agents-proxy MCP surface", () => {
       question: "Ship to prod or staging?",
       choices: ["Prod", 3, "Staging"],
     });
+  });
+
+  it("forwards a question close through the same tool without asking again", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "ask_user");
+    expect(tool.inputSchema.properties.close).toMatchObject({ type: "boolean" });
+    const res = await callTool("ask_user", { question: " Ship it? ", close: true });
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("Closed as answered in chat.");
+    expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
   });
 
   it("surfaces ask_user rejections and an empty question as tool errors", async () => {
@@ -1298,51 +1312,52 @@ describe("agents-proxy catalog", () => {
   const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
   const names = (list: any): string[] => list.result.tools.map((tool: { name: string }) => tool.name);
 
-  it("replaces only the ten optional definitions with the bounded pair", async () => {
+  it("replaces only the five ask-driven definitions with the bounded pair", async () => {
     const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
-    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
     expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
-    expect(17 + names(list).length).toBe(28);
   });
 
   it.each([
     ["create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
     ["create_channel", { name: "Design", member_ids: ["bot-helper"] }],
-    ["react", { emoji: "👍" }],
-    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
     ["generate_image", { prompt: "A test image", show: true }],
     ["call_api", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
     ["request_credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
-    ["list_routines", {}],
-    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
-    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
   ])("runs %s through its original handler and returns the same artifact or card", async (name, args) => {
     const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name as string, args);
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
     expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
     expect(gateway.call.result.isError).toBeFalsy();
     expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    ["react", { emoji: "👍" }],
+    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
+    ["list_routines", {}],
+    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
+    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
+  ])("keeps %s loaded: one direct call, never through the gateway", async (name, args) => {
+    const direct = await probeWithIdentity(identity(), name as string, args);
+    expect(direct.call.result.isError).toBeFalsy();
     if (name === "react") expect(lastReactBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", emoji: "👍" });
+    expect(direct.list.result.tools.map((tool: { name: string }) => tool.name)).toContain(name);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result.isError).toBe(true);
   });
 
-  it("retains the original routine argument normalization", async () => {
-    const args = { name: "Brief", instructions: "Check things.", schedule: JSON.stringify({ type: "daily", time: "09:00" }) };
-    const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name: "propose_routine", arguments: args });
-    expect(call.result.isError).toBeFalsy();
-    expect(lastRoutineRequestBody.routine.schedule.type).toBe("weekly");
-  });
-
-  it.each(["create_bot", "create_channel", "react", "show_image", "generate_image", "request_credential", "propose_routine", "propose_routine_action"])("preserves %s argument refusals", async (name) => {
+  it.each(["create_bot", "create_channel", "generate_image", "request_credential"])("preserves %s argument refusals", async (name) => {
     const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, {});
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
     expect(gateway.call.result.content).toEqual(direct.call.result.content);
     expect(gateway.call.result.isError).toBe(true);
   });
 
-  it.each([1, 2])("reveals only list_routines among optional tools at depth %s", async (depth) => {
+  it.each([1, 2])("offers no catalog at depth %s, where no folded tool is allowed", async (depth) => {
     const { list, call } = await probeWithIdentity(identity(depth), "find_wink_tool", { query: "routine bot image api credential" });
-    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "find_wink_tool", "call_wink_tool"].sort());
-    expect(JSON.parse(call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toEqual(["list_routines"]);
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "list_routines"].sort());
+    expect(JSON.parse(call.result.content[0].text).tools).toEqual([]);
     const refused = await probeWithIdentity(identity(depth), "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
     expect(refused.call.result.isError).toBe(true);
   });
@@ -1355,7 +1370,7 @@ describe("agents-proxy catalog", () => {
       const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
       expect(call.result.isError).toBe(true);
     }
-    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "list_routines", arguments: {} });
+    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "create_bot", arguments: { name: "Pixel", role: "Designer", instructions: "Draw things." } });
     expect(unauthorized.call.result.isError).toBe(true);
     expect(unauthorized.call.result.content[0].text).toContain("unauthorized");
   });
@@ -1408,10 +1423,10 @@ describe("agents-proxy verify_site", () => {
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 20, true],
     [{ OMB_TEAM_REPORTS: "1" }, 20, false],
     [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 21, true],
-    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
-    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 13, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 16, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);

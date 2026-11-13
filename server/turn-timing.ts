@@ -270,6 +270,8 @@ export function observeTraceEvent(event: RuntimeEvent): void {
 }
 
 export type TurnTimingMarks = {
+  /** Keys the marks usage stats read; never written to the timing file. */
+  threadId?: string;
   engine?: string;
   model?: string;
   effort?: string | number | null;
@@ -303,8 +305,35 @@ function timingPath(): string {
   return join(dataDir(), "turn-timing.jsonl");
 }
 
-/** Start a turn timer. Returns a no-op timer when ORBIT_TURN_TIMING is off. */
-export function startTurnTimer(meta: TurnTimingMarks = {}): TurnTimer {
+type StatsMarks = { spawnMs?: number; readyMs?: number; reused?: boolean };
+const statsMarks = new Map<string, StatsMarks>();
+let statsOn = () => false;
+
+/** Usage stats take a thread's spawn and ready marks once its turn ends. */
+export function turnMarksFor(on: () => boolean): (threadId: string) => StatsMarks | undefined {
+  statsOn = on;
+  return (threadId) => {
+    const marks = statsMarks.get(threadId);
+    statsMarks.delete(threadId);
+    return marks;
+  };
+}
+
+/** Start a turn timer. Returns a no-op timer when ORBIT_TURN_TIMING and usage stats are both off. */
+export function startTurnTimer({ threadId, ...meta }: TurnTimingMarks = {}): TurnTimer {
+  const kept: StatsMarks | undefined = threadId && statsOn() ? {} : undefined;
+  if (kept) statsMarks.set(threadId!, kept);
+  if (!enabled() && kept) {
+    const t0 = performance.now();
+    return {
+      mark(name) {
+        if (name === "spawnOrReuse") kept.spawnMs ??= Math.round(performance.now() - t0);
+        if (name === "cliReady") kept.readyMs ??= Math.round(performance.now() - t0);
+      },
+      setMeta(patch) { if (patch.reusedSession !== undefined) kept.reused = patch.reusedSession; },
+      finish() {},
+    };
+  }
   if (!enabled()) {
     return {
       mark() {},
@@ -340,9 +369,12 @@ export function startTurnTimer(meta: TurnTimingMarks = {}): TurnTimer {
                   ? "firstVisibleMs"
                   : "turnDoneMs";
       if (marks[key] == null) marks[key] = Math.round(performance.now() - t0);
+      if (kept && name === "spawnOrReuse") kept.spawnMs ??= marks[key]!;
+      if (kept && name === "cliReady") kept.readyMs ??= marks[key]!;
     },
     setMeta(patch) {
       info = { ...info, ...patch };
+      if (kept && patch.reusedSession !== undefined) kept.reused = patch.reusedSession;
     },
     finish(extra) {
       if (finished) return;

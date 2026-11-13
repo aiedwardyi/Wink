@@ -534,14 +534,15 @@ describe("deleted files", () => {
   it("holds the count while a deleted file's copy can't be dropped, so the next stream sends it again", async () => {
     saveJoined("r1", HOST, STATE.me, KEY);
     setJoinedState("r1", STATE);
-    const copy = join(DATA_DIR, "joined-files", "r1", "a".repeat(24));
+    // Not the last test's id: its stopped client can still be mid-rm on that path, and fs.rm takes a dir made meanwhile
+    const copy = join(DATA_DIR, "joined-files", "r1", "b".repeat(24));
     mkdirSync(join(copy, "held"), { recursive: true });
     const asked: string[] = [];
     route = (req, res) => {
       quietDoor(req, res);
       if (!req.url?.includes("/stream")) return;
       asked.push(new URL(req.url, "https://x").searchParams.get("deleted") ?? "");
-      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["a".repeat(24)], count: 3 })}\n\n`);
+      res.write(`data: ${JSON.stringify({ kind: "deleted", ids: ["b".repeat(24)], count: 3 })}\n\n`);
       setTimeout(() => res.destroy(), 50);
     };
     guest({ timing: { retryMs: 10 } }).start();

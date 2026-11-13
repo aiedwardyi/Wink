@@ -174,9 +174,11 @@ h1 {
   filter: drop-shadow(0 0 3px var(--edge-glow));
   animation: glow 2.4s ease-in-out infinite alternate;
 }
-.list button:not(.last):hover:not(:disabled)::before,
-.list button:not(.last):hover:not(:disabled)::after {
-  border-color: var(--hairline);
+@media (hover: hover) {
+  .list button:not(.last):hover:not(:disabled)::before,
+  .list button:not(.last):hover:not(:disabled)::after {
+    border-color: var(--hairline);
+  }
 }
 @keyframes glow {
   from {
@@ -206,8 +208,10 @@ h1 {
   cursor: pointer;
   transition: filter 150ms, transform 150ms;
 }
-.list button:hover:not(:disabled) {
-  border-color: var(--ink-secondary);
+@media (hover: hover) {
+  .list button:hover:not(:disabled) {
+    border-color: var(--ink-secondary);
+  }
 }
 .list button:active:not(:disabled) {
   transform: scale(0.99);

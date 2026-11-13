@@ -22,6 +22,7 @@ import {
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { formatTime, StoreProvider, useStore, type Bot } from "@/state/store";
+import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 import { ProfileFields } from "./ProfileFields";
 import { compactSidebarModelLabel, Sidebar } from "./Sidebar";
@@ -571,7 +572,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     );
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const cancel = vi.fn();
-    const halfway = () => ({ cancel, effect: { getComputedTiming: () => ({ progress: 0.5 }) } }) as unknown as Animation;
+    const halfway = () => ({ cancel, finished: new Promise<Animation>(() => {}), effect: { getComputedTiming: () => ({ progress: 0.5 }) } }) as unknown as Animation;
     const animate = vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(halfway);
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
@@ -881,6 +882,48 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     } finally {
       await act(async () => root.unmount());
       host.remove();
+    }
+  });
+
+  it("paints the last profile in the footer while the config is still on its way", async () => {
+    window.localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({ bots: [], groups: [], selectedId: "", profile: { name: "Ada Lovelace", email: "", avatarUrl: "/api/attachments/ada.png" } }));
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SidebarSettingsProbe))));
+      const row = host.querySelector("[data-sidebar-profile-row]")!;
+      expect(row.querySelector(".animate-pulse")).toBeNull();
+      expect(row.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/ada.png");
+      expect(row.textContent).toContain("Ada Lovelace");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      window.localStorage.removeItem(SNAPSHOT_CACHE_KEY);
+    }
+  });
+
+  it("keeps the loaded profile for the next launch", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [], groups: [] });
+      if (path === "/api/config") return Response.json({ composio: { configured: false }, profile: { name: "Ada Lovelace", email: "", avatarUrl: "/api/attachments/ada.png" } });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SidebarSettingsProbe))));
+      await act(async () => FakeEventSource.current!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "" }));
+      await vi.waitFor(() => expect(host.querySelector("[data-sidebar-profile-row] img")).not.toBeNull());
+      window.dispatchEvent(new Event("pagehide"));
+      expect(JSON.parse(window.localStorage.getItem(SNAPSHOT_CACHE_KEY)!).profile).toEqual({ name: "Ada Lovelace", email: "", avatarUrl: "/api/attachments/ada.png" });
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      window.localStorage.removeItem(SNAPSHOT_CACHE_KEY);
     }
   });
 

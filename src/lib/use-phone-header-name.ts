@@ -77,8 +77,9 @@ export function usePhoneHeaderNameFloor(
     const header = cluster?.parentElement;
     if (!cluster || !button || !header) return;
     let alive = true;
-    let text = naturalWidth(button);
-    let rem = px(getComputedStyle(document.documentElement).fontSize) || 16;
+    let text = 0;
+    let rem = 16;
+    let measured = false;
     const chipOf = () => {
       const label = header.querySelector("[data-model-label]");
       const effort = header.querySelector("[data-model-effort]");
@@ -117,6 +118,12 @@ export function usePhoneHeaderNameFloor(
         header.style.paddingRight = "";
         clearChip();
         return;
+      }
+      // Measured only here: the clone forces a layout that desktop never uses.
+      if (!measured) {
+        text = naturalWidth(button);
+        rem = px(getComputedStyle(document.documentElement).fontSize) || 16;
+        measured = true;
       }
       header.style.paddingRight = menuOnRight ? `${PHONE_HEADER_MENU_RESERVE_PX}px` : "";
       const slots = phoneHeaderSlots(text, 4 * rem);
@@ -231,8 +238,7 @@ export function usePhoneHeaderNameFloor(
     window.addEventListener("resize", kick);
     void document.fonts?.ready.then(() => {
       if (!alive) return;
-      text = naturalWidth(button);
-      rem = px(getComputedStyle(document.documentElement).fontSize) || 16;
+      measured = false;
       kick();
     });
     return () => {

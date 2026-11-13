@@ -14,8 +14,9 @@ import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { trackFeature } from "@/lib/usage-stats";
 
-type Sheet = "join" | "rejoin" | "leave" | "remove" | null;
+type Sheet = "join" | "rejoin" | "leave" | "remove" | "delete" | null;
 
 let sheet: Sheet = null;
 let roomTarget: { id: string; name: string } | null = null;
@@ -24,6 +25,11 @@ const watchers = new Set<() => void>();
 function openSheet(next: Sheet) {
   sheet = next;
   for (const watcher of [...watchers]) watcher();
+}
+
+export function confirmRoomDelete(group: Group) {
+  roomTarget = { id: group.id, name: group.name };
+  openSheet("delete");
 }
 
 const watch = (watcher: () => void) => {
@@ -191,6 +197,7 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     const result = rejoin ? await rejoinRoom(rejoin.roomId, value) : await joinRoom(value);
     if ("room" in result) {
       noteJoinedRoom(result.room);
+      trackFeature("room.join");
       dispatch({ type: "select", id: joinedSelection(result.room.roomId) });
       onClose();
       return;
@@ -204,7 +211,6 @@ function JoinSheet({ closing, onClose, rejoin }: { closing: boolean; onClose: ()
     }
     const short = !rejoin && !looksLikeRoomCode(value);
     setProblem(joinErrorKey(result.status, result.error, short));
-    if (short) setCode("");
     input.current?.select();
   };
 
@@ -291,6 +297,7 @@ export function TeamRoomDialogs() {
   const joinedId = roomTarget && joinedRoomIdOf(roomTarget.id);
   const leave = async () => {
     if (!joinedId || leaving) return;
+    trackFeature("room.leave");
     setLeaving(true);
     setLeaveFailed(false);
     try {
@@ -351,6 +358,19 @@ export function TeamRoomDialogs() {
         >
           {removeFailed && <div role="alert" className="mt-2 text-[12.5px] text-danger">{t("errors.request")}</div>}
         </ConfirmDialog>}
+      </Presence>
+      <Presence open={open === "delete"}>
+        {(closing) => <ConfirmDialog
+          closing={closing}
+          title={t("teamRoom.deleteTitle", { name: roomTarget?.name ?? "" })}
+          body={t("teamRoom.deleteBody")}
+          confirmLabel={t("chrome.delete")}
+          onCancel={close}
+          onConfirm={() => {
+            if (roomTarget) dispatch({ type: "deleteGroup", groupId: roomTarget.id });
+            close();
+          }}
+        />}
       </Presence>
     </>
   );

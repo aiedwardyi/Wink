@@ -753,6 +753,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let env = childEnv(LOCAL_HOST_KEY_ENVS);
         const spawnArgs = support.spawnArgs(config, turn);
         const turnTimer = startTurnTimer({
+          threadId,
           engine: DRIVER_KIND,
           model: turn.model,
           effort: turn.effort ?? null,

@@ -173,6 +173,16 @@ it("copies the hosted invite and opens Room details from People", async () => {
   expect(seen).toEqual({ selectedId: "host", settingsOpen: true });
 });
 
+it("asks before deleting a hosted room", async () => {
+  await mount();
+  await choose(await context("host"), "Delete group");
+  expect(calls.filter((call) => call.method === "DELETE")).toEqual([]);
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Delete Design team?");
+  await choose(dialog, "Delete");
+  expect(calls).toContainEqual({ path: "/api/groups/host", method: "DELETE", body: undefined });
+});
+
 it("requires the existing leave confirmation before posting", async () => {
   await mount();
   await choose(await context("joined:r9"), "Leave");

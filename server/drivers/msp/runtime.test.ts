@@ -87,6 +87,15 @@ describe("MSP turns (fake host)", () => {
     expect(servers!.phone).toEqual({ transport: "stdio", command: "phone-cmd", args: ["phone.js"], env: { T: "phone" } });
   });
 
+  it("folds the ask-driven agents tools behind the catalog unless the switch says 0", () => {
+    const agents = { command: "agents-cmd", args: ["agents.js"], env: { T: "agents" } };
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents", OMB_WINK_TOOL_CATALOG: "1" });
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", "0");
+    expect(mspMcpServers({ agents }, { wsl: false })!.agents.env).toEqual({ T: "agents" });
+    vi.unstubAllEnvs();
+  });
+
   it("mounts a cloud box computer through the computer proxy", () => {
     const servers = mspMcpServers(
       { computer: { kind: "box", boxId: "box-1", token: "box-token" } },
@@ -116,10 +125,92 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_USAGE_CHANGED;
     delete process.env.FAKE_MSP_ITEMS;
     delete process.env.FAKE_MSP_GATE_FILE;
+    delete process.env.FAKE_MSP_VERSION;
     delete process.env.META_API_KEY;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
+  });
+
+  it.each([
+    ["Muse Code 1.4.15 (1.4.15-R8339.1)", ["serve", "-c", "run.reminder_roster.agents=[]"]],
+    ["Muse Code 1.4.14 (1.4.14-R7309.1)", ["serve"]],
+  ])("serves %s with %j", async (version, argv) => {
+    const dump = join(scratch, "muse-serve-args.json");
+    process.env.FAKE_MSP_DUMP = dump;
+    process.env.FAKE_MSP_VERSION = version;
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-serve-args", text: "hi" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).toEqual(argv);
+  });
+
+  describe("system text", () => {
+    const sent = (dump: string) => JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))[0].text;
+    const turn = async (text: string, system: string, resumeCursor?: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-system", text, system, resumeCursor });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+
+    it("goes out once per session and again when it changes", async () => {
+      const dump = join(scratch, "muse-system-once.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create();
+      await turn("one", "RULES");
+      expect(sent(dump)).toBe("RULES\n\none");
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("two");
+      await turn("three", "RULES v2", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES v2\n\nthree");
+      await turn("four", "RULES v2", "fake-msp-session");
+      expect(sent(dump)).toBe("four");
+    });
+
+    it("goes out again after the host compacts the session", async () => {
+      const dump = join(scratch, "muse-system-compacted.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      process.env.FAKE_MSP_ITEMS = JSON.stringify([
+        { method: "item/started", params: { item: { itemId: "compact-1", kind: "compaction", status: "inProgress" } } },
+        { method: "item/completed", params: { item: { itemId: "compact-1", kind: "compaction", status: "completed" } } },
+      ]);
+      await create();
+      await turn("one", "RULES");
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
+
+    it("goes out again after a turn that failed", async () => {
+      const dump = join(scratch, "muse-system-failed.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create("fail-after-text");
+      expect(await turn("one", "RULES")).toMatchObject({ ok: false });
+      await turn("two", "RULES", "fake-msp-session");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
+
+    it("goes out again after a turn that was stopped", async () => {
+      const dump = join(scratch, "muse-system-stopped.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      await create("hang");
+      for (const [text, resumeCursor] of [["one", undefined], ["two", "fake-msp-session"]] as const) {
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-system", text, system: "RULES", resumeCursor });
+        await vi.waitFor(() => expect(sent(dump)).toBe(`RULES\n\n${text}`));
+        await instance.adapter.interruptTurn("t-system");
+        expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ stopReason: "cancelled" });
+      }
+    });
+
+    it("goes out on the fresh session a rejected resume falls back to", async () => {
+      const dump = join(scratch, "muse-system-fallback.json");
+      process.env.FAKE_MSP_DUMP = dump;
+      const rpcDump = join(scratch, "muse-system-fallback-rpc.json");
+      process.env.FAKE_MSP_RPC_DUMP = rpcDump;
+      await create("resume-fails");
+      await turn("one", "RULES");
+      await turn("two", "RULES", "gone-session");
+      expect(JSON.parse(readFileSync(rpcDump, "utf8"))).toContain("session/resume");
+      expect(sent(dump)).toBe("RULES\n\ntwo");
+    });
   });
 
   it("starts a session with the requested model and folds text", async () => {

@@ -17,6 +17,7 @@ import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WorkerChip, WorkerMark } from "./WorkerRows";
 import "@xterm/xterm/css/xterm.css";
+import { trackFeatureOnce } from "@/lib/usage-stats";
 
 type SessionInfo = { cwd: string; shell: string };
 type OutputEvent = LiveOutput;
@@ -289,6 +290,7 @@ export function TerminalWorkspace({
     // onBinary carries non-UTF8 mouse reports (wheel in X10/RXVT mode); without it the wheel is dropped.
     const forwardInput = (data: string, track = true) => {
       if (!id || !replayComplete || terminal.options.disableStdin || exits.has(id)) return;
+      if (track) trackFeatureOnce("terminal.type");
       const sessionId = id;
       let submitted = false;
       if (track && panesRef.current.some((pane) => pane.id === sessionId)) {

@@ -63,6 +63,7 @@
 //   FAKE_MSP_ITEMS     JSON item notifications before the scripted turn.
 //   FAKE_MSP_INIT_DELAY_MS  hold the initialize result this long.
 //   FAKE_MSP_GATE_FILE  gate file for echo-gated.
+//   FAKE_MSP_VERSION   the `--version` line.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -79,7 +80,7 @@ if (process.env.FAKE_MSP_DUMP) {
   writeFileSync(process.env.FAKE_MSP_DUMP, JSON.stringify({ argv, env: dumpEnv, cwd: process.cwd() }, null, 2));
 }
 if (argv.includes("--version")) {
-  console.log("fake-msp 0.0.0");
+  console.log(process.env.FAKE_MSP_VERSION ?? "fake-msp 0.0.0");
   process.exit(0);
 }
 

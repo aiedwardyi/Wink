@@ -24,6 +24,7 @@ export const askUserRequestSchema = z
     fromThreadId: z.string().catch(""),
     question: z.string().catch(""),
     choices: z.array(z.string().catch("")).catch([]),
+    close: z.boolean().optional().catch(undefined),
   })
   .catch({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
 export type AskUserRequest = z.infer<typeof askUserRequestSchema>;
@@ -55,16 +56,19 @@ export interface AskUserDeps<B extends Sender> {
   /** The sender's own 1:1 task or a room it belongs to; null otherwise. */
   conversation(botId: string, threadId: string): { group?: object } | null;
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
+  activePath: Store["activePath"];
+  patchMessage: Store["patchMessage"];
+  cancelHeld(botId: string, threadId: string, question: string): boolean;
   /** The thread the alert opens, read when the bot asks: a routine run is over by release. */
   alertThread(bot: B, threadId: string): string;
   notifyQuestion(bot: B, target: string, question: string): void;
   /** Runs `post` now, or once the asking turn has replied. */
-  whenSettled(botId: string, threadId: string, post: () => void): void;
+  whenSettled(botId: string, threadId: string, post: () => void, question: string): void;
 }
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -75,6 +79,15 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!owner) return { status: 403, body: { error: "source thread does not belong to sender" } };
   const question = request.question.trim().slice(0, ASK_USER_QUESTION_MAX);
   if (!question) return { status: 400, body: { error: "question required" } };
+  if (request.close) {
+    let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
+    for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
+      if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
+      if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
+      closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: "Answered in chat" } })) || closed;
+    }
+    return { status: 200, body: { closed } };
+  }
   const message: Omit<Message, "id" | "at"> = {
     role: "bot",
     kind: "options",
@@ -90,7 +103,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     if (!deps.conversation(from.id, threadId)) return;
     posted = deps.appendMessage(threadId, message);
     deps.notifyQuestion(from, target, question);
-  });
+  }, question);
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
 }
 

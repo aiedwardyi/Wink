@@ -18,12 +18,14 @@ import { useStore, type Group } from "@/state/store";
 
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { RenameActions } from "./RenameActions";
 import { useRoomAlerts } from "./RoomAlertsBell";
 import { RoomDetailsBots } from "./RoomDetailsBots";
 import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
 import { RoomPicture, TeamRoomPicture } from "./RoomPicture";
 import { SaveStatus } from "./SaveStatus";
 import { JoinedBots } from "./RoomTeamBots";
+import { trackFeature } from "@/lib/usage-stats";
 
 const hostedRoom = (group: Group): group is TeamRoom => Boolean(group.hosted);
 
@@ -157,22 +159,25 @@ function HostRoom({ group }: { group: Group }) {
             </button>
           </>
         ) : (
-          <input
-            autoFocus
-            aria-label={t("bot.name")}
-            className={DETAILS_INPUT}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onBlur={saveName}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
-              if (event.key === "Enter") saveName();
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setName(null);
-              }
-            }}
-          />
+          <>
+            <input
+              autoFocus
+              aria-label={t("bot.name")}
+              className={DETAILS_INPUT}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={saveName}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === "Enter") saveName();
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setName(null);
+                }
+              }}
+            />
+            <RenameActions onSave={saveName} onCancel={() => setName(null)} />
+          </>
         )}
       </div>
       <div className={cn(DETAILS_BOX, "mt-4")}>
@@ -231,6 +236,7 @@ function LeaveRoom({ roomId, name }: { roomId: string; name: string }) {
             onCancel={() => setLeaving(false)}
             onConfirm={() => {
               setLeaving(false);
+              trackFeature("room.leave");
               void request(`${joinedRoomBase(roomId)}/leave`, { method: "POST" }).catch(() => {});
             }}
           />

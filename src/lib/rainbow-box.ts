@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { trackSetting } from "./usage-stats";
 
 export type RainbowBox = "off" | "rainbow" | "theme";
 export const RAINBOW_BOX_KEY = "omb-rainbow-box";
@@ -21,6 +22,7 @@ export function rainbowBoxMode(): RainbowBox {
 }
 
 export function saveRainbowBox(value: RainbowBox): void {
+  trackSetting("chatBox", mode, value, "settings", RAINBOW_BOX_KEY);
   mode = value;
   try {
     localStorage.setItem(RAINBOW_BOX_KEY, value === "rainbow" ? "on" : value);

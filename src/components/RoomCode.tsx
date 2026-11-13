@@ -4,9 +4,7 @@ import { Check, Copy } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 
-import { BOX } from "./CodeBoxes";
-
-/** Shows `short` as six boxes when the relay minted one, else the long code. */
+/** Shows `short` when the relay minted one, else the long code. */
 export function RoomCode({ code, short }: { code: string; short?: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -28,26 +26,19 @@ export function RoomCode({ code, short }: { code: string; short?: string }) {
   };
   return (
     <div className="flex flex-col gap-2">
-      <div data-team-room-code className="rounded-lg bg-inset px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{t("teamRoom.inviteCode")}</span>
-          <button
-            type="button"
-            onClick={() => void copy()}
-            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-text hover:bg-control"
-          >
-            {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-            {copied ? t("teamRoom.copied") : t("teamRoom.copy")}
-          </button>
-        </div>
-        {short ? (
-          <>
-            <div data-room-short-code aria-label={short} className="mt-2 flex select-none justify-between gap-2">
-              {[...short].map((ch, i) => <span key={i} aria-hidden className={`${BOX} flex items-center justify-center bg-card`}>{ch}</span>)}
-            </div>
-            {copyFailed && <div data-room-code-text className="mt-2 select-all text-center font-mono text-[15px] tracking-[0.2em] text-ink">{short}</div>}
-          </>
-        ) : <div className="mt-1 select-all break-all font-mono text-[11.5px] text-ink-secondary">{code}</div>}
+      <div data-team-room-code className="flex items-center gap-3 rounded-lg bg-inset px-3 py-2">
+        <span className="shrink-0 text-[13px] font-medium text-ink">{t("teamRoom.inviteCode")}</span>
+        {short
+          ? <span data-room-code-text className="min-w-0 flex-1 select-all truncate text-right font-mono text-[15px] tracking-[0.2em] text-ink">{short}</span>
+          : <span data-room-code-text className={`min-w-0 flex-1 select-all font-mono text-[11.5px] text-ink-secondary ${copyFailed ? "break-all" : "truncate text-right"}`}>{code}</span>}
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-text hover:bg-control"
+        >
+          {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+          {copied ? t("teamRoom.copied") : t("teamRoom.copy")}
+        </button>
       </div>
       <p data-room-code-hint className="px-3 text-[12px] text-ink-secondary">{t(short ? "teamRoom.shortCodeHint" : "teamRoom.codeHint")}</p>
     </div>

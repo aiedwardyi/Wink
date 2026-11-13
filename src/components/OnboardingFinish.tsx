@@ -3,6 +3,7 @@ import { Star } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
 import { OrbitMark } from "./OrbitMark";
+import { trackFeature, trackOnboard, usageStatsSwitched } from "@/lib/usage-stats";
 
 const REPO = "https://github.com/aiedwardyi/Wink";
 
@@ -10,7 +11,9 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
   const { t } = useI18n();
   const [share, setShare] = useState(true);
   const open = () => {
-    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).catch(() => {});
+    trackOnboard("finish");
+    if (!share) usageStatsSwitched(false);
+    void api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: share }) }).then((body) => usageStatsSwitched(body.capture === true, body.period)).catch(() => {});
     onDone();
   };
   return (
@@ -27,6 +30,7 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
           target="_blank"
           rel="noreferrer"
           onClick={(event) => {
+            trackFeature("star.click");
             if (window.ogb?.openExternal) {
               event.preventDefault();
               void window.ogb.openExternal(REPO).catch(() => {});

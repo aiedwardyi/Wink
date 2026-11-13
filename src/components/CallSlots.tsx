@@ -5,6 +5,7 @@ import { lazyView } from "@/lib/stale-build";
 
 const LiveCallHost = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallHost })));
 const CallWidget = lazyView(() => import("./CallWidget").then((m) => ({ default: m.CallWidget })));
+export const warmCallSlots = () => Promise.all([LiveCallHost.preload(), CallWidget.preload()]);
 
 // Both load with the first call, so a chat without one pays nothing.
 export function CallHostSlot() {

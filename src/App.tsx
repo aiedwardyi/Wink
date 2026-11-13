@@ -22,7 +22,7 @@ import { listedGroups, preferredStartupSelectionId } from "@/lib/sidebar-order";
 import { DRAWER_BUTTON_LEFT, DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
-import { ChatView } from "@/components/ChatView";
+import { ChatView, warmCallViews } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
@@ -30,7 +30,7 @@ import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
-import { CallHostSlot } from "@/components/CallSlots";
+import { CallHostSlot, warmCallSlots } from "@/components/CallSlots";
 import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
@@ -58,6 +58,7 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
+import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
@@ -158,7 +159,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
-  const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
+  const openTerminal = useCallback(() => {
+    if (!botId) return;
+    trackScreen("terminal");
+    trackFeature("terminal.open");
+    setTerminalViews((views) => ({ ...views, [botId]: true }));
+  }, [botId]);
   const openTerminalPane = useCallback((sessionId: string) => {
     openTerminal();
     if (botId) setPaneFocus({ sessionId, botId });
@@ -300,7 +306,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         e.preventDefault();
         const current = (document.documentElement.dataset.skin as SkinId) || readSkin();
         const next = nextSkin(current);
-        applySkin(next);
+        applySkin(next, "hotkey");
         setThemeToast(SKINS.find((skin) => skin.id === next)?.name ?? next);
         return;
       }
@@ -397,7 +403,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload]);
+    if (state.hydrated) return warmViews([SettingsPanel.preload, SettingsModal.preload, CreateBotSheet.preload, ShowPane.preload, warmCallSlots, warmCallViews, RoomDetailsPanel.preload]);
   }, [state.hydrated]);
 
   useEffect(() => {
@@ -517,7 +523,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     let cancelled = false;
     const wake = () => {
       if (cancelled) return;
-      void import("@/components/PluginsPanel")
+      void PluginsPanel.preload()
+        .then(() => import("@/components/PluginsPanel"))
         .then((m) => m.preloadConnectedApps())
         .catch(() => {});
     };
@@ -883,7 +890,7 @@ export default function App() {
       <StoreProvider>
         <Shell onboardingOpen={onboardingOpen} />
         {onboardingOpen && (
-          <LazyView overlay fallback={<div className="orbit-inset-aware fixed inset-0 z-50 bg-app" />}>
+          <LazyView overlay fallback={window.ogb ? <div className="orbit-inset-aware fixed inset-0 z-50 bg-app" /> : null}>
             <Onboarding
               onDone={() => {
                 setOnboardingDone();

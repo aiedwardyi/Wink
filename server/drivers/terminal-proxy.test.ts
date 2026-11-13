@@ -10,7 +10,7 @@ import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { STATIC_ANTIGRAVITY_MODELS } from "./antigravity.ts";
 import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
-import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
+import { TOOLS, WORKER_LAUNCH_TEXT, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
 import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
@@ -81,7 +81,7 @@ describe("terminal proxy", () => {
   });
 
   it("exposes a read-only read tool and destructive send, spawn and close tools, all bot-scoped", () => {
-    expect(TOOLS.map((tool) => tool.name)).toEqual(["terminal_read", "terminal_send", "terminal_spawn", "terminal_close"]);
+    expect(TOOLS.map((tool) => tool.name)).toEqual(["terminal_read", "terminal_send", "terminal_spawn", "terminal_close", "terminal_playbook"]);
     expect(TOOLS[0]).toMatchObject({ annotations: { readOnlyHint: true, destructiveHint: false } });
     expect(Object.keys(TOOLS[0].inputSchema.properties)).toEqual(["sessionId", "waitFor", "timeoutMs"]);
     expect(TOOLS[1]).toMatchObject({ annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { required: ["sessionId", "generation"] } });
@@ -96,34 +96,34 @@ describe("terminal proxy", () => {
   });
 
   it("carries the worker spawn recipe in the tool descriptions", () => {
-    expect(TOOLS[2].description).toContain(`claude --model <model-id> --effort <effort> --dangerously-skip-permissions ${workerReportText(process.platform).claude}'Read <card path> and do it.'`);
-    expect(TOOLS[2].description).toContain(`--dangerously-bypass-approvals-and-sandbox ${workerReportText(process.platform).env}${workerReportText(process.platform).notify}'<prompt>'`);
-    expect(TOOLS[2].description).toContain(workerReportText(process.platform).spawn);
+    expect(WORKER_LAUNCH_TEXT).toContain(`claude --model <model-id> --effort <effort> --dangerously-skip-permissions ${workerReportText(process.platform).claude}'Read <card path> and do it.'`);
+    expect(WORKER_LAUNCH_TEXT).toContain(`--dangerously-bypass-approvals-and-sandbox ${workerReportText(process.platform).env}${workerReportText(process.platform).notify}'<prompt>'`);
+    expect(WORKER_LAUNCH_TEXT).toContain(workerReportText(process.platform).spawn);
     expect(TOOLS[0].description).toContain(workerReportText(process.platform).read);
-    expect(TOOLS[2].description).toContain("NICKNAME | MODEL | EFFORT");
-    expect(TOOLS[2].description).toContain("git worktree");
-    expect(TOOLS[2].description).toMatch(/read-only review of a plain folder runs in a scratch copy of it, never in place/);
-    expect(TOOLS[2].description).toContain("one editing worker in place for a plain folder or a checkout with uncommitted changes, after a safety copy");
-    expect(TOOLS[2].description).toContain("Never send /effort in a pane");
+    expect(WORKER_LAUNCH_TEXT).toContain("NICKNAME | MODEL | EFFORT");
+    expect(WORKER_LAUNCH_TEXT).toContain("git worktree");
+    expect(WORKER_LAUNCH_TEXT).toMatch(/read-only review of a plain folder runs in a scratch copy of it, never in place/);
+    expect(WORKER_LAUNCH_TEXT).toContain("one editing worker in place for a plain folder or a checkout with uncommitted changes, after a safety copy");
+    expect(WORKER_LAUNCH_TEXT).toContain("Never send /effort in a pane");
     expect(TOOLS[1].description).not.toContain("/effort <level>");
     expect(TOOLS[1].description).toContain("Text sent while a Claude worker is busy queues for its next step");
   });
 
   it("trusts only the Codex worker folder for that launch", () => {
-    expect(TOOLS[2].description).toContain(`-c "projects={'<cwd>'={trust_level='trusted'}}" --dangerously-bypass-approvals-and-sandbox`);
-    expect(TOOLS[2].description).toContain("Use the pane's absolute native cwd in the trust table");
-    expect(TOOLS[2].description).not.toContain("a new folder shows a trust prompt first");
+    expect(WORKER_LAUNCH_TEXT).toContain(`-c "projects={'<cwd>'={trust_level='trusted'}}" --dangerously-bypass-approvals-and-sandbox`);
+    expect(WORKER_LAUNCH_TEXT).toContain("Use the pane's absolute native cwd in the trust table");
+    expect(WORKER_LAUNCH_TEXT).not.toContain("a new folder shows a trust prompt first");
   });
 
   it("answers Claude's folder trust menu and keeps Grok's trust fallback", () => {
-    expect(TOOLS[2].description).toContain("grok -m <model-id> --effort <effort> --always-approve --trust '<prompt>'");
-    expect(TOOLS[2].description).toContain("Wink answers the folder-trust menu itself");
-    expect(TOOLS[2].description).not.toContain("pick Yes with terminal_send");
-    expect(TOOLS[2].description).toContain("it may ask a y/n trust question first; send y");
+    expect(WORKER_LAUNCH_TEXT).toContain("grok -m <model-id> --effort <effort> --always-approve --trust '<prompt>'");
+    expect(WORKER_LAUNCH_TEXT).toContain("Wink answers the folder-trust menu itself");
+    expect(WORKER_LAUNCH_TEXT).not.toContain("pick Yes with terminal_send");
+    expect(WORKER_LAUNCH_TEXT).toContain("it may ask a y/n trust question first; send y");
   });
 
   it("lists every picker model of the four worker engines with its name and --model id", () => {
-    const description = TOOLS[2].description;
+    const description = WORKER_LAUNCH_TEXT;
     const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.filter((option) => !RETIRED_PICKER_MODEL_IDS.includes(option.id)).map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
     for (const [name, id] of [STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].flatMap(names)) {
       expect(description, id).toContain(`${name} = ${id}`);
@@ -145,12 +145,12 @@ describe("terminal proxy", () => {
     const flags = "agy --model <model-id> --dangerously-skip-permissions -i '<prompt>'.";
     expect(workerReportText("win32").agy).toBe("$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; ");
     expect(workerReportText("linux").agy).toBe("");
-    expect(TOOLS[2].description).toContain(`Gemini: ${workerReportText(process.platform).agy}${flags}`);
-    expect(TOOLS[2].description.indexOf("Gemini: ")).toBeGreaterThan(TOOLS[2].description.indexOf("Grok: grok"));
+    expect(WORKER_LAUNCH_TEXT).toContain(`Gemini: ${workerReportText(process.platform).agy}${flags}`);
+    expect(WORKER_LAUNCH_TEXT.indexOf("Gemini: ")).toBeGreaterThan(WORKER_LAUNCH_TEXT.indexOf("Grok: grok"));
   });
 
   it("lists Grok 4.7 efforts without max in the spawn description", () => {
-    for (const description of [workerModelsText(), TOOLS[2].description]) {
+    for (const description of [workerModelsText(), WORKER_LAUNCH_TEXT]) {
       const grok = description.match(/Grok: Grok 4\.7 = grok-4\.7[^\n]*?(?= Gemini:)/)?.[0];
       expect(grok).toContain("(effort low/medium/high/xhigh)");
       expect(grok).not.toMatch(/\bmax\b/);
@@ -274,6 +274,26 @@ describe("terminal proxy", () => {
     });
     const result = await callTool("terminal_spawn", harnessDown, config, { label: "worker", command: "codex" });
     expect(result).toEqual({ content: [{ type: "text", text: opened }] });
+  });
+
+  it("keeps the launch recipes out of the spawn description and points at the playbook", () => {
+    expect(TOOLS[2].description).toContain("To run a worker, call terminal_playbook first");
+    expect(TOOLS[2].description).toContain("Max 16 live panes per bot");
+    expect(TOOLS[2].description).not.toContain("--dangerously-skip-permissions");
+    expect(TOOLS[2].description).not.toContain(workerModelsText());
+    expect(TOOLS[2].description.length).toBeLessThan(500);
+  });
+
+  it("fetches the on-demand playbook from the harness as this bot", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ text: "## Cards" }), { status: 200 }));
+    const config = { ...CONFIG, harness: "http://127.0.0.1:2", commsToken: "comms" };
+    expect(await callTool("terminal_playbook", fetchImpl, config, {})).toEqual({ content: [{ type: "text", text: `## Cards\n\n## Launch commands\n\n${WORKER_LAUNCH_TEXT}` }] });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:2/api/internal/worker-playbook");
+    expect(init?.headers).toMatchObject({ authorization: "Bearer comms" });
+    expect(JSON.parse(String(init?.body))).toEqual({ fromBotId: "bot-1" });
+    const down = vi.fn(async () => new Response("{}", { status: 503 }));
+    expect((await callTool("terminal_playbook", down, config, {})).isError).toBe(true);
   });
 
   it("maps terminal_close to a POST on the bot's close route", async () => {

@@ -48,6 +48,7 @@ import "./bot-profile.ts";
 import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
+import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -61,7 +62,7 @@ import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { myRoomBotThreads } from "./rooms/joined.ts";
+import { joinedRooms, myRoomBotThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -425,7 +426,7 @@ import { removeRotatingLog } from "./rotating-log.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
-import { harnessPlaybookPrompt } from "./harness-playbook.ts";
+import { createPlaybookGate, harnessPlaybookPrompt } from "./harness-playbook.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
@@ -438,7 +439,7 @@ import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./ver
 import { createVerifyAuto } from "./verify-auto.ts";
 import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
-import { reportServerFailure } from "./error-reports.ts";
+import { keepErrorReports, reportServerFailure, turnOffErrorReports } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
@@ -450,7 +451,7 @@ import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from 
 import { isVoiceLine, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
-import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart, turnMarksFor } from "./turn-timing.ts";
 import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
@@ -3033,6 +3034,14 @@ const spawnUsage = createSpawnUsage({
   nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
+const playbookGate = createPlaybookGate();
+// A recycled or switched provider session has a new cursor, so it reads the playbook again.
+function playbookSession(botId: string): string {
+  const threadId = workerTurns.activeThread(botId);
+  const instanceId = workerTurns.resolveWorkerTurn(botId)?.instanceId;
+  const cursor = threadId && instanceId ? store.taskByThread(botId, threadId)?.resumeCursors[instanceId] : undefined;
+  return JSON.stringify([botId, threadId, instanceId, cursor]);
+}
 const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
@@ -3413,6 +3422,56 @@ void (async () => {
 const busyResumeThreads = new Set<string>();
 const quietTurnText = createQuietTurns((threadId) => store.messagesFor(threadId));
 const quietEnd = createQuietEnd((threadId) => store.messagesFor(threadId), (event) => event.providerInstanceId ? registry.get(event.providerInstanceId)?.adapter : undefined);
+
+const statsTurns = new Map<string, TurnFacts & { after?: string }>();
+const takeTurnMarks = turnMarksFor(() => usageStats.capturing());
+const usageStats = createUsageStats({
+  dataDir: DATA_DIR, url: process.env.WINK_STATS_URL?.trim() ?? "", app: process.env.OMB_APP_VERSION ?? "", internal: process.env.ORBIT_STATS_INTERNAL === "1",
+  display: { scale: Number(process.env.OMB_DISPLAY_SCALE) || 100, screens: Number(process.env.OMB_DISPLAY_COUNT) || 1 },
+  busy: () => store.bots.some((bot) => bot.busy),
+  state: () => {
+    const rows = registry.describeSaved();
+    return {
+      engines: [...new Set(rows.map((row) => row.driverKind))].map((kind) => {
+        const same = rows.filter((row) => row.driverKind === kind);
+        return { kind, accounts: same.length, signedIn: same.some((row) => row.snapshot.authenticated === true), cli: same.find((row) => row.snapshot.version)?.snapshot.version ?? undefined };
+      }),
+      counts: {
+        bots: store.bots.filter((bot) => !bot.hidden).length, rooms: store.groups.length, joinedRooms: joinedRooms().length,
+        archived: store.bots.filter((bot) => bot.hidden).length, routines: routines?.listRoutines().length ?? 0, skills: availableSkills().length,
+        // Wink has no list of user-added MCP servers to count.
+        mcp: 0, phones: phoneVisits.list().length,
+        pcs: profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now()).length : 1,
+      },
+      on: {
+        tailscale: REMOTE_HOST !== undefined, relay: phoneAccess.base() !== null, push: loadPushSubscriptions(DATA_DIR).length > 0,
+        sync: Boolean(profileSyncSettings.folder), syncChats: profileSyncSettings.syncChats, team: Boolean(googleEnv.teamOwner && googleAccount.owner()),
+        chief: store.bots.some((bot) => bot.chiefOfStaff),
+      },
+      keys: [
+        composio.configured(cfg) && "composio", cfg.tts?.key && "elevenlabs", cfg.xai?.key && "xai", cfg.box?.token && "box",
+        cfg.imageGen?.key && "openai-images", cfg.openaiCompat?.key && "custom-provider",
+      ].filter((key): key is string => typeof key === "string" && key !== ""),
+    };
+  },
+  crashReports: () => snagUserData !== undefined && readErrorReportConsent(snagUserData),
+  off: () => {
+    for (const threadId of statsTurns.keys()) takeTurnMarks(threadId);
+    statsTurns.clear();
+  },
+  turn: (event) => {
+    const facts = statsTurns.get(event.threadId);
+    if (!facts || event.type !== "turn.completed") return facts ?? null;
+    const end = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+    // A replaced turn finishing late leaves the live turn its facts and marks.
+    if (end.superseded || (event.turnId && event.turnId === facts.after)) return { ...facts, stop: "superseded" };
+    statsTurns.delete(event.threadId);
+    return { ...facts, ...takeTurnMarks(event.threadId), stop: end.interrupted ? "interrupted" : undefined };
+  },
+});
+// Before the handler below, which settles the state a finished turn is read from.
+bus.subscribe(usageStats.runtime);
+startupTiming.onDone((spans) => { if (!spans.closed) usageStats.launched(spans); });
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
@@ -4595,7 +4654,9 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. Put anything skipped or failed first; keep it short and drop nothing." +
+  " If the user answers an open card in their own words, close the card." +
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -5277,6 +5338,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   turnUsage.delete(threadId);
   turnDispatchedAt.set(threadId, tickTurnClock());
   turnStartedAtMs.set(threadId, Date.now());
+  if (usageStats.capturing()) statsTurns.set(threadId, {
+    ...(opts?.call ? { c: "voice" } : turnStartedByUser(opts) ? { chars: (opts?.transcriptText ?? text).length } : { c: "system" }),
+    surface: opts?.automationSource ? "routine" : "chat", model, effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId),
+  });
   if (routineTurn) routineTurnThreads.add(threadId);
   else routineTurnThreads.delete(threadId);
   if (opts?.paneNoteWake === true && folded.length === 0) paneNoteTurnThreads.add(threadId);
@@ -6746,6 +6811,7 @@ async function runClaimedGroupMemberTurn(
     keepRoomTurnInstruction = true;
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
+    if (usageStats.capturing()) statsTurns.set(threadId, { ...(hop || authority ? { c: "system" } : { from: `group:${groupId}` }), surface: "room", model: selection.model, effort: selection.effort, startedAt: Date.now(), after: liveTurnIdByThread.get(threadId) });
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.() || (authority && !startAsk(authority, riders))) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -7597,6 +7663,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const note = mailboxNoteText(scope.pane, source.name || source.id, source.id, parsed.data.text, label);
       if (!note) return json(res, 400, { error: "empty message" });
       if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
+      if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
       const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
       if (source.notifications !== false) phonePing(source.id, pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId });
       if (kind !== "report") void raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
@@ -7703,12 +7770,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
+        const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""));
+        if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
       }
+      // terminal_playbook: the on-demand part, once per provider session.
+      if (method === "POST" && path === "/api/internal/worker-playbook") {
+        const from = store.bot(String((await readBody(req)).fromBotId ?? ""));
+        if (!from) return json(res, 403, { error: "unknown sender" });
+        return json(res, 200, { text: playbookGate.read(playbookSession(from.id)) });
+      }
       if (method === "POST" && path === "/api/internal/worker-launch") {
         await startupTiming.waitFor("accounts");
-        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], await readBody(req), workerLaunch);
+        const launch = await readBody(req);
+        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], launch, workerLaunch);
+        if ("launch" in result.body) usageStats.workerStarted(launch?.environment?.ORBIT_PANE, result.body.launch);
         return json(res, result.status, result.body);
       }
       // The show_image tool: a copy of a local image lands as a settled
@@ -7922,12 +7999,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/analytics") {
-      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR) });
+      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR, snagUserData !== undefined && readErrorReportConsent(snagUserData)), capture: usageStats.capturing(), period: usageStats.period() });
     }
     if (method === "PUT" && path === "/api/analytics") {
       const body = await readBody(req);
       if (typeof body?.enabled !== "boolean") return json(res, 400, { error: "enabled must be a boolean" });
-      return json(res, 200, { enabled: saveAnalyticsConsent(DATA_DIR, body.enabled) });
+      const enabled = saveAnalyticsConsent(DATA_DIR, body.enabled);
+      usageStats.setEnabled(enabled);
+      // One switch: off on any screen turns crash reports off on this PC too.
+      if (enabled) keepErrorReports();
+      else void turnOffErrorReports(terminalBridgeAccess);
+      return json(res, 200, { enabled, capture: usageStats.capturing(), period: usageStats.period() });
+    }
+    if (method === "POST" && path === "/api/stats") {
+      return usageStats.ingest(await readBody(req, 64 * 1024)) ? json(res, 200, { ok: true }) : json(res, 409, { error: "stats are off" });
     }
 
     // ── phone access from anywhere: pairing, phones and relay status (PC only) ──
@@ -8194,6 +8279,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
+      usageStats.sent(`group:${m[1]}`, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await groupRoutes.postMessage(req, res, m);
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
@@ -8350,6 +8436,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
+      usageStats.sent(store.bot(m[1]!)?.threadId, req.headers["user-agent"], isLoopbackHost(req.headers.host));
       return await botChatRoutes.send(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/call\/(token|lines|end)$/);
@@ -8967,6 +9054,7 @@ phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
+startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")
@@ -8988,6 +9076,7 @@ hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
   startupTiming.close();
+  usageStats.stop();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};
   for (const bot of store.bots) {

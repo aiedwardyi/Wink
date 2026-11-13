@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
+import { trackScreen } from "../usage-stats";
 
 /** `bot` is the bot as it was when called, for a store that has not listed it yet. */
 export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext };
@@ -28,6 +29,7 @@ export function callsSupported(): boolean {
 
 export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
   call = { id: ++calls, botId: bot.id, bot, ctx };
+  trackScreen("live-call");
   note = null;
   notify();
   return call;

@@ -490,6 +490,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         turn.integrations?.browser && "browser",
         (turn.integrations?.computer || (turn.integrations?.localComputer && !controlsHost)) && "computer",
         turn.integrations?.terminal && "terminal/terminal_read",
+        turn.integrations?.terminal && "terminal/terminal_playbook",
       ]);
       const handleServerRequest = (msg: any) => {
         const method = msg.method as string;

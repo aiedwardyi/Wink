@@ -3,6 +3,7 @@ import { api } from "@/state/store";
 import type { NotificationTarget } from "./notify";
 import { roomAlertsOff } from "./room-alerts";
 import { joinedSelection } from "./team-rooms";
+import { trackFeature, trackSetting } from "./usage-stats";
 
 export type WebPushState = "unsupported" | "off" | "on" | "blocked";
 
@@ -39,6 +40,8 @@ export async function enableWebPush(): Promise<WebPushState> {
     (await registration.pushManager.getSubscription()) ??
     (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlBytes(publicKey) }));
   await postSubscription(subscription);
+  trackSetting("phoneNotifications", "off", "on");
+  trackFeature("push.on");
   return "on";
 }
 
@@ -57,6 +60,7 @@ export async function disableWebPush(): Promise<void> {
   if (!subscription) return;
   await api("/api/web-push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint }) });
   await subscription.unsubscribe();
+  trackSetting("phoneNotifications", "on", "off");
 }
 
 export async function testWebPush(botId?: string): Promise<void> {

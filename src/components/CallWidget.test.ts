@@ -162,6 +162,29 @@ describe("call follows you", () => {
     expect(host.querySelector("[data-call-box]")).not.toBeNull();
   });
 
+  it("keeps talking through a chat switch and a voice change, and shows the saved voice", async () => {
+    await mount(atlas);
+    const engine = await call();
+    await render(juno);
+    await act(async () => pills("Call voice")[1]!.click());
+    await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:3", ...CONFIG, liveCall: { voice: "Achird", language: "auto" } }), lastEventId: "qa:3" }));
+    expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(fakes.engines).toEqual([engine]);
+    expect(engine.closed).toBe(false);
+    expect(button(widget()!, "Mute")).not.toBeNull();
+  });
+
+  it("says a call that dropped in another chat failed and stops its clock", async () => {
+    await mount(atlas);
+    const engine = await call();
+    await render(juno);
+    await act(async () => engine.events.closed(1006, ""));
+    const shown = widget()!;
+    expect(shown.querySelector("[role=alert]")?.textContent).toBe("Call failed: The call dropped");
+    expect(shown.textContent).not.toMatch(/\d:\d\d/);
+    expect(button(shown, "End")).not.toBeNull();
+  });
+
   it("opens the call's chat from the widget and hangs up from it", async () => {
     await mount(atlas);
     const engine = await call();
@@ -188,6 +211,18 @@ describe("call follows you", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(corner().getAttribute("aria-label")).toBe("Send message");
+  });
+
+  it("switches to another bot's call on one press", async () => {
+    await mount(atlas);
+    const first = await call();
+    await render(juno);
+    await act(async () => button(host, "Call Juno")!.click());
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(2));
+    expect(first.closed).toBe(true);
+    await act(async () => fakes.engines[1]!.events.ready());
+    await vi.waitFor(() => expect(host.querySelector("[data-call-box]")).not.toBeNull());
+    expect(fakes.engines[1]!.closed).toBe(false);
   });
 
   it("answers the order from the widget in another chat", async () => {
@@ -246,6 +281,31 @@ describe("call voice in Settings", () => {
     } finally {
       applyLocale("en");
     }
+  });
+
+  it("labels the composer call button in Korean", async () => {
+    await mount(atlas);
+    applyLocale("ko");
+    try {
+      await render(atlas);
+      const frame = host.querySelector<HTMLElement>("[data-orbit-composer-frame]")!;
+      expect(button(host, "Atlas 통화 시작")).toBeNull();
+      await act(async () => button(frame, "Atlas에게 전화")!.click());
+      await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+      await act(async () => fakes.engines[0]!.events.ready());
+      await vi.waitFor(() => expect(button(frame, "종료")).not.toBeNull());
+      expect(button(host, "Atlas 통화 끊기")).toBeNull();
+    } finally {
+      applyLocale("en");
+    }
+  });
+
+  it("previews in the call language, not the app's", async () => {
+    await mount(atlas);
+    await act(async () => pills("Call language")[2]!.click());
+    await vi.waitFor(() => expect(pills("Call language")[2]!.getAttribute("aria-checked")).toBe("true"));
+    await act(async () => preview("Jenn")!.click());
+    expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
   });
 
   it("previews without selecting, one clip at a time, loading none until asked", async () => {

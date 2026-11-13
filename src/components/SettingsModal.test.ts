@@ -235,10 +235,16 @@ describe("SettingsModal friends chrome", () => {
     Object.defineProperty(window, "ogb", { value: { errorReportConsent: vi.fn(), setErrorReportConsent: vi.fn() }, configurable: true, writable: true });
     const html = markup("general");
     expect(html).toContain('aria-label="Crash reports and stats"');
-    expect(html).toContain("Anonymous. No chats or files.");
+    expect(html).toContain("Anonymous speed, crash and feature stats. Never chats, files or names.");
     expect(html).not.toContain("Send Anonymous Usage Stats");
     expect((html.match(/role="switch"/g) ?? [])).toHaveLength(1);
     Object.defineProperty(window, "ogb", { value: undefined, configurable: true, writable: true });
+  });
+
+  it("shows the same one switch without the desktop shell, on a phone or in a browser", () => {
+    const html = markup("general");
+    expect((html.match(/aria-label="Crash reports and stats"/g) ?? [])).toHaveLength(1);
+    expect(html).toContain("Anonymous speed, crash and feature stats. Never chats, files or names.");
   });
 
   it("groups Advanced preferences in one card without repeated titles", () => {

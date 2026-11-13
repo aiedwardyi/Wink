@@ -1009,6 +1009,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const trace = prepare ? undefined : restart?.turn.trace ?? turn.trace ?? startTurnTrace({ engine: "claude", threadId, turnId });
     trace?.identify({ threadId, turnId, engine: "claude" });
     const turnTimer = restart?.turn.timer ?? startTurnTimer({
+      threadId,
       engine: "claude",
       model: turn.model,
       effort: turn.effort ?? null,
@@ -1106,7 +1107,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       if (turn.integrations?.terminal) {
         mcpServers.terminal = { ...turn.integrations.terminal, ...orbitOwned };
-        allowed.push("mcp__terminal__terminal_read");
+        allowed.push("mcp__terminal__terminal_read", "mcp__terminal__terminal_playbook");
       }
       // dweb network daemon (status / repo / opencode model access) via
       // server/drivers/dweb-proxy.ts — points at the configured dweb instance
@@ -1192,6 +1193,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
+        turnTimer.setMeta({ reusedSession: true });
         turnTimer.mark("spawnOrReuse");
         trace?.span("spawn", "reused")();
         trace?.span("initialize", "reused")();

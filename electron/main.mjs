@@ -51,6 +51,7 @@ import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
 import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
+import { installCrashStats, statsUrl } from "./usage-stats.mjs";
 import { spoolTeamSnag } from "./team-snags.mjs";
 import { ERROR_SITES } from "../shared/error-report.mjs";
 import {
@@ -155,6 +156,14 @@ const ERROR_REPORT_DSN = verifyProbe ? null : errorReportDsn(() => require("./er
 const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
 registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
+const STATS_URL = verifyProbe ? "" : statsUrl(() => require("./error-report-config.json"));
+const crashStats = installCrashStats(app, () => mainWindow?.webContents, async (events) => {
+  if (!serverToken) return null;
+  const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/stats`, {
+    method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${serverToken}` }, body: JSON.stringify({ events }), signal: AbortSignal.timeout(10_000),
+  });
+  return response.status;
+});
 onUpdaterFailure(errorReports.capture);
 // Startup owns the first window; activation before it only queues targets for that window's load.
 let startupWindowCreated = false;
@@ -952,6 +961,9 @@ async function startServerOn(port) {
     ...workspaceCredentialEnv(childEnvCredentials),
     ...googleServerEnv(GOOGLE_CLIENT),
     ...crashReportsEnv(ERROR_REPORT_DSN),
+    WINK_STATS_URL: STATS_URL,
+    OMB_DISPLAY_SCALE: String(Math.round(screen.getPrimaryDisplay().scaleFactor * 100)),
+    OMB_DISPLAY_COUNT: String(screen.getAllDisplays().length),
     ...(terminalBridgeAccess
       ? {
           OMB_TERMINAL_URL: terminalBridgeAccess.url,
@@ -974,6 +986,7 @@ async function startServerOn(port) {
   proc.once("exit", (code) => {
     exited = true;
     if (!killed) errorReports.capture({ process: "server", code: "SERVER_GONE", site: ERROR_SITES.serverGone, exitCode: code });
+    if (!killed) crashStats.capture("server", "server-gone", code);
     if (serverProc === proc) {
       serverToken = null;
       appAuthorization.bind(`http://127.0.0.1:${port}`, null);
@@ -1009,6 +1022,7 @@ async function startServerOn(port) {
     slog(`child on port ${port} exited before answering /api/health`);
   } else {
     if (identity.outcome === "timeout") errorReports.capture({ process: "main", code: "STARTUP_TIMEOUT", site: ERROR_SITES.startupTimeout });
+    if (identity.outcome === "timeout") crashStats.capture("main", "startup-timeout");
     slog(
       identity.outcome === "foreign-owner"
         ? `port ${port} answered health checks from another process`
@@ -1033,6 +1047,7 @@ async function startServerPackaged() {
         serverProc = started.proc;
         SERVER_PORT = port;
         serverToken = started.token;
+        void crashStats.flush();
         appAuthorization.bind(`http://127.0.0.1:${port}`, serverToken);
         updateCompanionHarness(port, serverToken);
         return true;

@@ -1,6 +1,6 @@
 import { fallbackError } from "@/lib/error-text";
 import { useRef, useState } from "react";
-import { api, useStore, type ConfigStatus } from "@/state/store";
+import { api, shownProfile, useStore, type ConfigStatus } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { showAvatarFormatsHint } from "@/lib/friends-chrome";
@@ -12,15 +12,16 @@ export function ProfileFields() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
-  const savedName = state.config?.profile?.name ?? "";
+  const shown = shownProfile(state);
+  const savedName = shown?.profile?.name ?? "";
   const [name, setName] = useState(savedName);
   const [shownName, setShownName] = useState(savedName);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [rejected, setRejected] = useState(false);
-  const avatarUrl = state.config?.profile?.avatarUrl;
-  // Null until the first config answer: a placeholder, never an empty name or a "?" photo.
-  const loaded = state.config !== null;
+  const avatarUrl = shown?.profile?.avatarUrl;
+  // Null until the first config answer or a cached profile: a placeholder, never an empty name or a "?" photo.
+  const loaded = shown !== null;
   // Synced during render, not in an effect, so the frame the profile arrives already has the name.
   if (shownName !== savedName) {
     setShownName(savedName);
@@ -52,7 +53,7 @@ export function ProfileFields() {
 
   // A blank Save with no stored name would mark the name cleared and block the Google fill.
   const save = () =>
-    name.trim() || state.config?.profile?.name?.trim() ? put(async () => ({ name: name.trim() }), "settings.profile.saveError") : undefined;
+    name.trim() || savedName.trim() ? put(async () => ({ name: name.trim() }), "settings.profile.saveError") : undefined;
 
   const changePhoto = async (file: File | undefined) => {
     if (!file) return;
@@ -97,7 +98,7 @@ export function ProfileFields() {
         onChange={(event) => void changePhoto(event.target.files?.[0])}
       />
       <div className="flex items-center gap-4 max-md:flex-col max-md:gap-3">
-        <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={avatarUrl} size={56} pending={!loaded} />
+        <InitialsAvatar initials={profileInitials(shown?.profile)} imageUrl={avatarUrl} size={56} pending={!loaded} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 max-md:w-full max-md:flex-col-reverse max-md:gap-3">
           <div className="flex items-center gap-2">
             <label htmlFor="settings-profile-name" className="sr-only">{t("settings.profile.nameLabel")}</label>

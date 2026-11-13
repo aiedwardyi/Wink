@@ -32,6 +32,7 @@ import { USAGE_LAYOUT, usageAccounts } from "./usage-layout";
 import { useCappedAccounts } from "./usage-cap";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
 import "./UsageDesk.css";
+import { trackFeature } from "@/lib/usage-stats";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -537,6 +538,7 @@ export function UsageDesk() {
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   useEffect(() => { if (!board) waited.current = true; });
   const refresh = async (board: UsageBoard) => {
+    trackFeature("usage.refresh");
     setRefreshFailed(false);
     setMuseAuthFailed(false);
     const outcome = await refreshUsage(store.instances, board, dispatch);

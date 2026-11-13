@@ -34,6 +34,7 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { consentOf } from "@/lib/live-call/consent";
+import { sendInput } from "@/lib/usage-stats";
 
 type Phase = "listening" | "sending" | "working" | "speaking";
 const CALL_ENDPOINT_MS = 850;
@@ -367,6 +368,7 @@ function Call({ bot }: { bot: Bot }) {
       }
 
       move("sending");
+      sendInput("call");
       dispatch({ type: "send", botId: bot.id, text: said, threadId: bot.threadId });
     });
     const offEnd = bridge.onSpeechEnd(({ code, reason }) => {

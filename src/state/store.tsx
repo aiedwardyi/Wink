@@ -40,6 +40,8 @@ import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
+import { trackReplyText, trackStream } from "@/lib/usage-stats";
+import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -83,7 +85,7 @@ import type { OptionCardData, Message, Group, Bot, InstanceInfo, AppState, StopH
 export type { MausColor } from "@/lib/mascot";
 export type { RoutineRunCardData } from "../../shared/routine-run";
 export type { OptionCardData, ConnectorCardData, SecretRequestCardData, Message, GroupDefaultResponder, Group, GroupTask, ModelSelection, Task, TaskResumePacket, TaskUsage, Bot, TerminalAttention, TerminalAttentionMap, ConfigStatus, ConfigStatusFrame, EngineInstall, RateLimitReport, InstanceInfo, AppSettingsSection, AppState, BotAnnouncement, Action, PeripheralSnapshotLoad } from "./store-types";
-export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread } from "./store-transforms";
+export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread, shownProfile } from "./store-transforms";
 
 /** The visible conversation: walk parentId links from the active leaf back
  * to the root. Falls back to the flat list for pre-branching payloads. */
@@ -966,13 +968,16 @@ function saveSnapshotCache(state: AppState): void {
     selectedId: state.selectedId,
     // preserveRateLimits would keep a stale usage window past the live fetch.
     instances: state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance),
+    profile: state.config ? state.config.profile : state.cachedProfile,
   });
 }
 
 function withCachedSnapshot(state: AppState): AppState {
   const cached = readSnapshotCache();
   noteCacheLoaded(cached !== null);
-  return cached ? { ...state, ...cached } : state;
+  if (!cached) return state;
+  const { profile, ...snapshot } = cached;
+  return { ...state, ...snapshot, cachedProfile: profile };
 }
 
 export const initialState: AppState = {
@@ -1344,6 +1349,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       // A queued message is still real until the server confirms deletion.
       // All other actions keep their existing optimistic behavior.
+      trackAction(action, stateRef.current);
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
         case "olderMessages": {
@@ -2300,6 +2306,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const next: PendingDeltas = { ...applyStreamDelta(base, event.streamKind, event.delta), tail };
               // Only a live turn's reply types out; text after the turn ended lands whole.
               if (event.streamKind === "assistant_text") {
+                trackReplyText(event.threadId);
                 next.ramps = loadReplyStyle() === "live" && event.threadId in liveTurns.current
                   ? [...(base.ramps ?? []), [event.delta.length, performance.now()]]
                   : undefined;
@@ -2387,12 +2394,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
+        trackStream(true);
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
-      onError: () => rawDispatch({ type: "connected", value: false }),
+      onError: () => {
+        trackStream(false);
+        rawDispatch({ type: "connected", value: false });
+      },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);
         // Frames buffered before this non-resumable stream belong to an
