@@ -1145,9 +1145,10 @@ export class Store {
 
   /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
   dmGroup(a: string, b: string): GroupRecord | undefined {
-    return this.groups.find(
+    // the oldest, so PCs that each made one for the pair pick the same
+    return this.groups.filter(
       (g) => g.dm && g.memberIds.length === 2 && g.memberIds.includes(a) && g.memberIds.includes(b),
-    );
+    ).sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1))[0];
   }
 
   patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "picture" | "notice" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt" | "hosted">>): GroupRecord | null {
