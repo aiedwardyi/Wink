@@ -8,9 +8,6 @@ export const LIVE_VOICES = ["Aoede", "Alnilam", "Erinome"] as const;
 export type LiveVoice = (typeof LIVE_VOICES)[number];
 // Live has no accent field, so the accent rides the system instruction.
 export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
-/** Auto answers in English or Korean, whichever the person speaks, else the app language. */
-export const LIVE_LANGUAGES = ["auto", "en", "ko"] as const;
-export type LiveLanguage = (typeof LIVE_LANGUAGES)[number];
 export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
   return { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } };
 }
