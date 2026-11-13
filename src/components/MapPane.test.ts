@@ -157,6 +157,30 @@ it("puts every worker on one tree in its own color and marks clashes by how near
   expect(host.querySelector('.map-tree-file[data-map-file="b.ts"] .map-tree-x[data-same]')).not.toBeNull();
 });
 
+it("marks a file filled when any two of its workers overlap", async () => {
+  const team = [
+    { ...workers[0], files: [{ path: "src/a.ts", added: 1, removed: 0, ranges: [[10, 12]] }] },
+    { ...workers[1], files: [{ path: "src/a.ts", added: 1, removed: 0, ranges: [[100, 102]] }] },
+    { ...workers[1], id: "c", nick: "GAMMA", editedAt: 0, files: [{ path: "src/a.ts", added: 1, removed: 0, ranges: [[11, 13]] }] },
+  ];
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit(team);
+  expect(host.querySelector('.map-tree-file[data-map-file="src/a.ts"] .map-tree-x[data-same]')).not.toBeNull();
+});
+
+it("opens a folded branch's changed file from its box on a narrow pane", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
+  const paths = ["src", "server", "docs"].flatMap(dir => Array.from({ length: 20 }, (_, i) => `${dir}/f${i}.ts`));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path: "src/f1.ts", files: [{ path: "src/f1.ts", added: 1, removed: 0 }, { path: "server/f2.ts", added: 1, removed: 0 }] }]);
+  expect(host.querySelector('[data-map-file="server/f2.ts"]')).toBeNull();
+  const box = [...host.querySelectorAll<HTMLButtonElement>("button.map-tree-box")].find(box => box.textContent?.startsWith("server/"));
+  await act(async () => box!.click());
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("server/f2.ts");
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
+});
+
 it("hops the pointer to the file just edited without covering its name, and shows the path when the worker left no note", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);

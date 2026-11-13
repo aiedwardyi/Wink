@@ -127,7 +127,7 @@ export async function mapWalkFiles(cwd: string, limit = WALK_LIMIT): Promise<str
     for (const entry of entries) {
       if (++seen > limit) break;
       const path = dir ? `${dir}/${entry.name}` : entry.name;
-      if (entry.isFile()) paths.push(path);
+      if (entry.isFile() || entry.isSymbolicLink()) paths.push(path);
       else if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules") queue.push(path);
     }
   }

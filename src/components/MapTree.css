@@ -13,6 +13,7 @@
 .map-tree-n[data-kind="box"] .map-tree-box b { color: var(--color-ink-secondary); font-weight: 400; }
 .map-tree-box[data-changed] { border-color: var(--color-accent); }
 .map-tree[data-team] .map-tree-box[data-changed] { border-color: color-mix(in oklab, var(--color-ink-secondary) 60%, transparent); }
+button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .map-tree-box.map-tree-more { justify-content: center; border-style: dashed; background: transparent; }
 .map-tree-box.map-tree-more b { color: var(--color-ink-secondary); font-weight: 400; }
 .map-tree-ticks { position: absolute; left: -1px; right: -1px; bottom: -1px; height: 3px; }
@@ -44,7 +45,7 @@
 .map-tree-x { flex: none; width: 13px; height: 10px; overflow: visible; }
 .map-tree-x rect { fill: none; stroke: var(--color-warning); stroke-width: 1; }
 .map-tree-x path { fill: var(--color-warning); }
-@media (hover: hover) { .map-tree-file[data-state="changed"]:hover { background: var(--color-raised); } }
+@media (hover: hover) { .map-tree-file[data-state="changed"]:hover, button.map-tree-box:hover { background: var(--color-raised); } }
 @container map-pane (max-width: 503px) {
   .map-tree-box b { font-size: 11px; }
   .map-tree-n[data-kind="root"] .map-tree-box b { font-size: 12px; }

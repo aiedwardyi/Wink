@@ -196,7 +196,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
           const at = row.findIndex(it => it.filesOnly);
           row.splice(at < 0 ? row.length : at, 0, more);
         }
-        more.dirs!++; more.count! += last.dir!.total;
+        more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path);
         const loose = row.find(it => it.id === "f:");
         if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; }
         measure(more, o, maxStack);
