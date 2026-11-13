@@ -1,4 +1,4 @@
-import { PanelRight } from "lucide-react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -22,7 +22,7 @@ export function ShowPaneButton({ threadId, className }: { threadId: string; clas
       onClick={() => open ? closePane() : togglePane(threadId)}
       className={cn("shrink-0 rounded-md p-1.5 hover:bg-raised hover:text-ink", open ? "text-accent" : "text-ink-secondary", className)}
     >
-      <PanelRight size={18} />
+      {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
     </button>
   );
 }
