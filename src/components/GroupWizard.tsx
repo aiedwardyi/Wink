@@ -131,7 +131,7 @@ export function GroupWizard({
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -144,7 +144,7 @@ export function GroupWizard({
         aria-modal={!closing || undefined}
         aria-labelledby="group-wizard-title"
         tabIndex={-1}
-        className="animate-pop-in flex max-h-full w-full max-w-[380px] flex-col rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
+        className="animate-pop-in flex max-h-full w-full max-w-[380px] flex-col rounded-[24px] border border-hairline/50 bg-panel p-4 shadow-2xl shadow-black/50 outline-none"
       >
         <div id="group-wizard-title" className="mb-3 text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -188,7 +188,7 @@ export function GroupWizard({
         </div>
 
         <div className="mt-3 flex shrink-0 justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/50">
             {t("groupWizard.cancel")}
           </button>
           <button

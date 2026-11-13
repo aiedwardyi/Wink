@@ -9,10 +9,12 @@ import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { isPhone, PHONE_QUERY } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useSheetSwipe } from "@/lib/use-phone-swipe";
+import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
+import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
 
 export const WORKER_STATUS = {
@@ -112,7 +114,7 @@ export function WorkerRow({ run, state, live, onOpenTerminalPane, open: expanded
         type="button"
         onClick={onToggle ?? (() => setLocalOpen((v) => !v))}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 border-b border-hairline/40 py-2 text-left text-[13px] hover:bg-raised/40"
+        className="flex w-full items-center gap-2.5 border-b border-hairline/40 py-2 text-left text-[13px] hover:bg-raised/50"
       >
         <WorkerLine run={run} state={state} />
         <ChevronDown size={12} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
@@ -177,7 +179,7 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
                 onOpenTerminalPane(sessionId);
                 onClose();
               }}
-              className={cn(entry, "hover:bg-raised/40")}
+              className={cn(entry, "hover:bg-raised/50")}
             >
               <WorkerLine {...shown} nickFirst={nickFirst} />
             </button>
@@ -199,7 +201,7 @@ function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTermi
         onOpenTerminal();
         onClose();
       }}
-      className={cn(ENTRY_CLASS, "shrink-0 border-t hover:bg-raised/40", inset && "px-3")}
+      className={cn(ENTRY_CLASS, "shrink-0 border-t hover:bg-raised/50", inset && "px-3")}
     >
       <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised">
         <TerminalSquare size={18} aria-hidden className="text-ink-secondary" />
@@ -314,6 +316,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
     if (!shown) setOpen(false);
   }, [shown]);
   useBackLayer(open && phone, () => setOpen(false));
+  const menu = usePresence(open && !phone);
   useLayoutEffect(() => {
     if (!open || phone || !rootRef.current) return;
     const root = rootRef.current;
@@ -414,13 +417,15 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
         </span>
       </button>
       {open && phone && <WorkerList title={t("workers.title", { name })} runs={listed} livePanes={livePanes} onClose={close} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />}
-      {open && !phone && (
+      {menu.mounted && (
         <div
           data-worker-list
-          role="dialog"
+          data-closing={menu.closing || undefined}
+          inert={menu.closing}
+          role={menu.closing ? undefined : "dialog"}
           aria-labelledby={titleId}
           style={{ right, width }}
-          className="absolute top-full z-40 mt-1 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50"
+          className={cn(MENU_CLASS, "absolute top-full mt-1 overflow-hidden")}
         >
           <h2 id={titleId} className="px-3 py-2 text-[15px] font-semibold text-ink">{t("workers.title", { name })}</h2>
           <div className="max-h-[320px] overflow-y-auto">

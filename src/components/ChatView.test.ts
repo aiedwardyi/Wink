@@ -406,7 +406,7 @@ describe("ChatView worker rows", () => {
         "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -461,7 +461,7 @@ describe("ChatView worker rows", () => {
       expect(entry.textContent).not.toContain("WORK");
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith(liveDone);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }

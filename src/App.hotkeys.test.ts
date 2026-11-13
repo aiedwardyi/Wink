@@ -162,7 +162,7 @@ describe("worker list shortcut", () => {
       expect(list.textContent).toContain(group ? "Team's workers" : "Scout's workers");
       expect(list.getAttribute("aria-modal")).toBe(phone ? "true" : null);
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -186,7 +186,7 @@ describe("worker list shortcut", () => {
     try {
       expect(host.querySelector("[data-worker-strip]")).toBeNull();
       expect((await press()).defaultPrevented).toBe(true);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -199,7 +199,7 @@ describe("worker list shortcut", () => {
       await press();
       for (const init of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }, { altKey: false }]) {
         expect((await press(init)).defaultPrevented).toBe(false);
-        expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+        expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       }
     } finally {
       await unmount();
@@ -213,7 +213,7 @@ describe("worker list shortcut", () => {
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
       const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
       expect(overlay).not.toBeNull();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       await vi.waitFor(async () => {
         await act(async () => {});
         expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
@@ -221,11 +221,11 @@ describe("worker list shortcut", () => {
       const event = await press();
       expect(event.defaultPrevented).toBe(true);
       expect(event.cancelBubble).toBe(true);
-      expect(document.body.querySelectorAll("[data-worker-list]")).toHaveLength(1);
+      expect(document.body.querySelectorAll("[data-worker-list]:not([data-closing])")).toHaveLength(1);
       expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
       expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -236,7 +236,7 @@ describe("worker list shortcut", () => {
     try {
       await press({ code: "KeyT", key: "t" });
       expect((await press()).defaultPrevented).toBe(false);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -251,7 +251,7 @@ describe("worker list shortcut", () => {
       inside.focus();
       expect(document.activeElement).toBe(inside);
       await press();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(document.activeElement).toBe(host.querySelector("[data-worker-strip]"));
     } finally {
       await unmount();

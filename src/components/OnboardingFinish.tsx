@@ -24,7 +24,7 @@ export function OnboardingFinish({ onDone }: { onDone: () => void }) {
           <OrbitMark size={82} />
         </div>
         <h1 id="onboarding-title" className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">{t("onboarding.doneTitle")}</h1>
-        <button type="button" onClick={open} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink transition-[filter,transform] hover:brightness-110 active:scale-[0.99]">{t("onboarding.openOrbit")}</button>
+        <button type="button" onClick={open} className="mt-7 w-full max-w-60 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110">{t("onboarding.openOrbit")}</button>
         <a
           href={REPO}
           target="_blank"

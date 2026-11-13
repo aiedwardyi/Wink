@@ -191,19 +191,19 @@ describe("WorkerChip", () => {
       expect(chip()!.getAttribute("aria-expanded")).toBe("true");
       expect(document.body.querySelector("[data-worker-list]")).not.toBeNull();
       await toggle();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       await toggle();
       await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       await toggle();
       const outside = phone ? document.body.querySelector("[data-worker-list]")!.parentElement! : document.body;
       await act(async () => { outside.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
     await toggle();
-    expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+    expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
   });
 
   it("keeps Tab inside the phone worker list", async () => {
@@ -325,7 +325,7 @@ describe("WorkerChip", () => {
       const entry = [...list.querySelectorAll("button")].find((button) => button.textContent?.includes("COPY"))!;
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith("done-1");
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -461,7 +461,7 @@ describe("WorkerChip", () => {
       await act(async () => chip()!.click());
       expect(document.body.querySelector("[data-worker-list]")).not.toBeNull();
       await act(async () => { window.dispatchEvent(new Event("orbit:close-worker-menu")); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(chip()!.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await unmount();
@@ -637,7 +637,7 @@ describe("WorkerChip", () => {
       await act(async () => (row as HTMLButtonElement).click());
       expect(onOpen).toHaveBeenCalledOnce();
       expect(onPane).not.toHaveBeenCalled();
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -657,7 +657,7 @@ describe("WorkerChip", () => {
       expect(sheet.querySelector("ul")!.contains(row)).toBe(false);
       await act(async () => (row as HTMLButtonElement).click());
       expect(onOpen).toHaveBeenCalledOnce();
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
       applyLocale("en");
@@ -680,7 +680,7 @@ describe("WorkerChip", () => {
       expect(host.querySelector("[data-worker-list]")).not.toBeNull();
       await act(async () => reader.unmount());
       await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(document.activeElement).toBe(chip());
     } finally {
       await act(async () => reader.unmount());
@@ -700,12 +700,12 @@ describe("WorkerChip", () => {
       await act(async () => opener.click());
       expect(host.querySelector("[data-worker-list]")).not.toBeNull();
       await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(document.activeElement).toBe(opener);
       outside.focus();
       await act(async () => opener.click());
       await act(async () => outside.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
       expect(document.activeElement).toBe(outside);
     } finally {
       outside.remove();
@@ -721,7 +721,7 @@ describe("WorkerChip", () => {
       await act(async () => chip()!.click());
       expect(host.querySelector("[data-worker-list]")).not.toBeNull();
       await act(async () => flip!());
-      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(host.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
