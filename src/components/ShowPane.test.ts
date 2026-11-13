@@ -25,6 +25,7 @@ vi.mock("pdfjs-dist", () => ({
     destroy() {},
   }),
 }));
+vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "/pdf.worker.min.mjs" }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -191,7 +192,7 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media ? ["show" as const] : [])');
+  expect(app).toContain('...(watch || show || media || mapping ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
@@ -207,7 +208,7 @@ const probe = async (read: () => void) => {
 
 it("has no Check tab without a check", async () => {
   await render({ item: item("C:\\w\\a.png", "image"), source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Media"]);
+  expect(tabs()).toEqual(["Show", "Media", "Map"]);
 });
 
 it("the checker opens on Check, and Show keeps its file", async () => {
@@ -218,7 +219,7 @@ it("the checker opens on Check, and Show keeps its file", async () => {
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -254,7 +255,7 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -284,16 +285,16 @@ it("speaks Korean on the Check tab", async () => {
 it("hides only Show and Check behind the other tabs, never the Media list", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
   const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media)');
+  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane)');
 });
 
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Media"]);
+  expect(tabs()).toEqual(["Show", "Media", "Map"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check"]);
+  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {

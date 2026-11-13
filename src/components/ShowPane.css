@@ -11,7 +11,8 @@
 .show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media { min-height: calc(100% - var(--head) - 20px); }
 .show-pane-tabs button:disabled { opacity: .45; }
 /* Show and Check stay mounted behind the other tabs, so the file never reloads and the check keeps streaming. */
-.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media) { display: none; }
+.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane) { display: none; }
+.show-pane > .map-pane { min-height: calc(100% - var(--head) - 20px); }
 
 .show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
 .show-frame-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
@@ -52,6 +53,7 @@
   .verify-watch.show-pane { position: fixed; inset: 0; z-index: 50; width: 100%; margin: 0; padding-top: env(safe-area-inset-top); border-left-width: 0; box-shadow: none; }
   .show-pane-head { height: auto; padding: 6px 0 0 12px; }
   .show-pane-tabs button, .show-media-kinds button { height: 32px; }
+  .show-pane-tabs button { padding-inline: 9px; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
   /* a thumb a finger can catch */
   .show-media-rail { width: 28px; }

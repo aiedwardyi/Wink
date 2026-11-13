@@ -4,7 +4,7 @@ import { ChevronRight, Download, ExternalLink, FileText, Globe, Image as ImageIc
 import type { VerifyCardData } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
-import { lastShown, linkedFileSrc, saveFile, showCheck, showItem, showMedia, showName, type ShowItem } from "@/lib/show-pane";
+import { lastShown, linkedFileSrc, saveFile, showCheck, showItem, showMap, showMedia, showName, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { ShowMedia } from "./ShowMedia";
@@ -14,6 +14,7 @@ import "./VerifyWatch.css";
 import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
+const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
 const ICON = { image: ImageIcon, pdf: FileText, page: Globe };
 
 interface ShowPaneProps {
@@ -23,6 +24,8 @@ interface ShowPaneProps {
   media?: boolean;
   /** the Check tab is open */
   check?: boolean;
+  map?: boolean;
+  botId?: string;
   /** the chat's last check, which the Check tab opens */
   card?: VerifyCardData;
   source?: MediaSource;
@@ -31,13 +34,13 @@ interface ShowPaneProps {
 }
 
 /** The right slot's one pane: a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
-export function ShowPane({ item, watch, media = false, check = false, card, source, hidden, closing = false }: ShowPaneProps) {
-  const { t } = useI18n();
+export function ShowPane({ item, watch, media = false, check = false, map = false, botId, card, source, hidden, closing = false }: ShowPaneProps) {
+  const { t, locale } = useI18n();
   const phone = useIsPhone();
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !phone;
   const again = source && lastShown(source.threadId);
-  const tab = media && source ? "media" : watch && (check || !item) ? "check" : "show";
+  const tab = map ? "map" : media && source ? "media" : watch && (check || !item) ? "check" : "show";
   // A phone watches a doc check live; only a site check waits for the end.
   const action = card && verifyCardAction(card, phone && !card.doc);
   const checkable = Boolean(watch) || action === "live" || action === "watch";
@@ -70,6 +73,7 @@ export function ShowPane({ item, watch, media = false, check = false, card, sour
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
           {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
+          {source && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{locale === "ko" ? "맵" : "Map"}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
@@ -80,6 +84,7 @@ export function ShowPane({ item, watch, media = false, check = false, card, sour
         ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
         : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
       {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
+      {tab === "map" && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.
