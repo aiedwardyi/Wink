@@ -10,6 +10,7 @@ import { EXTENDED_REACTIONS } from "../../shared/reactions";
 import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { ReactionIcon } from "./ReactionIcon";
 import { showSelectHandles } from "./select-handles";
@@ -321,7 +322,7 @@ function closeMenu(opener: HTMLElement, menu: HTMLElement | null, onClose: () =>
 }
 
 /** Arrow keys walk the menu's buttons; Enter clicks the focused one. */
-function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
+export function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.KeyboardEvent): void {
   const buttons = ref.current ? Array.from(ref.current.querySelectorAll("button")) : [];
   if (!buttons.length) return;
   const at = buttons.findIndex((entry) => entry === document.activeElement);
@@ -346,7 +347,7 @@ function menuKeyDown(ref: React.RefObject<HTMLDivElement | null>, e: React.Keybo
 export const MENU_CLASS =
   "animate-pop-in fixed z-40 rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60";
 const ROW_CLASS =
-  "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+  `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 const EMOJI_CLASS =
   "flex size-8 items-center justify-center rounded-full text-[17px] leading-none transition-transform hover:scale-110 hover:bg-control";
 

@@ -181,7 +181,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const bare = tight && spot.maxHeight < FOOTER_KEPT + 24;
   const closeButton = (
     <button type="button" data-quick-close="" aria-label={t("usage.chat.close")} onClick={() => close()}
-      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink [@media(pointer:coarse)]:size-11">
       <X size={15} aria-hidden="true" />
     </button>
   );

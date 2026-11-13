@@ -38,7 +38,7 @@ export function mediaFile(threadId: string, ref: MediaRef, at: number): MediaFil
   const video = VIDEO.test(ref.ref) || undefined;
   if (kind === "f") return { key, name, at, path: ref.ref, size, video };
   const show = showKind(ref.ref);
-  return show === "image" ? { key, name, at, src: key, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
+  return show === "image" ? { key, name, at, src: key, path: ref.ref, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
 }
 
 const seen = new WeakMap<Message, MediaFile[]>();

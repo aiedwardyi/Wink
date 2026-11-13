@@ -222,6 +222,9 @@ declare global {
       saveFile?(filePath: string): Promise<void>;
       /** Reveals a local file in its folder. Rejects like `openFile`. */
       showInFolder?(filePath: string, base?: string): Promise<void>;
+      localMediaFile?(file: { path?: string; src?: string }): Promise<string | null>;
+      readMediaImage?(src: string): Promise<{ bytes: Uint8Array; type: string }>;
+      saveMediaImage?(src: string, name: string): Promise<boolean>;
       /** Opens a chat's linked file from the PC that has it, under that PC's
        * own link checks. Rejects with a readable reason. */
       openPeerFile?(host: string, threadId: string, filePath: string): Promise<void>;
