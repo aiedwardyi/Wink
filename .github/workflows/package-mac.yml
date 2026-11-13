@@ -53,7 +53,7 @@ jobs:
           res=$app/Contents/Resources
           fail=0
           for f in server/packaged-boot.js server/index.js ui/index.html app-update.yml \
-            cloudflared/cloudflared cua-driver/cua-driver \
+            cloudflared/cloudflared cua-driver cua-sdk/cua-sdk.mjs \
             "OpenMausBot Speech.app/Contents/MacOS/speech-helper"; do
             [ -f "$res/$f" ] || { echo "::error::missing $res/$f"; fail=1; }
           done
