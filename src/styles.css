@@ -4213,11 +4213,13 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   border-color: var(--color-edge) !important;
 }
 
-[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] {
+[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow],
+[data-segmented-thumb] > [data-orbit-rainbow] {
   opacity: 1;
 }
 
-[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span {
+[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
+[data-segmented-thumb] > [data-orbit-rainbow] > span {
   animation-play-state: running;
 }
 
@@ -5377,7 +5379,8 @@ html[data-orbit-idle] :is(
   animation-play-state: paused !important;
 }
 
-html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span {
+html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
+html[data-orbit-idle] [data-segmented-thumb] > [data-orbit-rainbow] > span {
   animation-play-state: paused;
 }
 

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 function edgeFade(el: HTMLElement): string | undefined {
@@ -16,9 +16,10 @@ export interface SegmentedProps<T extends string> {
   disabled?: (id: T) => boolean;
   title?: string;
   peek?: boolean;
+  ring?: ReactNode;
 }
 
-export function Segmented<T extends string>({ label, value, options, onChange, disabled, title, peek }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ label, value, options, onChange, disabled, title, peek, ring }: SegmentedProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
   const [mask, setMask] = useState<string | undefined>();
@@ -73,9 +74,11 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
         <span
           aria-hidden
           data-segmented-thumb
-          className="pointer-events-none absolute inset-y-[3px] left-0 rounded-[max(0px,calc(var(--radius-lg)_-_3px))] bg-raised shadow-sm ring-1 ring-hairline/60 transition-[transform,width]"
+          className={cn("pointer-events-none absolute inset-y-[3px] left-0 rounded-[max(0px,calc(var(--radius-lg)_-_3px))] bg-raised shadow-sm transition-[transform,width]", !ring && "ring-1 ring-hairline/60")}
           style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
-        />
+        >
+          {ring}
+        </span>
       )}
       {options.map((option) => (
         <button

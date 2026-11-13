@@ -182,7 +182,7 @@ function queuedFromRoomHold(hold: PersistedRoomHold, draftId: string): QueuedGro
 }
 
 // An absolute child sits on the frame's padding box; the inset reaches out over each skin's border.
-function RainbowRing({ theme }: { theme: boolean }) {
+export function RainbowRing({ theme }: { theme: boolean }) {
   const ring = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const el = ring.current;
