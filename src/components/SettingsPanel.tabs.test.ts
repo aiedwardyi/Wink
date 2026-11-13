@@ -366,6 +366,45 @@ describe("Memory tab on return", () => {
   });
 });
 
+describe("Memory tab on a phone whose memory read never answers", () => {
+  // a dead socket after the phone sleeps: the fetch neither answers nor fails until something aborts it
+  const hangReads = (count: number) => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    let reads = 0;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (init?.method === "PUT" || String(url).includes("/memory/topics/") || ++reads > count) return answer(url, init);
+      return new Promise((_, fail) => init?.signal?.addEventListener("abort", () => fail(init.signal!.reason)));
+    });
+  };
+  const map = () => host.querySelector(".mm");
+
+  it("shows the map with the notes a later read brought", async () => {
+    hangReads(1);
+    await open();
+    await toMemory();
+    expect(map()).not.toBeNull();
+    expect(fileRow().textContent).toContain("1 line");
+    expect(map()!.textContent).toContain("Uses Windows");
+  });
+
+  it("shows the map with Retry once the read gives up", async () => {
+    hangReads(Infinity);
+    // native AbortSignal.timeout ignores fake timers
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const taskState: TaskResumePacket = { v: 1, threadId: "t1", botId: "bot-1", goal: "Ship the phone fix", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "", updatedAt: 0, updatedBy: "bot", flushReason: "turn-end", turnsAtWrite: 0 };
+    await open({ ...bot, tasks: [{ threadId: "t1", title: "x", createdAt: 0, taskState }] });
+    await toMemory();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(map()).not.toBeNull();
+    expect(map()!.querySelector(".mm-failed")!.textContent).toContain("Couldn't load memory.");
+    expect(map()!.textContent).toContain("Ship the phone fix");
+  });
+});
+
 describe("Knowledge and Edit", () => {
   it("reads a topic file from its Knowledge row and has no second list", async () => {
     await open();
