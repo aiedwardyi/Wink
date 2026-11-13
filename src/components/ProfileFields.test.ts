@@ -203,6 +203,21 @@ describe("ProfileFields photo", () => {
     mock.cachedProfile = undefined;
   });
 
+  it("clears a cached name on a blank Save", async () => {
+    const loaded = mock.config;
+    mock.config = null;
+    mock.cachedProfile = { name: "Ada", email: "" };
+    const request = vi.fn<(input: string, init?: RequestInit) => Promise<FetchResult>>(async () => ({ ok: true, json: async () => ({ profile: { name: "", email: "" } }) }));
+    vi.stubGlobal("fetch", request);
+    const { root, name, save } = await renderProfile();
+    await act(async () => fillInput(name, " "));
+    await act(async () => save.click());
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ profile: { name: "" } });
+    await act(async () => root.unmount());
+    mock.config = loaded;
+    mock.cachedProfile = undefined;
+  });
+
   it("never paints an empty editable name in the frame the profile arrives", async () => {
     const loaded = mock.config;
     mock.config = null;

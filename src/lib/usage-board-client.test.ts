@@ -190,6 +190,27 @@ describe("createUsageBoardClient", () => {
     expect(reads[1]!.cursor).toBe("new-3");
   });
 
+  it("keeps asking through a slow boot and on any frame while it shows the last board", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createUsageBoardClient((cursor) => new Promise((resolve, reject) => reads.push({ cursor, resolve, reject })), async () => {},
+        { read: () => fresh({ revision: 90, cursor: "old-90" }), write: () => {} });
+      stops.push(client.subscribe(() => {}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(client.snapshot().status).toBe("loading");
+      expect(reads).toHaveLength(2);
+      reads[1]!.reject(new Error("offline"));
+      await vi.advanceTimersByTimeAsync(0);
+      client.frame(3);
+      expect(reads).toHaveLength(3);
+      reads[2]!.resolve(fresh({ revision: 3, cursor: "new-3" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.snapshot()).toMatchObject({ status: "ready", board: { revision: 3 } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears swapped windows and history immediately and ignores an older in-flight read", async () => {
     const client = make();
     const instances = (account: string) => [{ instanceId: "claude", snapshot: { authenticated: true, account } }];

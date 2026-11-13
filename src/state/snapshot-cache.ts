@@ -44,7 +44,7 @@ const isInstance = (value: unknown) =>
   isRecord(value) && typeof value.instanceId === "string" && typeof value.driverKind === "string";
 
 const isProfile = (value: unknown) =>
-  isRecord(value) && typeof value.name === "string" && (value.avatarUrl === undefined || typeof value.avatarUrl === "string");
+  isRecord(value) && typeof value.name === "string" && typeof value.email === "string" && (value.avatarUrl === undefined || typeof value.avatarUrl === "string");
 
 export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
   try {
