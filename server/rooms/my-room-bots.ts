@@ -56,6 +56,8 @@ export class MyRoomBotTurns {
   private readonly stops = new Map<string, number>();
   /** Room task threads the owner stopped; they settle without a failure row. */
   private readonly stopped = new Set<string>();
+  /** Turns the owner stopped while their files were still downloading. */
+  private readonly cancelled = new Set<Waiting>();
   private readonly deps: MyRoomBotDeps;
 
   constructor(deps: MyRoomBotDeps) {
@@ -103,6 +105,9 @@ export class MyRoomBotTurns {
       this.set(roomId, row.id, undefined);
     }
     this.stop(roomId);
+    for (const row of this.active.values()) {
+      if (row.roomId === roomId && ![...this.running.values()].some((run) => run.botId === row.botId)) this.cancelled.add(row);
+    }
     for (const [threadId, run] of this.running) {
       if (run.roomId !== roomId) continue;
       this.stopped.add(threadId);
@@ -171,6 +176,11 @@ export class MyRoomBotTurns {
         setMyRoomBotTurn(roomId, bot.id, threadId, 0);
       }
       const files = await this.files(roomId, [...(entry.files ?? []), ...(quote?.files ?? [])]);
+      if (this.cancelled.delete(row)) {
+        this.active.delete(bot.botId);
+        this.set(roomId, bot.id, undefined);
+        return queueMicrotask(() => this.drain());
+      }
       const window = since(roomId, row.after, entry.seq);
       const { state } = room;
       const ownerOf = (owner?: string) => (owner ? state.people.find((person) => person.id === owner)?.name : state.host);

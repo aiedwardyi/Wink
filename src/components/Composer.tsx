@@ -668,8 +668,6 @@ export function Composer({
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
     : attachments.some((attachment) => attachment.kind === "upload");
-  const replyRef = useRef(replyTo);
-  replyRef.current = replyTo;
   // The text leaves the box at send like a bot chat; file chips stay as the upload's sign until the room accepts it.
   const sendRoom = async (target: ComposerRoom) => {
     const liveText = composerSendSourceText(inputRef.current?.value, text).trim();
@@ -682,13 +680,16 @@ export function Composer({
     if (!request) return;
     hapticTick();
     onSend?.();
+    onConsumeReply?.();
     restoreComposerDraft(draftId, { text: "", attachments: held });
     const failed = await request;
     showRoomProblem(failed);
     settleRoomSend(draftId, liveText, new Set(held.map((attachment) => attachment.id)), Boolean(failed));
-    if (failed) return;
+    if (failed) {
+      if (sentReply) onRestoreReply?.(sentReply, target.base);
+      return;
+    }
     for (const attachment of sent) dropRoomFile(attachment.id);
-    if (replyRef.current === sentReply) onClearReply?.();
   };
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
   const canSendToTerminal = Boolean(

@@ -6,19 +6,20 @@ import { CallWidgetSlot } from "./CallSlots";
 import { Composer, type RoomBotStatus, type RoomPerson } from "./Composer";
 
 export function useTeamRoomReply(base: string, draftId: string, messages: Message[]) {
-  const { replyTo, selectReply, clearReply } = useReplyDraft(base, draftId, messages);
-  useBackLayer(Boolean(replyTo), clearReply);
-  return { replyTo, selectReply, clearReply };
+  const reply = useReplyDraft(base, draftId, messages);
+  useBackLayer(Boolean(reply.replyTo), reply.clearReply);
+  return reply;
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, offline, status, onStop }: {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop }: {
   name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean;
+  onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
   status?: readonly RoomBotStatus[]; onStop?: () => void;
 }) {
   return (
     <>
       <CallWidgetSlot className="px-3 pb-2 md:hidden" />
-      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop }} replyTo={replyTo} onClearReply={onClearReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop }} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
     </>
   );
 }

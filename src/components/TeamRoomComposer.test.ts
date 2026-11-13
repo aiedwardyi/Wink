@@ -358,7 +358,7 @@ describe("room drafts", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
     const first = { id: "a", at: 1, role: "user", kind: "text", text: "first" } as Message;
     const clear = vi.fn();
-    const composer = (replyTo: Message) => createElement(TeamRoomComposer, { name: "Design team", base: "/api/rooms/r1", draftId: "g1", replyTo, onClearReply: clear });
+    const composer = (replyTo: Message) => createElement(TeamRoomComposer, { name: "Design team", base: "/api/rooms/r1", draftId: "g1", replyTo, onClearReply: clear, onConsumeReply: vi.fn(), onRestoreReply: vi.fn() });
     await act(async () => root.render(composer(first)));
     await type("Sent text");
     await send();
@@ -743,5 +743,19 @@ describe("room reply target", () => {
     await act(async () => root.render(createElement("div", null, "Bot chat")));
     await render("joined");
     expect(chip()).not.toBeNull();
+  });
+
+  it("drops the chip at send so a view opened mid-send does not reply again", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));
+    await render("joined");
+    await pick();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).toBeNull();
+    await act(async () => answer(reply({ ok: true })));
+    expect(chip()).toBeNull();
   });
 });

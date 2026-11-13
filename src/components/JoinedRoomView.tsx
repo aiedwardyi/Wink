@@ -58,7 +58,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const base = joinedRoomBase(roomId);
   const draftId = `joined:${roomId}`;
   const messages = useMemo(() => lines.map(roomMessage), [lines]);
-  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base, draftId, messages);
+  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, draftId, messages);
   const name = room?.state?.roomName ?? "";
   const phase = room ? joinedPhase(room) : room === null ? null : "connecting";
   const status =
@@ -139,6 +139,8 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
               bots={bots}
               replyTo={replyTo}
               onClearReply={clearReply}
+              onConsumeReply={consumeReply}
+              onRestoreReply={restoreReply}
               offline={phase !== "live"}
               status={myTurns.flatMap((bot) => bot.waiting ? [{ id: bot.id, text: t("teamRoom.botBusy", { name: bot.name }) }] : bot.error ? [{ id: bot.id, text: t("teamRoom.botFailed", { name: bot.name }), failed: true }] : [])}
               onStop={working ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
