@@ -906,6 +906,7 @@ describe("relative file links", () => {
       const play = vi.spyOn(video, "play");
       const pause = vi.spyOn(video, "pause");
       expect(video.getAttribute("controlslist")).toBe("nofullscreen");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       await act(async () => button()!.click());
       expect(shown).toBe(video.parentElement);
       expect(shown).not.toBe(video);
@@ -914,6 +915,7 @@ describe("relative file links", () => {
       expect(play).not.toHaveBeenCalled();
       expect(pause).not.toHaveBeenCalled();
       expect(video.className).toContain("object-contain");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
     });
 
     it("exits with the same button and keeps the video element", async () => {
@@ -989,6 +991,7 @@ describe("relative file links", () => {
       expect(button()).toBeNull();
       const video = host.querySelector("video")!;
       expect(video.hasAttribute("controlslist")).toBe(false);
+      expect(video.className).not.toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       expect(video.parentElement!.tagName).not.toBe("SPAN");
     });
   });
