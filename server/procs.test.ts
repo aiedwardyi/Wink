@@ -2,7 +2,7 @@
 // counts are real process launches, not calls.
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
-import { constants, getPriority, tmpdir } from "node:os";
+import { constants, getPriority, setPriority, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -167,13 +167,15 @@ describe.runIf(process.platform === "win32")("setCliPriority", () => {
   });
 
   it("leaves a launcher and the engine it starts at Normal", async () => {
-    const engine = `& '${process.execPath}' -e "console.log(process.pid); setTimeout(() => {}, 30000)"`;
-    const child = spawn("powershell.exe", ["-NoProfile", "-Command", `$PID; ${engine}`], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    // The launcher inherits the runner's class, which can itself be below Normal.
+    const runner = getPriority();
+    setPriority(constants.priority.PRIORITY_NORMAL);
+    const child = spawn("cmd.exe", ["/d", "/s", "/c", `""${process.execPath}" -e "console.log(process.pid); setTimeout(() => {}, 30000)""`], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true, windowsVerbatimArguments: true });
     try {
-      const tree = pids(child, 2);
       setCliPriority(child, "low");
+      const [engine] = await pids(child, 1);
       setCliPriority(child, "normal");
-      for (const pid of await tree) expect(getPriority(pid)).toBe(constants.priority.PRIORITY_NORMAL);
-    } finally { kill(child); }
-  }, 20_000);
+      for (const pid of [child.pid!, engine]) expect(getPriority(pid)).toBe(constants.priority.PRIORITY_NORMAL);
+    } finally { kill(child); setPriority(runner); }
+  });
 });
