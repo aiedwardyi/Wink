@@ -660,7 +660,7 @@ describe("ModelPicker friends chip", () => {
 describe("ModelPicker usage stats", () => {
   it("names the view that is drawn, not the one saved", () => {
     const picker = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ModelPicker.tsx"), "utf8");
-    expect(picker).toContain('trackScreen(dial && dialFits && loadModelPickerView() !== "list" ? "model-dial" : "model-picker");');
+    expect(picker).toContain('trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : "model-dial") : "model-picker");');
     expect(picker).toContain('if (dialView) switchVia("dial");');
   });
 });
