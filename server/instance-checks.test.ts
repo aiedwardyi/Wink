@@ -46,6 +46,27 @@ describe("first-run engine checks", () => {
     expect(failed.snapshot.reason).toBe("cli exploded");
   });
 
+  it("pushes a check that lands while the first list is being read", async () => {
+    let landed: () => void = () => {};
+    let done = false;
+    const row = (state: ProviderSnapshot["state"]) => ({ instanceId: "b", snapshot: { state } });
+    const registry = {
+      describeKnown: vi.fn(async () => {
+        const rows = [row(done ? "available" : "checking")];
+        if (!done) { done = true; landed(); }
+        return rows;
+      }),
+      describeCached: vi.fn(async () => []),
+      onProbed: (listener: () => void) => { landed = listener; return () => {}; },
+    };
+    const publish = vi.fn();
+    // SAFETY: the stub returns only the fields createInstanceChecks reads.
+    const checks = createInstanceChecks(registry as unknown as Parameters<typeof createInstanceChecks>[0], publish);
+
+    expect(states(await checks.describe() as never)).toEqual({ b: "checking" });
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledWith([row("available")]));
+  });
+
   it("answers a stopped account unavailable, never checking", async () => {
     const registry = await slowRegistry(async () => ({ state: "available" }));
     registry.blockAccount("b", true);
