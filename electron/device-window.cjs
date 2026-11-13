@@ -21,14 +21,33 @@ function deviceTailnet(localHost) {
   return host && HOST_RE.test(tailnet) ? tailnet : "";
 }
 
-/** This PC's tailnet suffix from `tailscale status --json`, or "" when unreadable. */
-function tailnetFromStatus(json) {
+/** This PC's own tailnet host from `tailscale status --json`, or "" when unreadable. */
+function selfHostFromStatus(json) {
   try {
     const dnsName = JSON.parse(json)?.Self?.DNSName;
-    return deviceTailnet(Object.prototype.toString.call(dnsName) === "[object String]" ? dnsName.replace(/\.$/, "") : "");
+    return normalizedHost(Object.prototype.toString.call(dnsName) === "[object String]" ? dnsName.replace(/\.$/, "") : "");
   } catch {
     return "";
   }
+}
+
+/** This PC's tailnet suffix from `tailscale status --json`, or "" when unreadable. */
+function tailnetFromStatus(json) {
+  return deviceTailnet(selfHostFromStatus(json));
+}
+
+/** A PC window's jump to a PC's root on this tailnet: "self" for this PC, else that PC's host; null for any other link. */
+function devicePickTarget(target, tailnet, selfHost) {
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.port || url.username || url.pathname !== "/" || url.search || url.hash) return null;
+  const host = normalizedHost(url.hostname);
+  if (!host || !tailnet || host.slice(host.indexOf(".") + 1) !== tailnet) return null;
+  return host === selfHost ? "self" : host;
 }
 
 // Funnel sites on other tailnets are public *.ts.net too, so only this tailnet's machines pass.
@@ -272,4 +291,4 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   };
 }
 
-module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus };
+module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus };
