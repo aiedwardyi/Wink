@@ -168,10 +168,10 @@ it("holds a starting turn's account until it is accepted", async () => {
   expect(section("    } finally {\n      releaseStarting();", "\n  })()", turn)).toBeTruthy();
   expect(section("  } finally {", "\n    turnStartClaims.delete(botId);", section("async function startTurn(", "\n}\n"))).toContain("takeStartingHold(botId)();");
   const roomTurn = section("async function runClaimedGroupMemberTurn(", "\n}\n");
-  expect(roomTurn.indexOf("  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
-  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(bot.id);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
+  expect(roomTurn.indexOf("  startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
+  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(turnKey);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
   expect(roomTurn).toContain("      .catch((err) => {\n        releaseStarting();");
-  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(botId)();");
+  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(lane ? laneKey(botId) : botId)();");
 
   const held = new Set<string>();
   const accountRuntime = { holdStarting: (id: string, generation: number) => { const key = `${id}:${generation}`; held.add(key); return () => held.delete(key); } };

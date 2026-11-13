@@ -79,7 +79,7 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
 - Keep sound off the speakers: test browsers keep `--mute-audio`; a clip that needs sound captures it without playing it, or adds it afterwards.
 - Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.
-- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.
+- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 

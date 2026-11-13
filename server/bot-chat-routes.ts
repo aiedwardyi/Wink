@@ -59,6 +59,7 @@ type BotChatRouteDeps = {
   markThreadInterrupted: (threadId: string, botId: string, epoch: number) => void;
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => TaskResumePacket | null;
   releaseInterruptedBot: (botId: string, threadId: string) => void;
+  roomLaneThread?: (botId: string) => string | undefined;
   clearUnattended: (botId: string) => void;
   routines: RoutineManager;
   busyResumeThreads: Set<string>;
@@ -538,7 +539,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const instance = instanceForBot(bot);
       // a bot busy in a ROOM is running on the room's thread - stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
-      const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
+      // a room on the bot's second lane has its own Stop
+      const busyGroup = store.groups.find((g) => g.busyBotId === bot.id && deps.roomLaneThread?.(bot.id) !== g.threadId);
       if (busyGroup) {
         if (expectedThreadId !== undefined && busyGroup.threadId !== expectedThreadId) {
           return json(res, 409, { error: `this bot is working in channel ${busyGroup.id}` });
