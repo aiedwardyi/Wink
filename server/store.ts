@@ -175,6 +175,8 @@ export interface Message {
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
+  /** A hidden 1:1 row: what the bot said in a room, carried into its next 1:1 turn once. */
+  roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */

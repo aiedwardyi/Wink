@@ -60,8 +60,8 @@ const rightClick = (el: Element) => {
   act(() => { el.dispatchEvent(event); });
   return event;
 };
-const items = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')].map((item) => item.textContent);
-const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')].find((each) => each.textContent === name)!;
+const items = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitem"]')].map((item) => item.textContent);
+const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitem"]')].find((each) => each.textContent === name)!;
 const filesTab = () => act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === "Files")!.click());
 const fileRow = (name: string) => [...host.querySelectorAll("[data-media-file]")].find((row) => row.querySelector("span span")!.textContent === name)!;
 const confirmButton = () => [...document.querySelectorAll<HTMLButtonElement>('[aria-modal="true"] button')].find((button) => button.textContent === "Delete")!;
@@ -171,7 +171,7 @@ it("Copy image writes PNG bytes and closes its menu", async () => {
   await act(async () => item("Copy image").click());
   expect(write).toHaveBeenCalledOnce();
   expect((await copied[0]!["image/png"]!).type).toBe("image/png");
-  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
 });
 
 it("copies an external picture through the desktop image reader", async () => {
@@ -246,10 +246,10 @@ it("prevents duplicate image save dialogs and leaves a failed save retryable", a
   expect(saveMediaImage).toHaveBeenCalledTimes(1);
   await act(async () => reject(new Error("unavailable")));
   await settle();
-  expect(document.querySelector('[role="menu"] [role="alert"]')?.textContent).toContain("Couldn't save");
+  expect(document.querySelector('[role="menu"]:not([data-closing]) [role="alert"]')?.textContent).toContain("Couldn't save");
   await act(async () => item("Save as").click());
   expect(saveMediaImage).toHaveBeenCalledTimes(2);
-  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
 });
 
 it("keeps the menu retryable when clipboard access fails", async () => {
@@ -260,7 +260,7 @@ it("keeps the menu retryable when clipboard access fails", async () => {
   await settle();
   await act(async () => item("Copy image").click());
   await settle();
-  expect(document.querySelector('[role="menu"] [role="alert"]')?.textContent).toContain("Couldn't copy");
+  expect(document.querySelector('[role="menu"]:not([data-closing]) [role="alert"]')?.textContent).toContain("Couldn't copy");
   expect(items()).toEqual(["Copy image", "Save as", "Delete"]);
 });
 
@@ -321,7 +321,7 @@ it("a room file offers Save as and Delete, and Save as downloads it", async () =
   await act(async () => item("Save as").click());
   expect(save).toHaveBeenCalledTimes(1);
   expect((save.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe(`/api/rooms/r1/files/${plan.id}`);
-  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
 });
 
 it("Save as keeps a room file's name when its desktop blob has an opaque ID", async () => {
@@ -343,7 +343,7 @@ it("Escape closes a file's menu and leaves the pane open", async () => {
   rightClick(fileRow("plan.pdf"));
   await settle();
   await act(async () => { item("Save as").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
-  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
   expect(host.querySelector("[data-show-media]")).not.toBeNull();
 });
 
@@ -380,5 +380,5 @@ it("on a phone a file it can fetch offers Save as alone, and one only its PC hol
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
   expect(rightClick(fileRow("notes.docx")).defaultPrevented).toBe(true);
   await settle();
-  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
 });

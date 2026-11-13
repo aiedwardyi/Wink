@@ -121,7 +121,7 @@ export function ComposerAttachments({
                 <button
                   type="button"
                   onClick={() => onDisplayInChatBox(a)}
-                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text transition-colors hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
                   aria-label="Display pasted text in chat box"
                   title="Display in chat box"
                 >
@@ -261,7 +261,7 @@ function Chip({
       title={title}
       className={cn(
         "group relative w-[172px] shrink-0 rounded-xl border border-hairline/40 bg-raised px-2.5 py-2",
-        "transition-colors hover:border-hairline",
+        "hover:border-hairline",
       )}
     >
       {children}

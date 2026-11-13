@@ -136,7 +136,7 @@ it("docks files wide and closes from the header", async () => {
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   const aside = host.querySelector("aside")!;
   expect(aside.hasAttribute("data-wide")).toBe(true);
-  expect(aside.classList.contains("animate-panel-in")).toBe(true);
+  expect(aside.classList.contains("md:animate-panel-slide")).toBe(true);
   expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Show");
   await act(async () => button("Close")!.click());
   let shown: ShowItem | null = item("x", "image");

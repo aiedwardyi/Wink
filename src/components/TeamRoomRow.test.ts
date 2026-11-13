@@ -146,6 +146,22 @@ it("renders a bot line's markdown and makes web links clickable on every line", 
   expect([...person.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/b"]);
 });
 
+it("links common domains and URLs in own, teammate and bot room bubbles", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  const text = "starzum.com www.x.io x.co.kr https://example.com file.ts README.md deploy.sh notes.ai v1.0.259 e.g. person@example.com";
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+    onReply: () => {}, base: "/api/rooms/r1", label: "Crew", mine: (line) => line.author.kind === "host",
+    lines: ["host", "person", "bot"].map((kind) => ({ id: kind, at: Date.now(), author: { kind, id: kind, name: kind }, text, files: [] })) as RoomLine[],
+  }))));
+  for (const kind of ["host", "person", "bot"]) {
+    const links = [...host.querySelectorAll<HTMLAnchorElement>(`[data-mid="${kind}"] a`)];
+    expect(links.filter((link) => !link.href.startsWith("mailto:")).map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", kind === "bot" ? "http://www.x.io" : "https://www.x.io", "https://x.co.kr", "https://example.com",
+    ]);
+  }
+});
+
 describe("room transcript reads like a 1:1 chat", () => {
   const day = 86_400_000;
   const line = (id: string, at: number, extra: Partial<RoomLine> = {}): RoomLine => ({ id, at, author: { kind: "person", id: "p1", name: "Mina" }, text: `text ${id}`, files: [], ...extra });

@@ -79,6 +79,7 @@ import { CallCard } from "./CallCard";
 import { lazyView } from "@/lib/stale-build";
 import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
+import { usePresence } from "@/lib/use-presence";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
@@ -114,6 +115,7 @@ import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from ".
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
 import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -239,7 +241,7 @@ export function ErrorRow({
       disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        "border-danger/30 hover:bg-danger/15",
+        "border-danger/30 hover:bg-danger/10",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
@@ -961,9 +963,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
-  // The audio context is born in the tap: phones only let it play from one.
+  // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
   const startCall = useCallback(() => {
-    const ctx = new AudioContext();
+    const ctx = callAudio();
     void ctx.resume();
     placeCall(bot, ctx);
   }, [bot]);
@@ -994,6 +996,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Stays mounted across threads, so drop a menu that still names the previous one.
   const [menuThread, setMenuThread] = useState(bot.threadId);
   if (menuThread !== bot.threadId) {
@@ -1510,7 +1513,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <button
             data-orbit-chat-focus-fallback=""
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50 cursor-pointer"
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised cursor-pointer"
             title={t("chat.avatarTip")}
             aria-label={t("chat.avatarTip")}
           >
@@ -1861,10 +1864,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         onWheel={followWheel}
       />
 
-      {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
-      ) : menu ? (
-        <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
+      {shownMenu?.kind === "message" ? (
+        <MessageMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} target={shownMenu.target} closing={menuClosing} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: shownMenu.target.threadId, messageId: shownMenu.target.message.id, emoji, message: shownMenu.target.message })} onClose={() => setMenu(null)} />
+      ) : shownMenu ? (
+        <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
       {/* Reading scrollback — one tap back to the end, streaming or not */}
