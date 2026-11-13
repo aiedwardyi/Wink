@@ -79,6 +79,7 @@ const STATUS_MS = 30_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
+const HEARD = "They already heard you answer: say nothing more.";
 const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
 // The voice told a bare "expired" or "replaced" says they declined.
 const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline.", replaced: "replaced: a newer offer took its place. They did not decline." };
@@ -104,7 +105,6 @@ export function asRequest(order: string): string {
 /** "Sent: X", "Not sent: X (why)": how a result reads aloud and in the chat. */
 export function told(result: string, subject: string): string {
   if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
-  if (result.startsWith("already proposed")) return `Waiting for their answer: ${subject}`;
   return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
 }
 
@@ -427,7 +427,7 @@ export class LiveCall {
   private runTool(call: LiveToolCall) {
     const run = TOOLS[call.name];
     if (run) run(this, call.args, call.id);
-    else this.engine?.sendToolResult(call.id, call.name, "unknown tool");
+    else this.engine?.sendToolResult([call.id], call.name, "unknown tool");
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
@@ -437,8 +437,7 @@ export class LiveCall {
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
-    for (const id of live) engine!.sendToolResult(id, name, note ? `${heard}. ${note}` : heard);
-    if (live.length) return;
+    if (live.length) return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
@@ -458,7 +457,8 @@ export class LiveCall {
     if (this.card?.armed || this.justAnswered) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
-    if (this.pending && orderKey(this.pending.order) === key) return this.toolResult(ids, "propose_work", order, "already proposed, waiting for their answer");
+    // Every result makes the voice speak, so a re-offer waits to be answered with the first one.
+    if (this.pending && orderKey(this.pending.order) === key) return void this.pending.toolIds.push(...ids);
     const replaced = Boolean(this.pending);
     if (replaced) {
       this.stats.orders.replaced += 1;
@@ -504,21 +504,21 @@ export class LiveCall {
     this.set({ pending: undefined });
   }
 
-  private answerTool(result: string) {
+  private answerTool(result: string, note?: string) {
     const pending = this.pending;
     if (!pending) return;
     this.clearPending();
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note);
   }
 
   /** Yes or No on the pending order, tapped or spoken. */
-  async answer(yes: boolean) {
+  async answer(yes: boolean, answering = false) {
     const pending = this.pending;
     if (!pending) return;
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
-      return this.answerTool("declined");
+      return this.answerTool("declined", answering ? HEARD : undefined);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -533,7 +533,7 @@ export class LiveCall {
       pending.req.accounted = req.accounted = false;
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && this.stats.voiceLines > said ? "They already heard you answer: say nothing more." : undefined);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && this.stats.voiceLines > said ? HEARD : undefined);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
@@ -683,7 +683,7 @@ export class LiveCall {
     if (!this.pending || !ended) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
-    if (consent) void this.answer(consent === "yes");
+    if (consent) void this.answer(consent === "yes", this.generating);
   }
 
   private flushSaid(share: number) {
