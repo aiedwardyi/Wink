@@ -17,6 +17,7 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
   const menu = (event: MouseEvent<HTMLElement>) => {
     if (!window.ogb?.openFile) return;
     event.preventDefault();
+    event.stopPropagation();
     setMenuAt({ x: event.clientX, y: event.clientY, opener: event.currentTarget });
   };
   return (

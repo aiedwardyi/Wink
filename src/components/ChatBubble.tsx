@@ -347,7 +347,7 @@ const Bubble = memo(function Bubble({
   const menuProps: HTMLAttributes<HTMLDivElement> = {
     ...holdToOpen(menuTarget && ((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target: menuTarget }))),
     onContextMenu: menuTarget ? (e) => {
-      if (e.defaultPrevented || isTouchPrimary() || !(e.target instanceof Element)) return;
+      if (isTouchPrimary() || !(e.target instanceof Element)) return;
       const kind = contextClickKind(e.target, e.clientX, e.clientY);
       if (kind === "native") return;
       e.preventDefault();

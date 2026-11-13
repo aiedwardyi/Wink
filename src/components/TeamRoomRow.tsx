@@ -156,7 +156,7 @@ export function TeamRoomRow({ line, mine, named, newDay = false, base, authorNam
         tabIndex={-1}
         {...holdToOpen((x, y, opener) => onMenu({ kind: "message", x, y, opener, target }))}
         onContextMenu={(event) => {
-          if (event.defaultPrevented || isTouchPrimary() || !(event.target instanceof Element)) return;
+          if (isTouchPrimary() || !(event.target instanceof Element)) return;
           const kind = contextClickKind(event.target, event.clientX, event.clientY);
           if (kind === "native") return;
           event.preventDefault();
