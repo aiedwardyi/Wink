@@ -3,10 +3,9 @@ import path from "node:path";
 
 import { fileMenuTemplate } from "./context-menu.mjs";
 
-// Types the OS default app may launch. Anything else (executables, scripts,
-// shortcuts, html, no extension) is only revealed in its folder, never run.
+// Unlisted types are revealed in their folder, never launched.
 export const OPENABLE_EXTENSIONS = new Set([
-  "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "txt", "md", "csv", "json", "rtf", "odt", "ods", "odp",
+  "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "txt", "md", "csv", "json", "rtf", "odt", "ods", "odp", "html", "htm",
   "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "mp3", "wav", "m4a", "mp4", "mov", "webm",
 ]);
 
@@ -123,9 +122,9 @@ export function imageFetchFor(srcURL, { origin, token, fetchImpl = fetch } = {})
 
 // The save dialog confirms before overwriting. Cancel writes nothing; a
 // fetch failure rejects for the caller's error box.
-export async function saveImageCopy(srcURL, { dialog, downloads, window, fetchImpl = fetch, fsp = fs.promises }) {
+export async function saveImageCopy(srcURL, { dialog, downloads, window, name, fetchImpl = fetch, fsp = fs.promises }) {
   const { canceled, filePath } = await dialog.showSaveDialog(window, {
-    defaultPath: path.join(downloads, imageSaveName(srcURL)),
+    defaultPath: path.join(downloads, typeof name === "string" && name && name !== "." && name !== ".." ? path.basename(name) : imageSaveName(srcURL)),
   });
   if (canceled || !filePath) return false;
   await fsp.writeFile(filePath, await imageBytes(srcURL, fetchImpl));

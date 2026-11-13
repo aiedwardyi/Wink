@@ -448,7 +448,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       <button
         onClick={() => endCall(group.id)}
         aria-label="Hang up"
-        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
+        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
       >
         <X size={18} />
       </button>

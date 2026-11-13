@@ -56,6 +56,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
     xai: frame.xai,
     gemini: frame.gemini,
+    liveCall: frame.liveCall,
     openaiCompat: frame.openaiCompat,
     composio: frame.composio,
     box: frame.box,
@@ -141,6 +142,12 @@ function reconcileSnapshotQueues(
     consumedQueueIds = rememberConsumedQueueId(consumedQueueIds, entry.queueId);
   }
   return { ...state, pendingQueued, consumedQueueIds };
+}
+
+/** The config's profile, or the last launch's until the config answers; null while neither is known. */
+export function shownProfile(state: Pick<AppState, "config" | "cachedProfile">): { profile: ConfigStatus["profile"] } | null {
+  if (state.config) return { profile: state.config.profile };
+  return state.cachedProfile ? { profile: state.cachedProfile } : null;
 }
 
 /** The exact conversation currently on screen. A focused window is not

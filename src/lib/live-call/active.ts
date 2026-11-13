@@ -22,6 +22,11 @@ function watch(fn: () => void) {
   return () => { watchers.delete(fn); };
 }
 
+// An http page on a phone has no mic API, so a Call button there could only fail.
+export function callsSupported(): boolean {
+  return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+}
+
 export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
   call = { id: ++calls, botId: bot.id, bot, ctx };
   trackScreen("live-call");

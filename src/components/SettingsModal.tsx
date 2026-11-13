@@ -367,7 +367,7 @@ function PickerStyleRow() {
       <SegmentedRow<ModelPickerView>
         label={t("settings.pickerStyle.title")}
         value={view}
-        options={(["dial", "list"] as const).map((id) => ({ id, label: t(`settings.pickerStyle.${id}`) }))}
+        options={(["dial", "list", "chart"] as const).map((id) => ({ id, label: t(`settings.pickerStyle.${id}`) }))}
         onChange={saveModelPickerView}
       />
     </Card>

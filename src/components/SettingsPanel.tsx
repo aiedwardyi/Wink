@@ -36,6 +36,7 @@ import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
+import { RenameActions } from "./RenameActions";
 import { useMemoryClean } from "@/lib/memory-clean";
 import { memoryTargetLine } from "@/lib/memory-recent";
 import { botAsks } from "@/lib/asks";
@@ -244,6 +245,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
 const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
 // a wide window fetches it with Bot details, so its map paints with the tab instead of after a suspend
 let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
+const MEMORY_READ_MS = 10_000;
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -320,23 +322,32 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
-  const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
-    api(`/api/bots/${botId}/memory`);
+  const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
+    api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
+      // a body cut off by the timeout, or a proxy's page, parses as {}
+      if (typeof result?.text !== "string" || !Array.isArray(result.topics)) throw new Error("no memory in the reply");
+      return result;
+    });
+  const landed = useRef(false);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await read();
+      // a phone's map waits on this read, and a socket that died while the phone slept never answers
+      const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
+      // a refresh that landed first is as new, and an edit may have saved since
+      if (landed.current) return;
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);
       setText(draft?.text ?? result.text);
       setLoadFailed(false);
+      landed.current = true;
       if (draft?.conflict) setConflict(result);
       else if (draft) setStatus("saving");
     } catch {
-      setLoadFailed(true);
+      if (!landed.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -364,7 +375,9 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     // a save that started after this read went out is newer than it
     if (!result || memoryDraft(botId) !== null || memorySaves(botId) !== saves) return;
     openMemory(botId, result);
+    landed.current = true;
     setText(result.text);
+    setLoading(false);
     setLoadFailed(false);
     setTruncated(result.truncated);
     setTopics(result.topics);
@@ -556,6 +569,8 @@ export function SettingsPanel({
   };
   const paging = useDetailsTabs(pagesRef, phone, closing, memoryTab, showTab);
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
+  const [nameBefore, setNameBefore] = useState<{ id: string; name: string } | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
   const patch = (
     p: Partial<
       Pick<
@@ -580,6 +595,11 @@ export function SettingsPanel({
       >
     > & { acknowledgeLocalAuto?: boolean },
   ) => dispatch({ type: "updateBot", botId: bot.id, patch: p });
+  // the name saves as you type, so cancel writes the focus-time name back
+  const restoreName = () => {
+    if (nameBefore?.id === bot.id && nameBefore.name !== bot.name) patch({ name: nameBefore.name });
+    nameInput.current?.blur();
+  };
   const activeState = stateForBot(bot);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -721,12 +741,27 @@ export function SettingsPanel({
                   </Fold>
                 </div>
                 <Field label={t("bot.name")}>
-                  <input
-                    className={DETAILS_INPUT}
-                    maxLength={BOT_PROFILE_LIMITS.name}
-                    value={bot.name}
-                    onChange={(e) => patch({ name: e.target.value })}
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={nameInput}
+                      aria-label={t("bot.name")}
+                      className={DETAILS_INPUT}
+                      maxLength={BOT_PROFILE_LIMITS.name}
+                      value={bot.name}
+                      onChange={(e) => patch({ name: e.target.value })}
+                      onFocus={() => setNameBefore({ id: bot.id, name: bot.name })}
+                      onBlur={() => setNameBefore(null)}
+                      onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing) return;
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          restoreName();
+                        }
+                      }}
+                    />
+                    {nameBefore?.id === bot.id && <RenameActions onSave={() => nameInput.current?.blur()} onCancel={restoreName} />}
+                  </div>
                 </Field>
                 <Field label={t("bot.title")}>
                   <input

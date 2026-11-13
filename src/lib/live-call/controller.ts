@@ -71,24 +71,33 @@ const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
 const MAX_NUDGES = 3;
+const MIC_CHECK_MS = 1_000;
+const MIC_GAP_MS = 3_000;
 // A gate input with no engine event for this long is stale: a stray fragment, not a turn.
 const QUIET_MS = 4_000;
+// A socket that never sets up would hold the call open and silent.
+const READY_MS = 15_000;
 const REPORT_CHARS = 1_500;
 const RETRY_MS = 1_500;
 const STATUS_MS = 30_000;
+// Speech the voice never stirred at; counted only, since noise gets no answer either.
+const UNHEARD_MS = 8_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
+const HEARD = "They already heard you answer: say nothing more.";
 const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
 // The voice told a bare "expired" or "replaced" says they declined.
 const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline.", replaced: "replaced: a newer offer took its place. They did not decline." };
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
 const request = (text: string): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map() });
 const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should i)\s+/i;
+// The brief's short confirm of a clear instruction: "Opening it, okay?"
+const CONFIRM_EN = /,\s*(?:okay|ok|alright|all right)\s*\?\s*$/i;
 // "How can I help?" and "무엇을 도와드릴까요?" ask, they offer nothing to say yes to.
 const offered = (said: string) => {
   const last = said.split(/(?<=[.!?])\s+/).at(-1) ?? "";
-  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
+  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || CONFIRM_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
 };
 
 /** The voice's offer as the person's request: "Want me to fix it?" posts as "Fix it." */
@@ -104,7 +113,6 @@ export function asRequest(order: string): string {
 /** "Sent: X", "Not sent: X (why)": how a result reads aloud and in the chat. */
 export function told(result: string, subject: string): string {
   if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
-  if (result.startsWith("already proposed")) return `Waiting for their answer: ${subject}`;
   return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
 }
 
@@ -177,13 +185,18 @@ export class LiveCall {
   private settled = new Set<string>();
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
+  private loudAt = 0;
+  private frameAt = 0;
+  private micMisses = 0;
+  private micTimer?: ReturnType<typeof setInterval>;
+  private readyTimer?: ReturnType<typeof setTimeout>;
   private turnHadAudio = false;
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
   private context: string[] = [];
   private letters = { hangul: 0, all: 0 };
   private stats = {
-    turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
+    turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
     asks: { sent: 0, retried: 0, answered: 0 },
     guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
@@ -247,14 +260,21 @@ export class LiveCall {
     if (!session) return;
     try {
       await this.deps.audio.capture((pcm) => {
+        this.frameAt = this.now();
+        this.micMisses = 0;
         if (!this.connected || this.snapshot.muted) return;
-        if (loud(pcm)) this.spokeAt = this.now();
+        if (loud(pcm)) {
+          this.spokeAt = this.now();
+          this.loudAt ||= this.spokeAt;
+        }
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
       return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     }
     if (this.ended) return;
+    this.frameAt = this.now();
+    this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
     this.set({ startedAt: this.now() });
     if (!this.snapshot.muted) this.deps.audio.ring();
     this.connect(session);
@@ -284,9 +304,12 @@ export class LiveCall {
     const engine = this.deps.engine();
     this.engine = engine;
     const mine = () => this.engine === engine && !this.ended;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
     const events: LiveEvents = {
       ready: () => {
         if (!mine()) return;
+        clearTimeout(this.readyTimer);
         this.connected = true;
         this.wasLive = true;
         this.deps.audio.stopRing();
@@ -427,7 +450,7 @@ export class LiveCall {
   private runTool(call: LiveToolCall) {
     const run = TOOLS[call.name];
     if (run) run(this, call.args, call.id);
-    else this.engine?.sendToolResult(call.id, call.name, "unknown tool");
+    else this.engine?.sendToolResult([call.id], call.name, "unknown tool");
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
@@ -437,8 +460,7 @@ export class LiveCall {
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
-    for (const id of live) engine!.sendToolResult(id, name, note ? `${heard}. ${note}` : heard);
-    if (live.length) return;
+    if (live.length) return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
@@ -458,7 +480,8 @@ export class LiveCall {
     if (this.card?.armed || this.justAnswered) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
-    if (this.pending && orderKey(this.pending.order) === key) return this.toolResult(ids, "propose_work", order, "already proposed, waiting for their answer");
+    // Every result makes the voice speak, so a re-offer waits to be answered with the first one.
+    if (this.pending && orderKey(this.pending.order) === key) return void this.pending.toolIds.push(...ids);
     const replaced = Boolean(this.pending);
     if (replaced) {
       this.stats.orders.replaced += 1;
@@ -504,21 +527,21 @@ export class LiveCall {
     this.set({ pending: undefined });
   }
 
-  private answerTool(result: string) {
+  private answerTool(result: string, note?: string) {
     const pending = this.pending;
     if (!pending) return;
     this.clearPending();
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note);
   }
 
   /** Yes or No on the pending order, tapped or spoken. */
-  async answer(yes: boolean) {
+  async answer(yes: boolean, answering = false) {
     const pending = this.pending;
     if (!pending) return;
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
-      return this.answerTool("declined");
+      return this.answerTool("declined", answering ? HEARD : undefined);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -533,7 +556,7 @@ export class LiveCall {
       pending.req.accounted = req.accounted = false;
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && this.stats.voiceLines > said ? "They already heard you answer: say nothing more." : undefined);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && this.stats.voiceLines > said ? HEARD : undefined);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
@@ -683,7 +706,7 @@ export class LiveCall {
     if (!this.pending || !ended) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
-    if (consent) void this.answer(consent === "yes");
+    if (consent) void this.answer(consent === "yes", this.generating);
   }
 
   private flushSaid(share: number) {
@@ -881,6 +904,7 @@ export class LiveCall {
   }
 
   private stir() {
+    this.loudAt = 0;
     this.quiet = false;
     clearTimeout(this.quietTimer);
     this.quietTimer = setTimeout(() => {
@@ -938,6 +962,22 @@ export class LiveCall {
     this.refresh();
   }
 
+  // A mic that stops sending (an ended track, a suspended context) leaves the voice deaf with nothing on screen.
+  private checkMic() {
+    if (!this.connected || this.snapshot.muted || this.stalled) return;
+    const now = this.now();
+    if (this.loudAt && now - this.loudAt > UNHEARD_MS) {
+      this.stats.unheard += 1;
+      this.loudAt = 0;
+    }
+    if (now - this.frameAt < MIC_GAP_MS) return;
+    this.frameAt = now;
+    this.stats.micGaps += 1;
+    if (!this.micMisses++) return void this.heal();
+    this.stalled = true;
+    this.refresh();
+  }
+
   private fail(error: string) {
     this.teardown();
     this.set({ status: "failed", error });
@@ -970,6 +1010,8 @@ export class LiveCall {
     clearTimeout(this.status?.timer);
     clearTimeout(this.quietTimer);
     clearTimeout(this.settleTimer);
+    clearInterval(this.micTimer);
+    clearTimeout(this.readyTimer);
     engine?.close();
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;

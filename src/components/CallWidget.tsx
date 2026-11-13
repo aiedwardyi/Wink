@@ -24,13 +24,14 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
   const [anchor, setAnchor] = useState<{ left?: number; right?: number; bottom: number } | null>(null);
   const shown = Boolean(live && bot && snap && !inChat);
   const pending = shown && Boolean(snap?.pending);
-  const notice = shown && snap?.notice ? noticeText(snap.notice, locale) : "";
+  const failed = snap?.status === "failed";
+  const notice = !shown || !snap ? "" : failed ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? noticeText(snap.notice, locale) : "";
 
   useEffect(() => {
-    if (!shown || !snap?.startedAt) return;
+    if (!shown || !snap?.startedAt || failed) return;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
-  }, [shown, snap?.startedAt]);
+  }, [shown, snap?.startedAt, failed]);
 
   // The icons-only sidebar has no room for the order, so it opens beside it.
   useLayoutEffect(() => {
@@ -54,7 +55,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
       className={cn("size-2 shrink-0 rounded-full", snap.status === "speaking" ? "animate-pulse bg-accent motion-reduce:animate-none" : talking ? "bg-success" : "bg-ink-secondary/50")}
     />
   );
-  const note = notice && <p data-live-call-notice={snap.notice?.kind} role="status" className="px-1 pb-1.5 text-xs text-ink-secondary">{notice}</p>;
+  const note = notice && <p data-live-call-notice={snap.notice?.kind} role={failed ? "alert" : "status"} className="px-1 pb-1.5 text-xs text-ink-secondary">{notice}</p>;
   const hangUp = (
     <button type="button" aria-label={words.end} title={words.end} onClick={() => call.end()} className={cn(icon, "bg-danger text-white hover:brightness-110")}>
       <PhoneOff size={16} />
@@ -90,7 +91,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
           <span className="min-w-0 truncate text-[13px] font-medium text-ink">{bot.name}</span>
           {dot}
           <span className="sr-only">{words[snap.status]}</span>
-          {snap.startedAt !== undefined && <span className="shrink-0 text-[12px] tabular-nums text-ink-secondary">{clock(now - snap.startedAt)}</span>}
+          {snap.startedAt !== undefined && !failed && <span className="shrink-0 text-[12px] tabular-nums text-ink-secondary">{clock(now - snap.startedAt)}</span>}
         </button>
         {talking && (
           <button type="button" aria-pressed={snap.muted} aria-label={snap.muted ? words.unmute : words.mute} title={snap.muted ? words.unmute : words.mute} onClick={() => call.mute(!snap.muted)} className={cn(icon, snap.muted ? "bg-control text-ink" : "text-ink-secondary hover:bg-control hover:text-ink")}>

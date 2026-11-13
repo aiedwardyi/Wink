@@ -1,7 +1,7 @@
 {
   "name": "orbit-desktop",
   "private": true,
-  "version": "1.0.258",
+  "version": "1.0.259",
   "description": "A local-first desktop workspace for AI teammates.",
   "homepage": "https://github.com/aiedwardyi/Wink",
   "repository": {
@@ -38,7 +38,7 @@
     "test:updater": "node --test electron/updater-coordinator.node-test.mjs electron/app-quit.node-test.mjs electron/update-channel.node-test.mjs electron/updater.node-test.mjs electron/error-reports.node-test.mjs electron/usage-stats.node-test.mjs electron/update-trace.node-test.mjs electron/update-error.node-test.mjs electron/installer-trace.node-test.mjs electron/close-guard.node-test.mjs",
     "test:desktop-viewer": "node --test electron/desktop-viewer.node-test.mjs electron/device-window.node-test.mjs electron/device-permissions.node-test.mjs electron/main-permissions.node-test.mjs electron/device-recovery.node-test.mjs electron/credential-migration.node-test.mjs electron/single-instance.node-test.mjs electron/linked-file-window.node-test.mjs electron/notify-aumid.node-test.mjs electron/notify-click.node-test.mjs electron/picker-background.node-test.mjs",
     "test:package-link": "node --test electron/package-link.node-test.mjs electron/packaging-identity.node-test.mjs electron/packaged-imports.node-test.mjs electron/utility-child.node-test.mjs electron/companion-policy.node-test.mjs electron/external-open.node-test.mjs electron/clipboard-image.node-test.mjs electron/preload.node-test.mjs",
-    "test:open-file": "node --test electron/open-file.node-test.mjs",
+    "test:open-file": "node --test electron/open-file.node-test.mjs electron/media-file.node-test.mjs",
     "test:server-boot-probe": "node --test electron/server-boot-probe.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",

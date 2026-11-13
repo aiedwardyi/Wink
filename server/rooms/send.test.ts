@@ -6,6 +6,7 @@ import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, ROOM_LIMITS, spend, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { hostedSend, hostSend } from "./send.ts";
+import { addTeamBot } from "./team-bots.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -69,6 +70,17 @@ describe("hostedSend", () => {
     expect(store.bot(korean.botId)!.name).toBe("위키");
     const answer = appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: korean.botId, name: "위키" }, text: "done", replyToId: korean.entryId });
     expect(hostedSend(group, person("trusted2"), "and the rest?", answer.id).ask).toMatchObject({ botId: korean.botId, quoteId: answer.id });
+  });
+
+  it("does not wake the host's reply target for an explicit teammate bot tag", () => {
+    addTeamBot(group.hosted.roomId, people.chat.id, "스타줌", "teal", []);
+    const answer = appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink, name: "Wink" }, text: "handoff" });
+    expect(hostedSend(group, person("chat"), "@스타줌 이거해.", answer.id).ask).toBeNull();
+    store.patchGroup(group.id, { memberIds: [wink] });
+    expect(hostedSend(store.group(group.id) as HostedGroup, person("chat"), "@스타줌 이거해.", answer.id).ask).toBeNull();
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(hostedSend(group, person("chat"), "@Mina can you check?", answer.id).ask).toMatchObject({ botId: wink });
+    expect(hostedSend(group, person("chat"), "thanks", answer.id).ask).toMatchObject({ botId: wink });
   });
 
   it("gives two same-level people two asks", () => {

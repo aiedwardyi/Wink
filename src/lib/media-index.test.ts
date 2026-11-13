@@ -28,7 +28,7 @@ describe("media index", () => {
     expect(decodeMedia("t1", wire)).toEqual([
       { key: "https://example.com/chart.png", name: "chart.png", at, src: "https://example.com/chart.png", image: true },
       { key: deck, name: "deck.pdf", at, src: deck, path: "C:\\w\\deck.pdf", size: 300, show: { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" } },
-      { key: shot, name: "shot.png", at, src: shot, image: true },
+      { key: shot, name: "shot.png", at, src: shot, path: "C:\\w\\shot.png", image: true },
       { key: "/api/attachments/abc-1.png", name: "abc-1.png", at, src: "/api/attachments/abc-1.png", image: true },
       { key: "C:\\att\\notes.docx", name: "notes.docx", at, path: "C:\\att\\notes.docx", size: 2048 },
     ]);

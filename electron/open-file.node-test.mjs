@@ -58,8 +58,19 @@ describe("open-file policy", () => {
     }
   });
 
+  it("opens HTML in its default app and keeps Show in folder separate", async () => {
+    for (const name of ["page.html", "Page.HTM"]) {
+      const shell = fakeShell();
+      const p = file(name);
+      const real = await fs.promises.realpath(p);
+      assert.equal(await openLocalFile(p, { shell }), "open");
+      await showLocalFile(p, { shell });
+      assert.deepEqual(shell.calls, [["open", real], ["reveal", real]]);
+    }
+  });
+
   it("only reveals executables, scripts and extensionless files", async () => {
-    for (const name of ["setup.exe", "run.ps1", "go.bat", "page.html", "README"]) {
+    for (const name of ["setup.exe", "run.ps1", "go.bat", "README"]) {
       const shell = fakeShell();
       const p = file(name);
       assert.equal(await openLocalFile(p, { shell }), "reveal");
