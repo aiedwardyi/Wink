@@ -78,7 +78,7 @@ function LinkedText({ text }: { text: string }) {
 
 export function RoomLineText({ base, entryId, text, canTranslate, children }: { base: string; entryId?: string; text: string; canTranslate: boolean; children?: ReactNode }) {
   const { t, locale } = useI18n();
-  const translation = useRoomTranslation(base, entryId ?? "", locale);
+  const translation = useRoomTranslation(base, entryId ?? "", locale, text);
   const show = Boolean(entryId) && canTranslate && Boolean(text.trim()) && !alreadyInLanguage(text, locale);
   return (
     <>

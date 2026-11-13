@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { RoomLine } from "@/lib/team-rooms";
 
-import { TeamRoomTranscript } from "./TeamRoomRow";
+import { RoomLineText, TeamRoomTranscript } from "./TeamRoomRow";
 
 const readiness = vi.hoisted(() => ({ instances: [] as unknown[], config: null as unknown }));
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -51,6 +51,17 @@ async function render(shown = lines, base = "/api/rooms/r1") {
 const button = () => host.querySelector<HTMLButtonElement>('button[data-room-translate]');
 
 describe("teammate translation", () => {
+  it("drops a local bubble's translation when its source text changes", async () => {
+    const props = { base: "/api/rooms/r1", entryId: "m-b1", canTranslate: true };
+    await act(async () => root.render(createElement(RoomLineText, { ...props, text: "준비됐어요." })));
+    await act(async () => button()!.click());
+    expect(host.querySelector("[data-room-translation]")).not.toBeNull();
+    await act(async () => root.render(createElement(RoomLineText, { ...props, text: "내용을 수정했어요." })));
+    expect(host.querySelector("[data-room-translation]")).toBeNull();
+    await act(async () => button()!.click());
+    expect(fetch.mock.calls.filter(([path]) => path.includes("/entries/"))).toHaveLength(2);
+  });
+
   it.each([undefined, "me", "mina"])("translates a bot with owner %s on the joined side", async (owner) => {
     const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando", ...(owner ? { owner } : {}) }, text: "출시 준비를 모두 마쳤어요. (For Eddie: ready)", files: [] };
     await render([bot, { ...bot, id: "english", entryId: "english-entry", text: "The checklist is ready." }], "/api/joined/rooms/r1");
