@@ -17,6 +17,7 @@ import {
 import { ensureMemorySyncDevice, loadMemorySyncLedger, saveMemorySyncLedger, syncBotMemory } from "../memory-sync.ts";
 import { pullSyncedPicture, pruneSyncedPictures } from "../picture-sync.ts";
 import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "../room-sync.ts";
+import { createRoomThreads } from "../room-thread-sync.ts";
 import { RoutineManager } from "../routines.ts";
 import { Store, type BotRecord } from "../store.ts";
 import { ensureSyncV2Identity } from "../thread-sync-v2-engine.ts";
@@ -29,8 +30,10 @@ export interface ReportBot { name: string; syncId: string | null; chats: string[
 export interface PlaceBot { id: string; syncId: string | null; name: string; chats: string[]; memory: string | null; files: number; daysLeft?: number }
 export interface Places { bots: PlaceBot[]; trash: PlaceBot[] }
 export interface PlaceRoom { id: string; threadId: string; name: string; members: string[]; dm: boolean; setup: boolean }
-export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean }
-export type TestResult = ReportBot[] | Places | PlaceRoom[] | boolean | undefined;
+export interface RoomRow { id: string; role: string; text?: string; from?: string; parentId?: string | null }
+export interface RoomChat { active: string; busy: boolean; threads: Array<{ id: string; title: string; rows: RoomRow[] }>; written: string[] }
+export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean; title?: string }
+export type TestResult = ReportBot[] | Places | PlaceRoom[] | RoomChat | Record<string, string> | number | boolean | undefined;
 
 const { dataDir } = z.object({ dataDir: z.string() }).parse(workerData);
 const DAY = 86_400_000;
@@ -54,7 +57,24 @@ let busy = false;
 // a build before the trash: never reads a mark
 let old = false;
 const host: TrashSyncHost = { dataDir, store, trash, settings: () => settings, now };
-const roomHost: RoomSyncHost = { dataDir, store, settings: () => settings, now, working: () => false };
+const roomHost: RoomSyncHost = { dataDir, store, settings: () => settings, now, working: () => false, syncing: (threadId) => v2?.holds(threadId) ?? false };
+const roomThreads = createRoomThreads({
+  store, botMap: () => settings.botMap,
+  syncId: (botId) => {
+    if (!settings.botMap[botId]) {
+      settings.botMap[botId] = randomUUID();
+      save();
+    }
+    return settings.botMap[botId]!;
+  },
+});
+// room message ids this PC wrote itself rather than imported
+const written = new Set<string>();
+// threads of rooms deleted here still owe chat sync their delete; index.ts flushes them on a timer
+const deleted = new Set<string>();
+store.onChange((change) => {
+  if (change.type === "message" && !change.imported && store.groupByThread(change.threadId)) written.add(change.message.id);
+});
 const trashActions = createBotTrashActions({
   host: () => host,
   queueDeletes: (syncIds) => {
@@ -147,6 +167,7 @@ function chats() {
     store, dataDir, deviceId: settings.deviceId,
     folder: () => settings.folder, enabled: () => settings.syncChats,
     target: (threadId) => {
+      if (store.groupByThread(threadId)) return old ? null : roomThreads.target(threadId);
       const bot = store.botByThread(threadId);
       const botSyncId = bot ? settings.botMap[bot.id] : undefined;
       return bot && botSyncId && store.taskByThread(bot.id, threadId) ? { botId: bot.id, botSyncId } : null;
@@ -159,6 +180,8 @@ function chats() {
       syncProfile(settings.folder!);
       pruneSyncedPictures(settings.folder!, dataDir);
     },
+    // an old build has no room owners
+    get rooms() { return old ? undefined : roomThreads; },
   });
   return v2;
 }
@@ -214,6 +237,21 @@ function rooms(): PlaceRoom[] {
   })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function roomChat(name: string): RoomChat {
+  const group = room(name);
+  const threads = group.dm ? [{ threadId: group.threadId, title: "" }] : group.tasks!;
+  return {
+    active: threads.find((task) => task.threadId === group.threadId)!.title,
+    busy: Boolean(group.busyBotId),
+    threads: threads.map((task) => ({
+      id: task.threadId, title: task.title,
+      rows: store.messagesFor(task.threadId).map(({ id, role, text, from, parentId }) => ({ id, role, text, from: from?.botId, parentId })),
+    })),
+    written: [...written].filter((id) => threads.some((task) => store.messagesFor(task.threadId).some((message) => message.id === id))),
+  };
+}
+
+const roomThreadIds = (group: { threadId: string; tasks?: Array<{ threadId: string }> }) => new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
 const live = (name: string) => store.bots.find((bot) => bot.name === name)!;
 const room = (name: string) => store.groups.find((group) => group.name === name)!;
 const trashed = (name: string) => store.trash.entries.find((entry) => entry.record.name === name)!;
@@ -293,6 +331,7 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
       if (!sync) return;
       await sync.poll();
       for (const bot of store.bots) for (const task of store.tasks(bot.id)) await sync.flush(task.threadId);
+      for (const threadId of [...store.groups.flatMap((group) => [...roomThreadIds(group)]), ...deleted]) await sync.flush(threadId);
       while (sync.republishing()) await new Promise((done) => setTimeout(done, 5));
       await sync.poll();
       return;
@@ -342,11 +381,34 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
       return;
     }
     case "roomDelete":
+      for (const threadId of roomThreadIds(room(args.room!))) deleted.add(threadId);
       roomRemoved(roomHost, room(args.room!));
       store.deleteGroup(room(args.room!).id);
       return;
     case "rooms":
       return rooms();
+    case "roomSay": {
+      // `bot` is a member's name, or any other id to send as a bot this PC lacks
+      const group = room(args.room!);
+      const threadId = args.title ? group.tasks!.find((task) => task.title === args.title)!.threadId : group.threadId;
+      const bot = args.bot ? store.bots.find((candidate) => candidate.name === args.bot) : undefined;
+      const from = args.bot ? { botId: bot?.id ?? args.bot, name: args.bot, color: "#3366ff" } : undefined;
+      if (from) store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text!, from });
+      else store.appendMessage(threadId, { role: "user", kind: "text", text: args.text! });
+      return;
+    }
+    case "roomTask":
+      store.createGroupTask(room(args.room!).id, args.title);
+      return;
+    case "roomChat":
+      return roomChat(args.room!);
+    case "threadRows":
+      return store.messagesFor(args.thread!).length;
+    case "botIds":
+      return Object.fromEntries(store.bots.map((bot) => [bot.name, bot.id]));
+    case "rebuild":
+      v2?.rebuild(live(args.bot!).id);
+      return;
     case "old":
       old = args.old!;
       return;

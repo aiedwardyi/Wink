@@ -25,6 +25,8 @@ export interface RoomSyncHost {
   settings(): ProfileSyncSettings;
   now(): number;
   working(group: GroupRecord): boolean;
+  /** Chat sync holds this thread and has not taken its delete. */
+  syncing?(threadId: string): boolean;
 }
 
 const MEMBER = "member.";
@@ -213,9 +215,12 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
   return written;
 }
 
+const roomThreads = (group: GroupRecord) => new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
+
 function removeRoom(store: Store, group: GroupRecord): void {
-  const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
-  store.deleteGroup(group.id);
+  const threadIds = roomThreads(group);
+  // the deleting PC already told chat sync; a second delete from here would cover rows written here after it
+  store.applySyncImport(() => store.deleteGroup(group.id));
   for (const threadId of threadIds) {
     for (const dir of [EVENTS_DIR, NATIVE_DIR]) removeRotatingLog(join(dir, `${threadId}.ndjson`));
   }
@@ -249,6 +254,8 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
         deferred = true;
         continue;
       }
+      // chat sync drops each synced thread on its own delete; one with rows from after the delete keeps the room
+      if ([...roomThreads(group)].some((threadId) => host.syncing?.(threadId))) continue;
       removeRoom(store, group);
     }
     forget(file, marked, key.slice("room:".length));

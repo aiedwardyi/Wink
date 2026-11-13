@@ -8,6 +8,7 @@ import { isVoiceLine } from "../shared/live-call.ts";
 import { lastMessageAt, withMessageTransaction } from "./message-db.ts";
 import { soonAfterWake, wakeClock } from "./pc-wake.ts";
 import { publishThreadPictures } from "./picture-sync.ts";
+import { isRoomScope, type RoomThreads } from "./room-thread-sync.ts";
 import type { Message, Store } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
 import { CONFLICT_NOTICE, CONFLICT_NOTICE_V2, isConflictNotice, shared, THREAD_SYNC_POLL_MS } from "./thread-sync.ts";
@@ -51,6 +52,8 @@ export interface SyncStoreHost {
   project(message: Message): Message;
   imported(botId: string): void;
   maintenance(): void | Promise<void>;
+  /** Owners of `room-*` scopes; the store's bot calls go here for them. */
+  rooms?: RoomThreads;
 }
 
 export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
@@ -97,6 +100,22 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     WHERE m.kind = 'activity' AND json_extract(m.json, '$.tool.name') = ?`)
     .all(`error: ${CONFLICT_NOTICE_V2}`))).map((notice) => [notice.threadId, notice]));
 
+  const room = (target: Target) => host.rooms && isRoomScope(target.botSyncId) ? host.rooms : undefined;
+  const fresh = (threadId: string) => lastMessageAt(threadId) === null && !existsSync(join(host.dataDir, `messages-${threadId}.json`));
+
+  function taskOf(target: Target, threadId: string): { title: string; createdAt: number } | undefined {
+    const rooms = room(target);
+    return rooms ? rooms.task(target.botId, threadId) : host.store.taskByThread(target.botId, threadId);
+  }
+
+  /** `local` rows are this PC's own and skip the bot id mapping. */
+  function applyTo(target: Target, threadId: string, changes: SyncChange[], local = false): void {
+    const rooms = room(target);
+    if (!rooms) return host.store.applySyncChanges(target.botId, threadId, changes);
+    // SAFETY: The sync engine validates each row before adding a change page.
+    rooms.apply(target.botId, threadId, local ? changes : changes.map((change) => change.kind === "row" ? { ...change, value: rooms.incoming(change.value as Message) } : change));
+  }
+
   function stored(threadId: string): StoredTask | undefined {
     return withMessageTransaction((db) => storedTaskSchema.optional().parse(db.prepare("SELECT * FROM sync_v2_store WHERE threadId = ?").get(threadId)));
   }
@@ -123,13 +142,14 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return moved;
   }
 
-  function register(threadId: string, target: Target, legacy = false): StoredTask {
-    const task = host.store.taskByThread(target.botId, threadId);
+  /** Null for a room thread that holds rows from while it was not syncing: they wait for a seed that maps their bot ids. */
+  function register(threadId: string, target: Target, legacy = false): StoredTask | null {
+    const task = taskOf(target, threadId);
     const existing = stored(threadId);
+    if (!existing && room(target) && (!host.enabled() || !fresh(threadId))) return null;
     if (!existing) withMessageTransaction((db) => db.prepare(
       "INSERT OR IGNORE INTO sync_v2_store(threadId, botId, botSyncId, title, createdAt, eligible) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run(threadId, target.botId, target.botSyncId, task?.title ?? "New task", task?.createdAt ?? 0,
-      Number(lastMessageAt(threadId) === null && !existsSync(join(host.dataDir, `messages-${threadId}.json`)))));
+    ).run(threadId, target.botId, target.botSyncId, task?.title ?? "New task", task?.createdAt ?? 0, Number(fresh(threadId))));
     const saved = existing ?? stored(threadId)!;
     if (legacy && !withMessageTransaction((db) => db.prepare("SELECT 1 FROM sync_v2_migration WHERE thread = ?").get(threadId))) {
       withMessageTransaction((db) => db.prepare("UPDATE sync_v2_store SET eligible = 0 WHERE threadId = ?").run(threadId));
@@ -168,7 +188,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function applyChanges(task: StoredTask, changes: SyncChange[]): void {
-    host.store.applySyncChanges(task.botId, task.threadId, changes.map((change) => {
+    applyTo(task, task.threadId, changes.map((change) => {
       const notice = noticeHeads.get(task.threadId);
       // Equal peer tips omit the PC-local notice above them.
       if (change.kind === "head" && notice && change.value === notice.parent) return { ...change, value: notice.leaf };
@@ -179,17 +199,17 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
 
   function restore(task: StoredTask): void {
     const metadata = engine.variants(task, "metadata")[0]?.version.value ?? { title: task.title, createdAt: task.createdAt };
-    host.store.applySyncChanges(task.botId, task.threadId, [{ cursor: 0, kind: "metadata", rowId: "", value: metadata, conflict: false }]);
+    applyTo(task, task.threadId, [{ cursor: 0, kind: "metadata", rowId: "", value: metadata, conflict: false }]);
     let after = "";
     for (;;) {
       const rows = engine.recoveryRows(task, after);
       if (!rows.length) break;
-      host.store.applySyncChanges(task.botId, task.threadId, rows);
+      applyTo(task, task.threadId, rows);
       after = rows.at(-1)!.rowId;
     }
     const head = engine.variants(task, "head")[0];
-    if (head) host.store.applySyncChanges(task.botId, task.threadId, [{ cursor: 0, kind: "head", rowId: "", value: head.version.value, conflict: false }]);
-    const restored = host.store.taskByThread(task.botId, task.threadId)!;
+    if (head) applyTo(task, task.threadId, [{ cursor: 0, kind: "head", rowId: "", value: head.version.value, conflict: false }]);
+    const restored = taskOf(task, task.threadId)!;
     withMessageTransaction((db) => db.prepare("UPDATE sync_v2_store SET title = ?, createdAt = ?, deleted = 0 WHERE threadId = ?")
       .run(restored.title, restored.createdAt, task.threadId));
     task.deleted = 0;
@@ -220,10 +240,10 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (noticed) return;
     const parent = db.prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(task.threadId)?.active_leaf_id;
     const message: Message = { id: randomUUID(), at: Date.now(), parentId: parent ? String(parent) : null, role: "bot", kind: "activity", tool: { name: `error: ${CONFLICT_NOTICE_V2}`, ok: false } };
-    host.store.applySyncChanges(task.botId, task.threadId, [
+    applyTo(task, task.threadId, [
       { cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false },
       { cursor: 0, kind: "head", rowId: "", value: message.id, conflict: false },
-    ]);
+    ], true);
     noticeHeads.set(task.threadId, { threadId: task.threadId, leaf: message.id, parent: message.parentId ?? null });
   }
 
@@ -255,14 +275,14 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
   const saved = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store").all()));
   for (const task of saved) {
-    if (!host.store.bot(task.botId)) continue;
+    if (room(task) ? !room(task)!.owns(task.botId) : !host.store.bot(task.botId)) continue;
     removeMigrationNotices(task);
     const change: SyncChange = task.deleted
       ? { cursor: 0, kind: "delete", rowId: "", value: { deletedAt: 0 }, conflict: false }
       : { cursor: 0, kind: "metadata", rowId: "", value: { title: task.title, createdAt: task.createdAt }, conflict: false };
-    const current = host.store.taskByThread(task.botId, task.threadId);
+    const current = taskOf(task, task.threadId);
     if (task.deleted || !current || current.title !== task.title || current.createdAt !== task.createdAt) {
-      host.store.applySyncChanges(task.botId, task.threadId, [change]);
+      applyTo(task, task.threadId, [change]);
     }
     if (task.eligible) {
       consume(task, 1);
@@ -270,7 +290,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     }
   }
 
-  function project(threadId: string, mutations: SyncMutation[]): SyncMutation[] {
+  function project(threadId: string, target: Target, mutations: SyncMutation[]): SyncMutation[] {
     if (!mutations.some((mutation) => mutation.kind === "row" || mutation.kind === "head")) return mutations;
     const messages = host.store.messagesFor(threadId);
     const lift = (id: string | null) => {
@@ -286,7 +306,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return mutations.flatMap((mutation): SyncMutation[] => {
       if (mutation.kind === "head") return [{ kind: "head", value: lift(mutation.value) }];
       if (mutation.kind !== "row") return [mutation];
-      const projected = host.project(mutation.value);
+      const projected = room(target)?.outgoing(host.project(mutation.value)) ?? host.project(mutation.value);
       const { messages: rows } = shared({ title: "", createdAt: 0, messages: [projected], activeLeafId: null });
       return rows.map((row) => ({ kind: "row", value: { ...row, parentId: lift(row.parentId ?? null) } }));
     });
@@ -306,12 +326,16 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     if (!target) return write();
     const changed = withMessageTransaction(() => {
       const task = register(threadId, target);
-      const outgoing = project(threadId, mutations).filter((mutation) => {
+      if (!task) {
+        write();
+        return false;
+      }
+      const outgoing = project(threadId, target, mutations).filter((mutation) => {
         const rowId = mutation.kind === "row" ? mutation.value.id : "";
         const variants = engine.variants(task, mutation.kind, rowId);
         return variants.length !== 1 || JSON.stringify(variants[0].version.value) !== JSON.stringify(mutation.value);
       });
-      const metadata = host.store.taskByThread(target.botId, threadId);
+      const metadata = taskOf(target, threadId);
       if (metadata && !outgoing.some((mutation) => mutation.kind === "metadata" || mutation.kind === "delete")) {
         if (!engine.variants(task, "metadata").length || task.title !== metadata.title || task.createdAt !== metadata.createdAt) {
           outgoing.unshift({ kind: "metadata", value: { title: metadata.title, createdAt: metadata.createdAt } });
@@ -392,7 +416,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   async function pull(threadId: string, target = host.target(threadId)): Promise<void> {
     if (!host.enabled() || !target || host.running(threadId)) return;
     const task = register(threadId, target);
-    if (!task.eligible) return;
+    if (!task?.eligible) return;
     const transport = await client();
     if (!transport || host.running(threadId)) return;
     const pulled = await transport.pull(task);
@@ -402,7 +426,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     await adopt(task);
     resolveHeads(task, task.cursor !== cursor, own);
     notifyConflict(task);
-    if (task.cursor !== cursor) host.store.applySyncImport(() => host.imported(target.botId));
+    if (task.cursor !== cursor && !room(target)) host.store.applySyncImport(() => host.imported(target.botId));
     if (host.enabled() && host.folder() === workerFolder) syncHold.pulled(workerFolder!, task, pulled.heads);
   }
 
@@ -517,11 +541,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function joinStale(task: StoredTask, stale: StaleBranch): void {
-    engine.commit(task, project(task.threadId, [{ kind: "row", value: stale.first }, { kind: "head", value: stale.tip }]), undefined, (db) => {
-      host.store.applySyncChanges(task.botId, task.threadId, [
+    engine.commit(task, project(task.threadId, task, [{ kind: "row", value: stale.first }, { kind: "head", value: stale.tip }]), undefined, (db) => {
+      applyTo(task, task.threadId, [
         { cursor: 0, kind: "row", rowId: stale.first.id, value: stale.first, conflict: false },
         { cursor: 0, kind: "head", rowId: "", value: stale.tip, conflict: false },
-      ]);
+      ], true);
       if (stale.missed) db.prepare("INSERT INTO sync_v2_joins VALUES (?, ?, ?) ON CONFLICT(thread) DO UPDATE SET missed = excluded.missed, tip = excluded.tip").run(task.threadId, stale.missed, stale.tip);
     });
     schedule(task.threadId);
@@ -644,7 +668,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     const openThread = host.openThread?.();
     const openTarget = openThread ? host.target(openThread) : null;
     if (openThread && openTarget) await pull(openThread, openTarget);
-    for (const target of host.bots()) {
+    for (const target of [...host.bots(), ...host.rooms?.scopes() ?? []]) {
       for (const threadId of await transport.threads(target.botSyncId)) {
         if (threadId !== openThread || !openTarget) await pull(threadId, target);
       }
@@ -664,9 +688,15 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     republishing: () => republishing > 0,
     /** Rebuilds a returning bot's chats from this PC's own sync records. */
     rebuild(botId: string): void {
-      const tasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE botId = ?").all(botId)));
+      const tasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE botId = ?").all(botId)))
+        .filter((task) => !isRoomScope(task.botSyncId));
       for (const task of tasks) if (!task.deleted) restore(task);
       if (tasks.length) host.store.applySyncImport(() => host.imported(botId));
+    },
+    /** A synced room thread whose delete has not arrived. */
+    holds(threadId: string): boolean {
+      const task = stored(threadId);
+      return Boolean(task && !task.deleted && isRoomScope(task.botSyncId));
     },
     messageWriter(threadId: string, messageId: string): string | null {
       const task = stored(threadId);
