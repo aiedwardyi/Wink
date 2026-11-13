@@ -70,6 +70,7 @@ describe.runIf(process.platform === "win32")("museDirectHost (launcher mirror)",
     ["the channel is unsupported", { MUSE_CHANNEL: "nightly" }, () => {}],
     ["the version is malformed", {}, (dir) => writeFileSync(join(dir, ".muse-version"), "latest\n")],
     ["an install is running", { MUSE_LAUNCHER_INSTALL: "1" }, () => {}],
+    ["an internal update is running", { MUSE_INTERNAL_UPDATE: "1" }, () => {}],
   ])("keeps the launcher when %s", (_, env, edit) => {
     const { dir, cli } = setup();
     edit(dir);
@@ -87,6 +88,11 @@ describe.runIf(process.platform === "win32")("museDirectHost (launcher mirror)",
 
   it("leaves a CLI that is not the Muse launcher alone", () => {
     expect(museDirectHost(process.execPath, {}, now)).toBeNull();
+  });
+
+  it("keeps the launcher for a configured CLI with fixed args", () => {
+    const { cli } = setup();
+    expect(museDirectHost(`"${cli}" --profile work`, {}, now)).toBeNull();
   });
 });
 

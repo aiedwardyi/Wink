@@ -118,8 +118,11 @@ export function museDirectHost(
 ): { command: string; env: Record<string, string | undefined> } | null {
   if (process.platform !== "win32") return null;
   const launch = resolveCliSpawn(cli, []);
-  const script = launch.args[launch.args.indexOf("-File") + 1];
+  const at = launch.args.indexOf("-File");
+  const script = at === -1 ? undefined : launch.args[at + 1];
   if (!script || basename(script).toLowerCase() !== ".muse-launcher.ps1") return null;
+  // Fixed args from the configured CLI ride after the script; the launcher keeps them.
+  if (launch.args.length > at + 2) return null;
   if (env.MUSE_LAUNCHER_INSTALL === "1" || env.MUSE_INTERNAL_UPDATE === "1") return null;
   const dir = dirname(script);
   const channel = env.MUSE_CHANNEL?.trim() ? env.MUSE_CHANNEL : "muse-stable";
