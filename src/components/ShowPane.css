@@ -36,8 +36,8 @@
 .show-media [data-media-grid] { position: relative; margin: 6px 0; }
 .show-media [data-media-grid] > section { position: absolute; left: 0; right: 0; }
 .show-media-month { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; height: 34px; padding: 0 4px; background: var(--color-panel); color: var(--color-ink-secondary); font-size: 12px; font-weight: 500; }
-.show-media [data-media-grid] img { opacity: 0; transition: opacity var(--motion-moderate) var(--ease-standard); }
-.show-media [data-media-grid] img[data-loaded] { opacity: 1; }
+.show-media [data-media-grid] :is(img, video) { opacity: 0; transition: opacity var(--motion-moderate) var(--ease-standard); }
+.show-media [data-media-grid] :is(img, video)[data-loaded] { opacity: 1; }
 .show-media [data-media-file] { position: absolute; height: 52px; }
 .show-media-rail { position: absolute; top: 0; right: 0; bottom: 0; width: 12px; pointer-events: none; }
 .show-media-thumb { position: absolute; top: 0; right: 0; width: 100%; pointer-events: auto; touch-action: none; }
