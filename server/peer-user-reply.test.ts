@@ -40,7 +40,7 @@ describe("peer user replies", () => {
     expect(peerUserRuntime(reply)).toMatchObject({ text: "main 브랜치입니다.", phase: undefined });
     expect(persistPeerUserReply(store, reply)).toBe(true);
     persistPeerUserReply(store, reply);
-    expect(texts().filter((message) => message.role === "bot")).toMatchObject([{ text: "main 브랜치입니다." }]);
+    expect(texts().filter((message) => message.role === "bot")).toMatchObject([{ text: "main 브랜치입니다.", engine: "claude" }]);
     expect(hasPeerWatch(bot.threadId)).toBe(true);
     settlePeerUserReplies(bot.threadId, "t1");
     const start = vi.fn(async () => {});

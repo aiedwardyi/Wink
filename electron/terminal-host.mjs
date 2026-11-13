@@ -6,11 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
+import { REMOTE_PANE_CEILING, remoteSlot } from "./terminal-remote.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
 import { workerResumeStatus } from "./worker-resume.mjs";
 import { watchCodexPromo } from "./codex-promo.mjs";
+import { nudgeApiBlip } from "./pane-blip.mjs";
+import { mapBase } from "./map-base.mjs";
+import { createMapEvents } from "./map-events.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -65,6 +69,8 @@ const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.te
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 export const BOT_PANE_LIMIT = 16;
+// Pane-count readers (terminal-bridge, server/terminal-snapshot.ts, src/lib/terminal-panes.ts) accept up to this many per bot.
+export const BOT_PANE_TOTAL = BOT_PANE_LIMIT + REMOTE_PANE_CEILING;
 // Exited panes stay readable until this many terminals are open.
 const SESSION_LIMIT = 32;
 const MB = 1024 ** 2;
@@ -514,13 +520,15 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, remote = null }) {
   const sessions = new Map();
+  const mapEvents = createMapEvents();
   const watchedOwners = new WeakSet();
   const active = new Map();
   const generations = new Map();
   const pending = new Map();
   const paneReservations = new Map();
+  const remoteOpens = new Set();
   const deletedBots = new Set();
   const closedBotPanes = new Map();
   let reservedPanes = 0;
@@ -588,8 +596,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     return result;
   };
   const botSessions = (botId) => [...sessions.values()].filter((candidate) => candidate.botId === botId && !candidate.retired && active.get(candidate.key) === candidate.id);
-  const paneSummary = (session) => ({ sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
-    ...(session.botPane && session.workerAccount ? { account: session.workerAccount } : {}) });
+  const paneSummary = (session) => {
+    const summary = { sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, baseHead: session.baseHead, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
+      ...(session.botPane && session.workerAccount ? { account: session.workerAccount } : {}) };
+    if (session.remote) summary.host = session.remote.host;
+    return summary;
+  };
+  const remotePanes = () => [...[...sessions.values()].filter((session) => session.remote && !session.retired && session.exitCode === null).map((session) => session.remote), ...remoteOpens];
   const liveAccountRuns = ({ botId, engine } = {}) => {
     const runs = [];
     for (const session of sessions.values()) {
@@ -610,6 +623,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     return session;
   };
   const emit = (session, channel, value) => {
+    if (channel === "terminal:opened" || channel === "terminal:closed" || channel === "terminal:exit") mapEvents.emit(session.botId);
     try {
       authorize({ sender: session.owner, senderFrame: session.owner.mainFrame });
       session.owner.send(channel, value);
@@ -808,6 +822,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           });
         }
       }
+      if (!limit && nudgeApiBlip(session, text, at, AGENT_BUSY_RE.test(text), (data) => typeIntoPane(session, data))) continue;
       const capacity = session.engine === "codex" && codexCapacity(session.screen.snapshot({ maxScrollbackChars: 0 }));
       const held = !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true));
       const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? WAIT_HOLD_MS : JOBS_HOLD_MS;
@@ -1183,6 +1198,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (managed) for (const key of ["ENV", "BASH_ENV", "ZDOTDIR"]) delete source[key];
     if (managed && worker.session) for (const key of Object.keys(source)) if (/^(?:CODEX_(?:THREAD|SESSION|TOOL_CALL)_ID|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_(?:CODE_)?SESSION(?:_ID)?)$/i.test(key)) delete source[key];
     const workerSession = createWorkerSession(worker, id, cwd, sessionBridge());
+    const baseHead = botPane ? await mapBase(cwd) : null;
     const paneEnv = terminalPaneEnv(source, { pane: id, bot: input.botId, teacher: folder.teacher, mailbox: mail });
     if (workerSession) Object.assign(paneEnv, workerSession.env);
     const nick = botPane && scratchRoot ? paneNick(input.label) : null;
@@ -1195,7 +1211,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } catch {}
     }
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
-    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : [], {
+    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
     let pty;
@@ -1205,13 +1221,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
     const session = {
-      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
+      id, key, botId: input.botId, botPane, workerSession, baseHead, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
-      stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
+      stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, blipNudge: null, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
       commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
       claudeTrust: false, claudeTrustMoved: false, claudeTrustAnswered: false, claudeTrustTimer: null,
     };
@@ -1277,7 +1293,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
   };
-  const botWrite = (session, raw, worker) => {
+  // `launch` is the engine command when the typed text only wraps it, as a remote pane's ssh line does.
+  const botWrite = (session, raw, worker, launch = null) => {
     const text = normalizeTerminalText(raw);
     cancelClaudeStartup(session);
     clearActivityTimer(session);
@@ -1299,10 +1316,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
       session.idleCompacting = false;
-      const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
+      const engineText = launch ?? text;
+      const launched = session.botPane ? WORKER_CLI_RE.exec(engineText) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
-        const args = worker ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+        const args = worker ? worker.args : engineText.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
         session.claudeTrust = (session.engine === "claude" || session.engine === "agy") && args.includes("--dangerously-skip-permissions");
         session.claudeOnboarding = { active: session.engine === "claude", answered: new Set() };
         session.claudeStartupScreen = null;
@@ -1315,7 +1333,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.contextCompactPending = false;
         watchStalls(session);
       }
-      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run });
+      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1555,6 +1573,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       };
     },
     liveAccountRuns,
+    watchMap: mapEvents.watch,
     readBot(botId, options = {}) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
@@ -1756,14 +1775,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (input.command !== undefined && (typeof input.command !== "string" || input.command.length > 64 * 1024 || input.command.includes("\x03"))) throw new Error("Invalid terminal command");
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Validate the optional folder before resolving it.
       if (input.cwd !== undefined && typeof input.cwd !== "string") throw new Error("Invalid terminal folder");
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Hosts cross the local proxy boundary.
+      if (input.host !== undefined && (typeof input.host !== "string" || !remote)) throw new Error("Invalid terminal host");
+      if (input.host !== undefined && platform !== "win32") throw new Error("Remote terminals need Windows");
       if (disposed) throw new Error("Terminal host is shutting down");
       const sender = paneOwner();
       if (!sender || sender.isDestroyed?.()) throw new Error("Wink window is not available");
       // Reserved before the first await so concurrent opens cannot overshoot the caps.
       const botReserved = paneReservations.get(botId) ?? 0;
-      if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
+      const slot = input.host === undefined ? null : remoteSlot(input.host, remotePanes(), now());
+      // A remote pane counts toward its host's cap; at home it is only a shell running ssh.
+      if (!slot && botSessions(botId).filter((session) => session.botPane && !session.remote && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
+      if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_TOTAL) throw new Error(`Too many bot terminals (limit ${BOT_PANE_TOTAL})`);
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
-      const floor = paneMemoryFloor(input.command);
+      const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
       if (free < floor) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
@@ -1771,8 +1796,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
+      if (slot) remoteOpens.add(slot);
       let session;
       let worker;
+      let remoteLine;
       let claimed = false;
       try {
         if (recovery) {
@@ -1783,12 +1810,14 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (recovery) launchInput.resume = recovery.session;
         // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
         else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
-        if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
+        if (slot) remoteLine = await remote.open({ name: input.host, command: input.command, cwd: input.cwd, slot });
+        else if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
         else worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
         if (recovery && worker?.kind !== "managed" && worker?.kind !== "unrouted") throw new Error("Worker resume service is unavailable");
         if (recovery && worker.session) worker.session.recoveredFrom = recovery.id;
-        const folder = await resolveFolder({ botId, cwd: input.cwd });
+        // input.cwd of a remote pane is a folder on its host.
+        const folder = slot ? { cwd: os.homedir() } : await resolveFolder({ botId, cwd: input.cwd });
         if (recovery) folder.teacher = recovery.teacher ?? botId;
         if (folder.needsFolder) throw new Error("Terminal folder is unavailable");
         const cwd = folder.cwd;
@@ -1810,11 +1839,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
         session.botPane = true;
         session.label = label;
+        if (slot) session.remote = slot;
         paneCleanup?.opened(session);
         session.spawnedAt = now();
         active.set(key, session.id);
       } finally {
         if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
+        remoteOpens.delete(slot);
         reservedPanes -= 1;
         const left = paneReservations.get(botId) - 1;
         if (left) paneReservations.set(botId, left);
@@ -1824,10 +1855,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (input.command) {
         // A fresh unrouted pane types the bot's own text; every other worker types its rendered argv.
         const rendered = worker?.kind === "managed" || (recovery && worker?.kind === "unrouted") ? worker : null;
-        const command = normalizeTerminalText(rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
+        const command = normalizeTerminalText(slot ? remoteLine : rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
           : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, input.command, session.mail?.binDir) : input.command);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
-        await botWrite(session, session.command, rendered);
+        await botWrite(session, session.command, rendered, slot && input.command);
       }
       return { sessionId: session.id, generation: session.generation, ...(worker?.line ? { line: worker.line } : {}) };
     },

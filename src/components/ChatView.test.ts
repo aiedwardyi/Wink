@@ -406,7 +406,7 @@ describe("ChatView worker rows", () => {
         "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -461,7 +461,7 @@ describe("ChatView worker rows", () => {
       expect(entry.textContent).not.toContain("WORK");
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith(liveDone);
-      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
     } finally {
       await unmount();
     }
@@ -756,10 +756,10 @@ describe("ChatView worker rows", () => {
       expect(rows(host).map((b) => b.textContent)).toEqual(["REVIEWGPT-6.1 Sol · HighWorking", "CHECKOpus 5.5 · HighDone"]);
       expect(host.textContent).not.toContain("Green.");
       const chip = host.querySelector("[data-worker-strip]");
-      const find = host.querySelector('button[aria-label="Find in conversation"]')!;
+      const bell = host.querySelector("[data-room-bell]")!;
       if (!chip) throw new Error("chip missing");
       expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(chip.compareDocumentPosition(find) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+      expect(chip.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
       expect(chip?.getAttribute("aria-label")).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers");
       await act(async () => chip?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       const list = document.querySelector("[data-worker-list]");

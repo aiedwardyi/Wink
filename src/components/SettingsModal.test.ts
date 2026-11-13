@@ -6,8 +6,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { catalogs } from "@/lib/i18n-catalog";
-import { saveModelPickerView } from "@/lib/model-picker-view";
-import { savePickerLook } from "@/lib/picker-look";
 import { saveRainbowBox } from "@/lib/rainbow-box";
 import { SKINS } from "@/lib/skins";
 import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -169,7 +167,7 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Precision Dimmed", "Bronze", "Dim Sand", "Wink Day", "Notebook"]) {
+    for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Dim Sand", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
     expect(html).toContain(`More themes (${SKINS.length - 11})`);
@@ -274,55 +272,26 @@ describe("SettingsModal friends chrome", () => {
     expect(source).toContain("onChange={saveRainbowBox}");
   });
 
-  it("picks the model picker look from Dark, Light and Atelier under Chat Box, following the skin until picked", () => {
-    const html = markup("themes");
-    expect(html.indexOf('aria-label="Model Picker"')).toBeGreaterThan(html.indexOf('aria-label="Chat Box"'));
-    const group = () => markup("themes").match(/<div role="radiogroup" aria-label="Model Picker"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
-    const checked = () => group().match(/aria-checked="true"[^>]*>([^<]+)</)?.[1];
-    expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dark", "Light", "Atelier"]);
-    const dataset = document.documentElement.dataset;
-    try {
-      for (const [skin, look] of [["precision", "Dark"], ["wink-day", "Light"], ["atelier", "Atelier"]]) {
-        dataset.skin = skin;
-        expect(checked(), skin).toBe(look);
-      }
-      savePickerLook("dark");
-      expect(checked()).toBe("Dark");
-      dataset.skin = "precision";
-      savePickerLook("atelier");
-      expect(checked()).toBe("Atelier");
-    } finally {
-      delete dataset.skin;
-    }
-    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={savePickerLook}");
-    expect([catalogs.ko["settings.pickerLook.title"], catalogs.ko["settings.pickerLook.dark"], catalogs.ko["settings.pickerLook.light"]]).toEqual(["모델 선택", "다크", "라이트"]);
+  it("leaves the model picker look to the theme, with no row for it", () => {
+    expect(markup("themes")).not.toContain('aria-label="Model Picker"');
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).not.toContain("picker-look");
+    expect(Object.keys(catalogs.en).filter((key) => key.startsWith("settings.pickerLook."))).toEqual([]);
   });
 
-  it("picks the model picker style from Dial and List under the look row, wherever the dial can show", () => {
-    const values = new Map<string, string>();
-    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
-    const style = 'aria-label="Model Picker Style"';
+  it("leaves the model picker style to the picker, even where the dial can show", () => {
     try {
-      expect(markup("themes")).not.toContain(style);
       mock.dial = true;
-      expect(markup("themes")).not.toContain(style);
       window.matchMedia = ((media: string) => ({ media, matches: true })) as typeof window.matchMedia;
       const html = markup("themes");
-      expect(html.indexOf(style)).toBeGreaterThan(html.indexOf('aria-label="Model Picker"'));
-      const group = () => markup("themes").match(/<div role="radiogroup" aria-label="Model Picker Style"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
-      const checked = () => group().match(/aria-checked="true"[^>]*>([^<]+)</)?.[1];
-      expect([...group().matchAll(/role="radio"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Dial", "List"]);
-      expect(checked()).toBe("Dial");
-      saveModelPickerView("list");
-      expect(values.get("omb-model-picker-view")).toBe("list");
-      expect(checked()).toBe("List");
+      expect(html).toContain('aria-label="Chat Box"');
+      expect(html).not.toContain("Model Picker Style");
+      expect(html).not.toMatch(/>Chart</);
     } finally {
       mock.dial = false;
       Reflect.deleteProperty(window, "matchMedia");
-      vi.unstubAllGlobals();
     }
-    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).toContain("onChange={saveModelPickerView}");
-    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"]]).toEqual(["모델 선택 방식", "다이얼", "목록"]);
+    expect(readFileSync(join(here, "SettingsModal.tsx"), "utf8")).not.toContain("saveModelPickerView");
+    expect([catalogs.ko["settings.pickerStyle.title"], catalogs.ko["settings.pickerStyle.dial"], catalogs.ko["settings.pickerStyle.list"], catalogs.ko["settings.pickerStyle.chart"]]).toEqual(["모델 선택 방식", "다이얼", "목록", "차트"]);
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
@@ -444,7 +413,7 @@ describe("SettingsModal friends chrome", () => {
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "precision-dimmed", "bronze"]);
+    expect(ids(html.slice(dark, light))).toEqual(["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze"]);
     expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
     expect(ids(html)).toHaveLength(11);
   });

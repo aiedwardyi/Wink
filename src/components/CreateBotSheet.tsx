@@ -116,7 +116,7 @@ export function CreateBotSheet({
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-app/90 p-6 backdrop-blur-lg"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-6 backdrop-blur-[2px]"
       onMouseDown={(event) => event.target === event.currentTarget && close()}
     >
       <div
@@ -124,7 +124,7 @@ export function CreateBotSheet({
         role={closing ? undefined : "dialog"}
         aria-modal={!closing || undefined}
         aria-labelledby="create-bot-title"
-        className="animate-pop-in max-h-[min(680px,calc(100dvh-2rem))] w-full max-w-[560px] overflow-y-auto rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl shadow-black/60 sm:p-7"
+        className="animate-pop-in max-h-[min(680px,calc(100dvh-2rem))] w-full max-w-[560px] overflow-y-auto rounded-[24px] border border-hairline/50 bg-panel p-5 shadow-2xl shadow-black/50 sm:p-7"
       >
         {/* Stacked below sm so the title shares the form's left edge. */}
         <div className="flex items-center gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-3">

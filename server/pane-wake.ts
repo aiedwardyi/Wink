@@ -64,13 +64,27 @@ export function paneWakeEnabled(store: Store, botId: string, threadId: string): 
 }
 
 export function hasLocalUndeliveredPaneNote(messages: Message[], deliveredId: string | undefined, deviceId: string, skippedId?: string): boolean {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!;
+  return localNoteBack(messages.toReversed(), deliveredId, deviceId, skippedId);
+}
+
+function localNoteBack(newestFirst: Iterable<Message>, deliveredId: string | undefined, deviceId: string, skippedId?: string): boolean {
+  for (const message of newestFirst) {
     if (message.id === deliveredId || message.id === skippedId) break;
     if (endsNoteWindow(message)) break;
     if (!message.quiet && isWakeNote(message) && message.text?.trim() && message.origin === deviceId) return true;
   }
   return false;
+}
+
+/** Open chats whose stored local pane notes were never delivered; reads only each chat's tail. */
+export function bootPaneWakes(store: Pick<Store, "bots" | "taskByThread" | "activePathBack">, deviceId: string): Array<{ botId: string; threadId: string }> {
+  return store.bots.flatMap((bot) => {
+    const task = store.taskByThread(bot.id, bot.threadId);
+    const deliveredId = task?.paneNotesDeliveredId;
+    return deliveredId !== undefined && localNoteBack(store.activePathBack(bot.threadId), deliveredId ?? undefined, deviceId, task?.paneNotesSkippedId)
+      ? [{ botId: bot.id, threadId: bot.threadId }]
+      : [];
+  });
 }
 
 interface Pending {

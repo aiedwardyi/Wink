@@ -124,7 +124,7 @@ describe("quick route", () => {
     await h.settled();
     const [ask, answer] = h.rows().slice(-2);
     expect(ask).toMatchObject({ role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
-    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", quick: { state: "answer", askId: ask!.id } });
+    expect(answer).toMatchObject({ role: "bot", kind: "text", text: "Port 8787.", engine: "claudeAgent", quick: { state: "answer", askId: ask!.id } });
     expect(h.steer).not.toHaveBeenCalled();
     const retry = await h.send({ text: QUESTION, sendId: "send-quick-0000000001" });
     expect(retry.data).toMatchObject({ quick: true, message: { id: ask!.id } });
@@ -486,7 +486,6 @@ describe("boot recovery", () => {
     const path = vi.spyOn(Store.prototype, "activePath");
     recoverQuickAsks(after);
     expect([...read.mock.calls, ...path.mock.calls].filter(([threadId]) => threadId === quiet.threadId)).toEqual([]);
-    expect(read.mock.calls.filter(([threadId]) => threadId === bot.threadId)).toEqual([]);
     expect(_queuedCount(bot.threadId)).toBe(1);
     expect(after.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
     expect(after.messagesFor(bot.threadId).find((row) => row.id === old.id)?.quick).toEqual({ state: "asked" });
@@ -510,6 +509,20 @@ describe("boot recovery", () => {
     const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
     recoverQuickAsks(store);
     expect(store.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
+  });
+
+  it("leaves chats with no pending ask unread", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    const asked = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: asked.id } });
+    const messages = vi.spyOn(store, "messagesFor");
+    const path = vi.spyOn(store, "activePath");
+    recoverQuickAsks(store);
+    expect(messages).not.toHaveBeenCalledWith(bot.threadId);
+    expect(path).not.toHaveBeenCalledWith(bot.threadId);
+    expect(_queuedCount(bot.threadId)).toBe(0);
   });
 
   it("leaves an ask stopped before a restart", async () => {

@@ -5,7 +5,9 @@ import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, ROOM_LIMITS, spend, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { addPerson, appendRoomEntry, closeRoomsDb, createRoom, PERSON_TEXT_MAX, recentRoomEntries, type RoomPerson } from "./db.ts";
-import { hostedSend, hostSend } from "./send.ts";
+import { createPeopleOnlyRoom } from "./people-only.ts";
+import { hostedSend, hostSend, stopBotChain, teamBotSend } from "./send.ts";
+import { addTeamBot, type TeamBot } from "./team-bots.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -69,6 +71,17 @@ describe("hostedSend", () => {
     expect(store.bot(korean.botId)!.name).toBe("위키");
     const answer = appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: korean.botId, name: "위키" }, text: "done", replyToId: korean.entryId });
     expect(hostedSend(group, person("trusted2"), "and the rest?", answer.id).ask).toMatchObject({ botId: korean.botId, quoteId: answer.id });
+  });
+
+  it("does not wake the host's reply target for an explicit teammate bot tag", () => {
+    addTeamBot(group.hosted.roomId, people.chat.id, "스타줌", "teal", []);
+    const answer = appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink, name: "Wink" }, text: "handoff" });
+    expect(hostedSend(group, person("chat"), "@스타줌 이거해.", answer.id).ask).toBeNull();
+    store.patchGroup(group.id, { memberIds: [wink] });
+    expect(hostedSend(store.group(group.id) as HostedGroup, person("chat"), "@스타줌 이거해.", answer.id).ask).toBeNull();
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(hostedSend(group, person("chat"), "@Mina can you check?", answer.id).ask).toMatchObject({ botId: wink });
+    expect(hostedSend(group, person("chat"), "thanks", answer.id).ask).toMatchObject({ botId: wink });
   });
 
   it("gives two same-level people two asks", () => {
@@ -149,6 +162,67 @@ describe("hostedSend", () => {
     const pete = appendRoomEntry(solo.hosted.roomId, { author: { kind: "bot", id: "tb-AAAAAAAAAAAAAAAA", name: "Pete-Coder", owner: mina.id }, text: "chart's ready" });
     expect(hostedSend(solo, { kind: "person", id: mina.id }, "thanks, now the totals", pete.id).ask).toBeNull();
     expect(hostedSend(solo, { kind: "person", id: mina.id }, "lunch?").ask).toMatchObject({ botId: wink });
+  });
+});
+
+describe("teamBotSend", () => {
+  let star: TeamBot;
+  const asks = () => roomAsks(group.hosted.roomId, ["held", "queued", "running"]);
+  const said = (text: string, replyToId?: string) => teamBotSend(group, people.chat, star, text, replyToId);
+  const winkLine = (text: string) => appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink, name: "Wink" }, text });
+  beforeEach(() => {
+    star = addTeamBot(group.hosted.roomId, people.chat.id, "스타줌", "teal", ["Wink", "위키"]);
+  });
+
+  it("wakes the host bot it @'s with one ask under its owner", () => {
+    const entry = said("@Wink Sora is free after 7. What works for Edward?");
+    expect(asks()).toEqual([expect.objectContaining({ botId: wink, asker: { kind: "person", id: people.chat.id }, entryId: entry.id, grant: "work", state: "queued", clean: false })]);
+    expect(deps.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("wakes nobody without an explicit @ to a host bot", () => {
+    const answer = winkLine("7:30 works?");
+    said("Done: Sat 7:30. @Edward @Sora", answer.id);
+    said("thanks", answer.id);
+    said("@스타줌 note to self");
+    expect(asks()).toEqual([]);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("waits behind its owner's open request", () => {
+    hostedSend(group, person("chat"), "@위키 first");
+    said("@Wink next");
+    expect(asks().map((ask) => ask.botId)).toHaveLength(2);
+  });
+
+  it("ends the chain on a line that tags no bot", () => {
+    said("@Wink your turn");
+    winkLine("@스타줌 7:30 works?");
+    said("Done: Sat 7:30. @Edward @Sora");
+    expect(asks()).toHaveLength(1);
+  });
+
+  it("goes on past many bot lines until Stop, then waits for a person", () => {
+    for (let n = 0; n < 20; n++) winkLine(`@스타줌 turn ${n}`);
+    said("@Wink still going");
+    expect(asks()).toHaveLength(1);
+    stopBotChain(group.hosted.roomId);
+    said("@Wink one more");
+    expect(asks()).toHaveLength(1);
+    hostedSend(group, person("trusted"), "keep going");
+    said("@Wink again");
+    expect(asks()).toHaveLength(2);
+  });
+
+  it("still posts but wakes nobody past the hourly quota or in a people-only room", () => {
+    for (let i = 0; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, people.chat.id, "ask");
+    expect(said("@Wink hi").text).toBe("@Wink hi");
+    const crew = store.createGroup("Crew", [], false, undefined, undefined, { roomId: createPeopleOnlyRoom("Crew").id }) as HostedGroup;
+    const sora = addPerson(crew.hosted.roomId, "Sora", "chat", []);
+    const pete = addTeamBot(crew.hosted.roomId, sora.id, "Pete", "teal", []);
+    teamBotSend(crew, sora, pete, "@Wink hi");
+    expect(roomAsks(crew.hosted.roomId, ["held", "queued", "running"])).toEqual([]);
+    expect(asks()).toEqual([]);
   });
 });
 

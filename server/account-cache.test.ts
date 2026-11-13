@@ -5,11 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { Store } from "./store.ts";
 import { createUsageRefresh } from "./usage-refresh.ts";
-import { createSpawnUsage } from "./spawn-usage.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { makeFakeDriver } from "./testing/fake-driver.ts";
 import type { JsonValue } from "./schema.ts";
-import type { RateLimitsMap } from "./rate-limits-store.ts";
 
 const sessions = await import("./account-sessions.ts").catch(() => null);
 const account = { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: "codex", home: join(DATA_DIR, "accounts", "fixture"), generation: 1 };
@@ -89,19 +87,6 @@ describe("account cache generations", () => {
     expect(store.sessionSystem("codex", "base-cursor")).toBe("base system");
     expect(JSON.stringify(store.messagesFor(bot.threadId))).toBe(before);
     expect(store.messagesFor(bot.threadId).find((message) => message.id === text.id)?.text).toBe("keep conversation");
-  });
-
-  it("removes only an invalidated instance's worker usage holds", async () => {
-    const at = Date.now();
-    const report = { observedAt: new Date(at).toISOString(), windows: [{ id: "five_hour", usedPercent: 99, resetsAt: at + 60_000 }] };
-    const rateLimits: RateLimitsMap = new Map([["claude", report], ["codex", report]]);
-    const usage = createSpawnUsage({ rateLimits, save: () => {}, refresh: async () => ({}), environment: () => ({}), now: () => at });
-    await usage("bot", "claude", "claude fixture");
-    await usage("bot", "codex", "codex fixture");
-    expect(usage.invalidate, "hold invalidation exists").toBeTypeOf("function");
-    usage.invalidate("claude");
-    expect((await usage("bot", "claude", "claude fixture")).hold).toBeDefined();
-    expect((await usage("bot", "codex", "codex fixture")).hold).toBeUndefined();
   });
 
   it("does not restore a saved authenticated account probe", async () => {

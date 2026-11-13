@@ -72,7 +72,7 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
   if (onMainChanged) vi.stubGlobal("fetch", vi.fn(async () => Response.json({ count: 0, unknown: 0, generations: {} })));
   const routed = onMainChanged && runtime!.createAccountRuntime({
     accounts, registry, providers, store: new Store(() => ({ instanceId: "claude", model: "claudeAgent-1" })), reload: () => providers.reload(configs()),
-    rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(), invalidateHolds: () => {}, invalidateWaits: () => {},
+    rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(), invalidateWaits: () => {},
     botActive: () => false, terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => configBusy, onMainChanged,
   });
   const controller = routed || new lifecycle!.AccountLifecycle(accounts, registry, {

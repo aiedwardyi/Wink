@@ -2,10 +2,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatListPage, paneNoteWaitingAtBoot, warmChats } from "./cold-thread.ts";
+import { chatListPage, warmChats } from "./cold-thread.ts";
 import { offscreenLimit } from "./chat-tail.ts";
 import { DATA_DIR } from "./config.ts";
-import { hasLocalUndeliveredPaneNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -94,51 +93,6 @@ describe("chat list page from a thread's tail", () => {
     writer.setActiveLeaf(bot.threadId, reply.id);
     expect(store.activeLeaf(bot.threadId)).toBe(reply.id);
     expect(store.loaded(bot.threadId)).toBe(false);
-  });
-});
-
-describe("pane note check at boot", () => {
-  const note = { role: "bot", kind: "note", text: "worker done", origin: "home" } as const;
-  const tool = { role: "bot", kind: "activity", tool: { name: "Bash", ok: true } } as const;
-
-  function expectSameAnswer(threadId: string, deliveredId?: string) {
-    const expected = hasLocalUndeliveredPaneNote(fresh().activePath(threadId), deliveredId, "home");
-    const store = fresh();
-    const path = vi.spyOn(store, "activePath");
-    expect(paneNoteWaitingAtBoot(store, threadId, deliveredId, "home")).toBe(expected);
-    return { expected, loaded: path.mock.calls.length > 0 };
-  }
-
-  it("decides from the newest rows when they hold the answer", () => {
-    const bot = fresh().createBot({}, { seedMessages: false });
-    const store = fresh();
-    for (let i = 0; i < 1500; i++) store.appendMessage(bot.threadId, tool);
-    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "run the worker" });
-    const done = store.appendMessage(bot.threadId, note);
-    store.appendMessage(bot.threadId, tool);
-    expect(expectSameAnswer(bot.threadId)).toEqual({ expected: true, loaded: false });
-    expect(expectSameAnswer(bot.threadId, done.id)).toEqual({ expected: false, loaded: false });
-  });
-
-  it("loads the thread when the note sits past the newest rows", () => {
-    const bot = fresh().createBot({}, { seedMessages: false });
-    const store = fresh();
-    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "run the worker" });
-    store.appendMessage(bot.threadId, note);
-    for (let i = 0; i < 1500; i++) store.appendMessage(bot.threadId, tool);
-    expect(expectSameAnswer(bot.threadId)).toEqual({ expected: true, loaded: true });
-  });
-
-  it("loads the thread when the head is on another branch", () => {
-    const bot = fresh().createBot({}, { seedMessages: false });
-    const store = fresh();
-    const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "run the worker" });
-    store.appendMessage(bot.threadId, note);
-    const branch = store.branchMessage(bot.threadId, first.id, "run it again")!;
-    store.setActiveLeaf(bot.threadId, store.messagesFor(bot.threadId)[1]!.id);
-    store.appendMessage(bot.threadId, tool);
-    store.setActiveLeaf(bot.threadId, branch.id);
-    expect(expectSameAnswer(bot.threadId)).toEqual({ expected: false, loaded: true });
   });
 });
 

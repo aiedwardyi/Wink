@@ -330,7 +330,7 @@ export function RemoteTerminalView({
     }
   };
   const buttonClass =
-    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50";
+    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50";
   const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
   const paneOrder = workerPaneOrder(panes, workers);
   useLayoutEffect(() => {
@@ -384,7 +384,7 @@ export function RemoteTerminalView({
             onClick={() => void start()}
             disabled={starting}
             aria-busy={starting}
-            className="flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-hairline bg-panel px-4 text-[13px] text-ink hover:bg-raised focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50"
+            className="flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-hairline bg-panel px-4 text-[13px] text-ink hover:bg-raised disabled:opacity-50"
           >
             <TerminalSquare size={16} /> {t("terminal.open")}
           </button>
@@ -432,7 +432,7 @@ export function RemoteTerminalView({
                 onClick={() => void post({ key })}
                 onMouseDown={(event) => event.preventDefault()}
                 aria-label={aria ? t(aria) : undefined}
-                className="flex min-h-9 min-w-11 items-center justify-center rounded-md border border-hairline bg-inset px-3 font-mono text-[13px] text-ink-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50"
+                className="flex min-h-9 min-w-11 items-center justify-center rounded-md border border-hairline bg-inset px-3 font-mono text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50"
               >
                 {label ?? (aria && t(aria))}
               </button>
@@ -459,7 +459,7 @@ export function RemoteTerminalView({
               disabled={sending}
               aria-label={t("terminal.send")}
               onMouseDown={(event) => event.preventDefault()}
-              className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50"
+              className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 disabled:opacity-50"
             >
               <CornerDownLeft size={18} />
             </button>

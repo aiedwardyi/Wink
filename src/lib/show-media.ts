@@ -27,6 +27,8 @@ export interface MediaFile {
   size?: number;
   /** who sent it, in a room */
   sender?: string;
+  /** served without byte ranges, so a clip's first frame would cost the whole file */
+  whole?: boolean;
 }
 
 const VIDEO = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
@@ -38,7 +40,7 @@ export function mediaFile(threadId: string, ref: MediaRef, at: number): MediaFil
   const video = VIDEO.test(ref.ref) || undefined;
   if (kind === "f") return { key, name, at, path: ref.ref, size, video };
   const show = showKind(ref.ref);
-  return show === "image" ? { key, name, at, src: key, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
+  return show === "image" ? { key, name, at, src: key, path: ref.ref, image: true } : { key, name, at, src: key, path: ref.ref, size, video, show: show ? { threadId, path: ref.ref, kind: show } : undefined };
 }
 
 const seen = new WeakMap<Message, MediaFile[]>();
@@ -69,7 +71,7 @@ export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray
     if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
     // A room previews only pictures; a PDF still draws from its bytes.
-    return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined,
+    return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined, whole: true,
       show: showKind(file.name) === "pdf" ? { threadId, path: file.name, kind: "pdf", src } : undefined };
   });
 }

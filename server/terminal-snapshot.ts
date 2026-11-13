@@ -23,6 +23,8 @@ function snapshotBody(snapshot: Record<string, unknown>): Record<string, unknown
 }
 
 const BOT_ID = /^[\w-]{1,128}$/;
+// electron BOT_PANE_TOTAL: 16 home panes plus 64 on other PCs.
+const BOT_PANES = 80;
 const bridgeErrorSchema = z.object({ error: z.string().optional() }).catch({});
 const bridgeSnapshotSchema = z.record(z.string(), z.unknown()).catch({});
 const paneCountsSchema = z.object({
@@ -37,14 +39,14 @@ export function acceptedPaneCounts(body: { counts?: Record<string, number>; pane
   const panes: Record<string, string[]> = {};
   const counts: Record<string, number> = {};
   for (const [botId, labels] of Object.entries(body.panes ?? {})) {
-    if (!BOT_ID.test(botId) || labels.length < 1 || labels.length > 16) continue;
+    if (!BOT_ID.test(botId) || labels.length < 1 || labels.length > BOT_PANES) continue;
     const names = labels.map((label) => label.slice(0, 40));
     panes[botId] = names;
     counts[botId] = names.length;
   }
   if (Object.keys(panes).length > 0) return { counts, panes };
   for (const [botId, count] of Object.entries(body.counts ?? {})) {
-    const parsed = z.number().int().min(1).max(16).safeParse(count);
+    const parsed = z.number().int().min(1).max(BOT_PANES).safeParse(count);
     if (!BOT_ID.test(botId) || !parsed.success) continue;
     counts[botId] = parsed.data;
   }

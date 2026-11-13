@@ -8,6 +8,7 @@ import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type
 import { useThumb } from "@/lib/media-thumbs";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
 import { showItem } from "@/lib/show-pane";
+import { MediaClip } from "./MediaClip";
 import { MediaMenu } from "./MediaMenu";
 import { MediaViewer } from "./MediaViewer";
 import { RoomFilesNotice, RoomMedia, useRoomFilesRemoved } from "./RoomMedia";
@@ -181,7 +182,7 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   return (
     <>
       <div className="show-media-rail" aria-hidden="true">
-        <div ref={thumb} data-media-thumb data-dragging={shown || undefined} className="show-media-thumb" style={{ height: size }}
+        <div ref={thumb} data-media-thumb className="show-media-thumb" style={{ height: size }}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} />
       </div>
       <div ref={bubble} data-media-bubble data-shown={shown || undefined} className="show-media-bubble" aria-hidden="true">{label}</div>
@@ -190,11 +191,11 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
 }
 
 function MediaVideo({ file, top, left, size }: { file: MediaFile; top: number; left: number; size: number }) {
+  const tile = <><Play size={22} aria-hidden="true" /><span className="w-full truncate text-center text-[11px]">{file.name}</span></>;
   return (
     <MediaOpen file={file} style={{ top, left, width: size, height: size }}
       className="absolute flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2 text-ink-secondary focus-visible:outline-2 focus-visible:outline-accent">
-      <Play size={22} aria-hidden="true" />
-      <span className="w-full truncate text-center text-[11px]">{file.name}</span>
+      {file.src && !file.whole ? <MediaClip src={file.src} name={file.name}>{tile}</MediaClip> : tile}
     </MediaOpen>
   );
 }

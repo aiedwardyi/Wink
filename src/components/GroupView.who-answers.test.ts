@@ -7,15 +7,8 @@ import { pinPreview } from "@/lib/pin-preview";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const groupView = readFileSync(join(here, "GroupView.tsx"), "utf8");
-const memberRoster = readFileSync(join(here, "GroupMemberRoster.tsx"), "utf8");
 
 describe("who answers label", () => {
-  it("opens Room details from the faces, with no dashed + in the header", () => {
-    expect(groupView).toContain("onOpen={(section) => openRoomDetails(dispatch, section)}");
-    expect(groupView).not.toContain("ManageMembersButton");
-    expect(memberRoster).not.toContain("border-dashed");
-  });
-
   it("keeps routing out of the header", () => {
     expect(groupView).not.toContain("DefaultResponderSelect");
     expect(groupView).not.toContain("data-who-answers");
@@ -32,7 +25,7 @@ describe("room pin banner", () => {
     expect(pinPreview("user", "**Done**\n  now")).toBe("**Done** now");
   });
 
-  it("uses the shared preview", () => {
-    expect(groupView).toContain("pinPreview(");
+  it("uses the 1:1 banner", () => {
+    expect(groupView).toContain("<PinnedBanner");
   });
 });

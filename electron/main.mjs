@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { localMediaFile, registerMediaImageIpc } from "./media-file.mjs";
 import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
 import { assemblyAICredential, mintAssemblyAIStreamingToken } from "./assemblyai.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
@@ -17,6 +18,7 @@ import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./term
 import { createPaneCleanupWorker } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
+import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
@@ -112,7 +114,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -341,6 +343,7 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
+  remote: createRemoteHosts({ hosts: async () => JSON.parse(await fs.promises.readFile(path.join(app.getPath("home"), ".orbit", "remote-hosts.json"), "utf8").catch(() => "{}")) }),
   scratchRoot,
   processes: paneProcesses,
   paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),
@@ -1161,6 +1164,7 @@ function respondToDisplayMediaRequest(callback, response) {
 }
 
 let cachedTailnet = "";
+let cachedSelfHost = "";
 
 function tailscaleStatus(command) {
   return new Promise((resolve) => {
@@ -1171,11 +1175,16 @@ function tailscaleStatus(command) {
 // Only a found tailnet is cached: Tailscale may start after Orbit.
 async function localTailnet() {
   const fromHost = deviceTailnet(process.env.ORBIT_REMOTE_HOST);
-  if (fromHost) return fromHost;
+  if (fromHost) {
+    cachedSelfHost = normalizedHost(process.env.ORBIT_REMOTE_HOST);
+    return fromHost;
+  }
   if (cachedTailnet) return cachedTailnet;
   const commands = process.platform === "win32" ? ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"] : ["tailscale"];
   for (const command of commands) {
-    cachedTailnet = tailnetFromStatus(await tailscaleStatus(command));
+    const status = await tailscaleStatus(command);
+    cachedTailnet = tailnetFromStatus(status);
+    cachedSelfHost = selfHostFromStatus(status);
     if (cachedTailnet) break;
   }
   return cachedTailnet;
@@ -1278,6 +1287,10 @@ async function openDeviceWindow(rawHost, rawName) {
       }
       if (sameDesktopViewerOrigin(target, url.origin)) return;
       event.preventDefault();
+      // The PC menu jumps in place; from here this PC is the main window and another PC gets its own.
+      const pc = devicePickTarget(target, tailnet, cachedSelfHost);
+      if (pc === "self") return activateMainWindow();
+      if (pc) return void openDeviceWindow(pc, pc.split(".")[0]);
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
     });
@@ -1790,6 +1803,22 @@ ipcMain.handle("desktop:show-file", async (_event, rawPath, rawBase) => {
   await showLocalFile(rawPath, { base: rawBase, shell });
 });
 
+ipcMain.handle("desktop:local-media-file", (event, file) => {
+  if (!trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())) throw new Error("Untrusted file caller");
+  return localMediaFile(file, { dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit") });
+});
+
+registerMediaImageIpc(ipcMain, {
+  trusted: (event) => trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin()),
+  optionsFor: (event) => ({
+    origin: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`,
+    token: serverToken,
+    dialog,
+    downloads: app.getPath("downloads"),
+    window: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+  }),
+});
+
 ipcMain.handle("desktop:save-file", async (event, rawPath) => {
   const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
   await saveLocalFile(rawPath, { dialog, downloads: app.getPath("downloads"), window })
@@ -1857,7 +1886,7 @@ ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(ho
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
-  if (process.platform === "win32" && pane === "mic") return shell.openExternal("ms-settings:privacy-microphone");
+  if (process.platform === "win32" && (pane === "mic" || pane === "sound")) return shell.openExternal(pane === "mic" ? "ms-settings:privacy-microphone" : "ms-settings:sound");
   if (!nativeActions.applePrivacySettings) return false;
   const panes = {
     mic: "Privacy_Microphone",
@@ -1868,7 +1897,7 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
   // own-property lookup only — a renderer-supplied "__proto__"/"constructor"
   // would otherwise resolve up the prototype chain to a truthy object
   const anchor = Object.hasOwn(panes, pane) ? panes[pane] : "Privacy";
-  return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`);
+  return shell.openExternal(pane === "sound" ? "x-apple.systempreferences:com.apple.preference.sound?input" : `x-apple.systempreferences:com.apple.preference.security?${anchor}`);
 });
 
 ipcMain.handle("speech:start", (event, options) => {

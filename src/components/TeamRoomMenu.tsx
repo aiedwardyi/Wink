@@ -10,6 +10,7 @@ import { openRoomDetails } from "@/lib/room-details";
 import { inviteErrorKey, inviteToRoom, isTeamRoom, joinedRoomIdOf, joinedRoomBase, joinErrorKey, joinedSelection, joinRoom, looksLikeRoomCode, rejoinRoom, typedRoomName } from "@/lib/team-rooms";
 import { CodeBoxes } from "./CodeBoxes";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { Presence } from "@/lib/use-presence";
 import { api, useStore, type Group } from "@/state/store";
 
@@ -37,7 +38,7 @@ const watch = (watcher: () => void) => {
   return () => void watchers.delete(watcher);
 };
 
-const ITEM = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70";
+const ITEM = `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 
 export function TeamRoomSidebarActions({ group, onClose }: { group: Group; onClose: () => void }) {
   const { t } = useI18n();
@@ -137,7 +138,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -149,7 +150,7 @@ function Shell({ label, closing, onClose, children }: { label: string; closing: 
         role={closing ? undefined : "dialog"}
         aria-modal={!closing || undefined}
         aria-label={label}
-        className="animate-pop-in w-full max-w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl"
+        className="animate-pop-in w-full max-w-[380px] rounded-[24px] border border-hairline/50 bg-panel p-4 shadow-2xl shadow-black/50"
       >
         {children}
       </div>

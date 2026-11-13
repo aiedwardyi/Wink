@@ -8,7 +8,6 @@ const components = join(here, "../components");
 const chatBubble = readFileSync(join(components, "ChatBubble.tsx"), "utf8");
 const chatView = [readFileSync(join(components, "ChatView.tsx"), "utf8"), chatBubble].join("\n");
 const groupView = readFileSync(join(components, "GroupView.tsx"), "utf8");
-const memberRoster = readFileSync(join(components, "GroupMemberRoster.tsx"), "utf8");
 const composer = readFileSync(join(components, "Composer.tsx"), "utf8");
 
 describe("chat TTS speaker chrome", () => {
@@ -164,7 +163,6 @@ describe("transcript pills on a phone", () => {
   const slice = (source: string, from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
   it.each([
     ["ChatView", slice(chatView, "function ActivityChip", "function ScreenFrame")],
-    ["GroupView", slice(groupView, "export function RoomToolChip", "function ClusterLabel")],
   ])("lets every truncating row in %s shrink", (_name, source) => {
     const pills = classStrings(source, PILL);
     const labels = classStrings(source, LABEL);
@@ -174,15 +172,8 @@ describe("transcript pills on a phone", () => {
     for (const value of labels) expect(value).toMatch(/\bmin-w-0\b/);
   });
 
-  it("lets the room's step and usage-limit wrappers shrink with their pill", () => {
-    const wrapper = 'className="flex min-w-0 max-w-full flex-col items-start"';
-    expect(groupView.split(wrapper).length - 1).toBe(2);
-  });
-
-  it("wraps an expanded room error inside the pill", () => {
-    const [expanded] = classStrings(groupView, /whitespace-pre-wrap/).map((value) => new Set(value.split(/\s+/)));
-    expect(expanded.has("min-w-0")).toBe(true);
-    expect(expanded.has("break-words")).toBe(true);
+  it("draws room steps with the 1:1 chip, so its rules cover rooms", () => {
+    expect(slice(groupView, "export function RoomToolChip", "function ClusterLabel")).toContain("<ActivityChip message={message} notices={notices} />");
   });
 });
 
@@ -192,7 +183,6 @@ describe("server status lines in a tool chip", () => {
   const slice = (source: string, from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
   it.each([
     ["ChatView", slice(chatView, "function ActivityChip", "function ScreenFrame")],
-    ["GroupView", slice(groupView, "export function RoomToolChip", "function ClusterLabel")],
   ])("shows them whole in the UI font in %s and leaves commands as they were", (_name, source) => {
     expect(source).toContain("const status = isServerLine(tool.name);");
     expect(source).toMatch(/status\s*\? "min-w-0 max-w-\[480px\] break-words"\s*: "min-w-0 max-w-\[480px\] truncate font-mono"/);
@@ -203,14 +193,12 @@ describe("server status lines in a tool chip", () => {
 // label pushed the roster off a phone unless every link in the chain can shrink.
 describe("room header on a phone", () => {
   const slice = (from: string, to: string) => groupView.slice(groupView.indexOf(from), groupView.indexOf(to));
-  const header = slice("{/* Header: static member mauses", "{findOpen && (");
-  const chip = slice("function RoomWorkingFolderChip", "type RoomSetupFields");
+  const header = slice("@container/chathead", "{findOpen && (");
   const tokensAfter = (source: string, marker: string) => classTokens(source.slice(source.indexOf(marker)));
 
   it("ends the closed label in an ellipsis", () => {
     expect(header).toContain("<RoomTitle name={group.name}");
     expect(readFileSync(join(components, "RoomTitle.tsx"), "utf8")).toMatch(/<span className="min-w-0 truncate text-\[15px\] font-semibold text-ink">\{name\}<\/span>/);
-    expect(chip).toMatch(/<span className="truncate font-mono max-md:hidden">\{name\}<\/span>/);
   });
 
   it("keeps the room name at about 8 characters and lets the control row shrink", () => {
@@ -218,20 +206,5 @@ describe("room header on a phone", () => {
     expect(name.has("flex-1")).toBe(true);
     expect(name.has("min-w-[4.5rem]")).toBe(true);
     expect(tokensAfter(header, '<div className="flex min-w-0 items-center gap-1.5').has("min-w-0")).toBe(true);
-  });
-
-  it("folds the folder chip to its icon on a phone", () => {
-    const button = tokensAfter(chip, "<button");
-    expect(button.has("min-w-0")).toBe(true);
-    expect(button.has("max-md:shrink-0")).toBe(true);
-    expect(chip).toMatch(/<Folder size=\{12\} className="shrink-0" \/>/);
-    expect(chip).toMatch(/"truncate font-mono max-md:hidden"/);
-  });
-
-  it("overlaps the roster avatars on a phone", () => {
-    const roster = tokensAfter(memberRoster, "ref={reorder.rowRef}");
-    expect(roster.has("max-md:-space-x-1.5")).toBe(true);
-    expect(roster.has("max-md:overflow-x-auto")).toBe(true);
-    expect(groupView).toContain('group.busyBotId === b.id && "z-10 ring-2');
   });
 });

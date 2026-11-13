@@ -37,7 +37,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { useAutoShow, useCheckThread, useMediaThread, useShowItem } from "@/lib/show-pane";
+import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -262,6 +262,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const show = useShowItem();
   const media = useMediaThread();
   const checking = useCheckThread();
+  const mapping = useMapThread();
   const watchChat = group ?? bot;
   const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
@@ -272,9 +273,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const mediaOn = Boolean(watchChat && media === watchChat.threadId);
   const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
   const paneWatch = watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : undefined;
-  const watchShown = usePresence(paneWatch || showing || mediaOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
+  const mapOn = Boolean(watchChat && mapping === watchChat.threadId);
+  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, botId: bot?.id, card: LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, source } : null);
   const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
-  const slotPanels: SlotPanel[] = [...(watch || show || media ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
+  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : [])];
   const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
   useEffect(() => { closePane(); }, [state.selectedId]);
@@ -704,7 +706,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
+          className="pointer-events-none fixed bottom-4 left-1/2 z-[110] -translate-x-1/2 rounded-full border border-hairline/50 bg-card px-3.5 py-1.5 text-[13px] text-ink shadow-xl"
         >
           {themeToast}
         </div>

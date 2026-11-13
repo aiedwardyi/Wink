@@ -2,19 +2,22 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { askUserCardPatchSchema } from "./ask-user.ts";
+import { askUserCardPatchSchema, settledAsk } from "./ask-user.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
+import { laneKey } from "./room-lane.ts";
+import { steerRoomSend } from "./room-steer.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { roomFile } from "./rooms/files.ts";
 import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/people-only.ts";
+import { stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -25,6 +28,7 @@ type GroupRouteDeps = {
   clientMessage: (message: Message) => Message;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
+  roomLaneThread?: (botId: string) => string | undefined;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
@@ -36,13 +40,14 @@ type GroupRouteDeps = {
   sendSequencer: SendSequencer;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
   startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string) => Message;
+  userName: () => string;
   cancelGroupTurnOperations: (groupId: string, threadId: string) => void;
   taskResumes: TaskResumeScheduler;
   bumpTurnEpoch: (botId: string) => number;
   markThreadInterrupted: (threadId: string, botId: string, epoch: number) => void;
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => void;
   closeOpenApprovals: (threadId: string) => void;
-  releaseInterruptedBot: (botId: string, threadId: string) => void;
+  releaseInterruptedBot: (botId: string, threadId: string, lane?: boolean) => void;
 };
 
 export function createGroupRoutes(deps: GroupRouteDeps) {
@@ -69,20 +74,25 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
     closeOpenApprovals,
     releaseInterruptedBot,
   } = deps;
+  // a Stop that lands while a room send awaits its steer
+  const roomStops = new Map<string, number>();
   const roomBots = (memberIds: string[], people: readonly string[] = []) => roomBotsRefusal(memberIds.map((id) => store.bot(id)!), people);
   /** Stop one member's turn and leave the rest of the room's queue alone; `ended` runs before the bot is free. */
   const stopMember = async (threadId: string, botId: string, ended?: () => Promise<unknown>) => {
     const busy = store.bot(botId);
     const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
+    // read before the interrupt: the lane lets go of the thread when the turn ends
+    const lane = deps.roomLaneThread?.(botId) === threadId;
     if (busy) {
-      const epoch = bumpTurnEpoch(busy.id) - 1;
-      markThreadInterrupted(threadId, busy.id, epoch);
+      const key = lane ? laneKey(busy.id) : busy.id;
+      const epoch = bumpTurnEpoch(key) - 1;
+      markThreadInterrupted(threadId, key, epoch);
       flushInterruptedTask(threadId, busy.id, "stop");
     }
     await instance?.adapter.interruptTurn(threadId).catch(() => {});
     closeOpenApprovals(threadId);
     if (ended) await ended().catch(() => {});
-    if (busy) releaseInterruptedBot(busy.id, threadId);
+    if (busy) releaseInterruptedBot(busy.id, threadId, lane);
   };
   const channelTaskBlocked = (group: GroupRecord) =>
     groupIsWorking(group) ||
@@ -432,7 +442,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const message = startGroupTurn(current.id, text, replyTo, sendId);
+          const stops = roomStops.get(current.id);
+          const steered = await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId);
+          // a Stop during the steer await hands the line back, as a 1:1 Send now
+          if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId);
           return { ok: true as const, threadId, message };
         },
       );
@@ -455,9 +469,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       // Mark the whole room operation cancelled before awaiting the provider.
       // This covers setup-before-busy and responder handoffs, and makes every
       // queued responder observe cancellation before it can start.
+      roomStops.set(group.id, (roomStops.get(group.id) ?? 0) + 1);
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
+      if (group.hosted) stopBotChain(group.hosted.roomId);
       const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;
@@ -475,6 +491,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const existing = store.messagesFor(group.threadId).find((msg) => msg.id === m![2]);
       if (!existing?.card?.askUser) return json(res, 404, { error: "no such card" });
       const patch = askUserCardPatchSchema.parse(await readBody(req));
+      const settled = patch.answered !== undefined && settledAsk(store.activePath(group.threadId), existing.id);
+      if (settled) return json(res, 409, { error: "question already settled", message: clientMessage(settled) });
       const card = { ...existing.card };
       if (patch.answered !== undefined) card.answered = patch.answered;
       if (patch.dismissed) card.dismissed = true;

@@ -148,7 +148,11 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
         break;
       case "model/list":
-        if (msg.params?.cursor === "page-2") {
+        if (process.env.FAKE_CODEX_MODEL_PAGES) {
+          const pages: Array<{ nextCursor: string | null }> = JSON.parse(process.env.FAKE_CODEX_MODEL_PAGES);
+          const page = msg.params?.cursor ? pages.findIndex((_, i) => pages[i - 1]?.nextCursor === msg.params.cursor) : 0;
+          out({ jsonrpc: "2.0", id: msg.id, result: pages[page] });
+        } else if (msg.params?.cursor === "page-2") {
           out({
             jsonrpc: "2.0",
             id: msg.id,

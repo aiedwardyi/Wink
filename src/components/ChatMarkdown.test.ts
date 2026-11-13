@@ -6,7 +6,8 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks } from "./ChatMarkdown";
+import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
@@ -17,6 +18,66 @@ vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code
 
 beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
+
+describe("web links", () => {
+  it.each(["README.md", "deploy.sh", "file.ts", "notes.ai", "v1.0.259", "e.g.", "file.tsx", "file.js", "file.json", "file.py", "file.txt", "file.yml", "file.log", "www.notes.ai", "example.technology"])("keeps %s plain in user and bot text", (text) => {
+    for (const Component of [LinkedText, ChatMarkdown]) {
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+      expect(host.querySelector("a")).toBeNull();
+      expect(host.textContent).toBe(text);
+    }
+  });
+
+  it.each([["user", LinkedText], ["bot", ChatMarkdown]] as const)("links common domains in %s text", (kind, Component) => {
+    const text = "starzum.com x.co.kr www.x.io";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", "https://x.co.kr", kind === "bot" ? "http://www.x.io" : "https://www.x.io",
+    ]);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each([
+    ["https://example.com/Edward's-notes", "https://example.com/Edward's-notes"],
+    ["www.starzum.com/Edward's-notes", "https://www.starzum.com/Edward's-notes"],
+    ["'www.starzum.com/notes'", "https://www.starzum.com/notes"],
+  ])("keeps apostrophes inside %s and surrounding quotes outside", (text, href) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(LinkedText, { text }));
+    expect(host.querySelector("a")?.getAttribute("href")).toBe(href);
+    expect(host.textContent).toBe(text);
+  });
+
+  it.each(["https://starzum.com", "www.x.io", "http://x.co.kr", "https://notes.ai", "http://x.io/a", "https://STARZUM.COM", "https://example.technology", "https://한글.kr"])("links %s in a bot reply", (text) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
+    const link = host.querySelector("a");
+    expect(link?.textContent).toBe(text);
+    const href = text.startsWith("http") ? text : `${text.startsWith("www.") ? "http" : "https"}://${text}`;
+    expect(new URL(link?.getAttribute("href") ?? "about:blank").href).toBe(new URL(href).href);
+    expect(link?.target).toBe("_blank");
+  });
+
+  it("keeps files, versions, code and existing email links unchanged", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "file.ts v1.0.259 e.g. `starzum.com` person@example.com [notes](file.ts)" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["mailto:person@example.com"]);
+    expect(host.querySelector("code")?.textContent).toBe("starzum.com");
+  });
+
+  it("leaves explicit markdown labels and paths intact and trims sentence punctuation", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(starzum.com/a(b)). [starzum.com](https://example.org) [www.notes.ai](https://www.notes.ai) ./starzum.com wrong.invalidtld file.ts" }));
+    expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org", "https://www.notes.ai"]);
+  });
+});
+
+// warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
+it("warms the parser outside a render", () => {
+  expect(() => warmMarkdown()).not.toThrow();
+});
 
 describe("ChatMarkdown streaming", () => {
   it("preserves code card identity and spoiler state across deltas and settle", async () => {
@@ -622,43 +683,80 @@ describe("relative file links", () => {
   });
 
   describe("file link right-click", () => {
-    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string) => {
+    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string, then?: (host: HTMLElement) => Promise<void>) => {
       if (ogb) Object.defineProperty(window, "ogb", { configurable: true, value: ogb });
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
       try {
         await act(async () => root.render(createElement(ChatMarkdown, { text, baseDir })));
-        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
         await act(async () => void host.querySelector("button")!.dispatchEvent(event));
-        return { prevented: event.defaultPrevented, text: host.textContent };
+        const items = [...document.querySelectorAll("[data-file-menu] [role=menuitem]")].map((item) => item.textContent);
+        await then?.(host);
+        return { prevented: event.defaultPrevented, text: host.textContent, items };
       } finally {
         await act(async () => root.unmount());
         host.remove();
         Reflect.deleteProperty(window, "ogb");
       }
     };
+    const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>("[data-file-menu] [role=menuitem]")].find((each) => each.textContent === name)!;
 
-    it("opens the native menu and keeps the browser menu away", async () => {
-      const fileMenu = vi.fn().mockResolvedValue(undefined);
-      const openFile = vi.fn();
-      const result = await rightClick({ fileMenu, openFile }, "[1080p](clip.mp4)", "/p");
-      expect(fileMenu).toHaveBeenCalledWith("/p/clip.mp4", "/p");
-      expect(openFile).not.toHaveBeenCalled();
+    it("opens the app menu with the native menu's actions and keeps the browser menu away", async () => {
+      const fileMenu = vi.fn();
+      const openFile = vi.fn().mockResolvedValue(undefined);
+      const showInFolder = vi.fn().mockResolvedValue(undefined);
+      const saveFile = vi.fn().mockResolvedValue(undefined);
+      const localMediaFile = vi.fn().mockResolvedValue("/p/real/clip.mp4");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ fileMenu, openFile, showInFolder, saveFile, localMediaFile }, "[1080p](clip.mp4)", "/p", async () => {
+        expect(localMediaFile).toHaveBeenCalledWith({ path: "/p/clip.mp4" });
+        await act(async () => item("Show in folder").click());
+        expect(showInFolder).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+        expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+        await act(async () => item("Save as").click());
+        expect(saveFile).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 1 })));
+        await act(async () => item("Copy path").click());
+        expect(writeText).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 2 })));
+        await act(async () => item("Open").click());
+        expect(openFile).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Save as", "Copy path"]);
+      expect(fileMenu).not.toHaveBeenCalled();
       expect(result.prevented).toBe(true);
+    });
+
+    it("offers no Save as and copies the link's own path when it resolves outside the bot's folder", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ openFile: vi.fn(), showInFolder: vi.fn(), saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue("/elsewhere/secret.py") }, "[report](report.py)", "/p", async () => {
+        await act(async () => item("Copy path").click());
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
+      expect(writeText).toHaveBeenCalledWith("/p/report.py");
     });
 
     it("leaves the default menu alone without the bridge", async () => {
       expect((await rightClick(undefined, "[notes](C:/My%20Drive/notes.md)")).prevented).toBe(false);
-      const older = await rightClick({ openFile: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
+      const older = await rightClick({ fileMenu: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
       expect(older.prevented).toBe(false);
     });
 
-    it("says why when the file is rejected", async () => {
-      const fileMenu = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
-      const result = await rightClick({ fileMenu }, "[gone](gone.py)", "/p");
+    it("offers no Save as for a folder or a missing file, and says why Show in folder failed", async () => {
+      const showInFolder = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
+      const result = await rightClick({ openFile: vi.fn(), showInFolder, saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue(null) }, "[gone](gone.py)", "/p", async (host) => {
+        await act(async () => item("Show in folder").click());
+        expect(host.textContent).toContain("That file no longer exists");
+      });
       expect(result.prevented).toBe(true);
-      expect(result.text).toContain("That file no longer exists");
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
     });
   });
 
@@ -808,6 +906,7 @@ describe("relative file links", () => {
       const play = vi.spyOn(video, "play");
       const pause = vi.spyOn(video, "pause");
       expect(video.getAttribute("controlslist")).toBe("nofullscreen");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       await act(async () => button()!.click());
       expect(shown).toBe(video.parentElement);
       expect(shown).not.toBe(video);
@@ -816,6 +915,7 @@ describe("relative file links", () => {
       expect(play).not.toHaveBeenCalled();
       expect(pause).not.toHaveBeenCalled();
       expect(video.className).toContain("object-contain");
+      expect(video.className).toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
     });
 
     it("exits with the same button and keeps the video element", async () => {
@@ -891,6 +991,7 @@ describe("relative file links", () => {
       expect(button()).toBeNull();
       const video = host.querySelector("video")!;
       expect(video.hasAttribute("controlslist")).toBe(false);
+      expect(video.className).not.toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       expect(video.parentElement!.tagName).not.toBe("SPAN");
     });
   });

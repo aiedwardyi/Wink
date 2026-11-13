@@ -8,13 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { DATA_DIR } from "../config.ts";
-import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
+import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
 import { askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
-import { askNote, publishTurnAnswer } from "./multiplayer.ts";
+import { askNote, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
 import { hostedSend } from "./send.ts";
+import { addTeamBot, removeTeamBot } from "./team-bots.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -70,6 +71,52 @@ afterEach(() => {
   configureRoomAsks(null);
   closeAsksDb();
   closeRoomsDb();
+});
+
+describe("the host bot's room prompt", () => {
+  function prompt(teammates = teammatesLine, room: { hosted?: { roomId: string } } = group): string {
+    const run = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn") as ts.FunctionDeclaration;
+    const find = (node: ts.Node): ts.VariableStatement | undefined => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "system") ? node : ts.forEachChild(node, find);
+    const system = find(run)!;
+    const deps = {
+      bot: store.bot(wink), group: { ...group, hosted: room.hosted }, roster: "@Wink", userName: "Edward", teammatesLine: teammates,
+      detailedRepliesEnabled: () => false, cfg: {}, reactionSystemGuidance: () => "", coordinationPrompt: "", canMessage: false, integrations: {},
+    };
+    return new Function(...Object.keys(deps), `${js(system.getText(index))}\nreturn system;`)(...Object.values(deps));
+  }
+
+  it("tells the host bot who owns a team bot and how to hand work to it", () => {
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", ["Wink", "Sora"]);
+    expect(prompt()).toContain("Room members: @Wink, and Edward (the human).");
+    expect(prompt()).toContain("Teammates in this room: Sora.");
+    expect(prompt()).toContain('Team bots (owner): "Sora-Code" ("Sora").');
+    expect(prompt()).toContain("@ one only to hand it real work, never just to thank or confirm; it answers here. When the job is done, say so and tag no bot.");
+    expect(prompt()).toContain("Unlisted @names reach no one.");
+    expect(Buffer.byteLength(prompt()) - Buffer.byteLength(prompt(() => "Teammates in this room: Sora."))).toBeLessThan(250);
+  });
+
+  it("keeps rooms without team bots byte-for-byte unchanged", () => {
+    expect(Buffer.from(prompt())).toEqual(Buffer.from(prompt(() => "Teammates in this room: Sora.")));
+    const bot = addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", ["Wink", "Sora"]);
+    removeTeamBot(group.hosted.roomId, bot.id);
+    expect(Buffer.from(prompt())).toEqual(Buffer.from(prompt(() => "Teammates in this room: Sora.")));
+    expect(Buffer.from(prompt(teammatesLine, {}))).toEqual(Buffer.from(prompt(() => "", {})));
+    const empty = { hosted: { roomId: createRoom("Empty").id } };
+    expect(Buffer.from(prompt(teammatesLine, empty))).toEqual(Buffer.from(prompt(() => "", empty)));
+  });
+
+  it("lists room bots by owner, excluding absent owners and other rooms", () => {
+    const mina = addPerson(group.hosted.roomId, "미나", "chat", ["Wink"]);
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", []);
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Review", "blue", []);
+    addTeamBot(group.hosted.roomId, mina.id, '검토 "봇"', "blue", []);
+    addTeamBot(group.hosted.roomId, "departed-owner", "Absent", "blue", []);
+    addTeamBot(createRoom("Elsewhere").id, sora.id, "Other", "blue", []);
+    expect(prompt()).toContain(`Team bots (owner): "Sora-Code" ("Sora"), "Sora-Review" ("Sora"), ${JSON.stringify('검토 "봇"')} ("미나").`);
+    expect(prompt()).not.toContain('"Other"');
+    expect(prompt()).not.toContain("Absent");
+    expect(prompt()).not.toContain("departed-owner");
+  });
 });
 
 describe("a teammate's line in a shared bot group", () => {
@@ -197,15 +244,20 @@ describe("a teammate's line in a shared bot group", () => {
 describe("the answer", () => {
   /** The real busy path: runGroupMemberTurn sees a working bot and parks the ask on its queue. */
   async function queuedBehindBusyBot(ask: RoomAsk): Promise<RoomDrain> {
-    const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation });
+    const broadcast = vi.fn();
+    const publicGroupState = (value: HostedGroup) => ({ ...value, waitingBotIds: queuedRoomBotIds(value.id, value.threadId) });
+    const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation, store, broadcast, publicGroupState });
     const run = load("runGroupMemberTurn", {
       store, cfg: { profile: {} }, hostedTurnRefused, botHasActiveTurn: () => true, tryClaimTurnStart: vi.fn(), queueBusyRoomMember,
+      threadHasLiveTurn: () => false, roomLanes: { claim: () => false }, laneKey: (id: string) => id, botAccounts: { instance: () => undefined },
       runClaimedGroupMemberTurn: vi.fn(), takeStartingHold: vi.fn(), turnStartClaims: new Map(), continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {},
     });
     expect(await run(group.id, group.threadId, wink, 0, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, ask.id)).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith({ kind: "group", group: expect.objectContaining({ waitingBotIds: [wink] }) });
     const drained: RoomDrain[] = [];
     drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
     expect(drained).toHaveLength(1);
+    expect(queuedRoomBotIds(group.id, group.threadId)).toEqual([]);
     return drained[0]!;
   }
 

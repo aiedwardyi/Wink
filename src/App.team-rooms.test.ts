@@ -215,7 +215,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     expect(button("Cancel reply")).toBeUndefined();
   });
 
-  it("jumps to a loaded original and Escape closes the menu before the quote", async () => {
+  it("jumps to a loaded original and Escape closes the menu but keeps the quote", async () => {
     await openRoom();
     const original = $("[data-mid=original]")!;
     const scrollIntoView = vi.fn();
@@ -230,7 +230,7 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
     expect($("[data-message-menu]")).toBeNull();
     expect(button("Cancel reply")).toBeTruthy();
     await escape();
-    expect(button("Cancel reply")).toBeUndefined();
+    expect(button("Cancel reply")).toBeTruthy();
   });
 
   it("holds for 500 ms, labels the touch menu in Korean and closes it with Back", async () => {

@@ -188,7 +188,7 @@ describe("catalogs", () => {
 
   it("substitutes template values across different runtime values", () => {
     const phrases = [
-      ["composer.roomLead", "{name}에 메시지"],
+      ["composer.roomLead", "{name}에게 메시지 보내기"],
       ["room.hint.lead", "답변할 봇을 고르려면 @로 언급하세요."],
       ["chat.conversationAria", "대화 상대: {name}"],
       ["palette.noMatch", "“{query}” 검색 결과가 없습니다"],
@@ -363,14 +363,6 @@ describe("complete phrases", () => {
     expect(ko["room.chooseSharedFolder"]).toBe("건너뛰기 — 봇마다 자신의 폴더");
     expect(en["room.eachBotFolder"]).toBe("Each bot's own folder");
     expect(ko["room.eachBotFolder"]).toBe("봇마다 자신의 폴더");
-    expect(en["room.eachBotFolderPath"]).toMatch(/Skip — each bot's own folder/);
-    expect(ko["room.eachBotFolderPath"]).toMatch(/건너뛰기 — 봇마다 자신의 폴더/);
-    expect(en["room.workingFolderChip"]).toMatch(/No shared folder/i);
-    expect(ko["room.workingFolderChip"]).toMatch(/공유 폴더 없음/);
-    expect(en["room.workingFolderNamed"]).toBe("Shared folder: {folder}");
-    expect(ko["room.workingFolderNamed"]).toBe("공유 폴더: {folder}");
-    expect(en["room.projectFolderChip"]).toBe("No shared folder");
-    expect(ko["room.projectFolderChip"]).toBe("공유 폴더 없음");
     expect(en["chrome.resizeSidebar"]).toBe("Resize sidebar");
     expect(ko["chrome.resizeSidebar"]).toBe("사이드바 너비 조절");
     expect(en["chrome.sidebarWidthPixels"]).toBe("{width} pixels");
@@ -422,8 +414,10 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(ko["room.details"]).toBe("채팅방 세부 정보");
     expect(en["bot.details"]).toBe("Bot Details");
     expect(ko["bot.details"]).toBe("봇 세부 정보");
-    expect(en["bot.collapseDetails"]).toBe("Collapse Bot Details");
-    expect(ko["bot.collapseDetails"]).toBe("봇 세부 정보 접기");
+    for (const key of ["show.collapse", "bot.collapseDetails", "room.collapseDetails"]) {
+      expect(key in en).toBe(false);
+      expect(key in ko).toBe(false);
+    }
     expect(en["bot.closeDetails"]).toBe("Close Bot Details");
     expect(ko["bot.closeDetails"]).toBe("봇 세부 정보 닫기");
   });
@@ -440,7 +434,6 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(settingsPanel).not.toContain('t("chrome.connectedApps")');
     expect(settingsPanel).not.toContain("connectedAppsEnabled");
     expect(settingsPanel).toContain('t("bot.details")');
-    expect(settingsPanel).toContain('t("bot.collapseDetails")');
     expect(settingsPanel).toContain('t("bot.closeDetails")');
     expect(settingsPanel).not.toMatch(/>Bot details</);
     expect(settingsPanel).not.toMatch(/Collapse bot details/);

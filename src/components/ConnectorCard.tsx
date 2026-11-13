@@ -136,7 +136,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
             <button
               onClick={() => void connect()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
             >
               {busy || authorizing ? <Loader2 size={13} className="animate-spin" /> : <PlugZap size={13} />}
               {authorizing ? t("connector.openAgain") : connector.status === "failed" ? t("connector.tryAgain") : t("connector.connect")}
@@ -145,7 +145,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
             <button
               onClick={() => void resume()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
             >
               {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} {t("connector.continueTask")}
             </button>

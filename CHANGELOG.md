@@ -2,6 +2,101 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.262] - 2026-11-14
+
+### Added
+- One Style button in the model picker opens a strip: Style (Dial, List, Chart, Machine) and Look (Theme, Dark, Light, Atelier). Alt+S opens it and Alt+Shift+S rotates styles.
+- Model Machine: a vending machine view of the model picker. Press Alt+Shift+M with the picker open; Esc goes back.
+- Chat Box options in Settings preview their own outline.
+- Video tiles in Media show their first frame, with a play badge, and play muted while the mouse rests on them.
+- Worker panes can run on another PC over ssh. Off until a host is set up.
+- Room bots hand work to each other when one names another with @. Room Stop ends the chain.
+- The activity card shows the most workers you ran at once and each engine's share of replies.
+
+### Changed
+- Calls follow the app language. The Call language row is gone from Settings.
+- Calls start without a ring: the bot's greeting is the first sound.
+- Muse and Codex start faster and use less memory.
+- Provider blips like Cloudflare pages, server errors and overload retry for up to about 3 minutes instead of failing the turn.
+- Muscle Memory is now called Habits.
+- Joined and host rooms match 1:1 chat: same message look, presence, Stop, reply and actions in one row under the bubble.
+- In a busy room, Enter steers the working bot's turn. Ctrl+Enter sends after it.
+- Bots answer once, after their last tool call, instead of repeating the answer.
+- The call voice answers the question asked first, says "On it." once, and "be quiet" hushes the call until you say its name.
+- The Call button stays beside Stop while the bot works.
+- Workers launch on low usage, with a note of how much is left.
+- Menus, popovers, dialogs and the sidebar share one look and motion.
+- The Map title follows the diff on screen, and squares are bigger in small projects.
+- Device windows, Settings and the Account tab load faster, and switching models at startup no longer waits for every account.
+- The Windows dictate button is gone; it never typed anything.
+
+### Fixed
+- Ordinary words like "the code is ready" or "exit code: 1" are no longer hidden as secrets in bot replies.
+- Calls no longer go silent on normal sentences like "stop talking about the tests".
+- Right-clicking a file card opens one menu.
+- Side panels close from one X.
+- Phone videos show one full screen button.
+- The silent mic hint opens the PC's sound settings.
+- Picking a PC in a device window stays in the app, and an offline PC says it is offline.
+- Answered question cards settle in the chat, and taps on an old card send nothing.
+
+## [1.0.261] - 2026-11-13
+
+### Added
+- The model picker has a Chart style beside Dial and List: each model is a cost and intelligence line with effort stops.
+- Merlot replaces the Moss theme: black cherry backgrounds, a wine accent and brighter text. A saved Moss theme switches to Merlot.
+- Room bots can search their owner's 1:1 chat with them. Only the owner sees the "Searched your 1:1" note.
+- New call voices: Jenn and Eddie sound new, and Adele joins with a British accent.
+- Every group gets the same header: picture, name, bell and side pane, with Ctrl+F search.
+- A Map tab in the side pane shows which files a worker changed, as squares and a list, with the live diff.
+
+### Changed
+- The call button lives in the message box: Call when idle, Send while typing, Stop while busy, and End with Mute beside it during a call. The header no longer has a call button.
+- Picture and file menus work the same everywhere, and menus, pickers and close buttons share one hover style. On phones, Copy appears for Wink pictures and readable outside pictures.
+- In team rooms, host bots name each team bot and its owner and hand off through the owner; an @name that matches no one reaches no one.
+- The call voice says each reply once, stops re-offering the same change, and sticks to what the chat shows.
+- Asking a bot that is already answering in the room now waits and answers automatically, in order, once it is free.
+- A bot busy in a 1:1 now answers in groups right away.
+- Calls, question cards and Settings open faster the first time.
+- Bots know more about Wink: groups and team rooms, calls, the side pane, the To Do list and skills.
+- Bot replies put gaps first, say who did or checked each thing, and quote numbers only from a source they opened.
+- Bot replies are warm without flattery: they celebrate real wins and acknowledge frustration briefly.
+- Worker bots follow clearer playbook rules, and their cards quote your latest words.
+- The side pane button shows an arrow, like the bot list button.
+- Chat menus fade out when they close, and file links in chat open the file menu: Open, Show in folder, Save as, Copy path. Hovers, focus rings and motion match across chat cards, panels and tooltips.
+
+### Fixed
+- Linked HTML pages render in Show, and HTML files open in your default app.
+- Teammates see the room's Bots again after upgrading.
+- The phone Memory page shows its map with a Retry when the memory read hangs, instead of only Auto Notes and Memory File.
+- Pictures teammates post in a group now reach the bots.
+- Bot replies in another language are translated in team rooms.
+- The Memory card scrollbar stays inside its rounded corners.
+- Claude bots show Load Skills & Plugins in Bot details again.
+- The Max effort rainbow is bright again on light skins.
+- Web addresses like starzum.com link without https://, while file names like README.md stay plain.
+- In team rooms, picking a name from the @ list completes the mention.
+- Passwords and room invite codes are masked in private room memory.
+
+## [1.0.259] - 2026-11-13
+
+### Added
+- Auto Notes keeps your picks: a short reply choosing among a bot's options is saved as one dated line under Decisions in MEMORY.md.
+- Save and cancel buttons beside room, profile and bot name edits; Enter saves and Esc cancels.
+- Question cards fold to a pill by chevron or phone swipe and reopen without answering.
+
+### Changed
+- Bots report every finished deliverable and pending decision with a picture or link, and close their own question cards once you answer in chat.
+- Room details shows the invite code on one line with a Copy button.
+- Bots are steered away from narrating their next step between tool calls.
+- Muse uses fewer tokens: the worker playbook and five rarely used Wink tools load only when needed.
+- The sidebar profile, Account and Connections tiles show from the last launch while the server starts.
+
+### Fixed
+- Dragging an image inside a chat no longer attaches it.
+- A changed call voice applies from the next call, and the voice picker stays on the saved voice.
+- A call whose reconnect never sets up fails with "Call failed" instead of sitting open, and a mic that stops sending recovers or asks for a tap.
+
 ## [1.0.258] - 2026-11-13
 
 ### Changed

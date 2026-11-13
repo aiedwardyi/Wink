@@ -538,7 +538,7 @@ export function TeamLibraryPanel({
                   <button
                     onClick={() => void importTeam("add")}
                     disabled={importing !== null}
-                    className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-60"
+                    className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-60"
                   >
                     {importing === "add" && <Loader2 size={15} className="animate-spin" />}
                     {importing === "add" ? t("teamLibrary.loadingEllipsis") : t("teamLibrary.addTeam")}
@@ -548,7 +548,7 @@ export function TeamLibraryPanel({
                 <button
                   onClick={() => void importTeam("add")}
                   disabled={importing !== null}
-                  className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-60"
+                  className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-60"
                 >
                   {importing && <Loader2 size={15} className="animate-spin" />}
                   {importing
@@ -705,7 +705,7 @@ export function TeamLibraryPanel({
                       }}
                       className={cn(
                         "flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed px-6 text-center transition-colors",
-                        dragging ? "border-accent bg-accent/5" : "border-hairline/60 bg-raised/20 hover:bg-raised/35",
+                        dragging ? "border-accent bg-accent/5" : "border-hairline/60 bg-raised/20 hover:bg-raised/50",
                       )}
                     >
                       <UploadCloud size={27} className="text-accent" />
@@ -729,7 +729,7 @@ export function TeamLibraryPanel({
                         <button
                           onClick={() => void loadGithubTeam()}
                           disabled={!githubUrl.trim() || githubLoading}
-                          className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-[13px] font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-40"
+                          className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
                         >
                           {githubLoading && <Loader2 size={13} className="animate-spin" />}
                           {t("teamLibrary.load")}
@@ -769,7 +769,7 @@ export function TeamLibraryPanel({
                     <button
                       onClick={() => void runScout(scoutTarget)}
                       disabled={!scoutTarget || scouting}
-                      className="flex items-center justify-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-[13px] font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-40"
+                      className="flex items-center justify-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
                     >
                       {scouting ? <Loader2 size={14} className="animate-spin" /> : <Compass size={14} />}
                       {scouting ? t("teamLibrary.scouting") : t("teamLibrary.scout")}
@@ -867,7 +867,7 @@ export function TeamLibraryPanel({
                         <button
                           onClick={() => void createProject()}
                           disabled={creating}
-                          className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-60"
+                          className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-60"
                         >
                           {creating && <Loader2 size={15} className="animate-spin" />}
                           {creating ? t("teamLibrary.creating") : t("teamLibrary.createChannel")}

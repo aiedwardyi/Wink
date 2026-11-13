@@ -36,14 +36,13 @@ import { finishNative } from "../native.ts";
 import { experimentalAgents } from "../tool-catalog.ts";
 import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
-import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
+import { IDLE_TTL_MS, warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
 const ASK_TIMEOUT_MS = 15 * 60_000;
-const HANDSHAKE_IDLE_MS = 60_000;
 const HANDSHAKE = "__handshake__";
 
 const DENY_TIMEOUT_NOTE =
@@ -86,6 +85,8 @@ export interface MspSupport {
   warmPool?: WarmPool;
   /** Extra `serve` argv for this CLI's `--version` line. */
   serveArgs?(version: string | null, wsl: boolean): string[];
+  /** The engine exe and env to start a host with, skipping the CLI's launcher; null keeps the launcher. */
+  directHost?(cli: string, env: Record<string, string | undefined>): { command: string; env: Record<string, string | undefined> } | null;
   /** One-shot text for summaries, outside any MSP session. */
   text?(ctx: CliTextContext): CliText;
 }
@@ -435,7 +436,22 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       };
       const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
         const args = ["serve", ...(support.serveArgs?.(cliVersion, isWslCli()) ?? [])];
-        const child = spawnCli(effectiveCli(), args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+        const launch = (command: string, childEnv: typeof env) =>
+          spawnCli(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+        // A failed direct start throws (bad image) or has no pid (ENOENT, EACCES); the launcher still runs.
+        const startDirect = () => {
+          const direct = support.directHost?.(effectiveCli(), env);
+          if (!direct) return null;
+          try {
+            const started = launch(direct.command, direct.env);
+            if (started.pid !== undefined) return started;
+            started.once("error", () => {});
+          } catch {
+            // fall through to the launcher
+          }
+          return null;
+        };
+        const child = startDirect() ?? launch(effectiveCli(), env);
         children.add(child);
         const host: Host = {
           child,
@@ -569,7 +585,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         if (host && !host.inUse && !host.ttl && !lease.signal.aborted) {
           host.ttl = setTimeout(() => {
             if (!host.inUse) lease.release("idle");
-          }, HANDSHAKE_IDLE_MS);
+          }, IDLE_TTL_MS);
           host.ttl.unref?.();
         }
       };

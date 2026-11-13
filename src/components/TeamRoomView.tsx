@@ -7,9 +7,10 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useOlderMessages } from "@/lib/message-pages";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roomPictureUrl, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
 import { useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { RoomAlertsBell } from "./RoomAlertsBell";
@@ -25,7 +26,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
   const sidebarOnRight = useSidebarSide() === "right";
   const lines = useMemo(() => hostLines(group.messages), [group.messages]);
   const base = hostRoomBase(group.hosted.roomId);
-  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
+  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, group.id, group.messages);
   const names = useMemo(() => reactionNames(roomPeople(group)), [group]);
   const noticeEntry = group.notice?.entryId;
   const missing = Boolean(group.room && "missing" in group.room);
@@ -40,14 +41,16 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
           </div>
         )}
       </div>
+      <AppErrorBanner />
       <ReconnectingCue />
       <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply}
         reactionNames={names}
         onReact={(message, emoji) => dispatch({ type: "toggleReaction", threadId: group.threadId, messageId: message.id, emoji, message })}
         notice={{ entryId: noticeEntry, text: roomNoticeText(group), canUnpin: true, set: (entryId) => void setHostNotice(group.id, entryId).catch(() => {}) }}
+        empty={missing ? undefined : { name: group.name, members: [state.config?.profile?.name ?? "", ...roomPeople(group).map((person) => person.name)].filter(Boolean), picture: roomPictureUrl(base, group.picture) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} replyTo={replyTo} onClearReply={clearReply} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} />}
       </div>
     </main>
   );

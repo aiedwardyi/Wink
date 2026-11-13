@@ -50,18 +50,19 @@ describe("call token", () => {
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
-  it("sends the saved voice and language in the Live setup", async () => {
-    const h = harness({ liveCall: { voice: "Achird", language: "ko" } });
-    const { data } = await h.post("token", { locale: "en" });
-    expect(data.voice).toBe("Achird");
+  it("sends the saved voice and follows the app language over an old saved call language", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam", language: "en" } as AppConfig["liveCall"] });
+    const { data } = await h.post("token", { locale: "ko" });
+    expect(data.voice).toBe("Alnilam");
     const setup = h.sent().bidiGenerateContentSetup;
-    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
-    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
-    expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
-    expect(setup.systemInstruction.parts[0].text).toContain("Greet in Korean in");
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(setup.systemInstruction.parts[0].text).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(setup.systemInstruction.parts[0].text).not.toContain("Switch only when");
+    expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
   it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
@@ -74,14 +75,24 @@ describe("call token", () => {
     expect(brief).not.toContain("Switch only when");
   });
 
+  it("gives Adele a British accent in English, and no one else", async () => {
+    const h = harness({ liveCall: { voice: "Erinome" } });
+    await h.post("token");
+    h.cfg.liveCall = { voice: "Aoede" };
+    await h.post("token");
+    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("When you speak English, use a natural British accent.");
+    expect(brief(1)).not.toContain("British");
+  });
+
   it("a voice picked mid-call waits for the next call", async () => {
     const h = harness();
     const first = await h.post("token");
-    h.cfg.liveCall = { voice: "Achird" };
+    h.cfg.liveCall = { voice: "Alnilam" };
     await h.post("token", { callId: first.data.callId, resume: true });
     await h.post("token");
     const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
-    expect([voice(1), voice(2)]).toEqual(["Aoede", "Achird"]);
+    expect([voice(1), voice(2)]).toEqual(["Aoede", "Alnilam"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
@@ -131,11 +142,14 @@ describe("call token", () => {
     expect(brief).toContain("Busy in STATUS never stops new work: offer it and call propose_work, it queues.");
   });
 
-  it("brief greets in the app language", async () => {
+  it("brief opens softly in the app language, no name or intro", async () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
-    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Greet in Korean in a few casual words.");
+    await h.post("token", { locale: "en" });
+    expect(h.sent(0).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
+    const brief = h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
+    expect(brief).not.toMatch(/Greet/);
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -155,9 +169,31 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("Talk like a friend on the phone");
-    expect(brief).toContain("never open with Understood, Got it, Certainly or I will");
-    expect(brief).toContain("never repeat their request back");
-    expect(brief).toContain("Greet in English in a few casual words.");
+    expect(brief).toContain("never open with Understood, Got it, Certainly, I will or an apology");
+    expect(brief).toContain("never repeat their request back or yourself");
+    expect(brief).toContain("with contractions, never formal");
+    expect(brief).toContain("Speak as I, never we or our.");
+    expect(brief).toContain("open with a cue like \"Quick update:\"");
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
+  });
+
+  it("brief answers the question asked first; role and notes never decline it", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Teacher", description: "your Wink project teacher. Protect Wink's direction. Avoid feature sprawl." }, { seedMessages: false });
+    mkdirSync(workspaceDir(bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(bot.id), "MEMORY.md"), "- NO PRIVACY PICKS: he ruled no permission/privacy steps for now; never offer that pick.");
+    await h.post("token", {}, bot.id);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notesAt = brief.indexOf("YOUR NOTES:\n");
+    expect(brief.slice(notesAt)).toContain("NO PRIVACY PICKS");
+    expect(brief.indexOf("Avoid feature sprawl.")).toBeLessThan(notesAt);
+    const answer = brief.indexOf("ANSWER: Answer what they asked, directly, first.");
+    expect(answer).toBeGreaterThan(-1);
+    expect(answer).toBeLessThan(notesAt);
+    expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
+    expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
+    expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -165,7 +201,8 @@ describe("call token", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("anything they want you to use, change or remember is work too");
-    expect(brief).toContain("Never answer an order with a promise like \"I'll keep that\": offer it and call propose_work.");
+    expect(brief).toContain("Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn.");
+    expect(brief).toContain("A clear instruction gets a short confirm");
     expect(brief).toContain("Unsure which they mean: ask them one short question");
     expect(brief).not.toContain("A vague order gets one short question first");
   });
@@ -184,18 +221,6 @@ describe("call token", () => {
     expect(brief).toContain("You have full access to the person's PC and projects");
     expect(brief).toContain("never say you can't do it or lack access");
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
-  });
-
-  it("brief pins a picked language", async () => {
-    const h = harness({ liveCall: { language: "ko" } });
-    await h.post("token", { locale: "en" });
-    h.cfg.liveCall = { language: "en" };
-    await h.post("token", { locale: "ko" });
-    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief(0)).toContain("Speak Korean");
-    expect(brief(0)).toContain("ask again in Korean");
-    expect(brief(1)).toContain("Speak English");
-    expect(brief(0)).not.toContain("the user's language");
   });
 
   it("brief answers English or Korean in kind, any other language in the app language", async () => {
@@ -239,6 +264,12 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it("passes Google's quota 429 through", async () => {
+    const h = harness({ reply: () => Response.json({ error: { message: "You exceeded your current quota", status: "RESOURCE_EXHAUSTED" } }, { status: 429 }) });
+    const { status } = await h.post("token");
+    expect(status).toBe(429);
   });
 
   it("502s with Google's message", async () => {
@@ -296,7 +327,9 @@ describe("brief STATUS", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
-    expect(brief).toContain("FACTS: Only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
+    expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
       "Juno is busy, working on: fix the login page.",
       "Sends waiting to run after this.",
@@ -343,9 +376,9 @@ describe("call lines and end", () => {
     expect(status).toBe(200);
     expect(data.ids).toHaveLength(2);
     const rows = h.store.activePath(h.bot.threadId).slice(-2);
-    expect(rows.map(({ role, kind, text, call }) => ({ role, kind, text, call }))).toEqual([
-      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId } },
-      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true } },
+    expect(rows.map(({ role, kind, text, call, engine }) => ({ role, kind, text, call, engine }))).toEqual([
+      { role: "user", kind: "text", text: "로그인 페이지 고쳐줘", call: { id: callId }, engine: undefined },
+      { role: "bot", kind: "text", text: "로그인 페이지를 고칠까요?", call: { id: callId, voice: true }, engine: "geminiAgent" },
     ]);
   });
 

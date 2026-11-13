@@ -7,11 +7,12 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksForChange, asksToRepeat, claimOf } from "./guard";
+import { asksAboutDone, asksForChange, asksForQuiet, asksToRepeat, callsVoice, claimOf } from "./guard";
 
 export const MIC_BLOCKED = "Microphone blocked";
 export const MIC_MISSING = "Microphone missing";
 export const MIC_BUSY = "Microphone busy";
+export const VOICE_OUT = "Voice limit reached";
 const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "paused" | "ended" | "failed";
@@ -25,6 +26,10 @@ export type CallState = {
   caption?: { id: number; who: CallLine["who"]; text: string };
   /** The last order or ask that never reached the bot, or got no reply. */
   notice?: { kind: "notSent" | "noReply"; text: string; why?: string };
+  /** Told to be quiet: nothing plays until they call it by name, say hey or tap. */
+  hushed?: true;
+  /** The mic has sent total silence since the call connected or its last sound. */
+  micSilent?: true;
 };
 
 export type CallAudioPort = {
@@ -33,10 +38,9 @@ export type CallAudioPort = {
   play(pcm: Int16Array): void;
   flush(): void;
   close(): void;
-  ring(): void;
-  stopRing(): void;
   boop(): void;
   heardShare(): number;
+  micLevel(): number;
   readonly playing: boolean;
   onIdle: () => void;
   onStart: () => void;
@@ -70,9 +74,14 @@ type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: ()
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
+const QUOTA = /quota|resource.?exhausted/i;
+const VOICE_OUT_LINE = { en: "I'm out of voice for today. Keep typing, I'm still on it.", ko: "오늘 음성은 여기까지야. 채팅으로 계속해 줘, 작업은 계속할게." };
 const MAX_NUDGES = 3;
 const MIC_CHECK_MS = 1_000;
 const MIC_GAP_MS = 3_000;
+const MIC_SILENT_MS = 5_000;
+// A muted or switched-off input reads as exact zeros; a quiet room still hisses above this.
+const MIC_SILENT_RMS = 1e-5;
 // A gate input with no engine event for this long is stale: a stray fragment, not a turn.
 const QUIET_MS = 4_000;
 // A socket that never sets up would hold the call open and silent.
@@ -85,16 +94,20 @@ const UNHEARD_MS = 8_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
+const HEARD = "They already heard you answer: say nothing more.";
 const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
-// The voice told a bare "expired" or "replaced" says they declined.
-const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline.", replaced: "replaced: a newer offer took its place. They did not decline." };
+const HUSHED = "not sent: they told you to be quiet";
+// The voice told a bare "expired" says they declined.
+const UNANSWERED: Record<string, string> = { expired: "expired: no answer came in time. They did not decline." };
 const reasonOf = (result: string) => result.replace(/^not (?:sent|confirmed): /, "");
 const request = (text: string): Request => ({ text, accounted: false, nudged: false, failed: false, told: false, asks: new Map() });
 const OFFER_EN = /^(?:(?:do you )?want me to|would you like me to|shall i|should i)\s+/i;
+// The brief's short confirm of a clear instruction: "Opening it, okay?"
+const CONFIRM_EN = /,\s*(?:okay|ok|alright|all right)\s*\?\s*$/i;
 // "How can I help?" and "무엇을 도와드릴까요?" ask, they offer nothing to say yes to.
 const offered = (said: string) => {
   const last = said.split(/(?<=[.!?])\s+/).at(-1) ?? "";
-  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
+  return /\?\s*$/.test(last) && (OFFER_EN.test(last) || CONFIRM_EN.test(last) || (/(할까요|드릴까요|줄까요)\s*\?\s*$/.test(last) && !/무엇|뭐|뭘|무슨|어떤|어떻게|어디|언제|누구/.test(last)));
 };
 
 /** The voice's offer as the person's request: "Want me to fix it?" posts as "Fix it." */
@@ -110,7 +123,6 @@ export function asRequest(order: string): string {
 /** "Sent: X", "Not sent: X (why)": how a result reads aloud and in the chat. */
 export function told(result: string, subject: string): string {
   if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
-  if (result.startsWith("already proposed")) return `Waiting for their answer: ${subject}`;
   return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
 }
 
@@ -166,6 +178,8 @@ export class LiveCall {
   private doneTold = false;
   private generating = false;
   private quiet = false;
+  private wokeAt = 0;
+  private soundAt = 0;
   private quietTimer?: ReturnType<typeof setTimeout>;
   private ran = false;
   private req = request("");
@@ -260,6 +274,10 @@ export class LiveCall {
       await this.deps.audio.capture((pcm) => {
         this.frameAt = this.now();
         this.micMisses = 0;
+        if (this.deps.audio.micLevel() > MIC_SILENT_RMS) {
+          this.soundAt = this.frameAt;
+          if (this.snapshot.micSilent) this.set({ micSilent: undefined });
+        }
         if (!this.connected || this.snapshot.muted) return;
         if (loud(pcm)) {
           this.spokeAt = this.now();
@@ -274,7 +292,6 @@ export class LiveCall {
     this.frameAt = this.now();
     this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
     this.set({ startedAt: this.now() });
-    if (!this.snapshot.muted) this.deps.audio.ring();
     this.connect(session);
   }
 
@@ -288,6 +305,10 @@ export class LiveCall {
     }
     if (posted.status === 409 && !this.callId) {
       this.set({ status: "needsKey" });
+      return null;
+    }
+    if (posted.status === 429) {
+      this.outOfVoice();
       return null;
     }
     if (posted.status !== 200) {
@@ -309,25 +330,26 @@ export class LiveCall {
         if (!mine()) return;
         clearTimeout(this.readyTimer);
         this.connected = true;
+        if (!this.wasLive) this.soundAt = this.now();
         this.wasLive = true;
-        this.deps.audio.stopRing();
         const resumed = Boolean(session.handle);
         this.reconnecting = 0;
         this.refresh();
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
-        if (!resumed) engine.sendText("[Wink] The call just started. Greet the user in one short sentence.");
+        if (!resumed) engine.sendText("[Wink] The call just started. Busy? Nod to the job in a few words.");
         else this.release();
       },
       audio: (pcm) => {
         if (!mine()) return;
         this.stir();
-        this.deps.audio.play(pcm);
+        if (!this.snapshot.hushed) this.deps.audio.play(pcm);
       },
       heard: (text) => {
         if (!mine()) return;
         this.stir();
         this.heardBuf += text;
         this.caption("user", this.heardBuf);
+        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName)) this.wake(0);
         if (this.softCut && this.deps.audio.playing) {
           this.softCut = false;
           this.cutPlaying();
@@ -338,6 +360,7 @@ export class LiveCall {
       said: (text) => {
         if (!mine()) return;
         this.stir();
+        if (this.snapshot.hushed) return;
         this.saidBuf += text;
         this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
@@ -399,6 +422,8 @@ export class LiveCall {
         if (!mine()) return;
         // A tool call can come before any audio, so what was heard is its request.
         this.flushHeard();
+        // Talk nearby is not for the voice: nothing it reads into it is sent or offered.
+        if (this.snapshot.hushed) return void calls.forEach((call) => engine.sendToolResult([call.id], call.name, HUSHED));
         for (const call of calls) this.toolEngines.set(call.id, engine);
         // Two offers in one tool message are one order, answered once per id.
         const offers = calls.filter((call) => call.name === "propose_work");
@@ -413,9 +438,10 @@ export class LiveCall {
       resumable: (handle) => { this.handle = handle; },
       goAway: () => { if (mine()) void this.reconnect(); },
       usage: (total) => { this.stats.usage += total; },
-      closed: (code) => {
+      closed: (code, reason) => {
         if (this.stats.closeCodes.length < 32) this.stats.closeCodes.push(code);
         if (this.engine !== engine || this.ended) return;
+        if (QUOTA.test(reason)) return this.outOfVoice();
         this.connected = false;
         void this.reconnect();
       },
@@ -448,7 +474,7 @@ export class LiveCall {
   private runTool(call: LiveToolCall) {
     const run = TOOLS[call.name];
     if (run) run(this, call.args, call.id);
-    else this.engine?.sendToolResult(call.id, call.name, "unknown tool");
+    else this.engine?.sendToolResult([call.id], call.name, "unknown tool");
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
@@ -458,8 +484,7 @@ export class LiveCall {
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
-    for (const id of live) engine!.sendToolResult(id, name, note ? `${heard}. ${note}` : heard);
-    if (live.length) return;
+    if (live.length) return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
@@ -479,11 +504,14 @@ export class LiveCall {
     if (this.card?.armed || this.justAnswered) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
-    if (this.pending && orderKey(this.pending.order) === key) return this.toolResult(ids, "propose_work", order, "already proposed, waiting for their answer");
-    const replaced = Boolean(this.pending);
+    // Every result makes the voice speak, so a re-offer waits to be answered with the first one.
+    if (this.pending && orderKey(this.pending.order) === key) return void this.pending.toolIds.push(...ids);
+    // A newer offer answers for the old call too: a result of its own made the voice speak a turn that sounded like a yes.
+    const replaced = this.pending;
     if (replaced) {
       this.stats.orders.replaced += 1;
-      this.answerTool("replaced");
+      this.clearPending();
+      this.notSent(replaced.order, "replaced");
     }
     this.stats.orders.proposed += 1;
     // A yes to the voice's own question, before it said anything new, already confirms the order.
@@ -505,7 +533,7 @@ export class LiveCall {
       pending.req.accounted = false;
       this.answerTool("expired");
     };
-    const pending = { order, toolIds: ids, req: this.req, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
+    const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
     this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
     if (yes) void this.answer(true);
@@ -525,21 +553,21 @@ export class LiveCall {
     this.set({ pending: undefined });
   }
 
-  private answerTool(result: string) {
+  private answerTool(result: string, note?: string) {
     const pending = this.pending;
     if (!pending) return;
     this.clearPending();
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note);
   }
 
-  /** Yes or No on the pending order, tapped or spoken. */
-  async answer(yes: boolean) {
+  /** Yes or No on the pending order, tapped or spoken. A spoken one gets the voice's own turn, so its result must not make another. */
+  async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
-      return this.answerTool("declined");
+      return this.answerTool("declined", spoken ? HEARD : undefined);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -554,7 +582,7 @@ export class LiveCall {
       pending.req.accounted = req.accounted = false;
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && this.stats.voiceLines > said ? "They already heard you answer: say nothing more." : undefined);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
@@ -668,8 +696,12 @@ export class LiveCall {
   // Speech cut off mid-line (a reconnect) is kept as a line but never answers a card or an offer.
   private flushHeard(ended = true) {
     const text = spokenText(this.heardBuf);
+    // Only a whole line said since the last wake hushes, so a fragment that passes through "...말하지 마" never does.
+    const quiet = ended && !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName);
     this.heardBuf = "";
+    this.wokeAt = 0;
     this.lineIds.user = 0;
+    if (quiet) this.hush();
     if (!text) return;
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -679,7 +711,7 @@ export class LiveCall {
     const req = this.req = request(text);
     // The first line after the card was read out is its answer, so it goes to the bot as one.
     const card = this.card;
-    if (ended && !this.pending && card?.armed && !asksToRepeat(text)) {
+    if (ended && !this.snapshot.hushed && !this.pending && card?.armed && !asksToRepeat(text)) {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
@@ -701,10 +733,10 @@ export class LiveCall {
       return;
     }
     this.postLines([{ who: "user", text, at: this.now() }]);
-    if (!this.pending || !ended) return;
+    if (!this.pending || !ended || this.snapshot.hushed) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
-    if (consent) void this.answer(consent === "yes");
+    if (consent) void this.answer(consent === "yes", true);
   }
 
   private flushSaid(share: number) {
@@ -890,7 +922,7 @@ export class LiveCall {
 
   // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
-    if (!this.connected || this.stalled || this.playing || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
+    if (!this.connected || this.stalled || this.snapshot.hushed || this.playing || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
     for (const text of this.context.splice(0)) this.engine?.sendContext(text);
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();
@@ -899,6 +931,23 @@ export class LiveCall {
     this.guarded = !item.nudge;
     this.playing = { item, ended: false };
     this.engine?.sendText(item.text);
+  }
+
+  // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
+  private hush() {
+    const share = this.deps.audio.heardShare();
+    this.deps.audio.flush();
+    this.flushSaid(share);
+    this.cutPlaying();
+    this.set({ hushed: true });
+  }
+
+  /** Talking again after a hush, by voice or a tap; a tap leaves what was already heard out of the next hush check. */
+  wake(from = this.heardBuf.length) {
+    if (!this.snapshot.hushed) return;
+    this.wokeAt = from;
+    this.set({ hushed: undefined });
+    this.release();
   }
 
   private stir() {
@@ -927,10 +976,7 @@ export class LiveCall {
 
   mute(muted: boolean) {
     this.set({ muted });
-    if (muted) {
-      this.deps.audio.stopRing();
-      this.engine?.audioPaused();
-    }
+    if (muted) this.engine?.audioPaused();
   }
 
   hidden(isHidden: boolean) {
@@ -968,12 +1014,21 @@ export class LiveCall {
       this.stats.unheard += 1;
       this.loudAt = 0;
     }
+    if (!this.snapshot.micSilent && now - this.soundAt >= MIC_SILENT_MS) this.set({ micSilent: true });
     if (now - this.frameAt < MIC_GAP_MS) return;
     this.frameAt = now;
     this.stats.micGaps += 1;
     if (!this.micMisses++) return void this.heal();
     this.stalled = true;
     this.refresh();
+  }
+
+  /** No retry: a live call ends quietly with its last line in the chat, one not yet live fails softly. */
+  private outOfVoice() {
+    if (!this.wasLive) return this.fail(VOICE_OUT);
+    this.postLines([{ who: "voice", text: VOICE_OUT_LINE[activeLocale() === "ko" ? "ko" : "en"], at: this.now() }]);
+    this.teardown();
+    this.set({ status: "ended" });
   }
 
   private fail(error: string) {

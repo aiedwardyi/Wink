@@ -43,11 +43,11 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-async function mount(subject: Bot) {
+async function mount(subject: Bot, extra?: { onCall?: () => void }) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root!.render(createElement(Composer, { bot: subject })));
+  await act(async () => root!.render(createElement(Composer, { bot: subject, ...extra })));
 }
 
 const stopButton = () => {
@@ -62,6 +62,29 @@ describe("composer stop", () => {
   it("looks like a filled stop button", async () => {
     await mount(bot);
     expect(stopButton().className).toEqual(expect.stringContaining("bg-ink text-app"));
+  });
+
+  it("keeps Call after Stop in the empty corner while busy", async () => {
+    const onCall = vi.fn();
+    await mount(bot, { onCall });
+    const call = host!.querySelector('button[aria-label="Call Stopper"]');
+    if (!(call instanceof HTMLElement)) throw new Error("call button did not render");
+    expect(stopButton().compareDocumentPosition(call) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => call.click());
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(interrupts()).toHaveLength(0);
+  });
+
+  it("hides Call once there is text while busy", async () => {
+    await mount(bot, { onCall: vi.fn() });
+    const input = host!.querySelector("textarea")!;
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "hi");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(stopButton()).not.toBeNull();
+    expect(host!.querySelector('button[aria-label="Call Stopper"]')).toBeNull();
   });
 
   it("marks Stop for skin styling without changing its size or labels", async () => {

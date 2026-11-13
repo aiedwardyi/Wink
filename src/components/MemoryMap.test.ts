@@ -45,7 +45,7 @@ describe("MemoryMap", () => {
     expect(host.querySelector(".mm-live")!.textContent).toContain("Uses VS Code");
   });
 
-  it("opens Muscle Memory to its lessons on a tap", async () => {
+  it("opens Habits to its lessons on a tap", async () => {
     await mount();
     const muscle = host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="muscle"]')!;
     await act(async () => muscle.click());
@@ -75,7 +75,7 @@ describe("MemoryMap", () => {
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
-  it("tints the Muscle Memory icon the Knowledge violet and keeps its count plain", () => {
+  it("tints the Habits icon the Knowledge violet and keeps its count plain", () => {
     const icon = (kind: string) => css.match(new RegExp(`^\\[data-kind="${kind}"\\] \\.mm-icon \\{([^}]*)\\}`, "m"))?.[1] ?? "";
     expect(icon("muscle")).toContain("color: rgb(var(--mm-violet));");
     expect(icon("muscle")).toBe(icon("knowledge"));

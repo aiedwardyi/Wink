@@ -146,6 +146,7 @@ function open(): DatabaseSync {
       seen_seq INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (room_id, id)
     );
+    CREATE TABLE IF NOT EXISTS room_task_threads (thread_id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS pictures (
       room_id TEXT NOT NULL,
       id TEXT NOT NULL,
@@ -384,10 +385,10 @@ export function joinedCursor(roomId: string): number {
   return (db().prepare("SELECT cursor FROM joined WHERE room_id = ?").get(roomId) as { cursor: number } | undefined)?.cursor ?? 0;
 }
 
-/** Keeps the highest version; an older state is ignored, and a held state without bots takes them at its version. */
+/** An equal-version state can fill a bot roster a previous build did not keep. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND json_extract(state, '$.bots') IS NULL))")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version).changes > 0;
+  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
+    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
 }
 
 /** Read-only from here on; the key is gone. */
@@ -431,9 +432,15 @@ export function dropMyRoomBot(roomId: string, id: string): void {
 
 export function setMyRoomBotTurn(roomId: string, id: string, threadId: string, seenSeq: number): void {
   db().prepare("UPDATE my_room_bots SET thread_id = ?, seen_seq = MAX(seen_seq, ?) WHERE room_id = ? AND id = ?").run(threadId, seenSeq, roomId, id);
+  db().prepare("INSERT OR IGNORE INTO room_task_threads (thread_id) VALUES (?)").run(threadId);
 }
 
 /** Every room task thread on this PC, so chat sync leaves them alone. */
 export function myRoomBotThreads(): Set<string> {
   return new Set((db().prepare("SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
+}
+
+/** Every thread that ever ran a room turn, kept after the bot leaves the room, so it never reads as a 1:1. */
+export function roomTaskThreads(): Set<string> {
+  return new Set((db().prepare("SELECT thread_id FROM room_task_threads UNION SELECT thread_id FROM my_room_bots WHERE thread_id IS NOT NULL").all() as Array<{ thread_id: string }>).map((row) => row.thread_id));
 }

@@ -175,8 +175,12 @@ export interface Message {
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
+  /** A hidden 1:1 row: what the bot said in a room, carried into its next 1:1 turn once. */
+  roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Bot replies: the engine driver kind that wrote it; older rows have none. */
+  engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
@@ -298,9 +302,9 @@ export interface GroupRecord {
    * namespace so one heading can hold a project's room and its people */
   section?: string;
   pinned?: boolean;
-  /** New user-created rooms start with setup pending. Null timestamps are
-   * intentional: records from before room setup has existed omit both keys
-   * and remain immediately usable. */
+  /** New rooms start with setup skipped, so older builds skip the setup page
+   * too; both null is a room still pending from before. Records from before
+   * room setup existed omit both keys and remain immediately usable. */
   setupCompletedAt?: number | null;
   setupSkippedAt?: number | null;
 }
@@ -1115,7 +1119,7 @@ export class Store {
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
       group.setupCompletedAt = setup?.completed ? createdAt : null;
-      group.setupSkippedAt = null;
+      group.setupSkippedAt = setup?.completed ? null : createdAt;
     }
     this.groups.unshift(group);
     this.saveGroups();
@@ -1292,6 +1296,10 @@ export class Store {
     return this.thread(threadId).messages;
   }
 
+  hasUnansweredQuickAsk(threadId: string): boolean {
+    return mdb.hasUnansweredQuickAsk(threadId);
+  }
+
   activeLeaf(threadId: string): string | null {
     const head = this.threads.has(threadId) ? undefined : mdb.storedHead(threadId);
     return head === undefined ? this.thread(threadId).activeLeafId : head;
@@ -1313,6 +1321,11 @@ export class Store {
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
     return path.reverse();
+  }
+
+  /** activePath newest first, read lazily from disk when the thread is not loaded. */
+  activePathBack(threadId: string): Iterable<Message> {
+    return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {

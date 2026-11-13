@@ -59,3 +59,23 @@ const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question
 export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
+
+// The whole line is the command, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
+const QUIET_EN = /(?:be quiet|keep quiet|stay quiet|quiet down|stop talking|shut up|hush|shh+|zip it)/.source;
+const QUIET_KO = /(?:조용(?:해|히\s?(?:좀\s?)?해|히\s?있어)|그만\s?말해|말하지\s?마|닥쳐|쉿)\s?(?:요|줘|봐|라|세요|주세요)?/.source;
+const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hey|(?:can|could|would|will) you|좀|이제|그만|잠깐(?:만)?|헤이/.source;
+
+/** The person telling the voice to stop talking for now, which is not a no to a job. */
+export function asksForQuiet(heard: string, name = ""): boolean {
+  const own = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const lead = `(?:(?:${SOFT}${own && `|${own}(?:야|아)?`})[\\s,]*)*`;
+  const tail = `(?:[\\s,]+(?:please|now|for now${own && `|${own}`}))*`;
+  return new RegExp(`^${lead}(?:${QUIET_EN}${tail}|${QUIET_KO})[\\s~….,!?]*$`, "i").test(heard.trim());
+}
+
+/** Talking to the voice again: its name or a "hey". */
+export function callsVoice(heard: string, name: string): boolean {
+  const own = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Whole name only, though a Korean particle may follow it ("Nova야").
+  return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])${own}(?![a-z0-9])`, "iu").test(heard));
+}

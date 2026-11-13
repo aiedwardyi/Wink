@@ -31,7 +31,7 @@ export function MemorySaveChip({ summary, at, lines, room = false }: { summary: 
   const saved = useSaved(at);
   return (
     <div className="flex justify-start">
-      <Tag type={room ? undefined : "button"} onClick={room ? undefined : () => dispatch({ type: "toggleSettings", open: true, memory: { line: memorySaveTarget(summary, lines) } })} className={room ? ROW : `${ROW} rounded-lg hover:bg-control focus-visible:bg-control active:bg-control`}>
+      <Tag type={room ? undefined : "button"} onClick={room ? undefined : () => dispatch({ type: "toggleSettings", open: true, memory: { line: memorySaveTarget(summary, lines) } })} className={room ? ROW : `${ROW} rounded-lg hover:bg-control focus-visible:bg-control`}>
         {saved ? <Brain size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
         <span className="min-w-0 max-w-[480px] truncate">
           {saved ? t("chat.savedMemory", { summary }) : t("chat.savingMemory")}
@@ -56,7 +56,7 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
           type="button"
           onClick={() => setOpen(!open)}
           aria-expanded={open}
-          className={`${ROW} rounded-lg hover:bg-control focus-visible:bg-control active:bg-control`}
+          className={`${ROW} rounded-lg hover:bg-control focus-visible:bg-control`}
         >
           {saved ? <Brain size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
           <span className="min-w-0 max-w-[480px] truncate">

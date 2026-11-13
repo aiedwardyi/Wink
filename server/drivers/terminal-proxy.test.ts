@@ -91,7 +91,7 @@ describe("terminal proxy", () => {
     expect(TOOLS[1].description).toContain("esc interrupts a running Claude turn, so it is refused while the pane shows Claude: busy.");
     expect(TOOLS[0].description).toContain("\"Claude: busy\" while its spinner line says a turn is running");
     expect(TOOLS[2]).toMatchObject({ annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { required: ["label"], additionalProperties: false } });
-    expect(Object.keys(TOOLS[2].inputSchema.properties)).toEqual(["label", "cwd", "command"]);
+    expect(Object.keys(TOOLS[2].inputSchema.properties)).toEqual(["label", "cwd", "command", "host"]);
     expect(TOOLS[3]).toMatchObject({ annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { required: ["sessionId"], additionalProperties: false } });
   });
 
@@ -191,6 +191,21 @@ describe("terminal proxy", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ label: "Opus 5.5 | high | ORCH", command: "claude" });
   });
 
+  it("passes a terminal_spawn host through to the open route", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify({ sessionId: "p1", generation: 1 }), { status: 200 }));
+    const config = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
+    const spawn = TOOLS.find((tool) => tool.name === "terminal_spawn");
+    expect(spawn?.inputSchema.properties).toHaveProperty("host");
+    const result = await callTool("terminal_spawn", fetchImpl, config, { label: "far", host: "work", cwd: "D:/wink-remote/wt/far", command: "claude" });
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body))).toEqual({ label: "far", host: "work", cwd: "D:/wink-remote/wt/far", command: "claude" });
+    const bad = await callTool("terminal_spawn", fetchImpl, config, { label: "far", host: 7 });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0].text).toContain("host");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("posts one launch note to the harness after a spawn", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify({ sessionId: "p1", generation: 1 }), { status: 200 }));
@@ -242,8 +257,8 @@ describe("terminal proxy", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("returns a usage hold as a plain result and opens no pane", async () => {
-    const hold = "Held: Codex 5h 15% left (resets 13:40), weekly 87% left. Pick another engine, or send the same spawn again within 2 min to launch anyway.";
+  it("returns a spawn hold as a plain result and opens no pane", async () => {
+    const hold = "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
     const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify(String(url).includes("/spawn-usage") ? { hold } : { sessionId: "p1", generation: 1 }), { status: 200 }));
     const config = { ...CONFIG, harness: "http://127.0.0.1:2", commsToken: "comms" };

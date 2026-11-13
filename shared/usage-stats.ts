@@ -31,7 +31,7 @@ export const SKINS = [
   "terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal", "vscode-dark", "studio-gray", "steel-gray",
   "claude", "precision", "mono-hud", "servo-gray", "notebook", "messenger", "community", "community-light", "code-review", "blueprint",
   "blueprint-gray", "blueprint-charcoal", "instrument", "matte", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
-  "inkwell", "graphite", "moss", "precision-dimmed", "bronze", "dim-sand",
+  "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand",
   "other",
 ] as const;
 export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "auto"] as const;
@@ -45,7 +45,7 @@ export const MODELS = [
 
 export const SCREENS = [
   "chat", "room", "room-setup", "members", "room-instructions", "sidebar-search", "new-menu", "new-bot", "new-room", "find",
-  "model-picker", "model-dial", "workers", "terminal", "remote-terminal", "details", "memory", "avatar",
+  "model-picker", "model-dial", "model-chart", "workers", "terminal", "remote-terminal", "details", "memory", "avatar",
   "settings-account", "settings-general", "settings-advanced", "settings-connections", "settings-themes", "settings-more-themes",
   "settings-shortcuts", "settings-devices", "settings-usage", "settings-team", "settings-model-index", "settings-sync",
   "palette", "inspector", "watch", "usage-quick", "teams-library", "archived", "call", "live-call", "room-alerts",
@@ -55,7 +55,7 @@ export const SCREENS = [
 const FLAG = ["on", "off"] as const;
 /** Each setting with the values it can take. `from` may also be "default". */
 export const SETTINGS = {
-  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list"], pickerLook: ["follow", "dark", "light", "atelier"],
+  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart", "machine"], pickerLook: ["follow", "dark", "light", "atelier"],
   replyStyle: ["paragraphs", "live"], chatBox: ["off", "rainbow", "theme"], sidebarSide: ["left", "right"],
   toolCalls: FLAG, longerReplies: FLAG, autoNotes: FLAG, vibration: FLAG, language: ["en", "ko"], usageMode: ["used", "remaining"],
   terminalAlerts: FLAG, phoneNotifications: FLAG, approvals: ["auto", "ask"], syncChats: FLAG, phoneAccess: FLAG,

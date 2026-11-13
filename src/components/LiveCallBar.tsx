@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
 import { dropCall, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
-import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
+import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
 import { usePresence } from "@/lib/use-presence";
 import { firstNeed } from "../../shared/call-status";
@@ -17,7 +17,7 @@ import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "openSettings" | "openCall", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -41,8 +41,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micBlocked: "Microphone is off for Wink.",
     micMissing: "No microphone found. Plug one in, or type in the chat instead.",
     micBusy: "Your microphone is in use by another app.",
+    voiceOut: "Out of voice for today. Keep typing, I'm still here.",
     openSettings: "Open settings",
     openCall: "Back to the call with {bot}",
+    hushed: "Quiet · tap to talk",
+    micSilent: "Can't hear your mic. Check your sound input.",
+    soundInput: "sound input",
   },
   ko: {
     starting: "연결 중…",
@@ -67,8 +71,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     micBlocked: "Wink에서 마이크가 꺼져 있습니다.",
     micMissing: "마이크를 찾을 수 없습니다. 마이크를 연결하거나 채팅으로 입력하세요.",
     micBusy: "다른 앱에서 마이크를 사용 중입니다.",
+    voiceOut: "오늘 음성 통화는 여기까지입니다. 채팅으로 계속 이야기하세요.",
     openSettings: "설정 열기",
     openCall: "{bot} 통화로 돌아가기",
+    hushed: "조용히 하는 중 · 탭해서 말하기",
+    micSilent: "마이크 소리가 안 들려요. 입력 장치를 확인해 주세요.",
+    soundInput: "입력 장치",
   },
 };
 
@@ -212,13 +220,13 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
     onEnd();
   }, [bot.id, onEnd, owner, snap.status]);
 
-  // No mic to fix in settings: hang up and leave only the line.
-  const micGone = snap.status === "failed" && (snap.error === MIC_MISSING || snap.error === MIC_BUSY);
+  // Nothing to fix in settings: hang up and leave only the line.
+  const quietEnd = snap.status === "failed" && (snap.error === MIC_MISSING || snap.error === MIC_BUSY || snap.error === VOICE_OUT);
   useEffect(() => {
-    if (!micGone) return;
+    if (!quietEnd) return;
     endCall(bot.id);
-    onEnd(snap.error === MIC_MISSING ? words.micMissing : words.micBusy);
-  }, [bot.id, micGone, onEnd, snap.error, words]);
+    onEnd(snap.error === MIC_MISSING ? words.micMissing : snap.error === VOICE_OUT ? words.voiceOut : words.micBusy);
+  }, [bot.id, quietEnd, onEnd, snap.error, words]);
 
   useEffect(() => {
     call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });

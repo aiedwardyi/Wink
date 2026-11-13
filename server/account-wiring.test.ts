@@ -168,10 +168,10 @@ it("holds a starting turn's account until it is accepted", async () => {
   expect(section("    } finally {\n      releaseStarting();", "\n  })()", turn)).toBeTruthy();
   expect(section("  } finally {", "\n    turnStartClaims.delete(botId);", section("async function startTurn(", "\n}\n"))).toContain("takeStartingHold(botId)();");
   const roomTurn = section("async function runClaimedGroupMemberTurn(", "\n}\n");
-  expect(roomTurn.indexOf("  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
-  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(bot.id);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
+  expect(roomTurn.indexOf("  startingHolds.set(turnKey, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
+  expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(turnKey);\n  releaseTurnStart?.();")).toBeGreaterThan(0);
   expect(roomTurn).toContain("      .catch((err) => {\n        releaseStarting();");
-  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(botId)();");
+  expect(section("  const releaseTurnStart = () => {", "\n  };")).toContain("takeStartingHold(lane ? laneKey(botId) : botId)();");
 
   const held = new Set<string>();
   const accountRuntime = { holdStarting: (id: string, generation: number) => { const key = `${id}:${generation}`; held.add(key); return () => held.delete(key); } };
@@ -256,7 +256,7 @@ it("renders one name on every surface", async () => {
     const note = notices.forTurn("atlas");
     note.commit();
     notices.forget("atlas");
-    const spawn = await spawnUsage("atlas", "ATLAS-2", "claude", { id: "acct_studio", name: "Claude", generation: 3 });
+    const spawn = await spawnUsage("claude", { id: "acct_studio", name: "Claude", generation: 3 });
     const board = (await s.usageBoard.read()).engines[0].accounts.find((account: { id: string }) => account.id === "acct_studio");
     return { spawn: spawn.line, panes: panes.split("\n").find((line) => line.includes("ATLAS-2")), note: note.text, board: board.name };
   };

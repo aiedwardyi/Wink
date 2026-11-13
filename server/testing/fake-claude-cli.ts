@@ -87,6 +87,8 @@
 //                      what each turn of a retained process was sent
 //   FAKE_CLAUDE_EAGER_INIT  path; a session process prints `init` before any
 //                      stdin, then creates this file
+//   FAKE_CLAUDE_HOLD_DIR  path; a prompt whose last hold:<name> is that name
+//                      answers only once <dir>/<name> exists
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
 //   FAKE_CLAUDE_FORK_MODE / FAKE_CLAUDE_FORK_FIXTURE  what a --fork-session
@@ -450,7 +452,7 @@ const playEdits = async () => {
   const denials: string[] = [];
   const useTool = async (id: string, name: string, input: { [key: string]: JsonValue }, run: () => void) => {
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
-    const behavior = hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
+    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
     if (behavior !== "allow") denials.push(name);
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });
@@ -632,9 +634,20 @@ const playThinkSteer = (prompt: JsonValue) => {
   }, 100);
 };
 
-const playTurn = (prompt: JsonValue) => {
+const playTurn = (prompt: JsonValue, held = false) => {
   turnRunning = true;
   steered = [];
+  const hold = !held && process.env.FAKE_CLAUDE_HOLD_DIR ? [...promptText(prompt).matchAll(/\bhold:([\w-]+)/g)].at(-1)?.[1] : undefined;
+  if (hold) {
+    out({ type: "system", subtype: "init", session_id: sessionId, model });
+    const gate = join(process.env.FAKE_CLAUDE_HOLD_DIR!, hold);
+    const poll = setInterval(() => {
+      if (!existsSync(gate)) return;
+      clearInterval(poll);
+      playTurn(prompt, true);
+    }, 10);
+    return;
+  }
   if (mode.startsWith("usage-limit") || mode === "usage-warning") {
     const reset = Number(process.env.FAKE_CLAUDE_RESET_AT);
     const message = process.env.FAKE_CLAUDE_FAILURE_TEXT ?? "You've hit your limit. Send Continue after it resets.";
@@ -728,6 +741,16 @@ const playTurn = (prompt: JsonValue) => {
     if (launched >= after && launched < after + quota) {
       if (process.env.FAKE_CLAUDE_PARTIAL_FAILS) {
         out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "half an answer" } } });
+      }
+      // FAKE_CLAUDE_BLIP_TEXT fails the way the real CLI reports an API
+      // error: a synthetic assistant row and an error result, process kept
+      const blip = process.env.FAKE_CLAUDE_BLIP_TEXT;
+      if (blip) {
+        out({ type: "assistant", error: "authentication_failed", message: { id: `blip-${launched}`, model: "<synthetic>", role: "assistant", content: [{ type: "text", text: blip }] } });
+        out({ type: "result", subtype: "success", is_error: true, result: blip, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+        turnRunning = false;
+        finishIfDone();
+        return;
       }
       process.stderr.write("claude: API error (503): service temporarily unavailable\n");
       process.exit(5);

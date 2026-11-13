@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { RIPPLE_GAP_MS } from "@/lib/activity-glitter";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
-import { ActivityCard, resetActivity, warmActivity } from "./ActivityCard";
+import { ActivityCard, engineShares, resetActivity, warmActivity } from "./ActivityCard";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,7 +16,7 @@ afterEach(() => {
 
 const activityOf = (counts: number[], start = "2026-05-10") => {
   const total = counts.reduce((sum, count) => sum + count, 0);
-  return { start, counts, streak: 1, busiest: { day: start, count: Math.max(...counts) }, total };
+  return { start, counts, busiest: { day: start, count: Math.max(...counts) }, total, workers: 12, engines: [{ engine: "claudeAgent", count: total }] };
 };
 
 function mount(waved?: { current: boolean }) {
@@ -409,19 +409,66 @@ it("deepens pale squares on a light skin instead of washing them out", async () 
 });
 
 it.each([
-  ["en", "Since Jun 2025", ["Day Streak", "Best Day", "Total Replies"]],
-  ["ko", "2025년 6월부터", ["연속 일수", "최고의 날", "총 답변"]],
+  ["en", "Since Jun 2025", ["Most workers at once", "Best Day", "Total Replies"]],
+  ["ko", "2025년 6월부터", ["최대 동시 작업자", "최고의 날", "총 답변"]],
 ] as const)("keeps the first day on the total's hover in %s", async (locale, title, labels) => {
   persistPreference(locale);
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), since: "2025-06-03", total: 24317 }))));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), since: "2025-06-03", total: 24317, engines: [{ engine: "claudeAgent", count: 24317 }] }))));
   const { host, unmount } = mount();
   await act(async () => {});
   try {
     const total = [...host.querySelectorAll<HTMLElement>("[title]")];
-    expect(total.map((el) => [el.textContent, el.title])).toEqual([["24,317", title]]);
+    expect(total.map((el) => [el.textContent, el.title])).toEqual([["24,317", title], ["100%", "Claude 100%"]]);
     for (const label of labels) expect(host.textContent).toContain(label);
     expect(host.textContent).not.toContain(title);
   } finally {
     await unmount();
+  }
+});
+
+it("shows the most workers at once where the streak was", async () => {
+  const { host, unmount } = await renderCard(weeks(() => 2));
+  try {
+    expect(host.textContent).not.toContain("Day Streak");
+    expect(host.textContent).toContain("12Most workers at once");
+  } finally {
+    await unmount();
+  }
+});
+
+it.each([
+  [[], 0, []],
+  [[{ engine: "codex", count: 0 }], 0, []],
+  [[{ engine: "claudeAgent", count: 5 }], 5, [["Claude", "100%"]]],
+  [[{ engine: "codex", count: 1 }, { engine: "claudeAgent", count: 1 }], 2, [["Claude", "50%"], ["OpenAI", "50%"]]],
+  [[{ engine: "antigravityAgent", count: 2 }, { engine: "geminiAgent", count: 1 }, { engine: "museAgent", count: 1 }, { engine: "claudeAgent", count: 996 }], 1000, [["Claude", "100%"], ["Gemini", "<1%"], ["Muse", "<1%"]]],
+  [[{ engine: "claudeAgent", count: 72 }, { engine: "codex", count: 14 }, { engine: "grokAgent", count: 8 }, { engine: "geminiAgent", count: 4 }, { engine: "museAgent", count: 2 }], 100, [["Claude", "72%"], ["OpenAI", "14%"], ["Grok", "8%"], ["Gemini", "4%"], ["Muse", "2%"]]],
+  [[{ engine: "codex", count: 3 }, { engine: "claudeAgent", count: 3 }], 7, [["Claude", "43%"], ["OpenAI", "43%"]]],
+  [[{ engine: "claudeAgent", count: 5 }], 4, [["Claude", "100%"]]],
+] as const)("shares %j of %i replies by engine, biggest first", (engines, total, shares) => {
+  expect(engineShares([...engines], total).map(({ name, share }) => [name, share])).toEqual(shares);
+});
+
+it("shows the top engine as a stat with every share on its hover, and none with no engines", async () => {
+  const engines = [{ engine: "codex", count: 1400 }, { engine: "claudeAgent", count: 7200 }, { engine: "grokAgent", count: 800 }, { engine: "geminiAgent", count: 400 }, { engine: "museAgent", count: 200 }];
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), total: 10000, engines }))));
+  const { host, unmount } = mount();
+  await act(async () => {});
+  try {
+    const top = host.querySelector<HTMLElement>("[title]")!;
+    expect([top.textContent, top.title]).toEqual(["72%", "Claude 72% · OpenAI 14% · Grok 8% · Gemini 4% · Muse 2%"]);
+    expect([top.nextElementSibling!.textContent, top.nextElementSibling!.querySelectorAll("svg").length]).toEqual(["Claude", 1]);
+  } finally {
+    await unmount();
+  }
+  resetActivity();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), engines: [] }))));
+  const empty = mount();
+  await act(async () => {});
+  try {
+    expect(empty.host.querySelector("[title]")).toBeNull();
+    expect(empty.host.textContent).not.toContain("%");
+  } finally {
+    await empty.unmount();
   }
 });

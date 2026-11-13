@@ -25,6 +25,7 @@ export function saveFile(src: string, name: string, path?: string) {
 let showing: ShowItem | null = null;
 let media: string | null = null;
 let checking: string | null = null;
+let mapping: string | null = null;
 const last = new Map<string, ShowItem>();
 const listeners = new Set<() => void>();
 const emit = () => { for (const listener of listeners) listener(); };
@@ -32,10 +33,11 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 
 export function showItem(next: ShowItem) {
   last.set(next.threadId, next);
-  if (!media && !checking && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
+  if (!media && !checking && !mapping && showing?.threadId === next.threadId && showing.path === next.path && showing.src === next.src) return;
   showing = next;
   media = null;
   checking = null;
+  mapping = null;
   emit();
 }
 
@@ -43,6 +45,7 @@ export function showMedia(threadId: string) {
   if (media === threadId) return;
   media = threadId;
   checking = null;
+  mapping = null;
   emit();
 }
 
@@ -51,16 +54,18 @@ export function showCheck(threadId: string) {
   if (checking === threadId) return;
   checking = threadId;
   media = null;
+  mapping = null;
   emit();
 }
 
 export const checkThread = () => checking;
 
 export function closeShow() {
-  if (!showing && !media && !checking) return;
+  if (!showing && !media && !checking && !mapping) return;
   showing = null;
   media = null;
   checking = null;
+  mapping = null;
   emit();
 }
 
@@ -68,7 +73,7 @@ export const lastShown = (threadId: string) => last.get(threadId);
 
 /** The header button: shuts this chat's pane, or opens what it last showed, else Media. */
 export function togglePane(threadId: string) {
-  if (showing?.threadId === threadId || media === threadId) return closeShow();
+  if (showing?.threadId === threadId || media === threadId || mapping === threadId) return closeShow();
   const was = last.get(threadId);
   if (was) showItem(was);
   else showMedia(threadId);
@@ -86,6 +91,18 @@ export function useMediaThread(): string | null {
 /** The thread whose pane is on the Check tab. */
 export function useCheckThread(): string | null {
   return useSyncExternalStore(subscribe, () => checking, () => null);
+}
+
+export function showMap(threadId: string) {
+  if (mapping === threadId) return;
+  mapping = threadId;
+  checking = null;
+  media = null;
+  emit();
+}
+
+export function useMapThread(): string | null {
+  return useSyncExternalStore(subscribe, () => mapping, () => null);
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
@@ -126,6 +143,7 @@ export function autoShowStep(state: AutoShow, threadId: string, messages: readon
 export function useAutoShow(threadId: string | undefined, messages: readonly Message[], free: boolean) {
   const shown = useShowItem();
   const onMedia = useMediaThread() !== null;
+  const onMap = useMapThread() !== null;
   const state = useRef<AutoShow>({ seen: null });
   const was = useRef(shown);
   useEffect(() => {
@@ -134,6 +152,6 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
     if (!threadId) return;
     const step = autoShowStep(state.current, threadId, messages, closed);
     state.current = step.state;
-    if (step.item && free && !onMedia) showItem(step.item);
-  }, [threadId, messages, shown, free, onMedia]);
+    if (step.item && free && !onMedia && !onMap) showItem(step.item);
+  }, [threadId, messages, shown, free, onMedia, onMap]);
 }

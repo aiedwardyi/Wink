@@ -21,6 +21,8 @@ export type AskState =
   | { state: "askedAgain" };
 
 const QUOTE_CHARS = 120;
+/** What a card the bot closed with ask_user close:true reads as answered with. */
+export const ANSWERED_IN_CHAT = "Answered in chat";
 
 /** A non-blocking ask_user card (never the first-run quiz, never a live ask). */
 export function isAskUserCard(message: Row): boolean {

@@ -1,4 +1,4 @@
-import { ChevronRight, FolderOpen, Settings, X } from "lucide-react";
+import { FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -245,6 +245,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
 const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
 // a wide window fetches it with Bot details, so its map paints with the tab instead of after a suspend
 let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
+const MEMORY_READ_MS = 10_000;
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -321,23 +322,32 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
-  const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
-    api(`/api/bots/${botId}/memory`);
+  const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
+    api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
+      // a body cut off by the timeout, or a proxy's page, parses as {}
+      if (typeof result?.text !== "string" || !Array.isArray(result.topics)) throw new Error("no memory in the reply");
+      return result;
+    });
+  const landed = useRef(false);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await read();
+      // a phone's map waits on this read, and a socket that died while the phone slept never answers
+      const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
+      // a refresh that landed first is as new, and an edit may have saved since
+      if (landed.current) return;
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);
       setText(draft?.text ?? result.text);
       setLoadFailed(false);
+      landed.current = true;
       if (draft?.conflict) setConflict(result);
       else if (draft) setStatus("saving");
     } catch {
-      setLoadFailed(true);
+      if (!landed.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -365,7 +375,9 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     // a save that started after this read went out is newer than it
     if (!result || memoryDraft(botId) !== null || memorySaves(botId) !== saves) return;
     openMemory(botId, result);
+    landed.current = true;
     setText(result.text);
+    setLoading(false);
     setLoadFailed(false);
     setTruncated(result.truncated);
     setTopics(result.topics);
@@ -653,23 +665,15 @@ export function SettingsPanel({
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
     <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <button
-          onClick={closeSettings}
-          aria-label={t("bot.collapseDetails")}
-          title={t("bot.collapseDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
-        >
-          <ChevronRight size={18} />
-        </button>
+      <div className="flex h-16 items-center justify-between pl-4 pr-1.5 max-md:pr-0">
         <span className="text-[15px] font-semibold text-ink">{t("bot.details")}</span>
         <button
           onClick={closeSettings}
           aria-label={t("bot.closeDetails")}
           title={t("bot.closeDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="flex size-7 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink max-md:size-11"
         >
-          <X size={18} />
+          <X size={15} />
         </button>
       </div>
 
@@ -812,7 +816,7 @@ export function SettingsPanel({
                     onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
                   />
                 )}
-                {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
+                {engine?.driverKind === "claudeAgent" && (
                   <SwitchRow
                     label={t("bot.leanStartup")}
                     on={bot.leanStartup !== true}

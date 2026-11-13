@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { paneNotesForTurn, paneNotesSinceLastUserTurn } from "./context-compaction.ts";
-import { hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
+import { bootPaneWakes, hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 
 const PANE_ONLY: WakeAdmission = { rootId: null, reservation: null };
@@ -424,6 +424,30 @@ describe("hasLocalUndeliveredPaneNote", () => {
     expect(hasLocalUndeliveredPaneNote(messages, undefined, "home", "local")).toBe(false);
     const newer: Message[] = [...messages, { id: "newer", role: "bot", kind: "note", text: "newer result", origin: "home", at: 3 }];
     expect(hasLocalUndeliveredPaneNote(newer, undefined, "home", "local")).toBe(true);
+  });
+
+  it("finds boot wakes without loading the chat", () => {
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const store = new Store(selection);
+    const waiting = store.createBot();
+    const done = store.createBot();
+    for (const bot of [waiting, done]) {
+      store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Run worker" });
+      store.markPaneNotesDelivered(bot.id, bot.threadId, undefined);
+      const note = store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "[pane worker01] DONE: verified", origin: "home" });
+      if (bot === done) store.markPaneNotesDelivered(bot.id, bot.threadId, note.id);
+    }
+
+    const reopened = new Store(selection);
+    const path = vi.spyOn(reopened, "activePath");
+    const messages = vi.spyOn(reopened, "messagesFor");
+    const wakes = bootPaneWakes(reopened, "home");
+    expect(wakes).toContainEqual({ botId: waiting.id, threadId: waiting.threadId });
+    expect(wakes).not.toContainEqual({ botId: done.id, threadId: done.threadId });
+    for (const bot of [waiting, done]) {
+      expect(path).not.toHaveBeenCalledWith(bot.threadId);
+      expect(messages).not.toHaveBeenCalledWith(bot.threadId);
+    }
   });
 
   it("keeps a skipped wake's marker across restart and still delivers the note on the next turn", () => {

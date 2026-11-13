@@ -398,6 +398,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_TRANSIENTS;
     delete process.env.FAKE_CLAUDE_TRANSIENT_AFTER;
     delete process.env.FAKE_CLAUDE_PARTIAL_FAILS;
+    delete process.env.FAKE_CLAUDE_BLIP_TEXT;
     delete process.env.FAKE_CLAUDE_STATE;
     delete process.env.FAKE_CLAUDE_RETRY_SCALE;
     delete process.env.FAKE_CLAUDE_RATE_LIMITS;
@@ -1213,6 +1214,20 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv[seen.argv.indexOf("--tools") + 1]).toBe("Read,WebFetch");
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Edit");
+  });
+
+  it("runs a read-only turn without file edits or shell", async () => {
+    await create("edit", {}, { disallowedTools: ["Bash(git *)"] });
+    const dump = join(scratch, "read-only-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "go", cwd: scratch, approval: "auto", readOnly: true });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(existsSync(join(scratch, "made.txt"))).toBe(false);
+    expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
+    expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
   });
 
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
@@ -2951,6 +2966,66 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(replies).toHaveLength(1);
   }, 20_000);
 
+  it("retries a Cloudflare blip on the live process, then answers once", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "2";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-blip", text: "go" });
+
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(done).toMatchObject({ turnId, ok: true });
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => [e.attempt, e.reason, e.maxAttempts])).toEqual([[1, "edge_error", 8], [2, "edge_error", 8]]);
+    expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(1);
+    expect(recorder.events.filter((e) => e.type === "session.started").every((e) => e.turnId === turnId)).toBe(true);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(1);
+    expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toHaveLength(1);
+  }, 20_000);
+
+  it("shows one error card after the last blip retry fails", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "99";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-cap");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-cap", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(recorder.events.filter((e) => e.type === "runtime.error").map((e) => e.message)).toEqual(["Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"]);
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toEqual([expect.objectContaining({ ok: false })]);
+  }, 20_000);
+
+  it("a Stop during a blip backoff ends the turn at once", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-stop");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "60";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-stop", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.retrying");
+    await instance.adapter.interruptTurn("t-blip-stop");
+    expect(await recorder.until((e) => e.type === "turn.completed", 2_000)).toMatchObject({ ok: false, stopReason: "interrupted" });
+    expect(recorder.events.filter((e) => e.type === "turn.retrying")).toHaveLength(1);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+  }, 20_000);
+
+  it("never retries a real sign-in failure result", async () => {
+    process.env.FAKE_CLAUDE_TRANSIENTS = "1";
+    process.env.FAKE_CLAUDE_BLIP_TEXT = "Failed to authenticate. API Error: 403 Forbidden";
+    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-blip-auth");
+    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blip-auth", text: "go" });
+
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(1);
+  }, 20_000);
+
   it("stops retrying at the attempt cap and settles the turn as failed", async () => {
     process.env.FAKE_CLAUDE_TRANSIENTS = "9";
     process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-cap");
@@ -2960,12 +3035,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     await recorder.until((e) => e.type === "turn.completed" && e.ok === false);
     const retries = recorder.events.filter((e) => e.type === "turn.retrying");
-    expect(retries.map((e) => e.attempt)).toEqual([1, 2]);
+    expect(retries.map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(true);
   }, 20_000);
 
   it("gives a later turn on the same thread a fresh retry budget", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
+    process.env.FAKE_CLAUDE_TRANSIENTS = "16";
     process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-fresh-budget");
     process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     await create();
@@ -2975,7 +3050,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await instance.adapter.sendTurn({ threadId: "t-fresh-budget", text: "two" });
     await recorder.until((e) => e.type === "turn.completed" && e.eventId !== firstDone.eventId);
 
-    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 1, 2]);
+    expect(recorder.events.filter((e) => e.type === "turn.retrying").map((e) => e.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]);
   }, 20_000);
 
   it("retries the turn a retained process is running, not the one that spawned it", async () => {

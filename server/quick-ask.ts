@@ -12,7 +12,6 @@ import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { storedUnansweredAsks, unansweredAsks } from "./quick-ask-rows.ts";
 import { nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
 import { queueSteeredMessage } from "./steer-queue.ts";
@@ -207,15 +206,15 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
 }
 
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread" | "hasUnansweredQuickAsk">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
-    // a thread is loaded only when it holds an unanswered ask
-    const asks = storedUnansweredAsks(threadId) ?? unansweredAsks(store.messagesFor(threadId));
-    if (!asks.size) continue;
-    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && asks.has(ask.id)) queueAsk(store, id, threadId, ask);
+    // Loading every open chat here held the server for ~30 s on a big messages.db.
+    if (!store.hasUnansweredQuickAsk(threadId)) continue;
+    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
+    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
   saveRunning();
 }
@@ -267,7 +266,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
     deps.drain();
     return;
   }
-  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
+  const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {

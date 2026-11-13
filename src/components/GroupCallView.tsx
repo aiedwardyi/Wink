@@ -448,7 +448,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       <button
         onClick={() => endCall(group.id)}
         aria-label="Hang up"
-        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
+        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
       >
         <X size={18} />
       </button>
@@ -469,7 +469,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
               <div
                 key={member.id}
                 className={cn(
-                  "flex w-[124px] flex-col items-center gap-2 rounded-3xl px-2 py-3 transition-all duration-200",
+                  "flex w-[124px] flex-col items-center gap-2 rounded-3xl px-2 py-3 transition-all",
                   focused ? "scale-105 bg-raised/70 shadow-lg" : "opacity-75",
                 )}
               >

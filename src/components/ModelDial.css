@@ -306,8 +306,14 @@
 html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height); }
 
 /* One view switch, beside the close button. */
-.model-cross-header .model-dial-view { padding: 6px 10px; border: 1px solid #ffffff1a; border-radius: 8px; font-size: 12px; }
-@media (hover: hover) { .model-cross-header .model-dial-view:hover { color: #f2f3f5; } }
+.model-cross-header .model-dial-view { display: inline-flex; vertical-align: middle; gap: 2px; padding: 2px; border: 1px solid #ffffff1a; border-radius: 8px; font-size: 12px; }
+.model-cross-header .model-dial-view button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 6px; }
+.model-cross-header .model-dial-view [aria-pressed="true"] { background: #ffffff14; color: #f2f3f5; }
+@media (hover: hover) { .model-cross-header .model-dial-view button:hover { color: #f2f3f5; } }
+@media (max-width: 767px) {
+  .model-cross-header .model-dial-view button { padding: 4px 7px; }
+  .model-cross-header .model-dial-view span { display: none; }
+}
 
 /* Phone: dial on top facing down, cards as a drum below it. */
 .dial-stage[data-phone] { --face: 90deg; --top: env(safe-area-inset-top, 0px); --gap: max(0px, (var(--ph) - 800px - var(--top) - env(safe-area-inset-bottom, 0px)) / 3); --cx: 50%; --cy: calc(238px + var(--top) + var(--gap)); --cw: calc(var(--pw) - 32px); --ch: 58px; width: var(--pw); height: var(--ph); overflow: visible; clip-path: inset(0 -100vw); }
@@ -375,9 +381,9 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
   :scope:has(.model-dial) { background: var(--color-app); }
   .model-dial { --ink: var(--color-ink); --ink-2: color-mix(in srgb, var(--color-ink) 40%, var(--color-ink-secondary)); --ink-3: var(--color-ink-secondary); --ink-4: var(--color-ink-secondary); background: var(--color-app); }
   .dial-stage { --glow: .35; --accent-ink: oklch(from var(--accent) min(l, .45) c h); }
-  .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) { --hot: oklch(.55 .17 var(--hue)); --halo: oklch(.74 .14 var(--hue)); }
-  .dial-stage[data-max] .dial-bar b { background-image: linear-gradient(90deg, oklch(.5 .17 20), oklch(.5 .17 90), oklch(.5 .17 150), oklch(.5 .17 240), oklch(.5 .17 300)); filter: none; }
-  .dial-shock { background: conic-gradient(in oklch, oklch(.66 .17 20), oklch(.66 .17 140), oklch(.66 .17 260), oklch(.66 .17 20)); }
+  .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) { --hot: oklch(.68 .26 var(--hue)); --halo: oklch(.8 .24 var(--hue)); --glow: .8; }
+  .dial-stage[data-max] .dial-bar b { background-image: linear-gradient(90deg, oklch(.6 .25 20), oklch(.6 .25 90), oklch(.6 .25 150), oklch(.6 .25 240), oklch(.6 .25 300)); filter: none; }
+  .dial-shock { background: conic-gradient(in oklch, oklch(.68 .24 20), oklch(.68 .24 140), oklch(.68 .24 260), oklch(.68 .24 20)); }
   .dial-seg[data-on] .dial-mark.lit { color: var(--accent-ink); }
   .dial-card:not([aria-pressed="true"]) :is(.dial-card-line, .dial-card-badge) { color: var(--ink); }
   .dial-scene { opacity: 1; }
@@ -390,5 +396,6 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
   .dial-ring .track { border-color: color-mix(in srgb, var(--color-ink) 7%, transparent); }
   .dial-footer { border-top-color: color-mix(in srgb, var(--color-ink) 8%, transparent); }
   .model-cross-header .model-dial-view { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
-  @media (hover: hover) { .model-cross-header .model-dial-view:hover { color: var(--color-ink); } }
+  .model-cross-header .model-dial-view [aria-pressed="true"] { background: color-mix(in srgb, var(--color-ink) 8%, transparent); color: var(--color-ink); }
+  @media (hover: hover) { .model-cross-header .model-dial-view button:hover { color: var(--color-ink); } }
 }

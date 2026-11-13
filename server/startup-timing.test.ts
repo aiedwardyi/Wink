@@ -82,6 +82,9 @@ describe("startup timing", () => {
     expect(startup.beforeRequest("PUT", "/api/internal/google-account")).toBeUndefined();
     expect(startup.beforeRequest("PUT", "/api/internal/terminal-bridge")).toBeUndefined();
     expect(startup.beforeRequest("POST", "/api/attachments")).toBeUndefined();
+    expect(startup.beforeRequest("PATCH", "/api/bots/b1")).toBeUndefined();
+    expect(startup.beforeRequest("PATCH", "/api/bots/b1/tasks/t1")).toBeDefined();
+    expect(startup.beforeRequest("POST", "/api/accounts/acct_1/default")).toBeDefined();
     const action = vi.fn();
     const pending = startup.beforeRequest("POST", "/api/bots/b1/send")!.then(action);
     startup.paint();

@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Trash2, Users } from "lucide-react";
 
 import { fetchResponse, request, responseBody } from "@/lib/api-request";
+import { cn } from "@/lib/cn";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { filesProblem, hostRoomBase, isRoomPicture, roomPictureUrl, type TeamRoom } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { usePresence } from "@/lib/use-presence";
 import { useStore } from "@/state/store";
+
+import { MENU_CLASS } from "./MessageMenu";
 
 /** `retry`: a change, like the host coming back online, loads a failed picture again. */
 export function RoomPicture({ src, size = 32, retry }: { src?: string; size?: number; retry?: unknown }) {
@@ -24,6 +29,7 @@ export function TeamRoomPicture({ group, size }: { group: TeamRoom; size?: numbe
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [open, setOpen] = useState(false);
+  const menu = usePresence(open);
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const busy = useRef(false);
@@ -86,15 +92,15 @@ export function TeamRoomPicture({ group, size }: { group: TeamRoom; size?: numbe
       if (input.current) input.current.value = "";
     }
   };
-  const item = "flex w-full items-center gap-3 whitespace-nowrap rounded-md px-3 py-2 text-left text-[14px] text-ink hover:bg-raised";
+  const item = cn("flex w-full items-center gap-3 whitespace-nowrap px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER);
   return (
     <div ref={wrapper} className="relative shrink-0">
-      <button ref={trigger} data-room-picture-button type="button" aria-label={t("teamRoom.picture")} aria-expanded={open} aria-haspopup="menu" disabled={saving} onClick={() => { setProblem(null); setOpen(!open); }} className="rounded-lg focus-visible:outline-accent disabled:opacity-50">
+      <button ref={trigger} data-room-picture-button type="button" aria-label={t("teamRoom.picture")} aria-expanded={open} aria-haspopup="menu" disabled={saving} onClick={() => { setProblem(null); setOpen(!open); }} className="rounded-lg disabled:opacity-50">
         <RoomPicture src={roomPictureUrl(base, group.picture)} size={size} />
       </button>
       <input ref={input} data-room-picture-input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="sr-only" tabIndex={-1} aria-hidden="true" onChange={(event) => { const file = event.target.files?.[0]; if (file) void save(file); }} />
-      {open && (
-        <div role="menu" aria-label={t("teamRoom.picture")} className="absolute left-0 top-full z-40 mt-2 min-w-44 rounded-xl border border-hairline/50 bg-card p-1 shadow-xl">
+      {menu.mounted && (
+        <div role="menu" aria-label={t("teamRoom.picture")} data-closing={menu.closing || undefined} inert={menu.closing} className={cn(MENU_CLASS, "absolute left-0 top-full mt-2 min-w-44")}>
           <button type="button" role="menuitem" autoFocus className={item} onClick={() => { setOpen(false); input.current?.click(); }}>
             <ImagePlus size={16} />{t("teamRoom.changePhoto")}
           </button>

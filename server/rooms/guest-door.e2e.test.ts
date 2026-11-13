@@ -14,8 +14,8 @@ import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
-import { Store } from "../store.ts";
-import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, type HostedGroup } from "./asks.ts";
+import { Store, type Message } from "../store.ts";
+import { closeAsksDb, configureRoomAsks, roomAskHooks, roomAsks, startAsk, stopRoomAsks, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged, removeRoomPerson } from "./door.ts";
 import { ENDED_FLUSH_MS } from "./door-streams.ts";
@@ -25,7 +25,8 @@ import { joinedRoute } from "./joined-routes.ts";
 import { addJoinedEntries, closeJoinedDb, joinedCursor, joinedEntries, joinedKey, joinedRoom, saveJoined } from "./joined.ts";
 import { publishTurnAnswer } from "./multiplayer.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
-import { hostedSend } from "./send.ts";
+import { MyRoomBotTurns } from "./my-room-bots.ts";
+import { hostedSend, stopBotChain } from "./send.ts";
 
 const BASE = "wink.test";
 /** The entry an older guest build accepts. */
@@ -668,5 +669,99 @@ describe("reactions and the notice on a teammate", () => {
     expect(store.groups.find((candidate) => candidate.id === group.id)?.notice?.by).toBe(`person:${c.room(roomId)!.me.id}`);
     expect(await c.notice(roomId, null)).toMatchObject({ ok: true });
     await until(() => !c.room(roomId)?.state?.notice);
+  });
+});
+
+describe("bots in two homes hand work to each other", () => {
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** Edward hosts Rando; JJ's PC joins and runs 스타줌. Both engines answer from a script. */
+  async function homes(rando: (ask: RoomAsk) => string, starzoom: (prompt: string) => string) {
+    const bot = store.patchBot(store.createBot().id, { name: "Rando" })!;
+    const group = store.createGroup("Dinner", [bot.id], false, undefined, undefined, { roomId: createRoom("Dinner").id }) as HostedGroup;
+    const roomId = group.hosted.roomId;
+    const answer = (text: string, askId?: string) => {
+      const since = store.messagesFor(group.threadId).length;
+      store.appendMessage(group.threadId, { role: "bot", kind: "text", text, from: { botId: bot.id, name: "Rando", color: bot.color } });
+      publishTurnAnswer(store, group, group.threadId, bot, since, askId);
+    };
+    configureRoomAsks({
+      store,
+      hostName: () => "Edward",
+      instance: () => null,
+      dispatch: (ask) => void wait(20).then(() => startAsk(ask.id) && answer(rando(ask), ask.id)),
+      stopTurn: vi.fn(async () => {}),
+      endSession: vi.fn(async () => {}),
+    });
+    const thread: Message[] = [];
+    const turns: MyRoomBotTurns = new MyRoomBotTurns({
+      client: { botSend: (...args) => c.botSend(...args), file: (...args) => c.file(...args) },
+      bot: (botId) => (botId === "jj-local" ? { id: botId, name: "스타줌" } : null),
+      busy: () => false,
+      hasTask: (_botId, threadId) => threadId === "jj-task",
+      createTask: () => ({ threadId: "jj-task" }),
+      startTurn: async (_botId, threadId, prompt, typed) => {
+        thread.push({ id: `u${thread.length}`, at: Date.now(), role: "user", kind: "text", text: typed });
+        void wait(20).then(() => {
+          thread.push({ id: `b${thread.length}`, at: Date.now(), role: "bot", kind: "text", text: starzoom(prompt) });
+          return turns.settled(threadId, true);
+        });
+      },
+      messagesFor: () => thread,
+      changed: () => {},
+      interrupt: async () => {},
+    });
+    const c: GuestClient = (client = new GuestClient({
+      bases: () => [null, BASE],
+      joiner: () => ({ name: "JJ", device: "pc-jj-0123456789abcdef" }),
+      https: { ca: caPem, lookup: loopbackLookup, port: hop.port },
+      onBotLine: (id, entry) => setImmediate(() => turns.heard(id, entry)),
+      onStop: (id) => turns.stop(id),
+      timing: { retryMs: 50, maxRetryMs: 200 },
+    }));
+    c.start();
+    expect((await c.join(codeFor(group, "JJ"))).ok).toBe(true);
+    await live(c, roomId);
+    expect((await c.addBot(roomId, "jj-local", "스타줌", "teal")).ok).toBe(true);
+    await until(() => Boolean(joinedRoom(roomId)?.state?.teamBots?.length));
+    const log = () => recentRoomEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
+    const joinedLog = () => joinedEntries(roomId, 100).map((entry) => `${entry.author.name}: ${entry.text}`);
+    return { roomId, answer, log, joinedLog };
+  }
+
+  it("asks back and forth with no person in between, and a line with no bot tag ends it", async () => {
+    const randos = ["@스타줌 7:30 at Mapo works, booking it."];
+    const starzooms = ["@Rando JJ is free Sat after 7. 7:30 at Mapo?", "Done: Sat 7:30 at Mapo. @Edward @JJ"];
+    const prompts: string[] = [];
+    const { answer, log, joinedLog } = await homes(() => randos.shift()!, (prompt) => (prompts.push(prompt), starzooms.shift()!));
+    hostSays(store.groups.find((group) => group.name === "Dinner") as HostedGroup, "@Rando work with 스타줌 on Saturday dinner");
+    answer("@스타줌 Edward is free Sat after 6, likes Korean. What works for JJ?");
+    await until(() => log().length === 5 && joinedLog().length === 5);
+    await wait(300);
+    expect(log()).toEqual([
+      "Edward: @Rando work with 스타줌 on Saturday dinner",
+      "Rando: @스타줌 Edward is free Sat after 6, likes Korean. What works for JJ?",
+      "스타줌: @Rando JJ is free Sat after 7. 7:30 at Mapo?",
+      "Rando: @스타줌 7:30 at Mapo works, booking it.",
+      "스타줌: Done: Sat 7:30 at Mapo. @Edward @JJ",
+    ]);
+    expect(joinedLog()).toEqual(log());
+    expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: @스타줌 Edward is free Sat after 6');
+  });
+
+  it("goes on with no line limit until the room's Stop ends it on both PCs", async () => {
+    let pings = 0;
+    let pongs = 0;
+    const { roomId, answer, log, joinedLog } = await homes(() => `@스타줌 ping ${++pings}`, () => `@Rando pong ${++pongs}`);
+    answer("@스타줌 ping 0");
+    await until(() => log().length >= 12 && log().at(-1)!.startsWith("Rando:"), 8_000);
+    stopBotChain(roomId);
+    stopRoomAsks(roomId);
+    await wait(300);
+    const stopped = log().length;
+    await wait(500);
+    expect(log()).toHaveLength(stopped);
+    expect(joinedLog()).toEqual(log());
+    expect(roomAsks(roomId, ["queued", "running"])).toEqual([]);
   });
 });

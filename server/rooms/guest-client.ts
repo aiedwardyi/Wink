@@ -106,6 +106,7 @@ const frameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("reactions"), reset: z.boolean().optional(), lines: z.array(z.object({ id, marks: marksSchema })).max(10_000) }),
   z.object({ kind: z.literal("deleted"), ids: z.array(fileSchema.shape.id).max(5_000), count: z.number().int().nonnegative().optional() }),
   z.object({ kind: z.literal("reset") }),
+  z.object({ kind: z.literal("stop") }),
   z.object({ kind: z.literal("ended") }),
 ]);
 
@@ -123,7 +124,7 @@ export interface JoinedView {
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
   /** This PC's own bots the room still lists, by the host's id. */
-  myBots: Array<{ id: string; botId: string; working?: boolean; error?: string }>;
+  myBots: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: string }>;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: true;
 }
@@ -141,8 +142,12 @@ export interface GuestClientDeps {
   onChange?(roomId: string): void;
   /** A line this PC sent, as the host stored it. */
   onSent?(roomId: string, entry: JoinedEntry): void;
+  /** A bot's line, stored here for the first time live or from this PC's own bot. */
+  onBotLine?(roomId: string, entry: JoinedEntry): void;
+  /** The host pressed the room's Stop. */
+  onStop?(roomId: string): void;
   /** What this PC's bots in the room are doing now. */
-  botTurn?(roomId: string, id: string): { working?: boolean; error?: string } | undefined;
+  botTurn?(roomId: string, id: string): { working?: boolean; since?: number; waiting?: boolean; error?: string } | undefined;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
@@ -468,7 +473,10 @@ export class GuestClient {
     }
     const entry = z.object({ entry: entrySchema }).safeParse(reply.value);
     if (!entry.success) return unavailable();
-    if (addJoinedEntries(roomId, [entry.data.entry])) this.changed(roomId);
+    if (addJoinedEntries(roomId, [entry.data.entry])) {
+      this.changed(roomId);
+      this.deps.onBotLine?.(roomId, entry.data.entry);
+    }
     return { ok: true, value: entry.data.entry };
   }
 
@@ -771,6 +779,7 @@ export class GuestClient {
       if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) {
         this.changed(roomId);
         this.alertLine(roomId, parsed.entry);
+        if (parsed.entry.author.kind === "bot") this.deps.onBotLine?.(roomId, parsed.entry);
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
@@ -784,6 +793,8 @@ export class GuestClient {
       if (sync.stopped) return;
       if (markJoinedFilesDeleted(roomId, parsed.ids)) this.changed(roomId);
       if (parsed.count !== undefined && !sync.undropped) setJoinedDeletedCount(roomId, parsed.count);
+    } else if (parsed.kind === "stop") {
+      this.deps.onStop?.(roomId);
     } else if (parsed.kind === "ended") {
       this.end(roomId, key);
     } else if (!sync.snapshotting) {

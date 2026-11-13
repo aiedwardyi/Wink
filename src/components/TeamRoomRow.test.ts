@@ -146,6 +146,22 @@ it("renders a bot line's markdown and makes web links clickable on every line", 
   expect([...person.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://example.com/b"]);
 });
 
+it("links common domains and URLs in own, teammate and bot room bubbles", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+  const text = "starzum.com www.x.io x.co.kr https://example.com file.ts README.md deploy.sh notes.ai v1.0.259 e.g. person@example.com";
+  await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+    onReply: () => {}, base: "/api/rooms/r1", label: "Crew", mine: (line) => line.author.kind === "host",
+    lines: ["host", "person", "bot"].map((kind) => ({ id: kind, at: Date.now(), author: { kind, id: kind, name: kind }, text, files: [] })) as RoomLine[],
+  }))));
+  for (const kind of ["host", "person", "bot"]) {
+    const links = [...host.querySelectorAll<HTMLAnchorElement>(`[data-mid="${kind}"] a`)];
+    expect(links.filter((link) => !link.href.startsWith("mailto:")).map((link) => link.getAttribute("href"))).toEqual([
+      "https://starzum.com", kind === "bot" ? "http://www.x.io" : "https://www.x.io", "https://x.co.kr", "https://example.com",
+    ]);
+  }
+});
+
 describe("room transcript reads like a 1:1 chat", () => {
   const day = 86_400_000;
   const line = (id: string, at: number, extra: Partial<RoomLine> = {}): RoomLine => ({ id, at, author: { kind: "person", id: "p1", name: "Mina" }, text: `text ${id}`, files: [], ...extra });
@@ -156,6 +172,42 @@ describe("room transcript reads like a 1:1 chat", () => {
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, { onReply, lines, mine: () => false, base: "/api/rooms/r1", label: "Room" }))));
     return host;
   }
+
+  it("carries the 1:1 message hooks, so skins, hairlines and Korean breaks reach every line", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+      onReply: () => {}, base: "/api/rooms/r1", label: "Room", mine: (each) => each.author.kind === "host",
+      lines: [
+        line("own", Date.now(), { author: { kind: "host", id: "host", name: "Edward" } }),
+        line("peer", Date.now()),
+        line("bot", Date.now(), { author: { kind: "bot", id: "b1", name: "Wink" } }),
+      ],
+    }))));
+    expect(["own", "peer", "bot"].map((id) => host.querySelector<HTMLElement>(`[data-mid="${id}"]`)!.dataset.orbitMessage)).toEqual(["user", "peer", "bot"]);
+    for (const id of ["own", "peer", "bot"]) expect(host.querySelector(`[data-mid="${id}"] [data-orbit-message-body] > [data-orbit-message-content]`)).not.toBeNull();
+  });
+
+  it("puts a teammate's initials beside their name", async () => {
+    const host = await show([line("m1", Date.now())]);
+    const label = [...host.querySelectorAll<HTMLElement>("div")].find((each) => each.lastElementChild?.textContent === "Mina" && each.childElementCount === 2)!;
+    expect(label.firstElementChild!.textContent).toBe("M");
+  });
+
+  it("greets an empty room with its name and members, like a fresh 1:1", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(TeamRoomTranscript, {
+      onReply: () => {}, lines: [], mine: () => false, base: "/api/rooms/r1", label: "Room",
+      empty: { name: "Design team", members: ["Edward", "민아"] },
+    }))));
+    const empty = host.querySelector<HTMLElement>("[data-room-empty]")!;
+    expect(empty.textContent).toContain("Design team");
+    expect(empty.textContent).toContain("Edward, 민아");
+    expect(empty.querySelector("[data-room-picture]")).not.toBeNull();
+  });
 
   it("copies and replies from the hover row", async () => {
     const onReply = vi.fn();

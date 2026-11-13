@@ -55,6 +55,11 @@ const openMenu = async (id: string) => {
 };
 
 describe("room reactions", () => {
+  it("tucks the chips into the bubble's edge like a 1:1 chat", async () => {
+    await render();
+    for (const id of ["e1", "e2"]) expect(row(id).querySelector("[data-orbit-message-body] > [data-message-reactions]")).not.toBeNull();
+  });
+
   it("shows a counted chip with people's names on hover, and a tap toggles through the room", async () => {
     const onReact = vi.fn();
     await render({ onReact });
@@ -79,6 +84,17 @@ describe("room reactions", () => {
     expect(old?.querySelector("[data-menu-reply]")).not.toBeNull();
     expect(old?.querySelector("[data-menu-copy]")).not.toBeNull();
     expect(old?.querySelector("[data-menu-pin]")).toBeNull();
+  });
+
+  it("puts the emoji picker in the hover row on others' lines, through the room", async () => {
+    const onReact = vi.fn();
+    await render({ onReact });
+    expect(row("e1").querySelector("[data-message-hover-actions] [data-reaction-bar]")).toBeNull();
+    await act(async () => row("e2").querySelector<HTMLButtonElement>("[data-message-hover-actions] [data-reaction-bar] button")!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-reaction-picker] button[aria-label*="😂"]')!.click());
+    expect(onReact).toHaveBeenCalledWith(expect.objectContaining({ id: "e2" }), "😂");
+    await render({ onReact: undefined });
+    expect(row("e2").querySelector("[data-reaction-bar]")).toBeNull();
   });
 });
 

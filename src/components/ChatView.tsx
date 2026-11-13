@@ -1,5 +1,6 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
+import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { DaySeparator } from "./DaySeparator";
@@ -14,7 +15,6 @@ import {
   Crown,
   ListTree,
   Loader2,
-  Phone,
   Pin,
   RefreshCw,
   Search,
@@ -80,6 +80,7 @@ import { CallCard } from "./CallCard";
 import { lazyView } from "@/lib/stale-build";
 import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
+import { usePresence } from "@/lib/use-presence";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
@@ -114,8 +115,8 @@ import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
 import { isVoiceLine } from "../../shared/live-call";
 import { callRows } from "@/lib/live-call/call-card";
-import { endCall } from "@/lib/call";
-import { dropCall, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callsSupported, placeCall, showCallChat, useActiveCall, useCallNote } from "@/lib/live-call/active";
+import { callAudio } from "@/lib/live-call/warm-audio";
 import { CallWidgetSlot } from "./CallSlots";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText, noteTitle } from "@/lib/pane-note";
@@ -241,7 +242,7 @@ export function ErrorRow({
       disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        "border-danger/30 hover:bg-danger/15",
+        "border-danger/30 hover:bg-danger/10",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
@@ -275,12 +276,12 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot: Bot }) {
+export const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot?: Bot }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
-  if (tool.name === "memory.save") return <MemoryCleanSave message={message} bot={bot} />;
+  if (tool.name === "memory.save" && bot) return <MemoryCleanSave message={message} bot={bot} />;
   if (message.comm) return <CommChip message={message} comm={message.comm} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
@@ -364,7 +365,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   );
 }
 
-const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
+export const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
@@ -963,7 +964,12 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const callNote = useCallNote();
   const onLiveCall = liveCall?.botId === bot.id;
   useEffect(() => (onLiveCall && !hidden ? showCallChat() : undefined), [hidden, onLiveCall]);
-  const liveCallLabel = t(onLiveCall ? "chat.hangUpBot" : "chat.callBot", { name: bot.name });
+  // A phone's context is born in the tap, the only place it may play from; a desktop hover may have made one already.
+  const startCall = useCallback(() => {
+    const ctx = callAudio();
+    void ctx.resume();
+    placeCall(bot, ctx);
+  }, [bot]);
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
@@ -991,6 +997,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     });
   };
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
+  const { value: shownMenu, closing: menuClosing } = usePresence(menu);
   // Stays mounted across threads, so drop a menu that still names the previous one.
   const [menuThread, setMenuThread] = useState(bot.threadId);
   if (menuThread !== bot.threadId) {
@@ -1507,7 +1514,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           <button
             data-orbit-chat-focus-fallback=""
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50 cursor-pointer"
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised cursor-pointer"
             title={t("chat.avatarTip")}
             aria-label={t("chat.avatarTip")}
           >
@@ -1581,29 +1588,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           )}
           <ShowPaneButton threadId={bot.threadId} />
 
-          {/* Before the chip: the phone header fits the chip as its last control. */}
-          <button
-            type="button"
-            aria-pressed={onLiveCall}
-            aria-label={liveCallLabel}
-            title={liveCallLabel}
-            // The audio context is born in the tap: phones only let it play from one.
-            onClick={() => {
-              if (onLiveCall) {
-                // Release the call first, or the desktop's old call overlay mounts for a render.
-                endCall(bot.id);
-                return dropCall(liveCall);
-              }
-              const ctx = new AudioContext();
-              void ctx.resume();
-              placeCall(bot, ctx);
-            }}
-            className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
-          >
-            <Phone size={18} />
-          </button>
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
-          {callAvailable && !state.config?.gemini?.configured && <CallButton bot={bot} />}
         </div>
       </div>
 
@@ -1617,15 +1602,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         />
       )}
 
-      {/* Error banner */}
-      {state.error && (
-        <div className="w-full px-5">
-          <div className="mb-2 flex items-start gap-2 rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
-            <span className="min-w-0 break-words">{state.error}</span>
-          </div>
-        </div>
-      )}
+      <AppErrorBanner />
 
       <ReconnectingCue />
 
@@ -1880,10 +1857,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         onWheel={followWheel}
       />
 
-      {menu?.kind === "message" ? (
-        <MessageMenu x={menu.x} y={menu.y} opener={menu.opener} target={menu.target} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: menu.target.threadId, messageId: menu.target.message.id, emoji, message: menu.target.message })} onClose={() => setMenu(null)} />
-      ) : menu ? (
-        <SelectionMenu x={menu.x} y={menu.y} opener={menu.opener} text={menu.text} onClose={() => setMenu(null)} />
+      {shownMenu?.kind === "message" ? (
+        <MessageMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} target={shownMenu.target} closing={menuClosing} onReply={selectReply} onPin={togglePin} onReact={(emoji) => dispatch({ type: "toggleReaction", threadId: shownMenu.target.threadId, messageId: shownMenu.target.message.id, emoji, message: shownMenu.target.message })} onClose={() => setMenu(null)} />
+      ) : shownMenu ? (
+        <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
       {/* Reading scrollback — one tap back to the end, streaming or not */}
@@ -1933,6 +1910,8 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
           call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
+          onCall={!onLiveCall && callsSupported() ? startCall : undefined}
+          callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>

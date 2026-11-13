@@ -1,1 +1,1 @@
-export { endsContentStream, flushEndedMaskers, StreamSecretMasker, redactSecretsInText, redactSecrets } from "../shared/redact.ts";
+export { endsContentStream, flushEndedMaskers, StreamSecretMasker, redactRoomMemory, redactSecretsInText, redactSecrets } from "../shared/redact.ts";

@@ -50,7 +50,7 @@ beforeEach(() => {
       { id: "b1", threadId: "t1", name: "Scout", messages: [{ id: "m1", role: "bot", kind: "note", text: "", at: 1, verify: card }], modelSelection: { instanceId: "inst", model: "m" } },
       { id: "b2", threadId: "t2", name: "Juno", messages: [], modelSelection: { instanceId: "inst", model: "m" } },
     ],
-    groups: [],
+    groups: [{ id: "g1", threadId: "gt1", name: "Crew", memberIds: ["b1"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, messages: [] }],
     selectedId: "b1",
   }));
   vi.stubGlobal("innerWidth", 1440);
@@ -87,16 +87,43 @@ describe("right slot", () => {
     expect(inspectorPanel()).toBeUndefined();
   });
 
+  it.each(["show", "details", "room"] as const)("the header's pane toggle still opens and closes the pane with %s open", async (open) => {
+    if (open === "room") localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(SNAPSHOT_CACHE_KEY)!), selectedId: "g1" }));
+    await act(async () => root.render(createElement(App)));
+    const toggle = () => button("button[data-show-pane-button]");
+    const press = async () => { await act(async () => toggle().click()); await wait(PRESENCE_EXIT_MS + 40); };
+    if (open === "show") await press();
+    else if (open === "room") {
+      await until(() => button('button[aria-label="Crew, Open room details"]'));
+      await act(async () => button('button[aria-label="Crew, Open room details"]').click());
+    }
+    else await openDetails();
+    expect(await until(() => document.querySelector("aside[data-side-panel]:not([data-closing])"))).toBeTruthy();
+    if (open !== "show") {
+      expect(toggle().getAttribute("aria-pressed")).toBe("false");
+      await press();
+      expect(document.querySelector("[data-settings-panel], [data-room-details]")).toBeNull();
+      expect(watchPanel()).toBeTruthy();
+    }
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    await press();
+    expect(watchPanel()).toBeNull();
+    expect(document.querySelector("aside[data-side-panel]")).toBeNull();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    await press();
+    expect(watchPanel()).toBeTruthy();
+  });
+
   it("the checker docks as the pane's Check tab, and Show keeps its file", async () => {
     await act(async () => root.render(createElement(App)));
     await act(async () => showItem({ threadId: "t1", path: "C:\\w\\a.png", kind: "image" }));
     await openWatch();
     const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
-    expect(tabs()).toEqual(["Show", "Media", "Check*"]);
+    expect(tabs()).toEqual(["Show", "Media", "Check*", "Map"]);
     const img = document.querySelector(".show-pane img");
     expect(img).toBeTruthy();
     await act(async () => button(".show-pane-tabs [role=tab]").click());
-    expect(tabs()).toEqual(["Show*", "Media", "Check"]);
+    expect(tabs()).toEqual(["Show*", "Media", "Check", "Map"]);
     expect(document.querySelector(".show-pane img")).toBe(img);
     expect(document.querySelector(".show-pane .verify-watch-url")).toBeTruthy();
   });
@@ -106,7 +133,7 @@ describe("right slot", () => {
     await pick("b2");
     await act(async () => (await until(() => button("button[data-show-pane-button]")) as HTMLButtonElement).click());
     await until(watchPanel);
-    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media"]);
+    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media", "Map"]);
   });
 
   it("picking another bot closes the slot, and the same bot again keeps it", async () => {

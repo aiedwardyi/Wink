@@ -1,8 +1,9 @@
+import * as fs from "node:fs";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applySyncOperations,
@@ -34,10 +35,13 @@ import {
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
+  syncOperationsStatus,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
 } from "./profile-sync.ts";
+
+vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
 const roots: string[] = [];
 
@@ -289,6 +293,38 @@ describe("profile sync operations", () => {
     const read = readSyncOperations(root);
     expect(read.invalidFiles).toEqual([]);
     expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["bot-1"]?.memoryNotes).toBe(false);
+  });
+
+  it("answers status like a full read and rereads only when the change folder moves", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
+    roots.push(root);
+    const full = () => {
+      const read = readSyncOperations(root);
+      return { operations: read.operations.length, invalidFiles: read.invalidFiles };
+    };
+    const reads = vi.spyOn(fs, "readFileSync");
+    try {
+      expect(syncOperationsStatus(root)).toEqual(full());
+      const first = writeSyncOperation(root, operation());
+      expect(syncOperationsStatus(root)).toEqual(full());
+      reads.mockClear();
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(reads).not.toHaveBeenCalled();
+      const second = operation({ operationId: "op-2", sequence: 2 });
+      const arrived = join(root, "changes", syncOperationFileName(second));
+      writeFileSync(arrived, "{");
+      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(syncOperationsStatus(root).invalidFiles).toEqual([syncOperationFileName(second)]);
+      writeFileSync(arrived, serializeSyncOperation(second));
+      expect(syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
+      writeSyncOperation(root, { ...operation(), changes: { name: "Renamed" } });
+      expect(syncOperationsStatus(root)).toEqual(full());
+      unlinkSync(first);
+      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it("reports invalid auto notes records and ignores unfinished writes", () => {

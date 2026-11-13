@@ -182,8 +182,10 @@ describe("SettingsPanel Korean bot details", () => {
       createElement(I18nProvider, null, createElement(SettingsPanel, { bot })),
     );
     expect(html).toContain("봇 세부 정보");
-    expect(html).toContain("aria-label=\"봇 세부 정보 접기\"");
-    expect(html).toContain("aria-label=\"봇 세부 정보 닫기\"");
+    const head = html.slice(html.indexOf("<aside"), html.indexOf('role="tablist"'));
+    expect(head.match(/<button/g)).toHaveLength(1);
+    expect(head).toMatch(/>봇 세부 정보<\/span><button [^>]*aria-label="봇 세부 정보 닫기"[^>]*class="[^"]*size-7 [^"]*max-md:size-11/);
+    expect(head).toContain('<svg xmlns="http://www.w3.org/2000/svg" width="15"');
     expect(html).toContain(">프로젝트 폴더<");
     expect(html).toContain(">이름<");
     expect(html).toContain(">메모리<");
@@ -221,17 +223,16 @@ describe("SettingsPanel lean startup", () => {
     chrome.voiceAndStartupSettings = false;
   });
 
-  it("keeps Load Skills & Plugins off the idle surface", async () => {
+  it("shows Load Skills & Plugins for Claude bots", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
       createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })),
     );
-    expect(html).not.toContain("Load Skills");
+    expect(html).toContain("Load Skills");
   });
 
   it("shows Load skills and plugins on by default with no hint", async () => {
-    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
@@ -246,7 +247,6 @@ describe("SettingsPanel lean startup", () => {
   });
 
   it("shows off when leanStartup is true", async () => {
-    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(

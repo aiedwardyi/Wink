@@ -6,8 +6,9 @@ import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { BOT_PANE_LIMIT, BOT_PANE_TOTAL, createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
 import { createPaneCleanup } from "./pane-cleanup.mjs";
+import { createRemoteHosts } from "./terminal-remote.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 
@@ -2143,6 +2144,23 @@ test("shell integration only wraps the worker PowerShell", { skip: process.platf
   assert.match(script, /Set-PSReadLineOption -HistorySaveStyle SaveNothing/);
   await f.host.open(f.event, f.input);
   assert.deepEqual(f.children[1].args, ["-NoLogo"]);
+});
+
+test("plain panes start a login shell on darwin only", async (t) => {
+  for (const [platform, args] of [["darwin", ["-l"]], ["linux", []]]) {
+    const f = fixture({ platform, env: { SHELL: "/bin/zsh" } });
+    t.after(() => f.host.dispose());
+    await f.host.open(f.event, f.input);
+    assert.equal(f.children[0].shell, "/bin/zsh");
+    assert.deepEqual(f.children[0].args, args);
+  }
+  let owner;
+  const f = fixture({ platform: "darwin", env: { SHELL: "/bin/zsh" }, owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 0 }, environment: {} }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+  assert.equal(f.children[0].shell, "/bin/sh");
+  assert.deepEqual(f.children[0].args, []);
 });
 
 for (const [name, shell] of [
@@ -4771,4 +4789,195 @@ test("the compact hook signals only a confirmed compact SessionStart",{ skip: pr
     });
     assert.equal(fs.existsSync(signal), part === "card" && hook.hook_event_name === "SessionStart" && hook.source === "compact");
   }
+});
+
+describe("remote panes", () => {
+  const GB = 1024 ** 3;
+  const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, far: { ssh: "far", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
+
+  function remoteFixture(t, { free = 8 * GB, ...options } = {}) {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-remote-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const probes = [];
+    const remote = createRemoteHosts({ hosts: async () => HOSTS, ssh: async (target, script) => {
+      probes.push(target);
+      return script.includes("FreePhysicalMemory") ? JSON.stringify({ free, hash: "", account: "me@example.com" }) : "";
+    } });
+    const f = stallFixture({ platform: "win32", env: { ProgramFiles: programFiles }, remote, ...options });
+    t.after(() => f.host.dispose());
+    return { ...f, probes };
+  }
+
+  test("types the ssh line, keeps the grant in the pane env only and lists the host", async (t) => {
+    const f = remoteFixture(t, { commandEcho: false });
+    const pane = await f.host.openForBot("bot-1", { label: "far", host: "work", cwd: "D:\\wink-remote\\wt\\far", command: "claude --dangerously-skip-permissions 'Read card.md'" });
+    const child = f.children[0];
+    assert.equal(child.writes.length, 1);
+    assert.match(child.writes[0], /; ssh -t .* work "powershell -NoProfile -EncodedCommand .*"\r$/);
+    assert.match(child.options.env.ORBIT_MSG_AUTH, /^[0-9a-f]{8}\./);
+    assert.ok(!child.writes[0].includes(child.options.env.ORBIT_MSG_AUTH));
+    assert.equal(child.options.cwd, os.homedir());
+    assert.deepEqual(f.probes, ["work", "work"]);
+    assert.equal(f.host.readBot("bot-1").panes.find((listed) => listed.sessionId === pane.sessionId).host, "work");
+  });
+
+  test("takes the engine from the bot's claude command, not the typed ssh line", async (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: Date.UTC(2026, 9, 24) });
+    const f = remoteFixture(t, { commandEcho: false, stallCheckMs: 10_000, now: () => Date.now() });
+    await f.host.openForBot("bot-1", { host: "work", command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST);
+    t.mock.timers.tick(500);
+    await Promise.resolve();
+    child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
+    t.mock.timers.tick(500);
+    await Promise.resolve();
+    assert.deepEqual(child.writes.slice(1), ["\x1b[B", "\r"]);
+  });
+
+  test("skips the local per-bot cap and needs only a shell's memory at home", async (t) => {
+    const f = remoteFixture(t);
+    await f.host.openForBot("bot-1", { host: "work", command: "claude" });
+    for (let index = 0; index < BOT_PANE_LIMIT; index += 1) await f.host.openForBot("bot-1", { command: "claude" });
+    await assert.rejects(f.host.openForBot("bot-1", { command: "claude" }), /Too many bot terminals/);
+    await f.host.openForBot("bot-1", { host: "work", command: "claude" });
+    const low = remoteFixture(t, { freeMemory: () => 300 * 1024 ** 2 });
+    await assert.rejects(low.host.openForBot("bot-1", { command: "claude" }), /Not enough free memory for another terminal/);
+    await low.host.openForBot("bot-1", { host: "work", command: "claude" });
+  });
+
+  test("gates a host on its free memory plus the panes still starting there", async (t) => {
+    const f = remoteFixture(t, { free: 2.6 * GB });
+    await f.host.openForBot("bot-1", { host: "work", command: "claude" });
+    await assert.rejects(f.host.openForBot("bot-2", { host: "work", command: "claude" }), /Not enough free memory on work \(2\.6 GB free, 2\.7 GB needed\)/);
+    await f.advance(60_000);
+    await f.host.openForBot("bot-2", { host: "work", command: "claude" });
+  });
+
+  test("caps a host at 64 live panes across bots", async (t) => {
+    const f = remoteFixture(t, { free: 1000 * GB });
+    for (let index = 0; index < 64; index += 1) await f.host.openForBot(index % 2 ? "bot-1" : "bot-2", { host: "work", command: "claude" });
+    await assert.rejects(f.host.openForBot("bot-3", { host: "work", command: "claude" }), /Too many terminals on work \(limit 64\)/);
+    f.children[0].exit({ exitCode: 0 });
+    await f.host.openForBot("bot-3", { host: "work", command: "claude" });
+  });
+
+  test("caps a bot's home and remote panes together at what pane counts accept", async (t) => {
+    const f = remoteFixture(t, { free: 1000 * GB });
+    for (let index = 0; index < BOT_PANE_LIMIT; index += 1) await f.host.openForBot("bot-1", { command: "claude" });
+    for (let index = 0; index < 64; index += 1) await f.host.openForBot("bot-1", { host: "work", command: "claude" });
+    await assert.rejects(f.host.openForBot("bot-1", { host: "far", command: "claude" }), /Too many bot terminals \(limit 80\)/);
+    assert.equal(BOT_PANE_TOTAL, 80);
+    f.children[0].exit({ exitCode: 0 });
+    await f.host.openForBot("bot-1", { host: "far", command: "claude" });
+  });
+
+  test("rejects unknown hosts and other launches before spawning a pane", async (t) => {
+    const f = remoteFixture(t);
+    await assert.rejects(f.host.openForBot("bot-1", { host: "dad", command: "claude" }), /Unknown terminal host: dad/);
+    await assert.rejects(f.host.openForBot("bot-1", { host: "work", command: "codex" }), /one-line claude command/);
+    await assert.rejects(f.host.openForBot("bot-1", { host: "work" }), /one-line claude command/);
+    await assert.rejects(f.host.openForBot("bot-1", { host: 7, command: "claude" }), /Invalid terminal host/);
+    assert.equal(f.children.length, 0);
+    const local = stallFixture({ platform: "win32" });
+    t.after(() => local.host.dispose());
+    await assert.rejects(local.host.openForBot("bot-1", { host: "work", command: "claude" }), /Invalid terminal host/);
+    const linux = stallFixture({ remote: createRemoteHosts({ hosts: async () => HOSTS, ssh: async () => "" }) });
+    t.after(() => linux.host.dispose());
+    await assert.rejects(linux.host.openForBot("bot-1", { host: "work", command: "claude" }), /Remote terminals need Windows/);
+  });
+});
+
+const CLAUDE_BLIP = "● Please run /login · API Error: 403 Attention Required! | Cloudflare";
+const claudeBlipScreen = (output, input = "") => `\x1b[2J\x1b[H${output}\r\n✻ Baked for 5s · done 6:48 PM\r\n${"─".repeat(40)}\r\n> ${input}\r\n${"─".repeat(40)}\r\n  ctx 40k/200k`;
+
+test("a Claude blip gets three nudges with backoff, then STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const child = f.children[0];
+  const nudges = () => child.writes.filter((write) => write === "Continue from where you were.").length;
+  for (const [index, wait] of [30_000, 60_000, 120_000].entries()) {
+    child.data(claudeBlipScreen(Array(index + 1).fill(CLAUDE_BLIP).join("\r\n")));
+    await f.settle();
+    await f.advance(wait - 1);
+    assert.equal(nudges(), index);
+    await f.advance(1);
+    assert.equal(nudges(), index + 1);
+    assert.equal(child.writes.at(-1), "Continue from where you were.");
+    child.data(claudeBlipScreen(Array(index + 1).fill(CLAUDE_BLIP).join("\r\n"), "Continue from where you were."));
+    await f.settle();
+    await f.advance(1_000);
+    assert.equal(child.writes.at(-1), "\r");
+    child.data("\x1b[2J\x1b[H✻ Working… (1s · esc to interrupt)");
+    await f.settle();
+  }
+  assert.equal(f.notes.length, 0);
+  child.data(claudeBlipScreen(Array(4).fill(CLAUDE_BLIP).join("\r\n")));
+  await f.settle();
+  await f.advance(121_000);
+  assert.equal(nudges(), 3);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: /);
+});
+
+for (const [name, screen, nudged] of [
+  ["a 5xx", claudeBlipScreen('● API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}'), true],
+  ["overload", claudeBlipScreen("● API Error: Repeated 529 Overloaded errors. Try again in a moment."), true],
+  ["a usage limit", CLAUDE_LIMIT, false],
+  ["a permission prompt", `${CLAUDE_BLIP}\r\n\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No`, false],
+  ["a /login need without an API error", claudeBlipScreen("● Not logged in · Please run /login"), false],
+  ["a real auth error", claudeBlipScreen('● Please run /login · API Error: 401 {"type":"error","error":{"type":"authentication_error"}}'), false],
+  ["unsent input", claudeBlipScreen(CLAUDE_BLIP, "my draft"), false],
+  ["newer output", claudeBlipScreen(`${CLAUDE_BLIP}\r\n● Bash(ls)\r\n  ⎿  done`), false],
+]) {
+  test(`the blip nudge ${nudged ? "fires on" : "leaves alone"} ${name}`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+    f.children[0].data(screen);
+    await f.settle();
+    await f.advance(31_000);
+    assert.equal(f.children[0].writes.includes("Continue from where you were."), nudged);
+  });
+}
+
+for (const [name, act] of [
+  ["the user edits it", (f, pane, child) => {
+    child.data(claudeBlipScreen(CLAUDE_BLIP, "Continue from where you were."));
+    f.host.write(f.event, pane.sessionId, "x");
+  }],
+  ["it never reaches the prompt", () => {}],
+]) {
+  test(`the blip nudge is not submitted when ${name}`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+    const child = f.children[0];
+    child.data(claudeBlipScreen(CLAUDE_BLIP));
+    await f.settle();
+    await f.advance(30_000);
+    const typed = child.writes.lastIndexOf("Continue from where you were.");
+    assert.ok(typed >= 0);
+    act(f, pane, child);
+    await f.settle();
+    await f.advance(1_000);
+    assert.equal(child.writes.slice(typed).includes("\r"), false);
+  });
+}
+
+test("a user typing at a blip leaves the pane to the STALLED note", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const child = f.children[0];
+  child.data(claudeBlipScreen(CLAUDE_BLIP));
+  await f.settle();
+  f.host.write(f.event, pane.sessionId, "x");
+  await f.advance(121_000);
+  assert.equal(child.writes.includes("Continue from where you were."), false);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: /);
 });

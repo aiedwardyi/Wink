@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { lazy, Suspense, useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Atom, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Hexagon, Leaf, MoonStar, Mountain, Orbit, Sparkle, Sparkles, Sun, X } from "lucide-react";
 import { shownModelSelection, useStore, type Bot, type ModelSelection } from "@/state/store";
@@ -17,13 +17,17 @@ import { EngineSetup, needsCli, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
-import { loadModelPickerView, saveModelPickerView } from "@/lib/model-picker-view";
+import { loadModelPickerView, nextPickerStyle, saveModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
-import { pickerLookSkin, usePickerLook } from "@/lib/picker-look";
+import { pickerLookSkin, savePickerLook, shownPickerLook, usePickedLook } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
 import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
+import { ModelChart } from "./ModelChart";
+import { PickerStyleButton, PickerStyleStrip } from "./PickerStyleStrip";
 import "./ModelPicker.css";
 import { switchVia, trackScreen } from "@/lib/usage-stats";
+
+const ModelMachine = lazy(() => import("./ModelMachine"));
 
 const EFFORT_EDGE_CLEARANCE = 130 / 2 + 38; // Half the horizontal step plus chevron clearance.
 
@@ -55,7 +59,8 @@ export function ModelPickerControl({
 }: ModelPickerProps & { store: PickerStore; accepted?: readonly AcceptedSend[] }) {
   const { t } = useI18n();
   const skin = useSkin();
-  const look = usePickerLook(skin);
+  const picked = usePickedLook();
+  const look = shownPickerLook(picked, skin);
   const { state, dispatch, refreshInstances } = store;
   const shortcutEnabled = !contained && state.selectedId === bot.id;
   const selection = shownModelSelection(bot);
@@ -65,17 +70,25 @@ export function ModelPickerControl({
   const [draftSelection, setDraft] = useState(selection);
   const draft = withPickerEffort(state.instances.find((instance) => instance.instanceId === draftSelection.instanceId), draftSelection);
   const [customOpen, setCustomOpen] = useState(false);
+  const [machine, setMachine] = useState(() => dial && loadModelPickerView() === "machine");
+  const [styleOpen, setStyleOpen] = useState(false);
+  const strip = usePresence(open && styleOpen);
   useBackLayer(open && customOpen, () => setCustomOpen(false));
   const [query, setQuery] = useState("");
   const dialFits = useModelDialFits(dial);
-  const [listView, setListView] = useState(() => loadModelPickerView() === "list");
-  const dialView = dial && dialFits && !listView;
+  const [view, setView] = useState(loadModelPickerView);
+  // Machine is an overlay; the dial stays mounted under it.
+  const base = view === "machine" ? "dial" : view;
+  const dialView = dial && dialFits && base === "dial";
+  const chartView = dial && dialFits && base === "chart";
+  const styles: ModelPickerView[] = dial && dialFits ? ["dial", "list", "chart", "machine"] : ["list", "machine"];
+  const shown: ModelPickerView = machine ? "machine" : dialView ? "dial" : chartView ? "chart" : "list";
   useDialFontWarm(dial, open);
   useEffect(() => {
     if (!presence.mounted) return;
-    void window.ogb?.setModelPickerBackground?.(dialView ? "dial" : "list")?.catch(() => undefined);
+    void window.ogb?.setModelPickerBackground?.(dialView || chartView ? "dial" : "list")?.catch(() => undefined);
     return () => { void window.ogb?.setModelPickerBackground?.(null)?.catch(() => undefined); };
-  }, [presence.mounted, dialView]);
+  }, [presence.mounted, dialView, chartView]);
   const dialRef = useRef<ModelDialHandle>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -129,10 +142,13 @@ export function ModelPickerControl({
   const runCost = dialRunCost(draft.model, draft.effort);
 
   const show = (switching = false) => {
-    trackScreen(dial && dialFits && loadModelPickerView() !== "list" ? "model-dial" : "model-picker");
+    const next = loadModelPickerView();
+    trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : "model-dial") : "model-picker");
     setDraft(selection);
     setCustomOpen(false);
-    setListView(loadModelPickerView() === "list");
+    setMachine(dial && next === "machine");
+    setStyleOpen(false);
+    setView(next);
     setQuery("");
     focusComposerAfterCloseRef.current = false;
     switchingRef.current = switching;
@@ -176,6 +192,20 @@ export function ModelPickerControl({
     setDraft(next);
     setCustomOpen(false);
   };
+  const chooseStyle = (next: ModelPickerView) => {
+    setView(next);
+    saveModelPickerView(next, "picker");
+    setMachine(next === "machine");
+    // Leaving the Machine unmounts the focused overlay.
+    requestAnimationFrame(() => { if (!dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus(); });
+  };
+  // The shown view takes focus back, so its keys and Enter work again.
+  const refocus = () => (dialogRef.current?.querySelector<HTMLElement>(".model-machine") ?? dialogRef.current)?.focus();
+  const closeStrip = () => {
+    setStyleOpen(false);
+    if (document.activeElement?.closest("[data-picker-style-strip]")) refocus();
+  };
+  const styleButton = dial ? <PickerStyleButton shown={shown} open={styleOpen} onToggle={() => styleOpen ? closeStrip() : setStyleOpen(true)} /> : null;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -212,14 +242,14 @@ export function ModelPickerControl({
       event.preventDefault();
       event.stopPropagation();
       if (!event.deltaY) return;
-      if (dialView && !dialWheel(wheelRef.current, event)) return;
+      if ((dialView || chartView) && !dialWheel(wheelRef.current, event)) return;
       const direction = event.deltaY > 0 ? "ArrowDown" : "ArrowUp";
       setDraft((current) => movePicker(rows, withPickerEffort(state.instances.find((item) => item.instanceId === current.instanceId), current), direction));
       setCustomOpen(false);
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-  }, [open, rows, state.instances, dialView]);
+  }, [open, rows, state.instances, dialView, chartView]);
 
   // Touch equivalent of the wheel handler above: the stage isn't a scroll
   // container, so a plain touchmove does nothing. One gesture steps once,
@@ -315,8 +345,22 @@ export function ModelPickerControl({
     </button>
   );
 
+  const setup = <>
+    {blocked && instance && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} />}
+    {custom.length > 0 && <button type="button" className="text-xs text-ink-secondary hover:text-ink" aria-expanded={customOpen} onClick={() => setCustomOpen(!customOpen)}>{t("model.useLocalCount", { count: custom.length })}</button>}
+    {customOpen && instance && <div className="model-cross-custom">
+      <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("model.searchLocal")} placeholder={t("model.searchLocal")} className="w-full rounded-lg bg-inset px-3 py-2 text-base sm:text-sm text-ink" />
+      {filteredCustom.map((option) => <button key={option.id} type="button" data-custom-option={option.id} className="block w-full rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-control" onClick={() => { if (option.id === draft.model) save(); else pick(selectPickerModel(instance, option.id, draft)); }}>{option.label}</button>)}
+      {filteredCustom.length === 0 && <p className="text-xs text-ink-secondary">{t("palette.noMatch", { query })}</p>}
+    </div>}
+  </>;
+
   const dialog = (
     <div className="model-cross-backdrop animate-fade-in" data-skin={pickerLookSkin(skin, look)} data-light={look !== "dark" || undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
+      if (styleOpen) {
+        if (!(event.target instanceof Element && event.target.closest("[data-picker-style-strip], [data-picker-style-button]"))) closeStrip();
+        return;
+      }
       if (event.target === event.currentTarget || (event.target instanceof Element && event.target.matches(".model-cross-plane, .model-cross-stage"))) close();
     }}>
       <div
@@ -329,12 +373,34 @@ export function ModelPickerControl({
         tabIndex={-1}
         className="model-cross-dialog"
         data-touch-picker-legend={!dial && !showTouchPickerLegend() ? "hidden" : undefined}
+        onKeyDownCapture={(event) => {
+          if (!styleOpen || event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          setStyleOpen(false);
+          refocus();
+        }}
         onKeyDown={(event) => {
           // focus lingers in the fading dialog for a frame; let Alt+M through to reopen it
           if (presence.closing) return;
           event.stopPropagation();
           if (event.nativeEvent.isComposing) return;
-          if (dialView && dialRef.current?.key(event)) return;
+          if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.repeat && event.code === "KeyM") {
+            event.preventDefault();
+            setMachine(!machine);
+            if (machine) dialogRef.current?.focus();
+            return;
+          }
+          // Option+S types a character in the local-model search; leave inputs alone.
+          if (dial && event.altKey && !event.ctrlKey && !event.metaKey && event.code === "KeyS" && !(event.target instanceof HTMLInputElement)) {
+            event.preventDefault();
+            if (event.repeat) return;
+            if (event.shiftKey) chooseStyle(nextPickerStyle(styles, shown));
+            else if (styleOpen) closeStrip();
+            else setStyleOpen(true);
+            return;
+          }
+          if ((dialView || chartView) && dialRef.current?.key(event)) return;
           if (event.key === "Escape" || (event.altKey && !event.ctrlKey && !event.shiftKey && event.code === "KeyM")) {
             event.preventDefault();
             close();
@@ -373,14 +439,11 @@ export function ModelPickerControl({
       >
         <header className="model-cross-header">
           <h2 className="sr-only">{t("model.choose")}</h2>
-          {dial && dialFits && <button type="button" className="model-dial-view" onClick={() => {
-            setListView(!listView);
-            saveModelPickerView(listView ? "dial" : "list", "picker");
-            dialogRef.current?.focus();
-          }}>{t(listView ? "model.dial.dial" : "model.dial.list")}</button>}
+          {styleButton}
           <button data-picker-action type="button" onClick={close} aria-label={t("createBot.cancel")}><X size={18} /></button>
         </header>
-        {dialView ? <ModelDial rows={rows} draft={draft} canCommit={canCommit} onDraft={pick} onSave={save} handle={dialRef} stageRef={stageRef} bindingsId={bindingsId} /> : <>
+        {dialView ? <ModelDial rows={rows} draft={draft} canCommit={canCommit} onDraft={pick} onSave={save} handle={dialRef} stageRef={stageRef} bindingsId={bindingsId} />
+          : chartView ? <ModelChart rows={rows} draft={draft} current={selection} canCommit={canCommit} onDraft={pick} onSave={save} handle={dialRef} stageRef={stageRef}>{setup}</ModelChart> : <>
         <div ref={stageRef} className="model-cross-stage" aria-label={t("engines.models")}>
           <div className="model-cross-plane" style={planeStyle}>
             <div className="model-cross-column" style={{ transform: `translateY(calc(${modelIndex} * -1 * var(--picker-y-step)))` }}>
@@ -465,22 +528,26 @@ export function ModelPickerControl({
               {engineBadgeText(instance.snapshot, needsCli(instance) ? "not-installed" : needsSignIn(instance) ? "sign-in" : "ready", t)}
             </span>}
           </div>
-          {blocked && instance && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} />}
-          {custom.length > 0 && <button type="button" className="text-xs text-ink-secondary hover:text-ink" aria-expanded={customOpen} onClick={() => setCustomOpen(!customOpen)}>{t("model.useLocalCount", { count: custom.length })}</button>}
-          {customOpen && instance && <div className="model-cross-custom">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("model.searchLocal")} placeholder={t("model.searchLocal")} className="w-full rounded-lg bg-inset px-3 py-2 text-base sm:text-sm text-ink" />
-            {filteredCustom.map((option) => <button key={option.id} type="button" data-custom-option={option.id} className="block w-full rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-control" onClick={() => { if (option.id === draft.model) save(); else pick(selectPickerModel(instance, option.id, draft)); }}>{option.label}</button>)}
-            {filteredCustom.length === 0 && <p className="text-xs text-ink-secondary">{t("palette.noMatch", { query })}</p>}
-          </div>}
+          {setup}
         </div>
         <footer className="model-cross-footer" id={bindingsId}>
           <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>M</kbd>{t("model.close")}</span>
+          {dial && <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>S</kbd>{t("model.style")}</span>}
+          {dial && <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>Shift</kbd><kbd>S</kbd>{t("model.style.next")}</span>}
           <span data-picker-key-legend className="model-cross-binding"><kbd>↑</kbd><kbd>↓</kbd>{t("model.engineAxis")}</span>
           <span data-picker-key-legend className="model-cross-binding"><kbd>←</kbd><kbd>→</kbd>{t("model.modelAxis")}</span>
           <button type="button" disabled={!canSave} className="model-cross-binding" onClick={() => save()}><kbd>Enter</kbd>{t("settings.profile.save")}</button>
           <button data-picker-action type="button" className="model-cross-binding" onClick={close}><kbd>Esc</kbd>{t("createBot.cancel")}</button>
         </footer>
         </>}
+        {machine && <Suspense fallback={null}>
+          <ModelMachine rows={rows} draft={draft} current={selection} canCommit={canCommit} onDraft={pick} onSave={save} corner={styleButton} onClose={() => {
+            // As the chosen style the Machine is the picker; as the Alt+Shift+M easter egg it peels off.
+            if (view === "machine") close();
+            else { setMachine(false); dialogRef.current?.focus(); }
+          }}>{setup}</ModelMachine>
+        </Suspense>}
+        {strip.mounted && <PickerStyleStrip closing={strip.closing} shown={shown} styles={styles} picked={picked} skin={skin} onStyle={chooseStyle} onLook={savePickerLook} />}
       </div>
     </div>
   );

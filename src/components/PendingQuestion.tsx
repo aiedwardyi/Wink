@@ -119,7 +119,7 @@ export function AskChoices({ options, onPick }: { options: string[]; onPick: (ch
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className="max-w-full break-words rounded-full border border-ink-secondary bg-control px-3.5 py-1.5 text-left text-[13px] text-ink transition-colors hover:bg-raised-hover pointer-coarse:min-h-11"
+          className="max-w-full break-words rounded-full border border-ink-secondary bg-control px-3.5 py-1.5 text-left text-[13px] text-ink hover:bg-raised-hover pointer-coarse:min-h-11"
         >
           {choice}
         </button>

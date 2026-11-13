@@ -143,6 +143,13 @@ describe("roomTranscriptRows", () => {
     expect(result[2].cluster).toBe(true);
   });
 
+  it("shows a plain note, but folds a worker run's notes into its one row", () => {
+    const note = (id: string): Message => ({ id, at: at(1), role: "bot", kind: "note", text: "STATUS: done", from: from("challenge") });
+    const items = groupActivityRuns([note("n1"), note("n2"), note("n3")]);
+    const workers = new Map([["n2", null], ["n3", { run: {} }]]);
+    expect(roomTranscriptRows(items, { showToolCalls: false, workers }).map((row) => row.visible)).toEqual([true, false, true]);
+  });
+
   it("keeps the day divider on the first visible line after activity crosses midnight", () => {
     const result = rows([
       say("defense", "Late.", at(1, 23)),

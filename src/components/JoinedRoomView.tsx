@@ -8,14 +8,18 @@ import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
+import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
+import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomMessage, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
+import { BotAvatar } from "./Avatar";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
 import { RoomTitle } from "./RoomTitle";
 import { TeamRoomComposer, TeamRoomStatus, useTeamRoomReply } from "./TeamRoomComposer";
 import { TeamRoomTranscript } from "./TeamRoomRow";
+import { TurnPresence } from "./TurnPresence";
 
 const PAGE = 200;
 
@@ -30,10 +34,9 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const entries = room?.entries;
   const hostBots = room?.state?.bots;
   const teamBots = room?.state?.teamBots;
+  // Tags include every room bot; routing still enforces ownership.
   const bots = useMemo(() => (teamBots?.length ? [...(hostBots ?? []), ...teamBots] : hostBots), [hostBots, teamBots]);
   const myBots = room?.myBots;
-  // Only this PC's own room bots answer this PC; the host's bots answer everyone.
-  const askable = useMemo(() => [...(hostBots ?? []), ...(teamBots ?? []).filter((bot) => myBots?.some((mine) => mine.id === bot.id))], [hostBots, teamBots, myBots]);
   const first = entries?.[0]?.seq;
   const loadOlder = useCallback((beforeCommit: () => void) => {
     // Held per oldest row, so a scroll before the bigger page lands asks once; nothing more stops it.
@@ -54,7 +57,9 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const names = useMemo(() => reactionNames(people ?? [], host, bots), [people, host, bots]);
   const notice = room?.state?.notice;
   const base = joinedRoomBase(roomId);
-  const { replyTo, selectReply, clearReply } = useTeamRoomReply(base);
+  const draftId = `joined:${roomId}`;
+  const messages = useMemo(() => lines.map(roomMessage), [lines]);
+  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, draftId, messages);
   const name = room?.state?.roomName ?? "";
   const phase = room ? joinedPhase(room) : room === null ? null : "connecting";
   const status =
@@ -67,6 +72,11 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const me = room?.me.id;
   const composerPeople = room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined;
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
+  const myTurns = (status === null ? myBots ?? [] : []).map((bot) => {
+    const listed = teamBots?.find((candidate) => candidate.id === bot.id);
+    return { ...bot, name: listed?.name ?? "", color: (listed?.color || DEFAULT_MAUS_COLOR) as MausColor };
+  });
+  const working = myTurns.some((bot) => bot.working);
   const seq = entries?.at(-1)?.seq;
   useEffect(() => {
     const read = () => {
@@ -87,6 +97,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         <RoomTitle name={name} picture={<RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />} disabled={!room?.state} />
         {room && joined && <RoomAlertsBell chat={joinedSelection(roomId)} />}
       </div>
+      <AppErrorBanner />
       <TeamRoomTranscript
         key={base}
         lines={lines}
@@ -106,17 +117,36 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
           canUnpin: notice?.by === `person:${meId}`,
           set: room?.canReact ? (entryId) => void setJoinedNotice(roomId, entryId).catch(() => {}) : undefined,
         }}
+        empty={entries && room?.state ? { name, members: [room.state.host, ...room.state.people.map((person) => person.name)], picture: roomPictureUrl(base, room.state.picture), retry: room.link } : undefined}
+        presence={myTurns.map((bot) => (
+          <TurnPresence
+            key={bot.id}
+            avatar={<BotAvatar bot={state.bots.find((local) => local.id === bot.botId) ?? { name: bot.name, color: bot.color }} state="thinking" size={36} forward={false} lookAround={1} trackPointer={false} />}
+            visible={Boolean(bot.working)}
+            label={t("teamRoom.botWorking", { name: bot.name })}
+            since={bot.since}
+          />
+        ))}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
         {joined ? (
           <>
             {status !== null && <div role="status" className="mb-2 px-5 text-center text-[13px] text-ink-secondary">{status}</div>}
-            {status === null && myBots?.map((bot) => {
-              const botName = teamBots?.find((candidate) => candidate.id === bot.id)?.name ?? "";
-              const text = bot.working ? t("teamRoom.botWorking", { name: botName }) : bot.error === "busy" ? t("teamRoom.botBusy", { name: botName }) : bot.error ? t("teamRoom.botFailed", { name: botName }) : null;
-              return text && <p key={bot.id} data-my-bot-turn role="status" className={cn("px-5 pb-1 text-[12.5px]", bot.error ? "text-danger" : "text-ink-secondary")}>{text}</p>;
-            })}
-            <TeamRoomComposer key={roomId} name={name} base={base} draftId={`joined:${roomId}`} people={composerPeople} bots={askable} replyTo={replyTo} onClearReply={clearReply} offline={phase !== "live"} />
+            <TeamRoomComposer
+              key={roomId}
+              name={name}
+              base={base}
+              draftId={draftId}
+              people={composerPeople}
+              bots={bots}
+              replyTo={replyTo}
+              onClearReply={clearReply}
+              onConsumeReply={consumeReply}
+              onRestoreReply={restoreReply}
+              offline={phase !== "live"}
+              status={myTurns.flatMap((bot) => bot.waiting ? [{ id: bot.id, text: t("teamRoom.botBusy", { name: bot.name }) }] : bot.error ? [{ id: bot.id, text: t("teamRoom.botFailed", { name: bot.name }), failed: true }] : [])}
+              onStop={working ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
+            />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}
       </div>
