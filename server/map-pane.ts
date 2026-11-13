@@ -94,7 +94,7 @@ export function createMapPane(deps: MapPaneDeps) {
         const live = (await deps.panes(botId)).filter(pane => !pane.main && !pane.exited);
         if (closed) return;
         const ids = new Set(live.map(pane => pane.sessionId));
-        for (const [id, record] of panes) if (!ids.has(id)) { remove(record); panes.delete(id); }
+        for (const [id, record] of panes) if (!ids.has(id)) { remove(record); panes.delete(id); fallback.delete(`${botId}:${id}`); }
         for (const pane of live) {
           if (closed) return;
           const existing = panes.get(pane.sessionId);
