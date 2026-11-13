@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 
 const BUTTON = "flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-control disabled:opacity-50 [@media(pointer:coarse)]:size-11";
-// the input saves on blur, so a press must not move focus before its click lands
+// a caller may save on blur, so a press must not move focus before its click lands
 const keepFocus = (event: MouseEvent) => event.preventDefault();
 
 export function RenameActions({ onSave, onCancel, disabled }: { onSave: () => void; onCancel: () => void; disabled?: boolean }) {

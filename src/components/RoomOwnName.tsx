@@ -60,7 +60,7 @@ export function RoomOwnName({ name }: { name: string }) {
           <>
             <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
             <span className="shrink-0 text-[12px] text-ink-secondary">{t("chat.you")}</span>
-            <button type="button" aria-label={t("teamRoom.renameSelf")} onClick={() => { setValue(state.config?.profile?.name ?? name); setEditing(true); }} className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><Pencil size={14} /></button>
+            <button type="button" aria-label={t("teamRoom.renameSelf")} onClick={() => { composing.current = false; setValue(state.config?.profile?.name ?? name); setEditing(true); }} className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><Pencil size={14} /></button>
           </>
         )}
       </div>

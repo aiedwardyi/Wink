@@ -61,3 +61,25 @@ it("cancels from the X without saving", async () => {
     await act(async () => root.unmount());
   }
 });
+
+it("saves after a cancel that cut off an IME composition", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  mock.api.mockResolvedValue({ profile: { name: "Mina" } });
+  try {
+    await act(async () => root.render(createElement(RoomOwnName, { name: "Mina Park" })));
+    await act(async () => host.querySelector("button")!.click());
+    await act(async () => host.querySelector("input")!.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click());
+    await act(async () => host.querySelector("button")!.click());
+    const input = host.querySelector("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Mina");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Save name"]')!.click());
+    expect(mock.api).toHaveBeenCalledWith("/api/config", { method: "PUT", body: JSON.stringify({ profile: { name: "Mina" } }) });
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
