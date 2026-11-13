@@ -86,9 +86,9 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
 
   const talking = snap.status === "listening" || snap.status === "speaking" || snap.status === "working";
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
-  // Only the Windows and macOS apps have a sound input pane to open.
-  const soundPane = window.ogb?.permOpenSettings && (window.ogb.platform === "win32" || window.ogb.platform === "darwin");
   const [beforeLink, afterLink] = words.micSilent.split(words.soundInput);
+  // Only the Windows and macOS apps have a sound input pane to open.
+  const soundPane = afterLink !== undefined && window.ogb?.permOpenSettings && (window.ogb.platform === "win32" || window.ogb.platform === "darwin");
   return (
     <>
       {snap.hushed && talking
