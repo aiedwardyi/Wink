@@ -12,6 +12,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
+import { RainbowRing } from "./RainbowRing";
 import { useModelDialFits } from "./ModelDial";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
@@ -337,6 +338,7 @@ function RainbowBoxRow() {
         value={box}
         options={(["off", "rainbow", "theme"] as const).map((id) => ({ id, label: t(`settings.rainbowBox.${id}`) }))}
         onChange={saveRainbowBox}
+        ring={box !== "off" && <RainbowRing theme={box === "theme"} />}
       />
     </Card>
   );

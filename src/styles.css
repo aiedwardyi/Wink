@@ -4209,15 +4209,18 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 }
 
 /* The plain field edge stays under the faint ring at rest. */
-:is([data-skin="wink-day"], [data-skin="atelier"], [data-skin="precision-dimmed"], [data-skin="bronze"], [data-skin="dim-sand"]) [data-orbit-composer-frame][data-rainbow]:not(:focus-within) {
+:is([data-skin="wink-day"], [data-skin="atelier"], [data-skin="precision-dimmed"], [data-skin="bronze"], [data-skin="dim-sand"]) [data-orbit-composer-frame][data-rainbow]:not(:focus-within),
+:is([data-skin="wink-day"], [data-skin="atelier"], [data-skin="precision-dimmed"], [data-skin="bronze"], [data-skin="dim-sand"]) [role="radiogroup"]:not(:focus-within) > [data-segmented-thumb] {
   border-color: var(--color-edge) !important;
 }
 
-[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] {
+[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow],
+[role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] {
   opacity: 1;
 }
 
-[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span {
+[data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
+[role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {
   animation-play-state: running;
 }
 
@@ -5377,7 +5380,8 @@ html[data-orbit-idle] :is(
   animation-play-state: paused !important;
 }
 
-html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span {
+html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
+html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {
   animation-play-state: paused;
 }
 
