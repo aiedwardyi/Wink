@@ -1195,7 +1195,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } catch {}
     }
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
-    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : [], {
+    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
     let pty;
