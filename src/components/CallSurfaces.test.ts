@@ -67,7 +67,7 @@ it("leaves voice picker focus to the global ring and snaps its hovers", async ()
 it("moves the focused group call tile on the default duration", async () => {
   await act(async () => startCall(group.id));
   const host = await render(createElement(GroupCallOverlay, { group, members: [bot] }));
-  const tile = host.querySelector(".w-\\[124px\\]")!;
+  const tile = host.querySelector(".scale-105, .opacity-75")!;
   expect(tile).not.toBeNull();
   expect([...tile.classList].filter((value) => value.startsWith("duration-"))).toEqual([]);
 });
