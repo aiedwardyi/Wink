@@ -278,6 +278,8 @@ describe("call voice in Settings", () => {
       for (const word of ["통화 목소리", "Jenn", "Eddie", "아델", "통화 언어", "자동", "한국어", "English"]) expect(text).toContain(word);
       await act(async () => button(settings(), "Jenn 들어보기")!.click());
       expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
+      await act(async () => button(settings(), "아델 들어보기")!.click());
+      expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3", "/voice-preview/Erinome-ko.mp3"]);
     } finally {
       applyLocale("en");
     }
