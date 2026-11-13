@@ -5,7 +5,7 @@
 import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, RefreshCw, X } from "lucide-react";
 import { isVoiceLine } from "../../shared/live-call";
 import {
   api,
@@ -59,14 +59,13 @@ import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
-import { GroupMemberRoster } from "./GroupMemberRoster";
 import { RoomTitle } from "./RoomTitle";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomNotice } from "./RoomNotice";
 import { RoomPicture } from "./RoomPicture";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { GroupArchiveBar } from "./GroupArchiveBar";
-import { GroupPeopleFaces, PersonLabel, RoomJoinLine } from "./GroupPeople";
+import { PersonLabel, RoomJoinLine } from "./GroupPeople";
 import { useGroupArchive } from "@/lib/group-archive";
 import { placeJoins } from "@/lib/room-joins";
 import { hostLines, hostRoomBase, reactionNames, roomJoins, roomNoticeText, roomPeople, roomPictureUrl, setHostNotice } from "@/lib/team-rooms";
@@ -74,18 +73,15 @@ import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, locali
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
-import { openRoomDetails } from "@/lib/room-details";
 import { useTranslationAvailable } from "@/lib/room-translate";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
-import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
 import { useSearchFindSeed } from "@/lib/chat-find";
 import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { shortPath } from "@/lib/short-path";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -703,112 +699,6 @@ export const Transcript = memo(function Transcript({
   );
 });
 
-/** The room's shared project folder: where every member's shell and file
- * tools run, overriding each bot's own folder for room turns. The room
- * pins its own copy on its first turn (the server does the pinning —
- * engines key their sessions to the folder a thread starts in, so a
- * folder must not move under a room that already worked somewhere). The
- * PATCH is made directly rather than through patchGroup: the server
- * validates the path and a rejected folder must not stick in local state. */
-function RoomWorkingFolder({ group }: { group: Group }) {
-  const { t } = useI18n();
-  const { capabilities } = useDesktopCapabilities();
-  const home = capabilities.host.homeDir;
-  const [draft, setDraft] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const canPick = Boolean(window.ogb?.pickFolder);
-  const pinned = group.pinnedCwd; // undefined = not yet, null = each bot's own, string = folder
-  const locked = pinned !== undefined;
-  const shownCwd = locked ? (pinned ?? undefined) : group.cwd;
-  const emptyLabel = locked ? t("room.eachBotFolder") : t("room.chooseSharedFolder");
-
-  const save = async (cwd: string | null) => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api(`/api/groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ cwd }) });
-      setDraft(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const pick = async () => {
-    const chosen = await window.ogb?.pickFolder?.(group.cwd);
-    if (chosen) void save(chosen);
-  };
-
-  return (
-    <div className="rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">{t("room.workingFolder")}</div>
-      <div className="mt-0.5 text-[13px] text-ink-secondary">{t("room.workingFolderHelp")}</div>
-      {locked ? (
-        <div className="mt-3">
-          <div className="truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={shownCwd}>
-            {shownCwd ? shortPath(shownCwd, home) : <span className="font-sans text-ink-secondary">{emptyLabel}</span>}
-          </div>
-          <div className="mt-2 text-[12px] text-ink-secondary">
-            {t("room.fixedFolder")}
-          </div>
-        </div>
-      ) : canPick ? (
-        <div className="mt-3 flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={group.cwd}>
-            {group.cwd ? shortPath(group.cwd, home) : <span className="font-sans text-ink-secondary">{emptyLabel}</span>}
-          </div>
-          <button onClick={() => void pick()} disabled={saving} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            <FolderOpen size={14} /> {t("room.chooseEllipsis")}
-          </button>
-          {group.cwd && (
-            <button onClick={() => void save(null)} disabled={saving} className="shrink-0 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50">
-              {t("room.clear")}
-            </button>
-          )}
-        </div>
-      ) : (
-        <form
-          className="mt-3 flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            // an emptied field clears the folder — the server wants null
-            void save((draft ?? group.cwd ?? "").trim() || null);
-          }}
-        >
-          <input
-            className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 font-mono text-[12.5px] text-ink placeholder:font-sans placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
-            placeholder={t("room.eachBotFolderPath")}
-            value={draft ?? group.cwd ?? ""}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <button type="submit" disabled={saving || draft === null} className="shrink-0 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            {t("room.save")}
-          </button>
-        </form>
-      )}
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-    </div>
-  );
-}
-
-function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: () => void }) {
-  const { t } = useI18n();
-  const folder = group.pinnedCwd === undefined ? group.cwd : (group.pinnedCwd ?? undefined);
-  const name = folder ? folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder : t("room.projectFolderChip");
-  return (
-    <button
-      onClick={onToggle}
-      className="flex min-w-0 max-w-[220px] shrink-[8] items-center max-md:shrink-0 gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
-      title={folder ? t("room.workingFolderNamed", { folder }) : t("room.workingFolderChip")}
-      aria-label={folder ? t("room.workingFolderNamed", { folder }) : t("room.projectFolderChip")}
-    >
-      <Folder size={12} className="shrink-0" />
-      {folder && <span className="truncate font-mono max-md:hidden">{name}</span>}
-    </button>
-  );
-}
-
 type RoomSetupFields = {
   setupPending?: boolean;
   setupRequired?: boolean;
@@ -1178,7 +1068,6 @@ export function GroupView({ group: live }: { group: Group }) {
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
-  const [folderOpen, setFolderOpen] = useState(false);
   const find = useSearchFindSeed(group.threadId);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
@@ -1410,8 +1299,6 @@ export function GroupView({ group: live }: { group: Group }) {
   // A plain tail holds at least the newest window of visible rows - see ChatView.
   const tailStart = useMemo(() => tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [group.messages.length, renders]);
 
-  // an open folder editor belongs to the room it was opened in
-  useEffect(() => setFolderOpen(false), [group.id]);
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted - see ChatView.
@@ -1530,28 +1417,10 @@ export function GroupView({ group: live }: { group: Group }) {
     });
   };
 
-  // Static mauses: one per member, a ring + dot on whoever is working.
-  const memberMauses = members.map((b) => (
-    <span
-      key={b.id}
-      title={group.busyBotId === b.id ? t("chrome.botWorking", { name: b.name }) : b.name}
-      className={cn(
-        "relative inline-flex rounded-full",
-        group.busyBotId === b.id && "z-10 ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
-      )}
-    >
-      <BotAvatar bot={b} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} />
-      {group.busyBotId === b.id && (
-        <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
-      )}
-    </span>
-  ));
-
   return (
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
-      {/* Header: static member mauses; a ring + dot marks the working bot. */}
       <div
         className={cn(
           "@container/chathead flex items-center justify-between px-5 py-3",
@@ -1560,38 +1429,13 @@ export function GroupView({ group: live }: { group: Group }) {
         )}
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
-          <RoomTitle name={group.name} picture={group.hosted && group.picture && <RoomPicture key={group.id} src={roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
+          <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
-          <button
-            type="button"
-            onClick={() => find.toggleFind()}
-            aria-label={t("chat.findInConversation")}
-            aria-pressed={findOpen}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
-              findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title={t("chat.findInConversation")}
-          >
-            <Search size={18} />
-          </button>
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
-          {!setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
-          {group.dm ? (
-            memberMauses
-          ) : (
-            <GroupMemberRoster group={group} members={members} mauses={memberMauses} onOpen={(section) => openRoomDetails(dispatch, section)}>
-              <GroupPeopleFaces group={group} />
-            </GroupMemberRoster>
-          )}
-          {group.hosted && (
-            <>
-              <RoomAlertsBell chat={group.id} />
-              <ShowPaneButton threadId={group.threadId} />
-            </>
-          )}
+          <RoomAlertsBell chat={group.id} />
+          <ShowPaneButton threadId={group.threadId} />
         </div>
       </div>
 
@@ -1603,15 +1447,6 @@ export function GroupView({ group: live }: { group: Group }) {
           initialMessageId={find.findSeed?.messageId ?? null}
           onClose={find.closeFind}
         />
-      )}
-
-      {/* Optional shared folder — the chip in the header toggles it */}
-      {!setupPending && folderOpen && !group.dm && (
-        <div className="w-full px-5">
-          <div className="mb-1">
-            <RoomWorkingFolder group={group} />
-          </div>
-        </div>
       )}
 
       {/* Pinned message banner — resolves against the room's full transcript */}

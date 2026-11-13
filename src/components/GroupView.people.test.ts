@@ -20,7 +20,6 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import { applyLocale, I18nProvider } from "@/lib/i18n";
-import { GroupPeopleFaces } from "./GroupPeople";
 import { Transcript } from "./GroupView";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -107,25 +106,6 @@ describe("people in a shared group's chat", () => {
     localStorage.setItem("omb-locale", "ko");
     const host = await show([mine], [{ personId: "p1", name: "서연", at: day + 1 }]);
     expect(host.querySelector("[data-room-join]")?.textContent).toBe("서연 님이 참여했어요. 여기 있는 모두가 채팅 전체를 볼 수 있어요.");
-  });
-});
-
-describe("header roster", () => {
-  it("lists people as initials after the bots", async () => {
-    const people = ["Seo-yeon Park", "Mina", "Jae", "Alexandra Kim"].map((name, i) => ({ id: `p${i}`, name }));
-    root = createRoot(document.body.appendChild(document.createElement("div")));
-    await act(async () => root!.render(createElement(GroupPeopleFaces, { group: { ...group, room: { name: "Room", people, joins: [] } } })));
-    const faces = document.querySelector("[data-group-people-faces]")!;
-    expect(faces.textContent).toBe("SPMJ+1");
-    expect(faces.getAttribute("title")).toBe("Seo-yeon Park, Mina, Jae, Alexandra Kim");
-    const roster = groupView.slice(groupView.indexOf("<GroupMemberRoster"), groupView.indexOf("</GroupMemberRoster>"));
-    expect(roster.indexOf("<GroupPeopleFaces")).toBeGreaterThan(-1);
-  });
-
-  it("draws nothing for a group nobody joined", async () => {
-    root = createRoot(document.body.appendChild(document.createElement("div")));
-    await act(async () => root!.render(createElement(GroupPeopleFaces, { group })));
-    expect(document.querySelector("[data-group-people-faces]")).toBeNull();
   });
 });
 
