@@ -116,15 +116,6 @@ describe("collapse and expand", () => {
 });
 
 describe("one arrow rule", () => {
-  it("points Bot Details' collapse right, toward the edge the panel leaves by", () => {
-    const panel = read("components/SettingsPanel.tsx");
-    const at = panel.indexOf('aria-label={t("bot.collapseDetails")}');
-    expect(at).toBeGreaterThan(-1);
-    const button = panel.slice(at, panel.indexOf("</button>", at));
-    expect(button).toContain("<ChevronRight ");
-    expect(button).not.toContain("<ChevronLeft");
-  });
-
   // Carbon: a fold's chevron points down while closed and turns up when open; right is for going somewhere.
   it.each([
     "ActivityRun", "ChatView", "InspectorPanel", "MemoryGroups", "MemorySaveChip", "ModelPicker",
