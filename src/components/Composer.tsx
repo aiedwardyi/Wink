@@ -621,6 +621,8 @@ export function Composer({
         queued: {
           cancel: () => dropQueued(entry.draft.sendId),
           sendNow: group && canSteer && roomLineSteers(entry.text, members ?? [], group.busyBotId) ? () => {
+            // the hold may have flushed while its menu was open
+            if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
             dropQueued(entry.draft.sendId);
             dispatch({
               type: "sendGroup",
