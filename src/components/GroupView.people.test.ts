@@ -126,6 +126,22 @@ describe("people in a shared group's chat", () => {
     expect(row.querySelector("strong")?.textContent).toBe("출시 준비를 모두 마쳤어요.");
   });
 
+  it("puts every room line's actions in one row under the bubble, translate last", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ available: true }))));
+    const bot: Message = { id: "b1", role: "bot", kind: "text", at: day, text: "출시 준비를 모두 마쳤어요.", from: { botId: "bot-1", name: "Rando", color: "blue" } };
+    const host = await show([mine, { ...theirs, text: "다들 안녕" }, bot]);
+    const labels = (id: string) => [...host.querySelectorAll(`[data-mid="${id}"] [data-message-hover-actions] button`)].map((button) => button.getAttribute("aria-label"));
+    for (const id of ["u1", "u2", "b1"]) {
+      const row = host.querySelector<HTMLElement>(`[data-mid="${id}"] [data-message-hover-actions]`)!;
+      expect(row.className).toContain("bottom-0");
+      expect(row.className).not.toMatch(/left-full|right-full|top-1\/2/);
+    }
+    expect(labels("u1")).toEqual(["Copy message", "Reply to message"]);
+    expect(labels("u2")).toEqual(["More reactions", "Copy message", "Reply to message", "Translate"]);
+    expect(labels("b1")).toEqual(["More reactions", "Copy message", "Reply to message", "Translate"]);
+    expect(host.querySelectorAll("[data-orbit-message-content] [data-room-translate]")).toHaveLength(0);
+  });
+
   it("translates an earlier Korean bubble when the committed turn ends in English", async () => {
     const fetch = vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("/entries/m-b1/translate") ? { text: "The launch is ready." } : { available: true })));
     vi.stubGlobal("fetch", fetch);
