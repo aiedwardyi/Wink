@@ -2,10 +2,12 @@
 // muse driver it replaces — stored configs key on the kind, so the fleet
 // swap is one import change in drivers/builtIn.ts. WSL plumbing is shared
 // with the ACP driver by import, never duplicated.
+import { readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 
 import type { ModelCatalog } from "../../contracts.ts";
-import { toWslPath } from "../../env-path.ts";
+import { resolveCliSpawn, toWslPath } from "../../env-path.ts";
 import { isWslCommand } from "../../wsl-gate.ts";
 import { createCliText } from "../cli-text.ts";
 import {
@@ -71,6 +73,80 @@ export function museServeArgs(version: string | null, wsl: boolean): string[] {
   return hasRoster && !wsl ? ["-c", "run.reminder_roster.agents=[]"] : [];
 }
 
+const MUSE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+-R[0-9]+(\.[0-9]+)?$/;
+const MUSE_URGENCY = ["none", "encouraged", "must_download"];
+
+const readText = (file: string): string | null => {
+  try {
+    return readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  } catch {
+    return null;
+  }
+};
+
+/** PowerShell's property lookup is case-insensitive. */
+const jsonProp = (o: unknown, name: string): unknown => {
+  if (!o || typeof o !== "object") return undefined;
+  const key = Object.keys(o).find((k) => k.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : (o as Record<string, unknown>)[key];
+};
+const jsonText = (o: unknown, name: string) => String(jsonProp(o, name) ?? "");
+
+/** The launcher's Parse-ChannelManifest, reduced to the version it names. */
+function releaseVersion(content: string, channel: string): string | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const version = jsonText(doc, "version");
+  const url = jsonText(doc, "manifest_url");
+  if (jsonText(doc, "channel") !== channel || !MUSE_VERSION.test(version)) return null;
+  if (!url || /[\t\r\n\x1f]/.test(url) || !/^https:\/\//i.test(url)) return null;
+  if (!MUSE_URGENCY.includes(jsonText(doc, "urgency")) || jsonProp(doc, "notification_text") == null) return null;
+  return version;
+}
+
+/** Mirrors `.muse-launcher.ps1` for a host start: the active `muse-bin-<version>.exe`
+ * and the env the launcher would hand it. Null whenever the launcher would do
+ * anything but run that exe (update due, channel switch, missing binary), so it runs instead. */
+export function museDirectHost(
+  cli: string,
+  env: Record<string, string | undefined>,
+  now = Date.now(),
+): { command: string; env: Record<string, string | undefined> } | null {
+  if (process.platform !== "win32") return null;
+  const launch = resolveCliSpawn(cli, []);
+  const script = launch.args[launch.args.indexOf("-File") + 1];
+  if (!script || basename(script).toLowerCase() !== ".muse-launcher.ps1") return null;
+  if (env.MUSE_LAUNCHER_INSTALL === "1" || env.MUSE_INTERNAL_UPDATE === "1") return null;
+  const dir = dirname(script);
+  const channel = env.MUSE_CHANNEL?.trim() ? env.MUSE_CHANNEL : "muse-stable";
+  if (channel !== "muse-stable" && channel !== "muse-canary") return null;
+  if ((readText(join(dir, ".muse-channel"))?.trim() ?? "muse-stable") !== channel) return null;
+  const version = readText(join(dir, ".muse-version"))?.trim();
+  if (!version || !MUSE_VERSION.test(version)) return null;
+  const exe = join(dir, `muse-bin-${version}.exe`);
+  try {
+    if (!statSync(exe).isFile()) return null;
+  } catch {
+    return null;
+  }
+  if (env.MUSE_NO_AUTO_UPDATE !== "1") {
+    if (env.MUSE_SYNC_UPDATE === "1") return null;
+    const interval = /^[0-9]+$/.test(env.MUSE_UPDATE_INTERVAL_SECONDS ?? "") ? Number(env.MUSE_UPDATE_INTERVAL_SECONDS) : 3600;
+    const checked = readText(join(dir, ".muse-update-checked-at"))?.trim();
+    if (!checked || !/^[0-9]+$/.test(checked) || Math.floor(now / 1000) - Number(checked) >= interval) return null;
+  }
+  // powershell.exe -ExecutionPolicy Bypass exports this to every child; shell tools inherit it.
+  const out: Record<string, string | undefined> = { ...env, PSExecutionPolicyPreference: "Bypass" };
+  const info = readText(join(dir, ".muse-release-info.json"));
+  if (info !== null && releaseVersion(info, channel) === version) out.MUSE_RELEASE_INFO = info;
+  else delete out.MUSE_RELEASE_INFO;
+  return { command: exe, env: out };
+}
+
 export const MspMuseAgentDriver = createMspDriver({
   driverKind: "museAgent",
   displayName: "Meta Muse",
@@ -91,6 +167,7 @@ export const MspMuseAgentDriver = createMspDriver({
   wslProbeWrapper: museWslFallbackCli,
   wslResolveCli: resolveWslMuseCli,
   serveArgs: museServeArgs,
+  directHost: (cli, env) => museDirectHost(cli, env),
   text: ({ cli, env }) => createCliText({
     name: "Muse",
     model: MSP_MUSE_MODELS.default,

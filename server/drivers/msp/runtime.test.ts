@@ -3,12 +3,12 @@
 // folds into canonical events, interrupts and crashes settle cleanly.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
 import type { PrepareTurn, ProviderInstance, SendTurnInput } from "../../contracts.ts";
@@ -16,6 +16,7 @@ import { toWslPath } from "../../env-path.ts";
 import * as procs from "../../procs.ts";
 import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
+import { fakeMuseInstall, museUpdate } from "../../testing/fake-muse-install.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { MspMuseAgentDriver } from "./muse.ts";
 import { createMspDriver, mspMcpServers, translateMspServerForWsl } from "./runtime.ts";
@@ -1059,6 +1060,82 @@ describe("MSP prewarm (fake host)", () => {
     expect(versionProbes()).toHaveLength(1);
     await instance.prepare!();
     expect(versionProbes()).toHaveLength(1);
+  });
+});
+
+describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)", () => {
+  let instance: ProviderInstance | undefined;
+  let dir: string;
+  let install: { cli: string; exe: string };
+  let mapped: Set<string>;
+  let spawn: MockInstance<typeof procs.spawnCli>;
+  const realSpawn = procs.spawnCli;
+  const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
+  const runTurn = async (threadId: string) => {
+    instance ??= await MspMuseAgentDriver.create({
+      instanceId: "muse-direct",
+      displayName: "Muse",
+      environment: {},
+      enabled: true,
+      config: { cli: install.cli, fullAuto: true, workspace: dir },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId, text: "hi" });
+      return await recorder.until((e) => e.type === "turn.completed");
+    } finally {
+      recorder.stop();
+    }
+  };
+
+  beforeEach(() => {
+    ensureDirs();
+    process.env.META_API_KEY = "meta-key";
+    dir = temps.make(join(tmpdir(), "omb-muse-install-"));
+    install = fakeMuseInstall(dir, FAKE_CLI);
+    // A mapped placeholder exe runs the fake host; an unmapped one fails to start.
+    mapped = new Set([install.exe]);
+    spawn = vi.spyOn(procs, "spawnCli").mockImplementation((cli, args, opts) => realSpawn(mapped.has(cli) ? FAKE_CLI : cli, args, opts));
+  });
+
+  afterEach(async () => {
+    delete process.env.META_API_KEY;
+    await instance?.dispose();
+    instance = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it("starts the engine exe itself with the env the launcher sets", async () => {
+    const exec = vi.spyOn(procs, "execCli");
+    expect(await runTurn("t-direct")).toMatchObject({ ok: true });
+    const [[command, , opts]] = serveCalls();
+    expect(command).toBe(install.exe);
+    expect(opts.env).toMatchObject({
+      MUSE_RELEASE_INFO: readFileSync(join(dir, ".muse-release-info.json"), "utf8"),
+      PSExecutionPolicyPreference: "Bypass",
+    });
+    // The version probe still runs the launcher, and with it Muse's update check.
+    expect(exec.mock.calls.some(([cli, args]) => cli === install.cli && args.includes("--version"))).toBe(true);
+  });
+
+  it("follows an update that renames the exe", async () => {
+    expect(await runTurn("t-before")).toMatchObject({ ok: true });
+    const next = museUpdate(dir, "1.4.19-R2.1");
+    mapped.add(next);
+    rmSync(install.exe);
+    expect(await runTurn("t-after")).toMatchObject({ ok: true });
+    expect(serveCalls().map(([command]) => command)).toEqual([install.exe, next]);
+  });
+
+  it.each<[string, () => void]>([
+    ["the version file is missing", () => rmSync(join(dir, ".muse-version"))],
+    ["the exe it names is gone", () => rmSync(install.exe)],
+    ["Muse's update check is due", () => writeFileSync(join(dir, ".muse-update-checked-at"), "0\n")],
+    ["the exe fails to start", () => mapped.clear()],
+  ])("falls back to the launcher when %s", async (_, breakInstall) => {
+    breakInstall();
+    expect(await runTurn("t-fallback")).toMatchObject({ ok: true });
+    expect(serveCalls().at(-1)![0]).toBe(install.cli);
   });
 });
 
