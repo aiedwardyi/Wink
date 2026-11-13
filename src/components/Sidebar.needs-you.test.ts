@@ -174,8 +174,10 @@ describe("Sidebar needs-you glow", () => {
     const animation = rule.match(/animation:\s*needs-you-pulse([^;]*);/)?.[1] ?? "";
     expect(animation).not.toBe("");
     expect(animation).not.toContain("infinite");
+    // A half count ends on the 50% keyframe, so the held ring never flashes out.
+    expect(animation).toMatch(/\s\d+\.5\b/);
     expect(rule).toMatch(/opacity:\s*1\b/);
-    expect(css).toMatch(/html\[data-orbit-idle="hidden"\] \.needs-you-glow::after \{[^}]*animation:\s*none/);
+    expect(css).toMatch(/html\[data-orbit-idle="hidden"\] \.needs-you-glow::after \{[^}]*animation-play-state:\s*paused/);
   });
 
   it("pulses while a fired routine is unseen, on rows, rail, collapsed and hidden sections, and settles on open", async () => {

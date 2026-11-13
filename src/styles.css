@@ -5384,7 +5384,7 @@ html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] 
 }
 
 html[data-orbit-idle="hidden"] .needs-you-glow::after {
-  animation: none;
+  animation-play-state: paused;
 }
 
 /* A frozen ring reads as a hung turn; the elapsed timer carries it instead. */
