@@ -593,7 +593,7 @@ export const Transcript = memo(function Transcript({
               <div
                 data-orbit-message-body
                 data-strip={m.reactions?.length ? "" : undefined}
-                className="relative w-fit max-w-[min(42rem,78%)] pb-8"
+                className={cn("relative w-fit max-w-[min(42rem,78%)]", !readOnly && "pb-8")}
               >
                 {mine && !readOnly && (
                   <div

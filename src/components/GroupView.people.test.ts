@@ -167,6 +167,7 @@ describe("an older task of a shared group", () => {
     const reacted = { ...theirs, reactions: [{ emoji: "👍", by: "user" }] };
     const host = await show([mine, reacted], undefined, true, menu);
     expect(host.querySelector("[data-message-hover-actions]")).toBeNull();
+    expect(host.querySelector("[data-orbit-message-body]")!.className).not.toContain("pb-8");
     for (const row of host.querySelectorAll("[data-orbit-message]")) row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(menu).not.toHaveBeenCalled();
     const chip = host.querySelector("[data-mid=\"u2\"] [data-orbit-message-body] button");
