@@ -1032,7 +1032,9 @@ describe("MSP prewarm (fake host)", () => {
     await create();
     await instance.prepare!();
     const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+    expect(child.exitCode).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
     vi.useRealTimers();
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
 

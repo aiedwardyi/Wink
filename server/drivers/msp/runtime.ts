@@ -36,14 +36,13 @@ import { finishNative } from "../native.ts";
 import { experimentalAgents } from "../tool-catalog.ts";
 import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
-import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
+import { IDLE_TTL_MS, warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
 const ASK_TIMEOUT_MS = 15 * 60_000;
-const HANDSHAKE_IDLE_MS = 60_000;
 const HANDSHAKE = "__handshake__";
 
 const DENY_TIMEOUT_NOTE =
@@ -569,7 +568,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         if (host && !host.inUse && !host.ttl && !lease.signal.aborted) {
           host.ttl = setTimeout(() => {
             if (!host.inUse) lease.release("idle");
-          }, HANDSHAKE_IDLE_MS);
+          }, IDLE_TTL_MS);
           host.ttl.unref?.();
         }
       };

@@ -162,6 +162,7 @@ import {
   type PushTarget,
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { warmEngines } from "./engine-warm.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -9087,6 +9088,12 @@ startupTiming.afterPaint("probes", async () => {
     })
     .then((sel) => {
       bootSelection = sel;
+      void registry.describeCached().then((rows) => warmEngines({
+        rows,
+        wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
+        instance: (id) => registry.get(id),
+        busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
+      })).catch(() => {});
     })
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);
