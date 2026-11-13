@@ -418,7 +418,7 @@ it.each([
   await act(async () => {});
   try {
     const total = [...host.querySelectorAll<HTMLElement>("[title]")];
-    expect(total.map((el) => [el.textContent, el.title])).toEqual([["24,317", title]]);
+    expect(total.map((el) => [el.textContent, el.title])).toEqual([["24,317", title], ["100%", "Claude 100%"]]);
     for (const label of labels) expect(host.textContent).toContain(label);
     expect(host.textContent).not.toContain(title);
   } finally {
@@ -447,14 +447,15 @@ it.each([
   expect(engineShares([...engines]).map(({ name, share }) => [name, share])).toEqual(shares);
 });
 
-it("lists every engine under the squares, and no row with no replies", async () => {
+it("shows the top engine as a stat with every share on its hover, and none with no engines", async () => {
   const engines = [{ engine: "codex", count: 1400 }, { engine: "claudeAgent", count: 7200 }, { engine: "grokAgent", count: 800 }, { engine: "geminiAgent", count: 400 }, { engine: "museAgent", count: 200 }];
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), engines }))));
   const { host, unmount } = mount();
   await act(async () => {});
   try {
-    const row = host.querySelector<HTMLElement>("[data-activity-engines]")!;
-    expect([...row.children].map((item) => [item.textContent, item.querySelectorAll("svg").length])).toEqual([["Claude72%", 1], ["OpenAI14%", 1], ["Grok8%", 1], ["Gemini4%", 1], ["Muse2%", 1]]);
+    const top = host.querySelector<HTMLElement>("[title]")!;
+    expect([top.textContent, top.title]).toEqual(["72%", "Claude 72% · OpenAI 14% · Grok 8% · Gemini 4% · Muse 2%"]);
+    expect([top.nextElementSibling!.textContent, top.nextElementSibling!.querySelectorAll("svg").length]).toEqual(["Claude", 1]);
   } finally {
     await unmount();
   }
@@ -463,7 +464,8 @@ it("lists every engine under the squares, and no row with no replies", async () 
   const empty = mount();
   await act(async () => {});
   try {
-    expect(empty.host.querySelector("[data-activity-engines]")).toBeNull();
+    expect(empty.host.querySelector("[title]")).toBeNull();
+    expect(empty.host.textContent).not.toContain("%");
   } finally {
     await empty.unmount();
   }

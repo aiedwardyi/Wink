@@ -187,6 +187,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
       <div className="text-[12px] text-ink-secondary">{label}</div>
     </div>
   );
+  const top = shares[0];
   return (
     <Card title={t("settings.activity.title")}>
       <div className="@container/activity">
@@ -234,7 +235,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
             </div>
           </div>
           {activity.total || !fetched ? (
-            <div className={cn("flex justify-between gap-4 @[30rem]/activity:flex-col @[30rem]/activity:gap-5", !fetched && "invisible")}>
+            <div className={cn(top ? "grid grid-cols-2 gap-x-4 gap-y-3 @[30rem]/activity:flex @[30rem]/activity:flex-col @[30rem]/activity:gap-3" : "flex justify-between gap-4 @[30rem]/activity:flex-col @[30rem]/activity:gap-5", !fetched && "invisible")}>
               {stat(activity.workers.toLocaleString(tag), t("settings.activity.workers"))}
               {stat((activity.busiest?.count ?? 0).toLocaleString(tag), (
                 <>
@@ -243,22 +244,12 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
                 </>
               ))}
               {stat(activity.total.toLocaleString(tag), t("settings.activity.replies"), since ? t("settings.activity.since", { month: since }) : undefined)}
+              {top && stat(top.share, <span className="inline-flex items-center gap-1"><ProviderMark driverKind={top.kind} size={12} />{top.name}</span>, shares.map(({ name, share }) => `${name} ${share}`).join(" · "))}
             </div>
           ) : (
             <p className="text-[13px] leading-relaxed text-ink-secondary @[30rem]/activity:max-w-40">{t("settings.activity.empty")}</p>
           )}
         </div>
-        {shares.length > 0 && (
-          <div data-activity-engines className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
-            {shares.map(({ name, kind, share }) => (
-              <span key={name} className="inline-flex items-center gap-1 whitespace-nowrap">
-                <ProviderMark driverKind={kind} size={12} />
-                <span className="text-ink">{name}</span>
-                <span className="tabular-nums">{share}</span>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
       {tip && createPortal(
         <div ref={tipRef} data-activity-tip="" role="tooltip" className={PLAIN_TOOLTIP_CLASS} style={{ top: 0, left: 0, visibility: "hidden" }}>
