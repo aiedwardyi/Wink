@@ -491,6 +491,8 @@ export interface AppState {
   groups: Group[];
   instances: InstanceInfo[];
   config: ConfigStatus | null;
+  /** The last launch's profile, shown until `config` answers. */
+  cachedProfile?: ConfigStatus["profile"];
   /** selected chat - a bot id OR a group id */
   selectedId: string;
   /** a bot workspace covers the conversation surface */

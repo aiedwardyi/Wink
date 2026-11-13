@@ -143,6 +143,12 @@ function reconcileSnapshotQueues(
   return { ...state, pendingQueued, consumedQueueIds };
 }
 
+/** The config's profile, or the last launch's until the config answers; null while neither is known. */
+export function shownProfile(state: Pick<AppState, "config" | "cachedProfile">): { profile: ConfigStatus["profile"] } | null {
+  if (state.config) return { profile: state.config.profile };
+  return state.cachedProfile ? { profile: state.cachedProfile } : null;
+}
+
 /** The exact conversation currently on screen. A focused window is not
  * enough to suppress an alert when its actionable card is in another task. */
 export function visibleNotificationThread(

@@ -173,6 +173,23 @@ describe("createUsageBoardClient", () => {
     stop();
   });
 
+  it("shows the last board before the first read, then takes the read whole whatever its revision", async () => {
+    const kept = fresh({ revision: 90, cursor: "old-90" });
+    const written: UsageBoard[] = [];
+    const client = createUsageBoardClient((cursor) => new Promise((resolve, reject) => reads.push({ cursor, resolve, reject })), async () => {},
+      { read: () => kept, write: (board) => written.push(board) });
+    expect(client.snapshot().board).toBe(kept);
+    stops.push(client.subscribe(() => {}));
+    expect(reads.map((read) => read.cursor)).toEqual([null]);
+    const reply = fresh({ revision: 3, cursor: "new-3" });
+    reads[0]!.resolve(reply);
+    await flush();
+    expect(client.snapshot().board).toBe(reply);
+    expect(written.at(-1)).toBe(reply);
+    client.frame(4);
+    expect(reads[1]!.cursor).toBe("new-3");
+  });
+
   it("clears swapped windows and history immediately and ignores an older in-flight read", async () => {
     const client = make();
     const instances = (account: string) => [{ instanceId: "claude", snapshot: { authenticated: true, account } }];

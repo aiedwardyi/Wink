@@ -5,7 +5,7 @@
 // says hello and every transcript downloads. The live snapshot always
 // replaces it; nothing here is acted on.
 import { redactSecrets } from "../../server/redact.ts";
-import type { Bot, Group, InstanceInfo, Message } from "./store";
+import type { Bot, ConfigStatus, Group, InstanceInfo, Message } from "./store";
 
 export interface CachedSnapshot {
   bots: Bot[];
@@ -13,6 +13,8 @@ export interface CachedSnapshot {
   selectedId: string;
   /** The model chip's engine icon; absent in older caches. */
   instances?: InstanceInfo[];
+  /** The sidebar's own photo and name until the config answers. */
+  profile?: ConfigStatus["profile"];
 }
 
 export const SNAPSHOT_CACHE_KEY = "omb-snapshot-v2";
@@ -41,6 +43,9 @@ const isConversation = (value: unknown) =>
 const isInstance = (value: unknown) =>
   isRecord(value) && typeof value.instanceId === "string" && typeof value.driverKind === "string";
 
+const isProfile = (value: unknown) =>
+  isRecord(value) && typeof value.name === "string" && (value.avatarUrl === undefined || typeof value.avatarUrl === "string");
+
 export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
   try {
     const storage = store(explicit);
@@ -55,7 +60,8 @@ export function readSnapshotCache(explicit?: Storage): CachedSnapshot | null {
       typeof parsed.selectedId !== "string" ||
       !parsed.bots.every(isConversation) ||
       !parsed.groups.every(isConversation) ||
-      (parsed.instances !== undefined && !(Array.isArray(parsed.instances) && parsed.instances.every(isInstance)))
+      (parsed.instances !== undefined && !(Array.isArray(parsed.instances) && parsed.instances.every(isInstance))) ||
+      (parsed.profile !== undefined && !isProfile(parsed.profile))
     ) {
       return null;
     }

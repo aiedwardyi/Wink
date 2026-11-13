@@ -70,11 +70,16 @@ export function mergeBoard(shown: UsageBoard | null, reply: UsageBoard): UsageBo
   };
 }
 
+type UsageBoardCache = { read: () => UsageBoard | null; write: (board: UsageBoard) => void };
+
 export function createUsageBoardClient(
   read: (cursor: string | null, signal: AbortSignal) => Promise<UsageBoard>,
   saveMain: (accountId: string) => Promise<unknown>,
+  cache?: UsageBoardCache,
 ) {
-  let state: UsageBoardState = { board: null, status: "loading", pending: {}, failed: new Set() };
+  let state: UsageBoardState = { board: cache?.read() ?? null, status: "loading", pending: {}, failed: new Set() };
+  // The last launch's board paints at once; the server's revision may have restarted, so the first read replaces it whole.
+  let cached = state.board !== null;
   const listeners = new Set<() => void>();
   let inFlight = false;
   let dirty = false;
@@ -113,12 +118,14 @@ export function createUsageBoardClient(
     };
     const next = () => { if (dirty) { dirty = false; load(); } };
     const limit = setTimeout(() => { if (!settle()) return; controller.abort(); if (state.board) set({ status: "error" }); else dirty = true; next(); }, READ_LIMIT_MS);
-    read(state.board?.cursor ?? null, controller.signal).then((reply) => {
+    read(cached ? null : state.board?.cursor ?? null, controller.signal).then((reply) => {
       if (settled || epoch !== identityEpoch) return;
       // Anything that is not a board (an old host's fallback page, a stray body) is a failed read.
       if (reply?.version !== 1 || !Array.isArray(reply.engines)) throw new Error("not a usage board");
-      const board = mergeBoard(state.board, reply) ?? state.board!;
+      const board = mergeBoard(cached ? null : state.board, reply) ?? state.board!;
+      cached = false;
       set({ board, status: "ready", pending: settlePending(ticket) });
+      cache?.write(board);
     }).catch(() => { if (!settled) set({ status: "error" }); }).finally(() => { if (settle()) next(); });
   };
 
@@ -186,6 +193,24 @@ export function createUsageBoardClient(
   };
 }
 
+const BOARD_CACHE_KEY = "omb-usage-board-v1";
+
+/** A private window or blocked site data throws on access; the board then just waits for its read. */
+const localBoardCache: UsageBoardCache = {
+  read() {
+    try {
+      // SAFETY: the same check a live read passes; the first read replaces it.
+      const board = JSON.parse(localStorage.getItem(BOARD_CACHE_KEY) ?? "null") as UsageBoard | null;
+      return board?.version === 1 && Array.isArray(board.engines) ? board : null;
+    } catch {
+      return null;
+    }
+  },
+  write(board) {
+    try { localStorage.setItem(BOARD_CACHE_KEY, JSON.stringify(board)); } catch { /* over quota or blocked */ }
+  },
+};
+
 type Api = (path: string, init?: RequestInit) => Promise<UsageBoard>;
 let connected: Api | null = null;
 /** The board hook hands over the store's api(). store.tsx imports this module for live frames, so this module never imports the store. */
@@ -194,6 +219,7 @@ const api: Api = (path, init) => connected ? connected(path, init) : Promise.rej
 const client = createUsageBoardClient(
   (cursor, signal) => api(cursor === null ? "/api/usage/board" : `/api/usage/board?cursor=${encodeURIComponent(cursor)}`, { signal }),
   (accountId) => api(`/api/accounts/${encodeURIComponent(accountId)}/default`, { method: "POST", body: "{}" }),
+  localBoardCache,
 );
 
 export const subscribeUsageBoard = client.subscribe;
