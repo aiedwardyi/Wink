@@ -193,6 +193,11 @@ function decodedRuns(text: string): string {
   return text.includes("%") ? text.replace(/(?:%[0-9a-f]{2})+/gi, decodeHref) : text;
 }
 
+function escapeAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll("\t", "&#9;").replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
+}
+
 function contentDisposition(name: string, attachment: boolean): string {
   const fallback = name.replace(/[^\x20-\x7E]/g, "_").replaceAll("\\", "_").replaceAll("\"", "") || "file";
   const encoded = encodeURIComponent(name).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -262,7 +267,13 @@ function folderGrant(folder: string, roots: readonly string[]): string | null {
 function linkingMessages(options: ServeLinkedFileOptions, target: string, folder = false): { id: string; roots: readonly string[] }[] {
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
+  const picture = !folder && mediaType(target)?.startsWith("image/") ? `<attached-file path="${escapeAttribute(target)}"` : "";
   for (const message of options.messages) {
+    // A picture the user attached by path shows on its own file chip.
+    if (picture && message.role === "user" && message.text?.includes(picture)) {
+      hits.push({ id: message.id, roots: [] });
+      continue;
+    }
     if (message.role !== undefined && message.role !== "bot") continue;
     const text = message.text ?? "";
     // Parsing every message of a long chat took seconds; only a message naming the file can link it.

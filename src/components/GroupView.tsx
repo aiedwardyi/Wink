@@ -534,7 +534,7 @@ export const Transcript = memo(function Transcript({
                         <LinkedText text={translateText} />
                         {translation && <RoomTranslationText translation={translation} />}
                       </div>
-                      {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
+                      {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={group.threadId} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
                       {(folded || unfolded.has(m.id)) && <FoldToggle expanded={!folded} onToggle={() => toggleFold(m.id)} />}
                     </>

@@ -38,6 +38,7 @@ import {
   pasteAttachment,
   pasteImageAttachment,
   rereadEmptyImages,
+  shrinksImage,
   uploadAttachment,
   visibleComposerNotice,
   type Attachment,
@@ -127,6 +128,7 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAt
   const file = fileAttachment(result.name, result.path, result.size, result.type);
   file.id = id;
   file.uploadId = uploadId;
+  if (result.preview) file.preview = result.preview;
   return file;
 }
 
@@ -318,7 +320,8 @@ export function Composer({
       if (kept.length) trackFeature("attach.add", { n: kept.length });
       flushSync(() => editAttachments((prev) => [...prev, ...kept]));
       for (const upload of uploads) {
-        if (kept.some((a) => a.id === upload.id)) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id));
+        const chip = kept.find((a) => a.id === upload.id);
+        if (chip) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.kind === "upload" && chip.shrink);
       }
     },
     [draftId, editAttachments, showNotice, t],
@@ -389,13 +392,13 @@ export function Composer({
     }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
-      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id));
+      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink);
       return;
     }
     dropUpload(target.id, target.uploadId);
-    const next = uploadAttachment(file);
+    const next = uploadAttachment(file, Boolean(target.shrink) && shrinksImage(file));
     editAttachments((prev) => prev.map((a) => (a.id === target.id ? next : a)));
-    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id));
+    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id), next.shrink);
   };
   // A value set from code never reaches the textarea's native undo stack, so
   // Ctrl+Z right after a long paste or "Display in chat box" restores this
