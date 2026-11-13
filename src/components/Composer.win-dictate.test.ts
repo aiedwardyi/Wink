@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const host_ = vi.hoisted(() => ({ platform: "win32" }));
+const host_ = vi.hoisted(() => ({ platform: "win32", dictation: false }));
 
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
@@ -18,7 +18,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 vi.mock("./DesktopCapabilities", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./DesktopCapabilities")>();
-  return { ...actual, useDesktopCapabilities: () => ({ capabilities: { host: { platform: host_.platform }, dictation: { available: false } }, ready: true }) };
+  return { ...actual, useDesktopCapabilities: () => ({ capabilities: { host: { platform: host_.platform }, dictation: { available: host_.dictation } }, ready: true }) };
 });
 
 import { Composer } from "./Composer";
@@ -41,37 +41,18 @@ async function mount() {
   await act(async () => root!.render(createElement(Composer, { replyTo: null, focusBlocked: false, locked: false })));
 }
 
-const mic = () => host!.querySelector('button[aria-label="Dictate"]') as HTMLButtonElement | null;
+const mic = () => host!.querySelector('button[aria-label="Dictate"], button[aria-label="Start dictation"]');
 
-describe("composer Windows dictate hint", () => {
-  it("shows the mic on Windows, focuses the box and shows the tip on tap", async () => {
-    host_.platform = "win32";
-    await mount();
-    expect(host!.textContent).not.toContain("Press ⊞ + H to talk");
-    await act(async () => mic()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(document.activeElement).toBe(host!.querySelector("[data-orbit-composer]"));
-    expect(host!.textContent).toContain("Press ⊞ + H to talk");
-  });
-
-  it("hides the tip after 5s, restarting the timer on a repeat tap", async () => {
-    host_.platform = "win32";
-    vi.useFakeTimers();
-    try {
-      await mount();
-      const tap = () => act(async () => mic()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-      await tap();
-      await act(async () => { vi.advanceTimersByTime(3000); });
-      await tap();
-      await act(async () => { vi.advanceTimersByTime(3000); });
-      expect(host!.textContent).toContain("Press ⊞ + H to talk");
-      await act(async () => { vi.advanceTimersByTime(2100); });
-      expect(host!.textContent).not.toContain("Press ⊞ + H to talk");
-    } finally { vi.useRealTimers(); }
-  });
-
-  it("shows no mic off Windows", async () => {
-    host_.platform = "other";
+describe("composer dictate button", () => {
+  it("shows no mic on Windows", async () => {
+    Object.assign(host_, { platform: "win32", dictation: false });
     await mount();
     expect(mic()).toBeNull();
+  });
+
+  it("shows the mic where native dictation is available", async () => {
+    Object.assign(host_, { platform: "darwin", dictation: true });
+    await mount();
+    expect(mic()).not.toBeNull();
   });
 });
