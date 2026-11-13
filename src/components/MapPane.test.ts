@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); applyLocale("en"); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
 
 it("follows edits across workers, pins a worker, and keeps a manual file with Follow off", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
@@ -123,7 +123,7 @@ it("lights changed squares by folder and opens a lit square's diff", async () =>
   expect(String(reads().at(-1)?.[0])).toContain("path=src%2Fmanual.ts");
 });
 
-it("moves the arrow to the row just edited and shows the path when the worker left no note", async () => {
+it("points the arrow at the row just edited without covering its square and shows the path when the worker left no note", async () => {
   let resized: (() => void) | undefined;
   vi.stubGlobal("ResizeObserver", vi.fn(function (callback: () => void) { resized = callback; return { observe() {}, disconnect() {} }; }));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
@@ -135,10 +135,13 @@ it("moves the arrow to the row just edited and shows the path when the worker le
     await act(async () => resized?.());
     const [x, y] = host.querySelector<HTMLElement>(".map-pin")!.style.transform.match(/-?[\d.]+/g)!.map(Number);
     const tip = { x: x + 2.2, y: y + 0.9 };
-    expect(tip.x).toBeGreaterThan(227);
-    expect(tip.x).toBeLessThan(234);
-    expect(tip.y).toBeGreaterThan(48 + height / 2 - 3.5);
-    expect(tip.y).toBeLessThan(48 + height / 2 + 3.5);
+    const square = { left: 227, right: 234, top: 48 + height / 2 - 3.5, bottom: 48 + height / 2 + 3.5 };
+    const gap = Math.hypot(Math.max(square.left - tip.x, 0, tip.x - square.right), Math.max(square.top - tip.y, 0, tip.y - square.bottom));
+    expect(gap).toBeGreaterThan(0);
+    expect(gap).toBeLessThanOrEqual(2);
+    expect(tip.x).toBeGreaterThanOrEqual(square.right);
+    expect(tip.y).toBeGreaterThanOrEqual(square.bottom);
+    expect(tip.x).toBeLessThan(220 + 23);
   }
   expect(row.querySelector(".map-delta")?.textContent).toBe("+1");
   expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
@@ -214,6 +217,8 @@ it("drops a fold response from an earlier edit and keeps lines a capped file lef
   const rows = () => [...host.querySelectorAll(".map-code-row code, .map-gap")].map(row => row.textContent);
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);
+  pending.shift()!([]);
+  await click(".map-whole");
   await click("button.map-gap");
   await emit([{ ...workers[0], editedAt: 5 }]);
   await act(async () => pending.shift()!([{ kind: "context", text: "stale", line: 1 }, { kind: "context", text: "stale", line: 2 }]));
@@ -223,7 +228,7 @@ it("drops a fold response from an earlier edit and keeps lines a capped file lef
   expect(rows()).toEqual(["one", "Large diff folded", "edit"]);
 });
 
-it("opens a folded run in place and keeps the whole file on while the pane is open", async () => {
+it("opens the whole file by default, flips to changes only, and opens a folded run in place", async () => {
   vi.mocked(fetch).mockImplementation(async url => {
     const query = new URL(String(url), "http://test").searchParams;
     if (!query.get("path")) return Response.json(repo);
@@ -233,19 +238,42 @@ it("opens a folded run in place and keeps the whole file on while the pane is op
   const rows = () => [...host.querySelectorAll(".map-code-row code, .map-gap")].map(row => row.textContent);
   await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
   await emit([workers[0]]);
-  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
-  expect(host.querySelector(".map-whole")?.textContent).toBe("전체 파일");
-  await click("button.map-gap");
   expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
   expect(String(reads().at(-1)?.[0])).toContain("whole=1");
+  expect(host.querySelector(".map-whole")?.textContent).toBe("변경만");
+  await click(".map-whole");
+  expect(host.querySelector(".map-whole")?.textContent).toBe("전체 파일");
+  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
+  await click("button.map-gap");
+  expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
   await click('[data-map-file="src/manual.ts"]');
   expect(rows()).toEqual(["변경 없는 2줄", "edit in src/manual.ts"]);
   await click(".map-whole");
-  expect(host.querySelector(".map-whole")?.getAttribute("aria-pressed")).toBe("true");
   expect(rows()).toEqual(["one", "two", "edit in src/manual.ts"]);
   await click('[data-map-file="src/a.ts"]');
   expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
   expect(host.querySelector(".map-code-row[data-kind='add']")).not.toBeNull();
-  await click(".map-whole");
-  expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
+});
+
+it("scrolls the whole file to its first change and falls back to changes only past the cap", async () => {
+  vi.mocked(fetch).mockImplementation(async url => {
+    const query = new URL(String(url), "http://test").searchParams;
+    if (!query.get("path")) return Response.json(repo);
+    if (query.get("path") === "src/manual.ts") return Response.json(query.get("whole") === "1" ? { lines: [{ kind: "context", text: "big", line: 1 }], capped: true } : { lines: [{ kind: "fold", text: "", count: 9000, line: 1 }, { kind: "add", text: "late edit", line: 9001 }] });
+    return Response.json({ lines: [...Array.from({ length: 40 }, (_, index) => ({ kind: "context", text: `line ${index + 1}`, line: index + 1 })), { kind: "add", text: "edit", line: 41 }] });
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return { top: this.matches(".map-code") ? 100 : this.dataset.kind === "add" ? 900 : 0 } as DOMRect; });
+  const rows = () => [...host.querySelectorAll(".map-code-row code, .map-gap")].map(row => row.textContent);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  expect(rows()).toHaveLength(41);
+  expect(host.querySelector(".map-code")?.scrollTop).toBe(800);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-code")?.scrollTop).toBe(800);
+  expect(host.querySelector(".map-whole")?.textContent).toBe("Changes only");
+  await click('[data-map-file="src/manual.ts"]');
+  expect(rows()).toEqual(["9000 lines unchanged", "late edit", "Large diff folded"]);
+  expect(reads().slice(-2).map(([url]) => new URL(String(url), "http://test").searchParams.get("whole"))).toEqual(["1", null]);
 });

@@ -137,7 +137,9 @@ export async function mapFileDiff(cwd: string, base: string, file: MapFile, whol
         addedFile(cwd, file.path).then(file => file.added, () => undefined),
       ]);
       // A deleted file's pathspec also matches its replacement directory.
-      return mapDiffLines(patch.split("\ndiff --git ", 1)[0], total, limit);
+      const own = patch.split("\ndiff --git ", 1)[0];
+      // A mode-only change has no hunks, so the whole file is read below.
+      if (!whole || total === undefined || /^@@ /m.test(own)) return mapDiffLines(own, total, limit);
     } catch (error) {
       const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
       if (partial.success) return { ...mapDiffLines(partial.data.stdout.split("\ndiff --git ", 1)[0], undefined, limit), capped: true };
@@ -147,5 +149,5 @@ export async function mapFileDiff(cwd: string, base: string, file: MapFile, whol
   const added = await fileText(cwd, file.path);
   const lines = added.text.replace(/\n$/, "").split("\n");
   return { binary: added.binary, capped: added.capped || lines.length > limit || lines.some(line => line.length > 2000),
-    lines: added.binary || !added.text ? [] : lines.slice(0, limit).map((text, index) => ({ kind: "add", text: text.slice(0, 2000), line: index + 1 })) };
+    lines: added.binary || !added.text ? [] : lines.slice(0, limit).map((text, index) => ({ kind: existed ? "context" : "add", text: text.slice(0, 2000), line: index + 1 })) };
 }
