@@ -2,6 +2,44 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.262] - 2026-11-14
+
+### Added
+- One Style button in the model picker opens a strip: Style (Dial, List, Chart, Machine) and Look (Theme, Dark, Light, Atelier). Alt+S opens it and Alt+Shift+S rotates styles.
+- Model Machine: a vending machine view of the model picker. Press Alt+Shift+M with the picker open; Esc goes back.
+- Chat Box options in Settings preview their own outline.
+- Video tiles in Media show their first frame, with a play badge, and play muted while the mouse rests on them.
+- Worker panes can run on another PC over ssh. Off until a host is set up.
+- Room bots hand work to each other when one names another with @. Room Stop ends the chain.
+- The activity card shows the most workers you ran at once and each engine's share of replies.
+
+### Changed
+- Calls follow the app language. The Call language row is gone from Settings.
+- Calls start without a ring: the bot's greeting is the first sound.
+- Muse and Codex start faster and use less memory.
+- Provider blips like Cloudflare pages, server errors and overload retry for up to about 3 minutes instead of failing the turn.
+- Muscle Memory is now called Habits.
+- Joined and host rooms match 1:1 chat: same message look, presence, Stop, reply and actions in one row under the bubble.
+- In a busy room, Enter steers the working bot's turn. Ctrl+Enter sends after it.
+- Bots answer once, after their last tool call, instead of repeating the answer.
+- The call voice answers the question asked first, says "On it." once, and "be quiet" hushes the call until you say its name.
+- The Call button stays beside Stop while the bot works.
+- Workers launch on low usage, with a note of how much is left.
+- Menus, popovers, dialogs and the sidebar share one look and motion.
+- The Map title follows the diff on screen, and squares are bigger in small projects.
+- Device windows, Settings and the Account tab load faster, and switching models at startup no longer waits for every account.
+- The Windows dictate button is gone; it never typed anything.
+
+### Fixed
+- Ordinary words like "the code is ready" or "exit code: 1" are no longer hidden as secrets in bot replies.
+- Calls no longer go silent on normal sentences like "stop talking about the tests".
+- Right-clicking a file card opens one menu.
+- Side panels close from one X.
+- Phone videos show one full screen button.
+- The silent mic hint opens the PC's sound settings.
+- Picking a PC in a device window stays in the app, and an offline PC says it is offline.
+- Answered question cards settle in the chat, and taps on an old card send nothing.
+
 ## [1.0.261] - 2026-11-13
 
 ### Added
