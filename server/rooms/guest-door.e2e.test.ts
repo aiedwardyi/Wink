@@ -709,6 +709,7 @@ describe("bots in two homes hand work to each other", () => {
       },
       messagesFor: () => thread,
       changed: () => {},
+      interrupt: async () => {},
     });
     const c: GuestClient = (client = new GuestClient({
       bases: () => [null, BASE],

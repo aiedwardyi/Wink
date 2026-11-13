@@ -108,8 +108,10 @@ type MentionChoice = { id: string; name: string; bot?: Bot; person?: boolean; ag
 
 export type RoomPerson = { id: string; name: string; owner?: string };
 
-/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. */
-export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean };
+export type RoomBotStatus = { id: string; text: string; failed?: boolean };
+
+/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` ends this PC's own bots' turns only. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
 
@@ -234,6 +236,7 @@ export function Composer({
   const threadId = group?.threadId ?? bot?.threadId ?? room?.base ?? "";
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
+  const stoppable = busy || Boolean(room?.onStop);
   // a room steers into its working member's turn
   const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
@@ -680,8 +683,6 @@ export function Composer({
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
     : attachments.some((attachment) => attachment.kind === "upload");
-  const replyRef = useRef(replyTo);
-  replyRef.current = replyTo;
   // The text leaves the box at send like a bot chat; file chips stay as the upload's sign until the room accepts it.
   const sendRoom = async (target: ComposerRoom) => {
     const liveText = composerSendSourceText(inputRef.current?.value, text).trim();
@@ -694,13 +695,16 @@ export function Composer({
     if (!request) return;
     hapticTick();
     onSend?.();
+    onConsumeReply?.();
     restoreComposerDraft(draftId, { text: "", attachments: held });
     const failed = await request;
     showRoomProblem(failed);
     settleRoomSend(draftId, liveText, new Set(held.map((attachment) => attachment.id)), Boolean(failed));
-    if (failed) return;
+    if (failed) {
+      if (sentReply) onRestoreReply?.(sentReply, target.base);
+      return;
+    }
     for (const attachment of sent) dropRoomFile(attachment.id);
-    if (replyRef.current === sentReply) onClearReply?.();
   };
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
   const canSendToTerminal = Boolean(
@@ -1048,6 +1052,11 @@ export function Composer({
             {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
           </p>
         ))}
+        {room?.status?.map((row) => (
+          <p key={row.id} data-my-bot-turn role="status" className={cn("mb-1.5 px-1 text-[12px]", row.failed ? "text-danger" : "text-ink-secondary")}>
+            {row.text}
+          </p>
+        ))}
         {catchingUp && (
           <p data-catching-up role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
             {t("composer.catchingUp")}
@@ -1350,11 +1359,12 @@ export function Composer({
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
           {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
-          {busy && !locked && !callSlot.mounted && (
+          {stoppable && !locked && !callSlot.mounted && (
           <button
             onClick={() => {
               if (stopTooSoon()) return;
-              if (group) stopRoom(group.id);
+              if (room?.onStop) room.onStop();
+              else if (group) stopRoom(group.id);
               else if (bot && !stopping) {
                 const botId = bot.id;
                 setStoppingBotId(botId);
@@ -1377,7 +1387,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!sendBlocked && !busy && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
+        {!sendBlocked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}
@@ -1418,7 +1428,7 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !busy && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
+          {(callButton || onCall) && bot && !hasContent && !sendBlocked && !callSlot.mounted && (callButton ?? (
             <button
               type="button"
               onClick={onCall}

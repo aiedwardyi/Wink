@@ -4889,3 +4889,95 @@ describe("remote panes", () => {
     await assert.rejects(linux.host.openForBot("bot-1", { host: "work", command: "claude" }), /Remote terminals need Windows/);
   });
 });
+
+const CLAUDE_BLIP = "● Please run /login · API Error: 403 Attention Required! | Cloudflare";
+const claudeBlipScreen = (output, input = "") => `\x1b[2J\x1b[H${output}\r\n✻ Baked for 5s · done 6:48 PM\r\n${"─".repeat(40)}\r\n> ${input}\r\n${"─".repeat(40)}\r\n  ctx 40k/200k`;
+
+test("a Claude blip gets three nudges with backoff, then STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const child = f.children[0];
+  const nudges = () => child.writes.filter((write) => write === "Continue from where you were.").length;
+  for (const [index, wait] of [30_000, 60_000, 120_000].entries()) {
+    child.data(claudeBlipScreen(Array(index + 1).fill(CLAUDE_BLIP).join("\r\n")));
+    await f.settle();
+    await f.advance(wait - 1);
+    assert.equal(nudges(), index);
+    await f.advance(1);
+    assert.equal(nudges(), index + 1);
+    assert.equal(child.writes.at(-1), "Continue from where you were.");
+    child.data(claudeBlipScreen(Array(index + 1).fill(CLAUDE_BLIP).join("\r\n"), "Continue from where you were."));
+    await f.settle();
+    await f.advance(1_000);
+    assert.equal(child.writes.at(-1), "\r");
+    child.data("\x1b[2J\x1b[H✻ Working… (1s · esc to interrupt)");
+    await f.settle();
+  }
+  assert.equal(f.notes.length, 0);
+  child.data(claudeBlipScreen(Array(4).fill(CLAUDE_BLIP).join("\r\n")));
+  await f.settle();
+  await f.advance(121_000);
+  assert.equal(nudges(), 3);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: /);
+});
+
+for (const [name, screen, nudged] of [
+  ["a 5xx", claudeBlipScreen('● API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}'), true],
+  ["overload", claudeBlipScreen("● API Error: Repeated 529 Overloaded errors. Try again in a moment."), true],
+  ["a usage limit", CLAUDE_LIMIT, false],
+  ["a permission prompt", `${CLAUDE_BLIP}\r\n\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No`, false],
+  ["a /login need without an API error", claudeBlipScreen("● Not logged in · Please run /login"), false],
+  ["a real auth error", claudeBlipScreen('● Please run /login · API Error: 401 {"type":"error","error":{"type":"authentication_error"}}'), false],
+  ["unsent input", claudeBlipScreen(CLAUDE_BLIP, "my draft"), false],
+  ["newer output", claudeBlipScreen(`${CLAUDE_BLIP}\r\n● Bash(ls)\r\n  ⎿  done`), false],
+]) {
+  test(`the blip nudge ${nudged ? "fires on" : "leaves alone"} ${name}`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+    f.children[0].data(screen);
+    await f.settle();
+    await f.advance(31_000);
+    assert.equal(f.children[0].writes.includes("Continue from where you were."), nudged);
+  });
+}
+
+for (const [name, act] of [
+  ["the user edits it", (f, pane, child) => {
+    child.data(claudeBlipScreen(CLAUDE_BLIP, "Continue from where you were."));
+    f.host.write(f.event, pane.sessionId, "x");
+  }],
+  ["it never reaches the prompt", () => {}],
+]) {
+  test(`the blip nudge is not submitted when ${name}`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+    const child = f.children[0];
+    child.data(claudeBlipScreen(CLAUDE_BLIP));
+    await f.settle();
+    await f.advance(30_000);
+    const typed = child.writes.lastIndexOf("Continue from where you were.");
+    assert.ok(typed >= 0);
+    act(f, pane, child);
+    await f.settle();
+    await f.advance(1_000);
+    assert.equal(child.writes.slice(typed).includes("\r"), false);
+  });
+}
+
+test("a user typing at a blip leaves the pane to the STALLED note", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const child = f.children[0];
+  child.data(claudeBlipScreen(CLAUDE_BLIP));
+  await f.settle();
+  f.host.write(f.event, pane.sessionId, "x");
+  await f.advance(121_000);
+  assert.equal(child.writes.includes("Continue from where you were."), false);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: /);
+});

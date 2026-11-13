@@ -169,6 +169,18 @@ describe("Room details", () => {
     expect(section("room").querySelector("input")).toBeNull();
   });
 
+  it("closes from one X at the far right of its header, sized like Show's", async () => {
+    await open({ group });
+    const head = host.querySelector("aside[data-room-details] > div")!;
+    const buttons = [...head.querySelectorAll("button")];
+    expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(["Close Room Details"]);
+    expect(head.lastElementChild).toBe(buttons[0]);
+    expect(buttons[0]!.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "max-md:size-11"]));
+    expect(buttons[0]!.querySelector("svg")!.getAttribute("width")).toBe("15");
+    await act(async () => buttons[0]!.click());
+    expect(mock.dispatched).toContainEqual({ type: "toggleSettings", open: false });
+  });
+
   it("sits in Bot details' slot: 400px on desktop, full width on a phone", async () => {
     await open({ group });
     const panel = host.querySelector<HTMLElement>("aside[data-room-details]")!;

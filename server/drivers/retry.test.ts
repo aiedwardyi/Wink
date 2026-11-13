@@ -7,6 +7,7 @@ import {
   classifyError,
   computeBackoff,
   isResumeCursorRejected,
+  retryAttempts,
   retryLine,
 } from "./retry.ts";
 
@@ -120,6 +121,42 @@ describe("classifyError", () => {
   it("classifies unrecognizable input as terminal", () => {
     expect(classifyError(null)).toEqual({ transient: false, reason: "unknown" });
     expect(classifyError(new Error(""))).toEqual({ transient: false, reason: "unknown" });
+  });
+});
+
+describe("provider blips", () => {
+  const cloudflare = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare";
+
+  it("calls a Cloudflare challenge or edge page transient, never auth", () => {
+    expect(classifyError({ text: cloudflare })).toEqual({ transient: true, reason: "edge_error" });
+    expect(classifyError({ exitCode: 1, stderr: cloudflare })).toEqual({ transient: true, reason: "edge_error" });
+    expect(classifyError(new Error("403 <title>Just a moment...</title>"))).toEqual({ transient: true, reason: "edge_error" });
+    expect(classifyError({ text: "API Error: 403 Just a moment" })).toEqual({ transient: true, reason: "edge_error" });
+    expect(classifyError(new Error("API Error: 502 Bad gateway | cf-ray: 8f1a2b3c4d5e6f70-ICN"))).toEqual({ transient: true, reason: "edge_error" });
+  });
+
+  it("keeps real auth failures terminal", () => {
+    for (const text of [
+      'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+      "403 Forbidden",
+      'Failed to authenticate. API Error: 403 {"type":"error","error":{"type":"permission_error"}}',
+      "Not logged in · Please run /login",
+    ]) expect(classifyError({ text })).toEqual({ transient: false, reason: "auth" });
+  });
+
+  it("gives edge, 5xx and overloaded blips about 3 min of retries", () => {
+    for (const reason of ["edge_error", "server_error", "overloaded"]) {
+      const waits = Array.from({ length: retryAttempts(reason) - 1 }, (_, attempt) => computeBackoff(attempt, () => 0.5, reason));
+      expect(waits.slice(0, 3)).toEqual([...BACKOFF_BASE_MS]);
+      expect(waits.reduce((sum, wait) => sum + wait, 0)).toBe(177_000);
+    }
+  });
+
+  it("keeps every other reason on its short schedule", () => {
+    for (const reason of ["rate_limited", "connection_reset", "timeout"]) {
+      expect(retryAttempts(reason)).toBe(RETRY_MAX_ATTEMPTS);
+      expect(computeBackoff(5, () => 0.5, reason)).toBe(8_000);
+    }
   });
 });
 

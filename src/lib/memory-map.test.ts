@@ -34,7 +34,7 @@ describe("memoryMap", () => {
     expect(map.longTerm[3]!.at).toBeNull();
   });
 
-  it("sends rules for the bot to Muscle memory and topic file links to neither", () => {
+  it("sends rules for the bot to Habits and topic file links to neither", () => {
     const map = memoryMap(text);
     expect(map.muscle.map((each) => each.fact.slice(0, 20))).toEqual(["Feedback style: neve", "Wants the bot to use"]);
     expect([...map.longTerm, ...map.learned, ...map.muscle].some((each) => each.fact.includes("memory/"))).toBe(false);

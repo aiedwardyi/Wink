@@ -7,6 +7,13 @@ import type { ProviderErrorCode, RuntimeEvent } from "../contracts.ts";
 
 export const RETRY_MAX_ATTEMPTS = 3;
 
+const RETRY_PREFIX = "retrying — attempt ";
+
+/** A retry row the next attempt of its streak rewrites. */
+export function isRetryLine(name: string | undefined): boolean {
+  return Boolean(name?.startsWith(RETRY_PREFIX));
+}
+
 /** The chat row for a turn.retrying; `busy` is a busy-provider resume wait. */
 export function retryLine(
   event: Pick<Extract<RuntimeEvent, { type: "turn.retrying" }>, "attempt" | "delayMs" | "reason" | "maxAttempts">,
@@ -14,14 +21,25 @@ export function retryLine(
 ): string {
   return busy
     ? `Gemini is busy. Retrying in ${event.delayMs < 60_000 ? `${Math.round(event.delayMs / 1000)} sec` : `${Math.round(event.delayMs / 60_000)} min`}.`
-    : `retrying \u2014 attempt ${event.attempt + 1}/${event.maxAttempts ?? RETRY_MAX_ATTEMPTS} in ${Math.round(event.delayMs / 1000)}s \u2014 ${event.reason}`;
+    : `${RETRY_PREFIX}${event.attempt + 1}/${event.maxAttempts ?? RETRY_MAX_ATTEMPTS} in ${Math.round(event.delayMs / 1000)}s \u2014 ${event.reason}`;
 }
 
 /** Backoff schedule before attempt N (N is 1-based over retries): 1s / 3s / 8s. */
 export const BACKOFF_BASE_MS = [1_000, 3_000, 8_000] as const;
 
+// An edge challenge or provider outage can last minutes, so these reasons
+// get a slower tail after the quick steps: ~3 min in all.
+const BLIP_BACKOFF_MS = [...BACKOFF_BASE_MS, 15_000, 30_000, 60_000, 60_000] as const;
+const BLIP_REASONS = new Set(["edge_error", "server_error", "overloaded"]);
+
+/** Total tries for a failure, first launch included. */
+export function retryAttempts(reason: string): number {
+  return BLIP_REASONS.has(reason) ? BLIP_BACKOFF_MS.length + 1 : RETRY_MAX_ATTEMPTS;
+}
+
 export type TransientReason =
   | "rate_limited"
+  | "edge_error"
   | "overloaded"
   | "server_error"
   | "connection_reset"
@@ -49,6 +67,10 @@ const RESUME_CURSOR_REJECTION_PATTERN =
 export function isResumeCursorRejected(stderr: string): boolean {
   return RESUME_CURSOR_REJECTION_PATTERN.test(stderr);
 }
+
+// A CDN page in front of the provider (Cloudflare's challenge, its 5xx) is a
+// blip even when it comes back as a 403.
+const EDGE_PATTERN = /\bcloudflare\b|\battention required!|\bjust a moment\b|\bcf-ray\b/i;
 
 const TRANSIENT_PATTERNS: Array<{ pattern: RegExp; reason: TransientReason }> = [
   { pattern: /\b(?:429|rate.?limit|too many requests)\b/i, reason: "rate_limited" },
@@ -108,9 +130,10 @@ const messageOf = (err: FailureInput): string => {
  */
 export function classifyError(err: FailureInput): ErrorClassification {
   const text = messageOf(err);
-  if (err && "exitCode" in err) {
-    const { exitCode: code } = err;
-    if (code !== null && code < 0) return { transient: false, reason: "interrupted" };
+  const exit = err && "exitCode" in err ? err.exitCode : undefined;
+  if ((exit ?? 0) < 0) return { transient: false, reason: "interrupted" };
+  if (EDGE_PATTERN.test(text)) return { transient: true, reason: "edge_error" };
+  if (exit !== undefined) {
     for (const { pattern, reason } of TRANSIENT_PATTERNS) {
       if (pattern.test(text)) return { transient: true, reason };
     }
@@ -146,8 +169,9 @@ export function busyResumeReason(text: string): string | null {
  * first retry) waits ~1s, then ~3s, then ~8s; beyond that the cap holds.
  * Jitter stays within ±25% so tests can bound it and a thundering herd of
  * bots doesn't re-sync on the same tick. */
-export function computeBackoff(attempt: number, random: () => number = Math.random): number {
-  const base = BACKOFF_BASE_MS[Math.min(Math.max(attempt, 0), BACKOFF_BASE_MS.length - 1)];
+export function computeBackoff(attempt: number, random: () => number = Math.random, reason = ""): number {
+  const schedule = BLIP_REASONS.has(reason) ? BLIP_BACKOFF_MS : BACKOFF_BASE_MS;
+  const base = schedule[Math.min(Math.max(attempt, 0), schedule.length - 1)];
   const jitter = base * 0.25;
   return Math.round(base - jitter + random() * jitter * 2);
 }

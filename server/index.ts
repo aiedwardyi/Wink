@@ -163,6 +163,7 @@ import {
   type PushTarget,
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { warmEngines } from "./engine-warm.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -172,7 +173,7 @@ import {
   type RequestOutcome,
   type RuntimeEvent,
 } from "./contracts.ts";
-import { BUSY_RESUME_DELAYS_MS, retryLine } from "./drivers/retry.ts";
+import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
@@ -3523,7 +3524,7 @@ bus.subscribe((event: RuntimeEvent) => {
   } else if (event.type === "turn.completed") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "turn.completed", { turnId: event.turnId });
   }
-  if (event.type === "turn.retrying" && event.delayMs >= BUSY_RESUME_DELAYS_MS[0]) busyResumeThreads.add(event.threadId);
+  if (event.type === "turn.retrying" && event.provider === "antigravityAgent" && event.delayMs >= BUSY_RESUME_DELAYS_MS[0]) busyResumeThreads.add(event.threadId);
   else if (event.type === "turn.started" || event.type === "turn.completed") busyResumeThreads.delete(event.threadId);
   if (event.type === "account.rate-limits.updated" && event.providerInstanceId) {
     const observedAt = event.observedAt ?? event.createdAt;
@@ -4001,18 +4002,16 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       break;
     }
-    case "turn.retrying":
+    case "turn.retrying": {
       // the driver is about to relaunch the turn after a transient failure;
-      // the activity chip keeps the bot visibly busy through the backoff
-      pushMessage({
-        role: "bot",
-        kind: "activity",
-        tool: {
-          name: retryLine(event, busyResumeThreads.has(event.threadId)),
-          ok: true,
-        },
-      });
+      // the activity chip keeps the bot visibly busy through the backoff,
+      // one chip per streak
+      const tool = { name: retryLine(event, busyResumeThreads.has(event.threadId)), ok: true };
+      const last = store.messagesFor(event.threadId).at(-1);
+      if (last?.kind === "activity" && isRetryLine(last.tool?.name)) store.patchMessage(event.threadId, last.id, { tool });
+      else pushMessage({ role: "bot", kind: "activity", tool });
       break;
+    }
     case "runtime.error": {
       refreshCodexPromo(event.message, usageBoard.touch);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
@@ -6435,6 +6434,13 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
   startTurn: (botId, threadId, prompt, typed, failed) => startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed }),
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
+  interrupt: async (botId, threadId) => {
+    const bot = store.bot(botId);
+    // a turn still preparing has no session to interrupt yet
+    if (bot) markThreadInterrupted(threadId, bot.id, bumpTurnEpoch(bot.id) - 1);
+    await (bot && botAccounts.instance(bot, threadId))?.adapter.interruptTurn(threadId).catch(() => {});
+    closeOpenApprovals(threadId);
+  },
 });
 const guestClient: GuestClient = new GuestClient({
   bases: () => [phoneAccess.base(), teamRelayBase(googleEnv.teamRelay)],
@@ -8745,7 +8751,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (await peopleRoute(req, res, method, path, { store, relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await shareRoute(req, res, method, path, { store, hostName: () => cfg.profile?.name?.trim() || "The host", relayHost: () => phoneAccess.presenceHost(), mintRoomCode: () => phoneAccess.mintRoomCode(), groupIsWorking, publicGroupState, botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
     if (await hostFileRoute(req, res, method, url, { store, hostName: () => cfg.profile?.name || "The host", botCaller: Boolean(commsCallers.resolve(req.headers.authorization)) })) return;
-    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId));
+    const joinedReply = await joinedRoute(method, path, guestClient, () => readBody(req), url.searchParams, (botId) => store.bot(botId), (roomId) => myRoomBotTurns.stopMine(roomId));
     if (joinedReply) return json(res, joinedReply.status, joinedReply.body);
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);
@@ -9122,10 +9128,16 @@ startupTiming.afterPaint("probes", async () => {
     .then((instances) => {
       rememberAutomaticAvailability(instances);
       broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(instances))) });
-      return defaultSelection();
+      return defaultSelection().then((sel) => ({ sel, instances }));
     })
-    .then((sel) => {
+    .then(({ sel, instances }) => {
       bootSelection = sel;
+      void warmEngines({
+        rows: instances,
+        wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
+        instance: (id) => registry.get(id),
+        busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
+      }).catch(() => {});
     })
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);

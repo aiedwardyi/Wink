@@ -554,7 +554,7 @@ describe("Long-Term and Knowledge sheets", () => {
     for (const each of mine) expect(each.cancel).toHaveBeenCalled();
   });
 
-  it("opens Muscle Memory from Long-Term in one click", async () => {
+  it("opens Habits from Long-Term in one click", async () => {
     await wide();
     await act(async () => fold("muscle").click());
     expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);

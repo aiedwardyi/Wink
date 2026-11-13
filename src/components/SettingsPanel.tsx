@@ -1,4 +1,4 @@
-import { ChevronRight, FolderOpen, Settings, X } from "lucide-react";
+import { FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -665,23 +665,15 @@ export function SettingsPanel({
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
     <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <button
-          onClick={closeSettings}
-          aria-label={t("bot.collapseDetails")}
-          title={t("bot.collapseDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
-        >
-          <ChevronRight size={18} />
-        </button>
+      <div className="flex h-16 items-center justify-between pl-4 pr-1.5 max-md:pr-0">
         <span className="text-[15px] font-semibold text-ink">{t("bot.details")}</span>
         <button
           onClick={closeSettings}
           aria-label={t("bot.closeDetails")}
           title={t("bot.closeDetails")}
-          className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
+          className="flex size-7 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink max-md:size-11"
         >
-          <X size={18} />
+          <X size={15} />
         </button>
       </div>
 

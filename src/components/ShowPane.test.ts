@@ -146,22 +146,20 @@ it("docks files wide and closes from the header", async () => {
   expect(shown).toBeNull();
 });
 
-it("collapses from the left like Bot details, on desktop only", async () => {
+it.each([false, true])("closes from one X at the far right of the header, phone %s", async (phone) => {
+  vi.stubGlobal("matchMedia", () => ({ matches: phone, addEventListener() {}, removeEventListener() {} }));
   await act(async () => showItem(item("C:\\w\\a.png", "image")));
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
-  const collapse = host.querySelector(".show-pane-head > button")!;
-  expect(collapse.getAttribute("aria-label")).toBe("Collapse Show and Media");
-  expect(collapse.getAttribute("title")).toBe("Collapse Show and Media");
-  expect(button("Close")).not.toBeNull();
-  await act(async () => (collapse as HTMLElement).click());
+  const head = document.querySelector(".show-pane-head")!;
+  const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Close"]);
+  expect(head.lastElementChild).toBe(buttons.at(-1));
+  expect(head.querySelector(".lucide-chevron-right")).toBeNull();
+  await act(async () => buttons.at(-1)!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
   expect(shown).toBeNull();
-  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
-  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
-  expect(document.querySelector('button[aria-label="Collapse Show and Media"]')).toBeNull();
-  expect(document.querySelector('button[aria-label="Close"]')).not.toBeNull();
 });
 
 it("speaks Korean", async () => {
@@ -170,7 +168,7 @@ it("speaks Korean", async () => {
   expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
   expect(button("새로고침")).not.toBeNull();
   expect(button("닫기")).not.toBeNull();
-  expect(button("보기와 미디어 접기")).not.toBeNull();
+  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
 });
 
 it("shares one pane with the checker, and Bot Details still takes the spot", async () => {
