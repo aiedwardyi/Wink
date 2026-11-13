@@ -62,9 +62,11 @@ export function spawnCli(
   return child;
 }
 
-/** Windows only: POSIX cannot raise a lowered nice again, and a turn may adopt the host. */
-export function setCliPriority(child: Pick<ChildProcess, "pid">, priority: "low" | "normal"): void {
+/** Windows only: POSIX cannot raise a lowered nice again, and a turn may adopt the host. Never lowers a launcher
+ * (Muse's PowerShell): its engine inherits the class at start and restoring the launcher leaves the engine low. */
+export function setCliPriority(child: Pick<ChildProcess, "pid" | "spawnfile">, priority: "low" | "normal"): void {
   if (process.platform !== "win32" || !child.pid) return;
+  if (priority === "low" && /(^|[\\/])(powershell|pwsh|cmd|wsl)(\.exe)?$/i.test(child.spawnfile)) return;
   try { os.setPriority(child.pid, priority === "low" ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL); } catch {}
 }
 

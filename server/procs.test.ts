@@ -1,11 +1,12 @@
 // execCli's --version cache. The fake CLI logs each launch to a file, so the
 // counts are real process launches, not calls.
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, getPriority, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { clearVersionCache, describeSpawnFailure, execCli } from "./procs.ts";
+import { clearVersionCache, describeSpawnFailure, execCli, setCliPriority } from "./procs.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 let dir: string;
@@ -137,4 +138,42 @@ describe("describeSpawnFailure cwd", () => {
     expect(describeSpawnFailure(enoent, "claude", tmpdir())).toEqual(install);
     expect(describeSpawnFailure(enoent, "claude")).toEqual(install);
   });
+});
+
+describe.runIf(process.platform === "win32")("setCliPriority", () => {
+  // The host prints its pid, then on "go" starts an engine child that prints its own and stays.
+  const host = `console.log(process.pid); process.stdin.once("data", () => { const c = require("node:child_process").spawn(process.execPath, ["-e", "console.log(process.pid); setTimeout(() => {}, 30000)"], { stdio: ["ignore", "inherit", "ignore"] }); });`;
+  const pids = (child: ReturnType<typeof spawn>, count: number) => new Promise<number[]>((resolve) => {
+    let text = "";
+    child.stdout!.on("data", (chunk) => {
+      text += chunk;
+      const found = text.split(/\s+/).filter(Boolean).map(Number);
+      if (found.length >= count) resolve(found);
+    });
+  });
+  const kill = (child: ReturnType<typeof spawn>) => spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+
+  it("an adopted engine host and the children it starts run at Normal", async () => {
+    const child = spawn(process.execPath, ["-e", host], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    try {
+      const [own] = await pids(child, 1);
+      setCliPriority(child, "low");
+      expect(getPriority(own)).toBe(constants.priority.PRIORITY_BELOW_NORMAL);
+      setCliPriority(child, "normal");
+      child.stdin!.write("go\n");
+      const [engine] = await pids(child, 1);
+      for (const pid of [own, engine]) expect(getPriority(pid)).toBe(constants.priority.PRIORITY_NORMAL);
+    } finally { kill(child); }
+  });
+
+  it("leaves a launcher and the engine it starts at Normal", async () => {
+    const engine = `& '${process.execPath}' -e "console.log(process.pid); setTimeout(() => {}, 30000)"`;
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", `$PID; ${engine}`], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    try {
+      const tree = pids(child, 2);
+      setCliPriority(child, "low");
+      setCliPriority(child, "normal");
+      for (const pid of await tree) expect(getPriority(pid)).toBe(constants.priority.PRIORITY_NORMAL);
+    } finally { kill(child); }
+  }, 20_000);
 });
