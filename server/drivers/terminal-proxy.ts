@@ -156,7 +156,8 @@ export const TOOLS = [
   {
     name: "terminal_spawn",
     description:
-      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 16 live panes per bot; a new pane needs up to 0.6 GB free. The shell is PowerShell on Windows. " +
+      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 16 live panes per bot; a new pane needs up to 0.6 GB free. " +
+      "Panes with host run claude on that PC: up to 64 per host, memory permitting. The shell is PowerShell on Windows. " +
       "To run a worker, call terminal_playbook first: it returns each engine's launch command, the model ids and the card rules. A worker launch is held until this session has read it.",
     inputSchema: {
       type: "object",
@@ -164,6 +165,7 @@ export const TOOLS = [
         label: { type: "string", description: "Short pane label shown on its tab, e.g. \"NICKNAME | MODEL | EFFORT\". Max 40 characters." },
         cwd: { type: "string", description: "Absolute working folder. Omit for the bot's terminal folder." },
         command: { type: "string", description: "Optional first command; Enter is added." },
+        host: { type: "string", description: "Optional PC from ~/.orbit/remote-hosts.json, e.g. \"work\". Needs a one-line claude command; cwd is a folder on that PC (default its root)." },
       },
       required: ["label"],
       additionalProperties: false,
@@ -196,7 +198,7 @@ export const TOOLS = [
 
 type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
-type SpawnInput = { label: string; cwd?: string; command?: string };
+type SpawnInput = { label: string; cwd?: string; command?: string; host?: string };
 type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
 
 type Snapshot = {
@@ -301,12 +303,12 @@ export function readTerminalSnapshot(fetchImpl: typeof fetch = fetch, config: Te
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
 export function spawnTerminalPane(args: Record<string, unknown>, fetchImpl: typeof fetch = fetch, config: TerminalConfig = {}): Promise<{ sessionId: string; generation: number; hold?: string; line?: string }> {
-  const { label, cwd, command } = args;
+  const { label, cwd, command, host } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
-  if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string")) {
-    return Promise.reject(new Error("terminal_spawn needs a label, with optional string cwd and command"));
+  if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string") || (host !== undefined && typeof host !== "string")) {
+    return Promise.reject(new Error("terminal_spawn needs a label, with optional string cwd, command and host"));
   }
-  return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command } });
+  return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command, host } });
 }
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
