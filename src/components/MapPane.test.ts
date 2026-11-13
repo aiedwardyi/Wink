@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MapPane } from "./MapPane";
 import { applyLocale } from "@/lib/i18n";
+import { mapWorkerColor } from "@/lib/map-worker-colors";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -62,7 +63,8 @@ it("uses plain empty and non-git lines in both languages", async () => {
   expect(host.textContent).toContain("실행 중인 작업자가 없어요");
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[0], git: false, files: [] }]);
-  expect(host.textContent).toContain("Git 폴더가 아니에요");
+  expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 · Git 폴더가 아니에요wink / ALPHA");
+  expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
 });
 
 it("requests only the selected file and recovers from a failed diff", async () => {
@@ -110,37 +112,71 @@ it("waits for the renewed snapshot before requesting an unchanged selected file"
   expect(host.textContent).toContain("renewed diff");
 });
 
-it("lights changed squares by folder and opens a lit square's diff", async () => {
+it("draws the repo as a tree in place of the squares and the changed-files list, every file of a small repo shown", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);
-  expect(host.querySelector(".map-where")?.textContent).toBe("2 of 6 files changedwink / ALPHA");
-  expect([...host.querySelectorAll(".map-cells i")].map(cell => cell.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "README.md", "b.ts", "server/x.ts"]);
-  expect([...host.querySelectorAll(".map-cells i[data-on]")].map(cell => cell.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts"]);
-  expect(host.textContent).toContain("One square, one file. Lit ones changed.");
-  await act(async () => { host.querySelector<HTMLElement>('[data-square="src/manual.ts"]')!.click(); });
-  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("src/manual.ts");
-  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
-  expect(String(reads().at(-1)?.[0])).toContain("path=src%2Fmanual.ts");
+  expect(host.querySelector(".map-where")?.textContent).toBe("Changed 2 of 6 fileswink / ALPHA");
+  expect(host.querySelector(".map-squares, .map-files, .map-file-label")).toBeNull();
+  expect([...host.querySelectorAll(".map-tree-box b")].map(box => box.textContent)).toEqual(["wink", "src/", "server/"]);
+  expect([...host.querySelectorAll(".map-tree-file")].map(row => row.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts", "README.md", "b.ts"]);
+  expect([...host.querySelectorAll("button.map-tree-file")].map(row => row.getAttribute("data-map-file"))).toEqual(["src/a.ts", "src/manual.ts"]);
 });
 
-it("moves the arrow to the row just edited and shows the path when the worker left no note", async () => {
-  let resized: (() => void) | undefined;
-  vi.stubGlobal("ResizeObserver", vi.fn(function (callback: () => void) { resized = callback; return { observe() {}, disconnect() {} }; }));
+it("opens a changed file box in the viewer below", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await click('.map-tree-file[data-map-file="src/manual.ts"]');
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("src/manual.ts");
+  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/manual.ts");
+  expect(String(reads().at(-1)?.[0])).toContain("path=src%2Fmanual.ts");
+  expect(host.querySelector(".map-code")?.textContent).toContain("const edited = true;");
+});
+
+it("puts every worker on one tree in its own color and marks clashes by how near their lines are", async () => {
+  const team = [
+    { ...workers[0], files: [{ path: "src/a.ts", added: 1, removed: 1, ranges: [[10, 12]] }, { path: "b.ts", added: 1, removed: 0, ranges: [[1, 1]] }, { path: "src/manual.ts", added: 2, removed: 0, ranges: [[1, 2]] }] },
+    { ...workers[1], files: [{ path: "src/a.ts", added: 1, removed: 0, ranges: [[15, 15]] }, { path: "b.ts", added: 1, removed: 0, ranges: [[5, 5]] }] },
+  ];
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit(team);
+  expect(host.querySelector(".map-where")?.textContent).toBe("2 workers · 3 of 6 files changed · 2 clasheswink / 2 workers");
+  expect([...host.querySelectorAll(".map-tree-legend span")].map(item => item.textContent)).toEqual(["ALPHA3", "BETA2"]);
+  expect([...host.querySelectorAll(".map-tree-clash")].map(row => [row.textContent, row.querySelector(".map-tree-x[data-same]") !== null])).toEqual([
+    ["a.tsALPHA + BETA · same lines", true],
+    ["b.tsALPHA + BETA · different lines", false],
+  ]);
+  expect(host.querySelector('.map-tree-file[data-map-file="src/a.ts"] .map-tree-x[data-same]')).not.toBeNull();
+  expect(host.querySelector('.map-tree-file[data-map-file="b.ts"] .map-tree-x:not([data-same])')).not.toBeNull();
+  expect(host.querySelector<HTMLElement>('.map-tree-sq[data-map-file="src/manual.ts"]')?.style.getPropertyValue("--c")).toBe(mapWorkerColor(0));
+  expect(host.querySelector<HTMLElement>('.map-tree-sq[data-map-file="src/a.ts"]')?.style.getPropertyValue("--c")).toContain(mapWorkerColor(1));
+  await click('.map-tree-sq[data-map-file="src/manual.ts"]');
+  expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("a");
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("src/manual.ts");
+  await emit([{ ...team[0], files: team[0].files.map(file => file.path === "b.ts" ? { ...file, ranges: [[2, 2]] } : file) }, team[1]]);
+  expect(host.querySelector('.map-tree-file[data-map-file="b.ts"] .map-tree-x[data-same]')).not.toBeNull();
+});
+
+it("hops the pointer to the file just edited without covering its name, and shows the path when the worker left no note", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
-  const row = host.querySelector('[data-map-file="b.ts"]')!;
-  Object.defineProperties(row, { offsetLeft: { value: 220 }, offsetTop: { value: 48 } });
-  for (const height of [24, 28]) {
-    Object.defineProperties(row.querySelector("i")!, { offsetLeft: { value: 7, configurable: true }, offsetTop: { value: height / 2 - 3.5, configurable: true }, offsetWidth: { value: 7, configurable: true }, offsetHeight: { value: 7, configurable: true } });
-    await act(async () => resized?.());
-    const [x, y] = host.querySelector<HTMLElement>(".map-pin")!.style.transform.match(/-?[\d.]+/g)!.map(Number);
-    const tip = { x: x + 2.2, y: y + 0.9 };
-    expect(tip.x).toBeGreaterThan(227);
-    expect(tip.x).toBeLessThan(234);
-    expect(tip.y).toBeGreaterThan(48 + height / 2 - 3.5);
-    expect(tip.y).toBeLessThan(48 + height / 2 + 3.5);
+  const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const near = (path: string) => {
+    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+    const [x, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+    const top = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
+    const [px, py] = numbers(host.querySelector<HTMLElement>(".map-tree-pin")!);
+    return { tip: px + 1.4, name: x + 14 + 13, gap: Math.abs(py + 0.7 - top) };
+  };
+  for (const path of ["b.ts", "src/a.ts"]) {
+    if (path !== "b.ts") await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 17), path, files: [...workers[1].files, { path, added: 2, removed: 0 }] }]);
+    await vi.waitFor(() => {
+      const { tip, name, gap } = near(path);
+      expect(tip).toBeLessThan(name - 4);
+      expect(gap).toBeLessThan(4);
+    });
   }
-  expect(row.querySelector(".map-delta")?.textContent).toBe("+1");
+  await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
   expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
   expect(host.querySelector(".map-step p")).toBeNull();
   expect(host.querySelector(".map-step time")?.getAttribute("datetime")).toBe("2026-11-13T01:16:07.000Z");
@@ -171,12 +207,12 @@ it("keeps the step title, breadcrumb and diff on one file through every hop", as
   expect(view()).toEqual(["a.ts", "src/a.ts", undefined, "1+edit in src/a.ts"]);
 });
 
-it("steps through the changed files with Up and Down only where the Map has focus", async () => {
+it("steps through the changed files in tree order with Up and Down only where the Map has focus", async () => {
   const scrolled = vi.fn();
   const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
   const path = () => host.querySelector("[data-map-path]")?.getAttribute("data-map-path");
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
-  await emit([{ ...workers[0], files: [...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }] }]);
+  await emit([{ ...workers[0], files: [{ path: "README.md", added: 1, removed: 0 }, ...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }] }]);
   for (const item of host.querySelectorAll<HTMLElement>("[data-map-file]")) item.scrollIntoView = () => scrolled(item.dataset.mapFile);
   const row = host.querySelector('[data-map-file="src/a.ts"]')!;
   await key(row, { key: "ArrowDown" });
@@ -186,11 +222,12 @@ it("steps through the changed files with Up and Down only where the Map has focu
   expect(scrolled).toHaveBeenLastCalledWith("src/manual.ts");
   expect(document.activeElement?.getAttribute("data-map-file")).toBe("src/manual.ts");
   await key(row, { key: "ArrowDown" });
-  await key(row, { key: "ArrowDown" });
   expect(path()).toBe("src/z.ts");
   expect(host.querySelector(".map-path b")?.textContent).toBe("z.ts");
-  await key(row, { key: "ArrowUp" });
-  await key(row, { key: "ArrowUp" });
+  await key(row, { key: "ArrowDown" });
+  await key(row, { key: "ArrowDown" });
+  expect(path()).toBe("README.md");
+  for (let step = 0; step < 3; step++) await key(row, { key: "ArrowUp" });
   const count = reads().length;
   await key(row, { key: "ArrowUp" });
   expect(path()).toBe("src/a.ts");

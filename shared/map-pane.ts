@@ -3,6 +3,7 @@ export interface MapFile {
   added: number;
   removed: number;
   binary?: boolean;
+  ranges?: [number, number][];
 }
 
 export interface MapWorker {
