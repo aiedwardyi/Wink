@@ -292,7 +292,7 @@ test("the captured-turn resolver and core policy reach the final fake PTY enviro
   const turns = captures.createWorkerTurns();
   turns.capture("bot-1", "thread", { instanceId: THIRD.id, driverKind: "codex", account: { ...THIRD, of: "codex", home: HOME } });
   const usageCalls = [];
-  const usage = Object.assign(async (...args) => { usageCalls.push(args); return { line: "Captured usage." }; }, { invalidate() {} });
+  const usage = async (...args) => { usageCalls.push(args); return { line: "Captured usage." }; };
   const prepare = policy.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: turns.resolveWorkerTurn,
     bases: () => ({ codex: { driver: "codex" } }), available: () => true, usage });
   const f = fixture(prepare, { platform: "win32", env: { CODEX_HOME: "profile-home", OpenAI_Api_Key: "profile-key", BASH_ENV: "profile" } });
@@ -303,7 +303,7 @@ test("the captured-turn resolver and core policy reach the final fake PTY enviro
   assert.equal(f.children[0].options.env.BASH_ENV, undefined);
   assert.ok(f.children[0].args.includes("-NoProfile"));
   assert.match(f.children[0].writes[0], /'--no-daemon'/);
-  assert.deepEqual(usageCalls[0][3], { ...THIRD, name: "Codex" });
+  assert.deepEqual(usageCalls[0][1], { ...THIRD, name: "Codex" });
   assert.equal(pane.line, "Captured usage.");
   assert.equal(f.host.livePanesForAccount(THIRD.id).count, 1);
 });
@@ -319,14 +319,14 @@ for (const platform of ["linux", "win32"]) {
     const turns = captures.createWorkerTurns();
     turns.capture("bot-1", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
     const usageCalls = [];
-    const usage = Object.assign(async (...args) => { usageCalls.push(args); return {}; }, { invalidate() {} });
+    const usage = async (...args) => { usageCalls.push(args); return {}; };
     const prepare = policy.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: turns.resolveWorkerTurn,
       bases: () => ({ claude: { driver: "claudeAgent" } }), available: () => true, usage });
     const f = fixture(prepare, { platform });
     t.after(() => f.host.dispose());
     await f.host.openForBot("bot-1", { label: "worker", command: "claude 'task'" });
     assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, undefined);
-    assert.deepEqual(usageCalls[0][3], { id: "claude", generation: 0, name: "Claude" });
+    assert.deepEqual(usageCalls[0][1], { id: "claude", generation: 0, name: "Claude" });
     assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
   });
 }

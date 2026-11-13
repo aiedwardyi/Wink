@@ -62,7 +62,7 @@ it("skips a marked base account when account routing is off", async () => {
   writeFileSync(join(home, ".wink-codex-promo.json"), '{"generation":0}');
   const unused = vi.fn();
   const prepare = workers!.createWorkerLaunch({ enabled: () => false, bases: () => ({}), available: () => true,
-    resolveWorkerTurn: () => undefined, usage: Object.assign(unused, { invalidate() {} }) });
+    resolveWorkerTurn: () => undefined, usage: unused });
   const input = { botId: "bot", command: "codex 'task'", environment: { CODEX_HOME: home } };
   await expect(prepare(input)).rejects.toThrow("Pick another Codex account");
   await expect(prepare({ ...input, unrouted: true })).rejects.toThrow("Pick another Codex account");
@@ -114,14 +114,14 @@ describe("trusted worker accounts", () => {
       expect(readFileSync(join(other, token), "utf8")).toBe("main-fixture");
     }
     f.rateLimits.set(selected.id, { observedAt: new Date().toISOString(), windows: [{ id: "seven_day", usedPercent: 99, resetsAt: Date.now() + 60_000 }] });
-    expect(await prepare({ ...f.input, command: `$env:${selector}='${selected.home}'; ${engine} 'task'` })).toMatchObject({ kind: "hold", hold: expect.stringContaining(names.nameOf(selected.id, engine)) });
+    expect(await prepare({ ...f.input, command: `$env:${selector}='${selected.home}'; ${engine} 'task'` })).toMatchObject({ kind: "managed", line: `${names.nameOf(selected.id, engine)} usage left: weekly 1%.` });
     expect(await prepare({ ...f.input, command: `${engine} 'task'` })).toMatchObject({ account: { id: engine, generation: 0 }, environment: { [selector]: other } });
   });
 
   it.each(["Missing account", "C:/unknown-worker-home"])("refuses unknown account selector %s with valid Usage names", async (value) => {
     const f = await fixture();
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), accounts: () => [f.third],
+      available: f.available, usage: vi.fn(async () => ({})), accounts: () => [f.third],
       nameOf: (id) => id === f.third.id ? "Codex 3" : "Codex 1" });
     await expect(prepare({ ...f.input, command: `$env:CODEX_HOME='${value}'; codex 'task'` })).rejects.toThrow("Unknown or unavailable worker account; choose Codex 1, Codex 3");
     expect(f.refresh).not.toHaveBeenCalled();
@@ -133,7 +133,7 @@ describe("trusted worker accounts", () => {
     names.sync(f.accounts.list());
     names.setNickname(f.third.id, "작업 계정");
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), accounts: () => [f.third], nameOf: names.nameOf });
+      available: f.available, usage: vi.fn(async () => ({})), accounts: () => [f.third], nameOf: names.nameOf });
     const access = { url: "http://fixture", token: "private-host" };
     const result = await panes!.workerLaunchResponse(access, access.token, { ...f.input, command: "$env:codeX_home='작업 계정'; codex 'task'" }, prepare);
     expect(result).toMatchObject({ status: 200, body: { launch: { account: { id: f.third.id, generation: f.third.generation },
@@ -143,10 +143,10 @@ describe("trusted worker accounts", () => {
   it.each(["removed", "generation"])("refuses a selected account whose %s changes during usage refresh", async (change) => {
     const f = await fixture();
     let accounts = [f.third];
-    const usage = Object.assign(vi.fn(async () => {
+    const usage = vi.fn(async () => {
       accounts = change === "removed" ? [] : [{ ...f.third, generation: f.third.generation + 1 }];
       return {};
-    }), { invalidate() {} });
+    });
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
       available: f.available, usage, accounts: () => accounts, nameOf: () => "Codex 3" });
     await expect(prepare({ ...f.input, command: `$env:CODEX_HOME='${f.third.home}'; codex 'task'` })).rejects.toThrow("Worker account changed before launch");
@@ -158,7 +158,7 @@ describe("trusted worker accounts", () => {
     f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
     const mainAccount = vi.fn(() => f.third);
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => { mainAccount.mockReturnValue({ ...f.third, generation: 99 }); return {}; }), { invalidate() {} }),
+      available: f.available, usage: vi.fn(async () => { mainAccount.mockReturnValue({ ...f.third, generation: 99 }); return {}; }),
       accounts: () => [f.third], nameOf: () => "Codex 3", mainAccount });
     expect(await prepare({ ...f.input, command: `$env:CODEX_HOME='${f.third.home}'; codex 'task'` })).toMatchObject({ account: { id: f.third.id, generation: f.third.generation } });
     expect(mainAccount).not.toHaveBeenCalled();
@@ -181,7 +181,7 @@ describe("trusted worker accounts", () => {
     writeFileSync(join(base, "skills/synced/x/SKILL.md"), "account skill");
     f.turns.capture("bot", "thread", { instanceId: third.id, driverKind: "claudeAgent", account: third });
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount: () => third });
+      available: f.available, usage: vi.fn(async () => ({})), resumeAccount: () => third });
     const launch = await prepare({ ...f.input, command: "claude 'task'", ...(resume ? { resume: { engine: "claude" as const,
       nativeId: "00000000-0000-4000-8000-000000000001", accountId: third.id, accountGeneration: third.generation,
       template: { executable: "claude", args: ["--model", "fixture", "task"] } } } : {}) });
@@ -207,19 +207,18 @@ describe("trusted worker accounts", () => {
     expect(launch?.kind === "managed" && launch.environment.CODEX_HOME).toBe(f.third.home);
   });
 
-  it.each(["hold", "refuse"])("writes no user setup when a launch is %s", async (mode) => {
+  it("writes no user setup when a launch is refused", async () => {
     const f = await fixture();
     const base = f.bases.codex.environment!.CODEX_HOME!;
     mkdirSync(join(base, "skills/my-skill"), { recursive: true });
     writeFileSync(join(base, "AGENTS.md"), "fixture rules");
-    const usage = Object.assign(vi.fn(async () => {
-      if (mode === "refuse") f.available.mockReturnValue(false);
-      return mode === "hold" ? { hold: { reason: "fixture" } as any } : {};
-    }), { invalidate() {} });
+    const usage = vi.fn(async () => {
+      f.available.mockReturnValue(false);
+      return {};
+    });
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn,
       bases: () => f.bases, available: f.available, usage });
-    if (mode === "hold") expect(await prepare(f.input)).toMatchObject({ kind: "hold" });
-    else await expect(prepare(f.input)).rejects.toThrow("Worker account changed before launch");
+    await expect(prepare(f.input)).rejects.toThrow("Worker account changed before launch");
     expect(existsSync(join(f.third.home, "AGENTS.md"))).toBe(false);
     expect(existsSync(join(f.third.home, "skills"))).toBe(false);
   });
@@ -229,7 +228,7 @@ describe("trusted worker accounts", () => {
     f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
     const nameOf = vi.fn(() => "Codex 1");
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), mainAccount: () => null, nameOf });
+      available: f.available, usage: vi.fn(async () => ({})), mainAccount: () => null, nameOf });
     expect(await prepare(f.input)).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0, name: "Codex" },
       line: "Codex Main is signed out, so this worker uses Codex 1." });
     expect(nameOf).toHaveBeenCalledWith("codex", "Codex");
@@ -251,7 +250,7 @@ describe("trusted worker accounts", () => {
     const account = { ...f.third, of: engine };
     const resumeAccount = vi.fn(() => account);
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({ line: "ready" })), { invalidate() {} }), resumeAccount });
+      available: f.available, usage: vi.fn(async () => ({ line: "ready" })), resumeAccount });
     const nativeId = "00000000-0000-4000-8000-000000000001";
     const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--effort", "high", "--session-id", nativeId] : ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_effort=high"];
     const launch = await prepare({ ...f.input, command: engine, resume: { engine, nativeId, accountId: account.id, accountGeneration: account.generation,
@@ -270,7 +269,7 @@ describe("trusted worker accounts", () => {
   it.each([
     { engine: "claude", label: "worker" }, { engine: "claude", label: undefined },
     { engine: "codex", label: "worker" }, { engine: "codex", label: undefined },
-  ] as const)("holds both $engine recoveries with label $label on low quota", async ({ engine, label }) => {
+  ] as const)("launches both $engine recoveries with label $label on low quota", async ({ engine, label }) => {
     const f = await fixture();
     const account = { ...f.third, of: engine };
     f.rateLimits.set(account.id, { observedAt: new Date().toISOString(), windows: [
@@ -281,7 +280,7 @@ describe("trusted worker accounts", () => {
       available: f.available, usage, resumeAccount: () => account });
     for (const nativeId of ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]) {
       expect(await prepare({ ...f.input, label, command: engine, resume: { engine, nativeId, accountId: account.id,
-        accountGeneration: account.generation, template: { executable: engine, args: ["task"] } } })).toMatchObject({ kind: "hold" });
+        accountGeneration: account.generation, template: { executable: engine, args: ["task"] } } })).toMatchObject({ kind: "managed", line: expect.stringContaining("5h 5%") });
     }
   });
 
@@ -289,7 +288,7 @@ describe("trusted worker accounts", () => {
     const f = await fixture();
     f.available.mockReturnValue(false);
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount: () => f.third });
+      available: f.available, usage: vi.fn(async () => ({})), resumeAccount: () => f.third });
     await expect(prepare({ ...f.input, resume: { engine: "codex", nativeId: "00000000-0000-4000-8000-000000000001", accountId: f.third.id,
       accountGeneration: f.third.generation, template: { executable: "codex", args: ["task"] } } })).rejects.toThrow(/account.*unavailable/i);
   });
@@ -298,7 +297,7 @@ describe("trusted worker accounts", () => {
     const f = await fixture();
     const resumeAccount = vi.fn().mockResolvedValueOnce(f.third).mockResolvedValueOnce(undefined);
     const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
-      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount });
+      available: f.available, usage: vi.fn(async () => ({})), resumeAccount });
     await expect(prepare({ ...f.input, resume: { engine: "codex", nativeId: "00000000-0000-4000-8000-000000000001", accountId: f.third.id,
       accountGeneration: f.third.generation, template: { executable: "codex", args: ["task"] } } })).rejects.toThrow("changed before launch");
   });
@@ -527,7 +526,7 @@ describe("trusted worker accounts", () => {
     runInNewContext(ts.transpile(dispatches[index], { target: ts.ScriptTarget.ES2022 }), {
       accounts, workerTurns: turns, bot: { id: "bot" }, threadId: "thread", lane: false, live: { instanceId: "codex", driverKind: "codex" },
     });
-    const usage = Object.assign(vi.fn(async () => ({})), { invalidate() {} });
+    const usage = vi.fn(async () => ({}));
     const prepare = workers!.createWorkerLaunch({ enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: turns.resolveWorkerTurn,
       bases: () => ({ codex: { driver: "codex" } }), available: () => true, usage });
     const input = { botId: "bot", command: "codex 'task'", environment: {} };
@@ -724,14 +723,14 @@ describe("trusted worker accounts", () => {
   it("does no account, usage, filesystem or engine work without accounts", async () => {
     expect(workers, "trusted worker launch gate exists").not.toBeNull();
     const unused = vi.fn(() => { throw new Error("unexpected no-accounts work"); });
-    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: Object.assign(unused, { invalidate() {} }) });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: unused });
     expect(await prepare({ botId: "bot", command: "$env:CODEX_HOME='legacy'; codex", environment: {} })).toBeNull();
     expect(unused).not.toHaveBeenCalled();
   });
 
   it.each(["claude", "codex"] as const)("captures a zero-account %s session and adds only its capture flags", async (engine) => {
     const unused = vi.fn(() => { throw new Error("unexpected routed work"); });
-    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: Object.assign(unused, { invalidate() {} }) });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: unused });
     const report = workerReportText("win32", true);
     const command = engine === "claude"
       ? `claude --model fixture --effort high --dangerously-skip-permissions ${report.claude}'task'`
@@ -748,7 +747,7 @@ describe("trusted worker accounts", () => {
   it.each(["claude -- 'task'", "codex -c hooks.SessionStart=[] 'task'", "$env:CODEX_HOME='x'; codex 'task'", "claude --settings 'C:/custom.json' 'task'",
     "pwsh -Command \"claude task\"", "claude 'task'; rm x", "pnpm test", "grok 'task'", ""])("leaves a zero-account command it cannot capture alone: %s", async (command) => {
     const unused = vi.fn(() => { throw new Error("unexpected routed work"); });
-    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: Object.assign(unused, { invalidate() {} }) });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: unused });
     expect(await prepare({ botId: "bot", command, environment: {}, unrouted: true })).toBeNull();
     expect(unused).not.toHaveBeenCalled();
   });
@@ -767,7 +766,7 @@ describe("trusted worker accounts", () => {
     mkdirSync(join(base, "skills/my-skill"), { recursive: true });
     writeFileSync(join(base, engine === "claude" ? "CLAUDE.md" : "AGENTS.md"), "fixture global rules");
     const resumeAccount = vi.fn(() => account);
-    const usage = Object.assign(vi.fn(async (): Promise<{ hold?: string; line?: string }> => ({ line: "ready" })), { invalidate() {} });
+    const usage = vi.fn(async (): Promise<{ line?: string }> => ({ line: "ready" }));
     const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases, available: f.available, usage, resumeAccount });
     const nativeId = "00000000-0000-4000-8000-000000000002";
     const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--settings", join(homedir(), ".orbit", "bin", "claude-worker.json"), "--session-id", nativeId]
@@ -780,10 +779,8 @@ describe("trusted worker accounts", () => {
     expect(existsSync(account.home)).toBe(false);
     expect(launch?.kind === "unrouted" && launch.args).toEqual(engine === "claude" ? ["--model", "original", "--dangerously-skip-permissions", "-r", nativeId, RESUME_NUDGE]
       : ["resume", nativeId, "--model", "original", "--dangerously-bypass-approvals-and-sandbox", "-c", "model_provider=custom", RESUME_NUDGE]);
-    expect(usage).toHaveBeenCalledExactlyOnceWith("bot", "worker", engine, undefined, true);
+    expect(usage).toHaveBeenCalledExactlyOnceWith(engine);
     expect(resumeAccount).toHaveBeenCalledWith(engine, 0);
-    usage.mockResolvedValueOnce({ hold: "Held: low usage" });
-    expect(await prepare({ ...f.input, command: engine, resume })).toEqual({ kind: "hold", hold: "Held: low usage" });
   });
 
   it("keeps the no-accounts terminal tool response unchanged using a recorded command", async () => {
@@ -840,7 +837,7 @@ describe("worker service boundary", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("terminal tools preserve trusted host usage holds and usage lines", async () => {
+  it("terminal tools preserve trusted host holds and usage lines", async () => {
     const request = vi.fn<typeof fetch>(async () => Response.json({ hold: "Held: captured account" }));
     const config = { host: "http://fixture", token: "grant", botId: "bot" };
     expect(await callTool("terminal_spawn", request, config, { label: "worker", command: "codex 'task'" })).toEqual({ content: [{ type: "text", text: "Held: captured account" }] });
