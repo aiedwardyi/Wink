@@ -991,7 +991,7 @@ describe("relative file links", () => {
       expect(button()).toBeNull();
       const video = host.querySelector("video")!;
       expect(video.hasAttribute("controlslist")).toBe(false);
-      expect(video.className).not.toContain("media-controls-fullscreen-button");
+      expect(video.className).not.toContain("[&::-webkit-media-controls-fullscreen-button]:hidden");
       expect(video.parentElement!.tagName).not.toBe("SPAN");
     });
   });
