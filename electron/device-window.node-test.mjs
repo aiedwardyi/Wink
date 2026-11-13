@@ -11,7 +11,7 @@ import { contextMenuTemplate } from "./context-menu.mjs";
 import { saveImageCopy } from "./open-file.mjs";
 
 const require = createRequire(import.meta.url);
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 
 function openDeviceWindowSource(main) {
@@ -492,6 +492,25 @@ test("reads the tailnet from tailscale status", () => {
   }
 });
 
+test("this PC's host from ORBIT_REMOTE_HOST is normalized like the tailscale status path", async () => {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const start = main.indexOf("async function localTailnet()");
+  const end = main.indexOf("\n}\n", start) + 3;
+  assert.ok(start >= 0 && end > start, "localTailnet slice bounds not found");
+  const normalized = [];
+  const context = {
+    process: { env: { ORBIT_REMOTE_HOST: " Work.tail1234.ts.net " }, platform: "win32" },
+    deviceTailnet,
+    normalizedHost: (raw) => { normalized.push(raw); return normalizedHost(raw); },
+    cachedTailnet: "",
+    cachedSelfHost: "",
+  };
+  const localTailnet = vm.runInNewContext(`(${main.slice(start, end)})`, context);
+  assert.equal(await localTailnet(), "tail1234.ts.net");
+  assert.equal(context.cachedSelfHost, "work.tail1234.ts.net");
+  assert.deepEqual(normalized, [" Work.tail1234.ts.net "]);
+});
+
 test("reads this PC's own host from tailscale status", () => {
   assert.equal(selfHostFromStatus(JSON.stringify({ Self: { DNSName: "Work.tail1234.ts.net." } })), "work.tail1234.ts.net");
   for (const bad of [JSON.stringify({ Self: { DNSName: "work.example.com." } }), "{not json", undefined]) assert.equal(selfHostFromStatus(bad), "");
@@ -545,7 +564,7 @@ test("picking a third PC in another PC's window opens its own window", () => {
 test("other links from a PC window still open in the browser", () => {
   const { calls, go } = homeWindowOnWork();
   assert.equal(go("https://home.tail1234.ts.net/threads"), false);
-  const links = ["https://example.com/", "https://laptop.tail1234.ts.net/docs", "https://laptop.tail1234.ts.net/?key=1", "https://laptop.tail1234.ts.net:8443/", "http://laptop.tail1234.ts.net/", "https://evil.other.ts.net/"];
+  const links = ["https://example.com/", "https://laptop.tail1234.ts.net/docs", "https://laptop.tail1234.ts.net/?key=1", "https://laptop.tail1234.ts.net:8443/", "http://laptop.tail1234.ts.net/", "https://evil.other.ts.net/", "https://:secret@laptop.tail1234.ts.net/", "https://user@laptop.tail1234.ts.net/"];
   for (const link of links) assert.equal(go(link), true);
   assert.deepEqual(calls.external, links);
   assert.deepEqual(calls.opened, []);

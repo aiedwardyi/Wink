@@ -44,7 +44,7 @@ function devicePickTarget(target, tailnet, selfHost) {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || url.port || url.username || url.pathname !== "/" || url.search || url.hash) return null;
+  if (url.protocol !== "https:" || url.port || url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
   const host = normalizedHost(url.hostname);
   if (!host || !tailnet || host.slice(host.indexOf(".") + 1) !== tailnet) return null;
   return host === selfHost ? "self" : host;
@@ -291,4 +291,4 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   };
 }
 
-module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus };
+module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, devicePickTarget, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus };

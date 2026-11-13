@@ -113,7 +113,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -1174,7 +1174,7 @@ function tailscaleStatus(command) {
 async function localTailnet() {
   const fromHost = deviceTailnet(process.env.ORBIT_REMOTE_HOST);
   if (fromHost) {
-    cachedSelfHost = process.env.ORBIT_REMOTE_HOST.trim().toLowerCase();
+    cachedSelfHost = normalizedHost(process.env.ORBIT_REMOTE_HOST);
     return fromHost;
   }
   if (cachedTailnet) return cachedTailnet;
