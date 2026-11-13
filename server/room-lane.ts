@@ -7,35 +7,33 @@ export const MAX_ROOM_LANES = 2;
 
 export const laneKey = (botId: string) => `${botId}\0room`;
 
-export function createRoomLanes(threadLive: (threadId: string) => boolean, max = MAX_ROOM_LANES) {
-  const lanes = new Map<string, { threadId: string; running: boolean; ending: boolean }>();
-  // held until the driver lets go too: a timed-out turn still owns its thread
-  const busy = (botId: string) => {
-    const lane = lanes.get(botId);
-    if (!lane) return false;
-    if (lane.running || lane.ending || threadLive(lane.threadId)) return true;
-    lanes.delete(botId);
-    return false;
-  };
-  const full = () => [...lanes.keys()].filter(busy).length >= max;
+export function createRoomLanes(max = MAX_ROOM_LANES) {
+  // an entry lives from claim until its turn is released and settled, so a later ordinary turn in that room is never read as a lane turn
+  const lanes = new Map<string, { threadId: string; running: boolean; ending: boolean; settled: boolean }>();
+  const full = () => lanes.size >= max;
   return {
     /** The room thread this bot's lane is working on, if any. */
-    thread: (botId: string) => (busy(botId) ? lanes.get(botId)!.threadId : undefined),
-    free: (botId: string) => !busy(botId) && !full(),
+    thread: (botId: string) => lanes.get(botId)?.threadId,
+    free: (botId: string) => !lanes.has(botId) && !full(),
     claim(botId: string, threadId: string): boolean {
-      if (busy(botId) || full()) return false;
-      lanes.set(botId, { threadId, running: true, ending: false });
+      if (lanes.has(botId) || full()) return false;
+      lanes.set(botId, { threadId, running: true, ending: false, settled: false });
       return true;
     },
     /** ending: a stopped turn whose terminal event is still to come. */
     release(botId: string, threadId: string, ending = false) {
       const lane = lanes.get(botId);
-      if (lane?.threadId === threadId) Object.assign(lane, { running: false, ending: lane.ending || ending });
+      if (lane?.threadId !== threadId) return;
+      if ((lane.ending || ending) && !lane.settled) Object.assign(lane, { running: false, ending: true });
+      else lanes.delete(botId);
     },
     /** The thread's terminal event has been handled. */
-    settle(botId: string, threadId: string) {
-      const lane = lanes.get(botId);
-      if (lane?.threadId === threadId) lane.ending = false;
+    settle(threadId: string) {
+      for (const [botId, lane] of lanes) {
+        if (lane.threadId !== threadId) continue;
+        if (lane.running) lane.settled = true;
+        else lanes.delete(botId);
+      }
     },
   };
 }

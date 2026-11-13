@@ -270,8 +270,9 @@ type AskResolutionSource = "user" | "timeout" | "system";
 // Ask rules outrank every allow list, the user's own settings.json included,
 // so Ask for approval reaches the broker even where Write or Bash is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
+const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
 const ASK_SETTINGS = JSON.stringify({
-  permissions: { ask: ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"] },
+  permissions: { ask: WRITE_TOOLS },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
 // Auto sends commands to the broker for approval; edits run under acceptEdits.
@@ -1044,9 +1045,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         args.push("--settings", AUTO_SETTINGS);
       }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
-      if (config.disallowedTools?.length) {
-        args.push("--disallowedTools", config.disallowedTools.join(","));
-      }
+      const disallowed = [...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
@@ -2226,6 +2226,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
           steerConsumed: true,
+          readOnlyTurns: true,
           pinnedSystem: true,
           localComputerMcp: config.permissionMode !== "bypassPermissions",
           askApproval: config.permissionMode !== "bypassPermissions",

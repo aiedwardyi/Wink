@@ -115,7 +115,7 @@ beforeAll(async () => {
 }, 40_000);
 
 afterAll(async () => {
-  for (const name of ["one1", "room1", "one2", "room2", "one3", "room3", "one4", "room4", "one5", "one6", "x6", "y6", "a7", "b7"]) open(name);
+  for (const name of ["one1", "room1", "one2", "room2", "one3", "room3", "one4", "room4", "one5", "one6", "x6", "y6", "a7", "b7", "one8", "room8", "again8"]) open(name);
   child?.kill();
   await new Promise<void>((resolve) => {
     if (!child || child.exitCode !== null) return resolve();
@@ -187,6 +187,27 @@ describe("room lane", () => {
     await settled(bot.id, room.id);
   }, 90_000);
 
+  it("stops a later ordinary room turn from the 1:1 after a lane turn", async () => {
+    const bot = await newBot("claude", "Fay");
+    const room = await newRoom("Reuse room", [bot.id]);
+
+    await holdOneOnOne(bot, "one8");
+    await post(room.id, "@Fay hold:room8 work");
+    await poll(() => sent("hold:room8").length).toBe(1);
+    open("room8");
+    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(1);
+    open("one8");
+    await settled(bot.id, room.id);
+
+    await post(room.id, "@Fay hold:again8 work");
+    await poll(() => sent("hold:again8").length).toBe(1);
+    expect((await botOf(bot.id)).busy).toBe(true);
+    expect((await api("POST", `/api/bots/${bot.id}/interrupt`, {})).status).toBe(200);
+    await settled(bot.id, room.id);
+    expect((await botOf(bot.id)).activity).toBe("idle");
+    expect(replies((await groupOf(room.id)).messages)).toBe(1);
+  }, 90_000);
+
   it("leaves the 1:1's session, task record and memory to the 1:1", async () => {
     const bot = await newBot("claude", "Dee");
     // same name and roster, so the two rooms' prompts match; each is a fresh engine process
@@ -205,6 +226,7 @@ describe("room lane", () => {
     await poll(async () => replies((await groupOf(idleRoom.id)).messages)).toBe(1);
     await settled(bot.id, idleRoom.id);
     expect(servers("idle-turn-five").terminal).toBeDefined();
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--disallowedTools");
     await say(bot.id, "first");
     await poll(async () => replies((await botOf(bot.id)).messages)).toBe(1);
     await settled(bot.id);
@@ -224,6 +246,8 @@ describe("room lane", () => {
     expect(await taskState()).toEqual(before.taskState);
     expect(readFileSync(memory, "utf8")).toBe("- Dee prefers short answers\n");
     const lane = servers("lane-turn-five");
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
     expect(lane.terminal).toBeUndefined();
     expect(lane.phone).toBeUndefined();
     expect(lane.agents).toBeDefined();

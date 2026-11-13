@@ -452,7 +452,7 @@ const playEdits = async () => {
   const denials: string[] = [];
   const useTool = async (id: string, name: string, input: { [key: string]: JsonValue }, run: () => void) => {
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
-    const behavior = hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
+    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
     if (behavior !== "allow") denials.push(name);
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });

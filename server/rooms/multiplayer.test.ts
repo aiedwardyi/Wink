@@ -249,7 +249,7 @@ describe("the answer", () => {
     const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation, store, broadcast, publicGroupState });
     const run = load("runGroupMemberTurn", {
       store, cfg: { profile: {} }, hostedTurnRefused, botHasActiveTurn: () => true, tryClaimTurnStart: vi.fn(), queueBusyRoomMember,
-      threadHasLiveTurn: () => false, roomLanes: { claim: () => false }, laneKey: (id: string) => id,
+      threadHasLiveTurn: () => false, roomLanes: { claim: () => false }, laneKey: (id: string) => id, botAccounts: { instance: () => undefined },
       runClaimedGroupMemberTurn: vi.fn(), takeStartingHold: vi.fn(), turnStartClaims: new Map(), continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {},
     });
     expect(await run(group.id, group.threadId, wink, 0, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, ask.id)).toBe(true);

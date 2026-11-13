@@ -3160,7 +3160,7 @@ const watchdog = new TurnWatchdog({
       }
       const currentBot = store.bot(turn.botId);
       const lane = roomLanes.thread(turn.botId) === turn.threadId;
-      roomLanes.settle(turn.botId, turn.threadId);
+      roomLanes.settle(turn.threadId);
       if (currentBot?.busy && !lane) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
@@ -4197,8 +4197,9 @@ bus.subscribe((event: RuntimeEvent) => {
           store.setActivity(speakingBot.id, "idle");
           // Channel replies only affect the channel unread state.
         }
-        roomLanes.settle(speaker.botId, event.threadId);
       }
+      // after a Stop already cleared the speaker too
+      roomLanes.settle(event.threadId);
       // Before the queue drain subscribers append the next send.
       const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
@@ -4715,7 +4716,7 @@ function threadHasLiveTurn(threadId: string): boolean {
  * the driver reports the thread free, so a stale one can only ever be
  * corrected to "free" — never invented. */
 const dispatchedThreads = new Map<string, string>();
-const roomLanes = createRoomLanes(threadHasLiveTurn);
+const roomLanes = createRoomLanes();
 
 /** Live ownership resolved BY BOT: this bot still holds the thread it was
  * working on, or the thread being asked about is held by someone. Both
@@ -6474,7 +6475,9 @@ async function runGroupMemberTurn(
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
-  const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) && roomLanes.claim(botId, threadId);
+  // the lane runs beside the 1:1 in its folder, so only an engine that can deny edits and shell gets one
+  const lane = botHasActiveTurn(botId, threadId) && !threadHasLiveTurn(threadId) &&
+    botAccounts.instance(bot, threadId)?.adapter.capabilities.readOnlyTurns === true && roomLanes.claim(botId, threadId);
   if (!lane && (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId))) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority);
   }
@@ -6863,6 +6866,7 @@ async function runClaimedGroupMemberTurn(
         system: roomSystem,
         // A teammate's request never waits on the host's approval card.
         approval: authority || bot.autoApprove ? "auto" : "ask",
+        ...(lane ? { readOnly: true as const } : {}),
         attended: !isUnattended(bot.id),
         cwd,
         integrations,

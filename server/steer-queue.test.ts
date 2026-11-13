@@ -915,14 +915,14 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "answers a busy room member on its lane after the free member",
+    "queues a busy room member and lets the free member answer now",
     async () => {
       const skye = await newBot("steerRoomBusy", "Skye");
       const nova = await newBot("steerNow", "Nova");
       const room = (
         await api("POST", "/api/groups", {
           name: "Two bots",
-          memberIds: [nova.id, skye.id],
+          memberIds: [skye.id, nova.id],
           setup: { bulletin: "", defaultResponder: { kind: "everyone" } },
         })
       ).body.group;
@@ -941,7 +941,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
         const novaReply = group?.messages.some(
           (message: any) => message.role === "bot" && message.kind === "text" && message.from?.botId === nova.id,
         );
-        return Boolean(novaReply) && snapshot.groups.find((candidate: any) => candidate.id === room.id)?.working;
+        return Boolean(novaReply) && !snapshot.groups.find((candidate: any) => candidate.id === room.id)?.working;
       }, "Nova's room reply while Skye is busy");
 
       const group = snapshot.groups.find((candidate: any) => candidate.id === room.id);
@@ -964,7 +964,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
         ) ?? [];
         const skyeBusy = snapshot.bots.find((candidate: any) => candidate.id === skye.id)?.busy;
         return !skyeBusy && !current?.working && skyeReplies.length >= 1;
-      }, "Skye's lane turn");
+      }, "Skye's queued room turn");
 
       const drained = snapshot.groups.find((candidate: any) => candidate.id === room.id);
       expect(
@@ -985,7 +985,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "stops a busy member's lane turn and leaves its 1:1 running",
+    "cancels a queued room member when the room is stopped after another reply",
     async () => {
       rmSync(roomBusyGate, { force: true });
       const skye = await newBot("steerRoomBusy", "Skye");
@@ -993,7 +993,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       const room = (
         await api("POST", "/api/groups", {
           name: "Stopped queued room",
-          memberIds: [nova.id, skye.id],
+          memberIds: [skye.id, nova.id],
           setup: { bulletin: "", defaultResponder: { kind: "everyone" } },
         })
       ).body.group;
@@ -1009,12 +1009,10 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
           const current = snapshot.groups.find((candidate: any) => candidate.id === room.id);
           return Boolean(current?.messages.some(
             (message: any) => message.role === "bot" && message.kind === "text" && message.from?.botId === nova.id,
-          )) && current?.working && snapshot.bots.find((candidate: any) => candidate.id === skye.id)?.busy;
-        }, "Nova's reply while Skye's lane runs");
+          )) && !current?.working && snapshot.bots.find((candidate: any) => candidate.id === skye.id)?.busy;
+        }, "Nova's reply while Skye is queued");
 
         expect((await api("POST", `/api/groups/${room.id}/interrupt`, { threadId: room.threadId })).status).toBe(200);
-        await until(async () => !(await api("GET", "/api/bots")).body.groups.find((candidate: any) => candidate.id === room.id)?.working, "the stopped lane turn");
-        expect((await botById(skye.id)).busy).toBe(true);
         writeFileSync(roomBusyGate, "open");
         await until(async () => !(await botById(skye.id)).busy, "Skye's direct turn");
         await new Promise((resolve) => setTimeout(resolve, 250));
