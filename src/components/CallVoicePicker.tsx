@@ -67,7 +67,7 @@ export function CallVoicePicker() {
                   aria-checked={name === voice}
                   onClick={() => void save({ voice: name })}
                   className={cn(
-                    "px-2 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus",
+                    "px-2 py-1 text-[12.5px] font-medium",
                     PILL,
                     !onCall && "pr-1",
                     name === voice ? "text-ink" : "text-ink-secondary hover:text-ink",
@@ -81,7 +81,7 @@ export function CallVoicePicker() {
                     aria-label={t(playing === name ? "callVoice.stop" : "callVoice.play", { name: label })}
                     aria-pressed={playing === name}
                     onClick={() => preview(name)}
-                    className="mr-0.5 grid size-6 place-items-center rounded-full text-ink-secondary transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus max-md:size-8"
+                    className="mr-0.5 grid size-6 place-items-center rounded-full text-ink-secondary hover:text-ink max-md:size-8"
                   >
                     {playing === name ? <Square size={9} aria-hidden className="fill-current" /> : <Play size={10} aria-hidden className="fill-current" />}
                   </button>
