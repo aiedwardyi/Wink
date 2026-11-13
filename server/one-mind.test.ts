@@ -33,6 +33,16 @@ function starzum() {
 const event = (threadId: string, type: string) => ({ type, threadId, eventId: "e", provider: "claude", createdAt: "" }) as unknown as RuntimeEvent;
 
 describe("search_my_chats", () => {
+  it("masks prose secrets and room codes in search hits and replies", () => {
+    const { store, rando, say } = world();
+    say(rando.threadId, "user", "network wifi password is bluefish42; room K7PQ2M");
+    say(rando.threadId, "bot", "my pin is 4471");
+    const text = searchOwnerChats(store, [rando.threadId], "network", "Edward");
+    for (const secret of ["bluefish42", "K7PQ2M", "4471"]) expect(text).not.toContain(secret);
+    expect(text).toContain("wifi password is «redacted 10 chars»");
+    expect(text).toContain("You replied: my pin is «redacted 4 chars»");
+  });
+
   it("finds a 1:1 fact 64 turns back with the private header and the bot's reply", () => {
     const { store, rando } = starzum();
     const text = searchOwnerChats(store, ownerChats(rando, new Set()), "starzum", "Edward");
@@ -101,6 +111,21 @@ describe("search_my_chats", () => {
 });
 
 describe("1:1 topics", () => {
+  it("masks topic secrets and the owner header with the search redactor", () => {
+    const { store, rando, say } = world();
+    const row = say(rando.threadId, "user", "network");
+    store.appendCompaction(rando.threadId, {
+      v: 1, summary: "SUMMARY\n- wifi password is bluefish42\n- my pin is 4471\n- room K7PQ2M\n- password=hunter2hunter2",
+      coveredThroughId: row.id, firstKeptId: null,
+      contextWindow: 200_000, estimatedTokensBefore: 1_000, sourceMessageCount: 1,
+    });
+    const topics = ownerTopics(store.activePath(rando.threadId), "K7PQ2M");
+    for (const secret of ["bluefish42", "4471", "K7PQ2M", "hunter2hunter2"]) expect(topics).not.toContain(secret);
+    expect(topics).toContain("wifi password is «redacted 10 chars»");
+    expect(topics).toContain("my pin is «redacted 4 chars»");
+    expect(topics).toContain("room «redacted 6 chars»");
+  });
+
   it("is empty without a summary", () => {
     const { store, rando } = starzum();
     expect(ownerTopics(store.activePath(rando.threadId), "Edward")).toBe("");
