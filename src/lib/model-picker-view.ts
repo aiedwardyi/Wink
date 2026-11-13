@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { trackSetting } from "./usage-stats";
 
-export type ModelPickerView = "dial" | "list" | "chart";
+export type ModelPickerView = "dial" | "list" | "chart" | "machine";
 
 const KEY = "omb-model-picker-view";
 const watchers = new Set<() => void>();
@@ -10,7 +10,7 @@ let kept: ModelPickerView = "dial";
 export function loadModelPickerView(): ModelPickerView {
   try {
     const view = localStorage.getItem(KEY);
-    return view === "list" || view === "chart" ? view : "dial";
+    return view === "list" || view === "chart" || view === "machine" ? view : "dial";
   } catch {
     return kept;
   }

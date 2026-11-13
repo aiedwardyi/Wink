@@ -1,0 +1,162 @@
+.model-cross-header .picker-style-button,
+.vm-sign .picker-style-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 1px solid #ffffff1a;
+  border-radius: 8px;
+  vertical-align: middle;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-cross-header .picker-style-button[aria-expanded="true"] { background: #ffffff14; color: #f2f3f5; }
+@media (hover: hover) { .model-cross-header .picker-style-button:hover { color: #f2f3f5; } }
+
+.vm-sign .picker-style-button { flex: none; height: 32px; border-color: rgba(59, 36, 65, .2); background: rgba(255, 255, 255, .35); color: #6a4660; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.vm-sign .picker-style-button[aria-expanded="true"] { background: rgba(255, 255, 255, .7); color: #241a26; }
+
+.picker-style-strip {
+  --pss-ground: #121318;
+  --pss-edge: #ffffff1c;
+  --pss-ink: #f2f3f5;
+  --pss-dim: #9a9ca6;
+  --pss-tile: #ffffff14;
+  --pss-on: #ffffff0f;
+  position: fixed;
+  z-index: 20;
+  top: var(--pss-top, 64px);
+  right: var(--pss-right, 24px);
+  width: 476px;
+  max-height: calc(100dvh - var(--pss-top, 64px) - 12px);
+  overflow-y: auto;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--pss-edge);
+  border-radius: 14px;
+  background: var(--pss-ground);
+  box-shadow: 0 18px 48px #000000b3;
+  color: var(--pss-ink);
+  font: 12px/1.3 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: left;
+  animation: pss-in 140ms ease-out;
+}
+
+@keyframes pss-in { from { opacity: 0; transform: translateY(-4px); } }
+
+.pss-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 8px; font-weight: 600; letter-spacing: .02em; }
+.pss-head small { font-size: 11px; font-weight: 400; color: var(--pss-dim); }
+.pss-look-head { margin-top: 14px; }
+.pss-keys { display: inline-flex; gap: 3px; }
+.pss-keys kbd { padding: 1px 5px; border: 1px solid var(--pss-edge); border-radius: 4px; font: 500 10.5px Inter, sans-serif; color: var(--pss-dim); }
+
+.pss-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+
+.pss-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--pss-tile);
+  border-radius: 12px;
+  color: inherit;
+  text-align: left;
+  transition: border-color 120ms, background-color 120ms;
+}
+
+.pss-tile[aria-checked="true"] { border-color: var(--picker-accent); background: var(--pss-on); }
+.pss-tile[aria-disabled] { cursor: default; opacity: .55; }
+@media (hover: hover) { .pss-tile:not([aria-checked="true"], [aria-disabled]):hover { background: var(--pss-on); } }
+.pss-tile:focus-visible { outline: 2px solid var(--picker-accent); outline-offset: 2px; }
+
+.pss-name { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 2px; font-size: 12px; font-weight: 500; }
+.pss-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pss-name svg { flex: none; color: var(--picker-accent); }
+
+.pss-mini {
+  --pv-face: #0b0c10;
+  --pv-card: #1a1c22;
+  --pv-ink: #eceef2;
+  --pv-dim: #7f828c;
+  --pv-line: #ffffff30;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--pv-face);
+  box-shadow: 0 0 0 1px var(--pss-edge);
+}
+
+.pss-mini:not([data-look="dark"]) {
+  --pv-face: var(--color-app);
+  --pv-card: var(--color-card);
+  --pv-ink: var(--color-ink);
+  --pv-dim: var(--color-ink-secondary);
+  --pv-line: var(--color-hairline);
+}
+
+.pss-mini svg { display: block; width: 100%; height: 100%; }
+.pss-mini .f-face { fill: var(--pv-face); }
+.pss-mini .f-card { fill: var(--pv-card); }
+.pss-mini .f-ink { fill: var(--pv-ink); }
+.pss-mini .f-dim { fill: var(--pv-dim); }
+.pss-mini .f-acc { fill: var(--picker-accent); }
+.pss-mini .s-line { stroke: var(--pv-line); }
+.pss-mini .s-acc { stroke: var(--picker-accent); }
+.pss-mini .s-dim { stroke: var(--pv-dim); }
+.pss-mini .f-floor { fill: color-mix(in srgb, var(--pv-face) 90%, #3b2441); }
+
+.pss-more {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 2px 0;
+  color: var(--pss-dim);
+  font-size: 12px;
+}
+
+.pss-more svg { transition: transform 150ms; }
+.pss-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+@media (hover: hover) { .pss-more:hover { color: var(--pss-ink); } }
+
+@media (pointer: coarse) { .pss-keys { display: none; } }
+
+@media (max-width: 767px) {
+  .picker-style-button span { display: none; }
+  .model-cross-header .picker-style-button { padding: 0 6px 0 8px; }
+  .picker-style-strip { left: 8px; right: 8px; width: auto; padding: 10px 10px 12px; }
+  .pss-tiles { gap: 6px; }
+  .pss-tile { padding: 4px; gap: 4px; border-radius: 10px; }
+  .pss-name { font-size: 11px; }
+}
+
+@media (max-width: 900px), (max-height: 700px) {
+  .vm-sign .picker-style-button { height: 28px; margin-left: auto; }
+  .vm-sign .picker-style-button + .vm-close { margin-left: 0; }
+}
+
+@scope (.model-cross-backdrop[data-light]) {
+  .model-cross-header .picker-style-button { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
+  .model-cross-header .picker-style-button[aria-expanded="true"] { background: color-mix(in srgb, var(--color-ink) 8%, transparent); color: var(--color-ink); }
+  @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: var(--color-ink); } }
+
+  .picker-style-strip {
+    --pss-ground: var(--color-card);
+    --pss-edge: color-mix(in srgb, var(--color-ink) 14%, transparent);
+    --pss-ink: var(--color-ink);
+    --pss-dim: var(--color-ink-secondary);
+    --pss-tile: color-mix(in srgb, var(--color-ink) 12%, transparent);
+    --pss-on: color-mix(in srgb, var(--color-ink) 5%, transparent);
+    box-shadow: 0 18px 44px color-mix(in srgb, var(--color-ink) 18%, transparent);
+  }
+
+  .pss-tile[aria-checked="true"], .pss-tile:focus-visible { border-color: oklch(from var(--picker-accent) min(l, .45) c h); outline-color: oklch(from var(--picker-accent) min(l, .45) c h); }
+  .pss-name svg { color: oklch(from var(--picker-accent) min(l, .45) c h); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .picker-style-strip { animation: none; }
+  .pss-tile, .pss-more svg { transition: none; }
+}

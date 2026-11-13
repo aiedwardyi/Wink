@@ -9,6 +9,7 @@ import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
 import { needsCli, needsSignIn } from "./EngineSetup";
 import type { ModelDialHandle } from "./ModelDial";
+import { altKeyLabel } from "./PickerStyleStrip";
 import "./ModelChart.css";
 
 const XMIN = 0.003;
@@ -319,6 +320,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
             <span><b>←→</b>{t("model.modelAxis")}</span>
             <span><b>1-{Math.min(rows.length, 5)}</b>{t("model.chart.lab")}</span>
             <span><b>↵</b>{t("model.chart.pick")}</span>
+            <span><b>{altKeyLabel()}+S</b>{t("model.style")}</span>
           </p>
         </div>
       </section>
