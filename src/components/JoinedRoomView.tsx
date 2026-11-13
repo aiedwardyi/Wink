@@ -30,6 +30,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const entries = room?.entries;
   const hostBots = room?.state?.bots;
   const teamBots = room?.state?.teamBots;
+  // Tags include every room bot; routing still enforces ownership.
   const bots = useMemo(() => (teamBots?.length ? [...(hostBots ?? []), ...teamBots] : hostBots), [hostBots, teamBots]);
   const myBots = room?.myBots;
   const first = entries?.[0]?.seq;
