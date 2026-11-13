@@ -10,7 +10,7 @@ import { SkinPicker } from "./SkinPicker";
 let root: Root;
 const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Precision Dimmed", "Bronze", "Dim Sand", "Wink Day", "Notebook"];
 const darkCount = 8;
-const kept = ["Wink Violet", "Wink Black", "Pewter", "Moss"];
+const kept = ["Wink Violet", "Wink Black", "Pewter", "Merlot"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
 const names = () => tiles().map((button) => button.querySelector(".font-medium")?.textContent);
 const tagged = () => tiles().filter((button) => button.querySelector("[data-skin-new]")).map((button) => button.querySelector(".font-medium")?.textContent);
@@ -96,12 +96,12 @@ describe("featured themes", () => {
     expect(names()).toEqual([...featured.slice(0, darkCount), "Servo Gray", ...featured.slice(darkCount)]);
   });
 
-  it("keeps Moss under More themes and gives an active extra theme the current-theme slot", async () => {
+  it("keeps Merlot under More themes and gives an active extra theme the current-theme slot", async () => {
     await mount("precision");
-    expect(names()).not.toContain("Moss");
+    expect(names()).not.toContain("Merlot");
     await act(async () => root.unmount());
-    await mount("moss");
-    expect(names()).toEqual([...featured.slice(0, darkCount), "Moss", ...featured.slice(darkCount)]);
+    await mount("merlot");
+    expect(names()).toEqual([...featured.slice(0, darkCount), "Merlot", ...featured.slice(darkCount)]);
     await act(async () => root.unmount());
     await mount("kanagawa");
     expect(names()).toEqual([...featured.slice(0, darkCount), "Kanagawa", ...featured.slice(darkCount)]);
@@ -145,7 +145,7 @@ describe("New tag", () => {
 
   it("drops the tag after the theme hotkey applies it", async () => {
     await mount("precision");
-    await act(async () => applySkin(nextSkin("moss")));
+    await act(async () => applySkin(nextSkin("merlot")));
     await act(async () => applySkin("precision"));
     expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
   });
