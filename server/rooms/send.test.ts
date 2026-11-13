@@ -242,6 +242,11 @@ describe("teamBotSend", () => {
     teamBotSend(crew, jj, pete, "@Zoe your turn");
     teamBotSend(crew, mina, zoe, "@Pete back to you");
     expect(liveBotChain(crew)).toBe(2);
+    const changed = vi.fn();
+    store.onChange(changed);
+    hostedSend(crew, { kind: "host" }, "I'll take it from here");
+    expect(liveBotChain(crew)).toBe(0);
+    expect(changed).toHaveBeenCalledWith({ type: "group", groupId: crew.id });
   });
 
   it("still posts but wakes nobody past the hourly quota or in a people-only room", () => {

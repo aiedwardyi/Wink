@@ -6986,11 +6986,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
   const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
-  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) {
-    // the host's line ends a handoff; no turn starts to say so
-    broadcast({ kind: "group", group: publicGroupState(group) });
-    return shared;
-  }
+  if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }

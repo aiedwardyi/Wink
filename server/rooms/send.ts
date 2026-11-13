@@ -1,7 +1,7 @@
 // Every message into a team room: the host's through the normal send route,
 // a person's through the door. The host's line is only committed here: the
 // normal group turn answers it. A person's wakes one bot, at most, with an ask.
-import { botChain } from "../../shared/bot-chain.ts";
+import { botChain, CHAIN_LINES } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import { alertWhenUnread, roomLineText } from "./alerts.ts";
@@ -19,9 +19,6 @@ const statusError = (status: number, message: string) => Object.assign(new Error
 
 /** Rooms whose bot lines wake no bot until a person or the host speaks again. */
 const stopped = new Set<string>();
-
-/** The strip's count reads this far back. */
-const CHAIN_LINES = 100;
 
 const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
   const bot = roomAskDeps().store.bot(id);
@@ -56,8 +53,11 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     }
     if (refusal) throw statusError(429, refusal);
   }
+  const ended = !person && liveBotChain(group) > 0;
   const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   stopped.delete(roomId);
+  // the host's line ends a handoff; republish the group so its strip clears
+  if (ended) store.patchGroup(group.id, {});
   if (person) markPersonLine(group, person, entry, person.name);
   if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({

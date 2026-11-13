@@ -2,6 +2,9 @@
 // Host and joined PCs read it from their own copy of the log for the strip and pings.
 import { botLineResponder } from "./room-routing.ts";
 
+/** The strip's count reads this far back. */
+export const CHAIN_LINES = 100;
+
 type Line = { author: { kind: string; id: string }; text: string };
 type Bot = { id: string; name: string };
 
