@@ -48,6 +48,7 @@ export function activityVisibleInChat(message: Message, showToolCalls: boolean):
         message.comm ||
         tool.name.startsWith("error:") ||
         tool.name === "memory.save" ||
+        OWNER_SEARCH.test(tool.name) ||
         isCommsNotice(tool.name)),
   );
 }
@@ -56,6 +57,8 @@ const ALWAYS_APPROVAL = /^auto-approved (.+?) \(always allowed\): ([\s\S]*)$/;
 const AUTO_APPROVAL = /^auto-approved ([^:]+): ([\s\S]*)$/;
 const REVIEW_APPROVAL = /^review approved ([^:]+): ([\s\S]*)$/;
 const BUSY_RETRY = /^Gemini is busy\. Retrying in (\d+) (sec|min)\.$/;
+// A room bot's search of its owner's 1:1: always shown, never folded into a work run.
+const OWNER_SEARCH = /^Searched your 1:1: ([\s\S]+)$/;
 const RETRY_LINE = /^retrying \u2014 attempt \d+\/\d+ in \d+s \u2014 /;
 
 function toolFromAllowKey(key: string): string {
@@ -87,7 +90,7 @@ interface ServerLine {
   re: RegExp;
   pick: (m: RegExpExecArray) => [MessageKey, Record<string, string | number>];
   /** fixed English the server must keep writing, in `file`; the drift guard scans for it */
-  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
+  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "one-mind.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
   needles: string[];
 }
 
@@ -95,6 +98,7 @@ interface ServerLine {
 export const SERVER_LINES: ServerLine[] = [
   { re: /^Message to @(.+)$/, pick: (m) => ["chat.messageToBot", { name: m[1] }], file: "comms-visibility.ts", needles: ["Message to @"] },
   { re: /^Message from @(.+)$/, pick: (m) => ["chat.messageFromBot", { name: m[1] }], file: "comms-visibility.ts", needles: ["Message from @"] },
+  { re: OWNER_SEARCH, pick: (m) => ["chat.searchedOwnerChat", { query: m[1] }], file: "one-mind.ts", needles: ["Searched your 1:1: "] },
   { re: /^Reply from @(.+)$/, pick: (m) => ["chat.replyFromBot", { name: m[1] }], file: "peer-reply-publication.ts", needles: ["Reply from @"] },
   {
     re: /^Queued for @(.+?), sends when this reply ends(?:: ([\s\S]*))?$/,
@@ -331,7 +335,7 @@ function foldable(message: Message): boolean {
   const tool = message.tool;
   if (message.kind !== "activity" || !tool) return false;
   if (message.comm) return false;
-  if (tool.name.startsWith("error:") || tool.name === "memory.save" || isCommsNotice(tool.name)) return false;
+  if (tool.name.startsWith("error:") || tool.name === "memory.save" || OWNER_SEARCH.test(tool.name) || isCommsNotice(tool.name)) return false;
   return true;
 }
 

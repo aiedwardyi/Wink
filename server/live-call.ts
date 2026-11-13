@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -188,7 +188,9 @@ export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_
   return {
     model: `models/${LIVE_MODEL}`,
     generationConfig: liveGeneration(voice),
-    systemInstruction: { parts: [{ text: brief }] },
+    systemInstruction: { parts: [{ text: LIVE_ACCENTS[voice] ? `${brief}
+
+${LIVE_ACCENTS[voice]}` : brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
     inputAudioTranscription: { languageCodes: language === "auto" ? [app, app === "ko" ? "en" : "ko"] : [language] },
     outputAudioTranscription: {},

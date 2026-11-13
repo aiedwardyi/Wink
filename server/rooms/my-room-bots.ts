@@ -7,21 +7,23 @@ import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
 import { WINDOW_CHARS, WINDOW_ENTRIES } from "./windows.ts";
 
-export type MyBotTurn = { working?: boolean; error?: "busy" | "failed" };
+export type MyBotTurn = { working?: boolean; waiting?: boolean; error?: "failed" };
 
 export interface MyRoomBotDeps {
   client: Pick<GuestClient, "botSend" | "file">;
   bot(botId: string): { id: string; name: string } | null;
+  busy(botId: string): boolean;
   /** The bot's task thread still exists. */
   hasTask(botId: string, threadId: string): boolean;
   createTask(botId: string, title: string): { threadId: string } | null;
   /** `prompt` goes to the model; `typed` is the task's user row. */
-  startTurn(botId: string, threadId: string, prompt: string, typed: string): Promise<unknown>;
+  startTurn(botId: string, threadId: string, prompt: string, typed: string, failed: () => void): Promise<unknown>;
   messagesFor(threadId: string): Message[];
   changed(roomId: string): void;
 }
 
-type Running = { roomId: string; id: string; entry: JoinedEntry; since: number };
+type Waiting = { roomId: string; id: string; botId: string; after: number; entry: JoinedEntry };
+type Running = Waiting & { since: number };
 
 const lineOf = (entry: JoinedEntry) => `${entry.author.name}: ${entry.text}`;
 
@@ -45,6 +47,8 @@ function since(roomId: string, after: number, before: number): JoinedEntry[] {
 export class MyRoomBotTurns {
   private readonly turns = new Map<string, MyBotTurn>();
   private readonly running = new Map<string, Running>();
+  private readonly waiting: Waiting[] = [];
+  private readonly active = new Map<string, Waiting>();
   private readonly deps: MyRoomBotDeps;
 
   constructor(deps: MyRoomBotDeps) {
@@ -59,7 +63,7 @@ export class MyRoomBotTurns {
   sent(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
     const state = room?.state;
-    if (!room || !state?.teamBots || entry.author.kind !== "person" || entry.author.id !== room.me.id) return;
+    if (room?.status !== "joined" || !state?.teamBots || entry.author.kind !== "person" || entry.author.id !== room.me.id) return;
     const mine = new Map(myRoomBots(roomId).map((bot) => [bot.id, bot]));
     const own = state.teamBots.filter((bot) => bot.owner === room.me.id && mine.has(bot.id));
     if (!own.length) return;
@@ -67,7 +71,29 @@ export class MyRoomBotTurns {
     const quote = entry.replyToId ? joinedEntry(roomId, entry.replyToId) : null;
     const hit = roomResponder(entry.text, [...state.bots, ...own], [state.host, ...state.people.map((person) => person.name), ...others], quote?.author.kind === "bot" ? quote.author.id : undefined, false);
     const bot = hit && mine.get(hit.id);
-    if (bot) void this.run(roomId, bot, hit.name, entry, quote);
+    if (!bot || entry.seq <= bot.seenSeq || this.waiting.some((row) => row.roomId === roomId && row.entry.id === entry.id) || [...this.active.values()].some((row) => row.roomId === roomId && row.entry.id === entry.id)) return;
+    this.waiting.push({ roomId, id: bot.id, botId: bot.botId, after: bot.seenSeq, entry });
+    this.drain();
+  }
+
+  drain(): void {
+    for (const row of [...this.waiting]) {
+      const room = joinedRoom(row.roomId);
+      const bot = myRoomBots(row.roomId).find((candidate) => candidate.id === row.id && candidate.botId === row.botId);
+      const listed = room?.state?.teamBots?.find((candidate) => candidate.id === row.id && candidate.owner === room.me.id);
+      if (room?.status !== "joined" || row.entry.author.id !== room.me.id || !bot || !listed || !this.deps.bot(row.botId)) {
+        this.waiting.splice(this.waiting.indexOf(row), 1);
+        this.set(row.roomId, row.id, undefined);
+        continue;
+      }
+      if (this.active.has(row.botId) || this.deps.busy(row.botId)) {
+        if (!this.turn(row.roomId, row.id)?.working) this.set(row.roomId, row.id, { waiting: true });
+        continue;
+      }
+      this.waiting.splice(this.waiting.indexOf(row), 1);
+      this.active.set(row.botId, row);
+      void this.run(row, bot, listed.name);
+    }
   }
 
   private set(roomId: string, id: string, turn: MyBotTurn | undefined): void {
@@ -77,21 +103,26 @@ export class MyRoomBotTurns {
     this.deps.changed(roomId);
   }
 
-  private async run(roomId: string, bot: MyRoomBot, roomName: string, entry: JoinedEntry, quote: JoinedEntry | null): Promise<void> {
+  private async run(row: Waiting, bot: MyRoomBot, roomName: string): Promise<void> {
+    const { roomId, entry } = row;
+    const quote = entry.replyToId ? joinedEntry(roomId, entry.replyToId) : null;
     const local = this.deps.bot(bot.botId);
     const room = joinedRoom(roomId);
-    if (!local || !room?.state) return this.set(roomId, bot.id, { error: "failed" });
+    if (!local || !room?.state) {
+      this.active.delete(bot.botId);
+      return this.set(roomId, bot.id, { error: "failed" });
+    }
     this.set(roomId, bot.id, { working: true });
     let mine: Running | undefined;
     try {
       let threadId = bot.threadId && this.deps.hasTask(local.id, bot.threadId) ? bot.threadId : null;
       if (!threadId) {
         threadId = this.deps.createTask(local.id, room.state.roomName)?.threadId ?? null;
-        if (!threadId) return this.set(roomId, bot.id, { error: "failed" });
+        if (!threadId) throw new Error("couldn't create the room task");
         setMyRoomBotTurn(roomId, bot.id, threadId, 0);
       }
       const files = await this.files(roomId, [...(entry.files ?? []), ...(quote?.files ?? [])]);
-      const window = since(roomId, bot.seenSeq, entry.seq);
+      const window = since(roomId, row.after, entry.seq);
       const prompt = [
         `(You are in the team room ${JSON.stringify(room.state.roomName)} on ${JSON.stringify(room.state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. Only ${JSON.stringify(room.me.name)}, who runs you, can ask you.)`,
         ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),
@@ -99,12 +130,20 @@ export class MyRoomBotTurns {
         ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
         `${JSON.stringify(room.me.name)} asked you: ${entry.text}`,
       ].join("\n");
-      // A live entry is the turn whose answer is still owed; this ask fails BOT_BUSY.
-      if (!this.running.has(threadId)) this.running.set(threadId, (mine = { roomId, id: bot.id, entry, since: this.deps.messagesFor(threadId).length }));
-      await this.deps.startTurn(local.id, threadId, prompt, entry.text);
+      this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length }));
+      await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
+        if (this.running.get(threadId) === mine) void this.settled(threadId, false);
+      });
     } catch (error) {
+      if (this.active.get(bot.botId) !== row) return;
       for (const [threadId, run] of this.running) if (run === mine) this.running.delete(threadId);
-      this.set(roomId, bot.id, { error: (error as { code?: unknown } | null)?.code === "BOT_BUSY" ? "busy" : "failed" });
+      this.active.delete(bot.botId);
+      if ((error as { code?: unknown } | null)?.code === "BOT_BUSY") {
+        this.waiting.unshift(row);
+        return this.set(roomId, bot.id, { waiting: true });
+      }
+      this.set(roomId, bot.id, { error: "failed" });
+      queueMicrotask(() => this.drain());
     }
   }
 
@@ -121,12 +160,19 @@ export class MyRoomBotTurns {
   /** Call on every settled turn; only a room task's posts. */
   async settled(threadId: string, ok: boolean): Promise<void> {
     const run = this.running.get(threadId);
-    if (!run) return;
+    if (!run) return this.drain();
     this.running.delete(threadId);
-    const text = this.deps.messagesFor(threadId).slice(run.since).filter(shown).map((message) => message.text!.trim()).join("\n\n");
-    if (!text) return this.set(run.roomId, run.id, ok ? undefined : { error: "failed" });
-    const posted = await this.deps.client.botSend(run.roomId, run.id, text, run.entry.id);
-    setMyRoomBotTurn(run.roomId, run.id, threadId, posted.ok ? posted.value.seq : run.entry.seq);
-    this.set(run.roomId, run.id, posted.ok ? undefined : { error: "failed" });
+    try {
+      const text = this.deps.messagesFor(threadId).slice(run.since).filter(shown).map((message) => message.text!.trim()).join("\n\n");
+      if (!text) return this.set(run.roomId, run.id, ok ? undefined : { error: "failed" });
+      const posted = await this.deps.client.botSend(run.roomId, run.id, text, run.entry.id);
+      setMyRoomBotTurn(run.roomId, run.id, threadId, posted.ok ? posted.value.seq : run.entry.seq);
+      this.set(run.roomId, run.id, posted.ok ? undefined : { error: "failed" });
+    } catch {
+      this.set(run.roomId, run.id, { error: "failed" });
+    } finally {
+      this.active.delete(run.botId);
+      this.drain();
+    }
   }
 }

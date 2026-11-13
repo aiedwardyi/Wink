@@ -171,7 +171,16 @@ describe("harness playbook", () => {
     expect(prompt).toContain("anything more goes to a FRESH worker in the same worktree");
     expect(prompt).toContain("Default workers to high effort");
     expect(prompt.replace(/\s+/g, " ")).toContain("Only when the user turns max mode on, use max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code audits only, at xhigh.");
-    expect(prompt.replace(/\s+/g, " ")).toContain("Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
+  });
+
+  it("gives every worker the general card, ship and answer rules", () => {
+    const prompt = loadHarnessPlaybook();
+    expect(harnessPlaybookPrompt(true)).toContain("- Say merged, released or in the app only once gh, the release list or the installed version shows it.");
+    expect(prompt).toContain("- Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.");
+    expect(prompt).toContain("- No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.");
+    expect(prompt).toContain("- Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.");
+    expect(prompt).toContain("Quote the user's latest words verbatim.");
+    expect(prompt).toContain("Before you relay a worker's plan or answer its question, check it against every item and limit the user named last.");
   });
 
   it("writes the built list before building and quotes it in cards", () => {
@@ -181,7 +190,7 @@ describe("harness playbook", () => {
   });
 
   it("logs every walk snag to one shared list", () => {
-    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("A walk logs every snag it sees to one shared findings list. Before the next walk, read that list and walk only the screens changed since, unless the user asks for more.");
+    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain("Each walk logs every snag to one shared findings list; the next walk reads it and covers only screens changed since, unless the user asks for more.");
   });
 
   it("matches the model to the job", () => {
@@ -265,7 +274,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(14701);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(14750);
   });
 
   it("fills the worktree path from the configured root", () => {

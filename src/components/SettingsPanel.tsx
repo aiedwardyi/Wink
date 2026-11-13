@@ -824,7 +824,7 @@ export function SettingsPanel({
                     onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
                   />
                 )}
-                {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
+                {engine?.driverKind === "claudeAgent" && (
                   <SwitchRow
                     label={t("bot.leanStartup")}
                     on={bot.leanStartup !== true}

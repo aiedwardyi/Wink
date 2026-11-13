@@ -1,5 +1,6 @@
-// Lazy screens and Activity's numbers, loaded once the first chat is up, so a first open paints like the second.
+// Lazy screens, Activity's numbers, first-use faces and the markdown parser, warmed once the first chat is up, so a first open paints like the second.
 import { isPhone } from "./phone-swipe";
+import { faceWarms } from "./warm-faces";
 
 interface Connection {
   saveData?: boolean;
@@ -9,6 +10,8 @@ interface Connection {
 type Load = () => Promise<unknown>;
 
 const EXTRAS: Load[] = [
+  ...faceWarms,
+  () => import("@/components/ChatMarkdown").then((m) => m.warmMarkdown()),
   () => import("@/components/MemoryMap"),
   () => import("@/components/ActivityCard").then((m) => m.warmActivity()),
   () => import("@/components/PhoneAccessSettings").then((m) => m.warmRelay()),

@@ -181,6 +181,9 @@
 .mm-close { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; color: var(--color-ink-secondary); background: var(--color-control); border: 1px solid var(--mm-line); }
 @media (hover: hover) { .mm-close:hover { color: var(--color-ink); } }
 .mm-sheet-body { flex: 1; min-height: 0; overflow-y: auto; }
+@media not all and (pointer: coarse) {
+  .mm-live::-webkit-scrollbar-track, .mm-sheet-body::-webkit-scrollbar-track { margin-block: 16px; }
+}
 .mm-sheet-body .mm-list { columns: 2; column-gap: 28px; padding: 6px 18px 12px; }
 .mm-list { list-style: none; margin: 0; padding: 0; }
 .mm-list li { break-inside: avoid; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--mm-line); font-size: 13px; line-height: 18px; }

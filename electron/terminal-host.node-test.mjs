@@ -2145,6 +2145,23 @@ test("shell integration only wraps the worker PowerShell", { skip: process.platf
   assert.deepEqual(f.children[1].args, ["-NoLogo"]);
 });
 
+test("plain panes start a login shell on darwin only", async (t) => {
+  for (const [platform, args] of [["darwin", ["-l"]], ["linux", []]]) {
+    const f = fixture({ platform, env: { SHELL: "/bin/zsh" } });
+    t.after(() => f.host.dispose());
+    await f.host.open(f.event, f.input);
+    assert.equal(f.children[0].shell, "/bin/zsh");
+    assert.deepEqual(f.children[0].args, args);
+  }
+  let owner;
+  const f = fixture({ platform: "darwin", env: { SHELL: "/bin/zsh" }, owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 0 }, environment: {} }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+  assert.equal(f.children[0].shell, "/bin/sh");
+  assert.deepEqual(f.children[0].args, []);
+});
+
 for (const [name, shell] of [
   ["PowerShell 5.1", path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")],
   ["PowerShell 7", path.join(process.env.ProgramFiles || "C:\\Program Files", "PowerShell", "7", "pwsh.exe")],

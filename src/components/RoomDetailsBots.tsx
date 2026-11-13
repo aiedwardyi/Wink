@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
-import { groupResponseHint } from "@/lib/group-routing";
 import { useI18n } from "@/lib/i18n";
 import { roomPeople, roomTeamBots } from "@/lib/team-rooms";
 import { api, useStore, type Bot, type Group } from "@/state/store";
@@ -11,6 +10,7 @@ import { BotAvatar } from "./Avatar";
 import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
 import { BotPickerList } from "./BotPickerList";
 import { NewBotRow, type NewRow } from "./GroupWizard";
+import { WhoAnswersRow } from "./RoomDetailsRows";
 import { TeammateBotRows } from "./RoomTeamBots";
 
 export function RoomDetailsBots({ group }: { group: Group }) {
@@ -128,7 +128,7 @@ export function RoomDetailsBots({ group }: { group: Group }) {
           </button>
         </div>
       )}
-      {group.memberIds.length > 0 && <p className="mt-2 px-1 text-[12.5px] text-ink-secondary">{groupResponseHint(group, inRoom, t)}</p>}
+      {group.memberIds.length > 0 && <div className={`${DETAILS_BOX} mt-2`}><WhoAnswersRow group={group} bots={inRoom} /></div>}
     </>
   );
 }

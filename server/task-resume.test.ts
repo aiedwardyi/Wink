@@ -200,9 +200,10 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     },
   });
   drainQueuedSends = load("drainQueuedSends", {
+    myRoomBotTurns: { drain: noop },
     taskResumes, store, drainPeerUserReplies, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
     startQueuedTurn, writeChatError, terminalBridgeAccess: null, isSendCancelled: () => false,
-    markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
+    markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop, roomLanes: { free: () => false },
   });
   const startGroupCardContinuation = load("startGroupCardContinuation", {
     store, groupTaskResumes, groupQueues,
@@ -498,8 +499,8 @@ describe("interrupt ownership", () => {
     }
     visit(room);
     const javascript = ts.transpileModule(`const bind = ${binding.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", `${javascript}\nreturn bind;`)(
-      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {},
+    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", `${javascript}\nreturn bind;`)(
+      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1",
     )({ turnId: "stopped-turn" });
     expect(f.liveTurnIdByThread.get(threadId)).toBe("new-turn");
     expect(f.stale(threadId, "new-turn")).toBe(false);

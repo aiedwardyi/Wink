@@ -300,6 +300,12 @@ export function queueRoomParticipation(
   return { id };
 }
 
+export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
+  return [...queues.values()]
+    .filter((entry) => entry.threadId === threadId && entry.items.some((item) => item.kind === "room" && item.groupId === groupId))
+    .map((entry) => entry.botId);
+}
+
 // a queued quick handoff's ask row, or a requeued call row, already shows this line
 const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
 
@@ -316,11 +322,13 @@ function isRoomItem(item: QueueItem): item is RoomItem {
  * transcript-replay adapters do not also see it in the prompt. Entries
  * leave the map BEFORE running so a settle racing another settle can never
  * fire the same item twice. A bot with both a 1:1 wait and a room wait
- * yields one run per settle so the two cannot start together. */
+ * yields one run per settle so the two cannot start together. A room-only
+ * wait also drains onto a free room lane while the bot is busy. */
 export function drainSteeredMessages(
   store: SteerStore,
   run: DrainRun,
   hasActiveTurn?: HasActiveTurn,
+  laneFree?: HasActiveTurn,
 ): void {
   const draining = new Set<string>();
   const promotingBots = new Set(promoting.values());
@@ -334,7 +342,8 @@ export function drainSteeredMessages(
       continue;
     }
     // busy, or startTurn has claimed this bot but has not flipped busy yet
-    if (bot.busy || hasActiveTurn?.(entry.botId) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
+    const busy = bot.busy || hasActiveTurn?.(entry.botId);
+    if ((busy && !(entry.items.every(isRoomItem) && laneFree?.(entry.botId))) || draining.has(entry.botId) || promotingBots.has(entry.botId)) continue;
     const first = entry.items.find((item) => !isRoomItem(item) && !isSendCancelled(item.sendId));
     if (first && !isRoomItem(first) && syncHold.waiting(entry.threadId, first.syncUntil)) continue;
     // committed to draining: the entry leaves the map before anything runs,

@@ -175,6 +175,8 @@ export interface Message {
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
+  /** A hidden 1:1 row: what the bot said in a room, carried into its next 1:1 turn once. */
+  roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   call?: import("../shared/live-call.ts").CallTag;
@@ -298,9 +300,9 @@ export interface GroupRecord {
    * namespace so one heading can hold a project's room and its people */
   section?: string;
   pinned?: boolean;
-  /** New user-created rooms start with setup pending. Null timestamps are
-   * intentional: records from before room setup has existed omit both keys
-   * and remain immediately usable. */
+  /** New rooms start with setup skipped, so older builds skip the setup page
+   * too; both null is a room still pending from before. Records from before
+   * room setup existed omit both keys and remain immediately usable. */
   setupCompletedAt?: number | null;
   setupSkippedAt?: number | null;
 }
@@ -1115,7 +1117,7 @@ export class Store {
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
       group.setupCompletedAt = setup?.completed ? createdAt : null;
-      group.setupSkippedAt = null;
+      group.setupSkippedAt = setup?.completed ? null : createdAt;
     }
     this.groups.unshift(group);
     this.saveGroups();

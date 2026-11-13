@@ -282,8 +282,9 @@ function useMenuPlacement(
   return box;
 }
 
-function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void): void {
+function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTMLElement, onClose: () => void, closing: boolean): void {
   useLayoutEffect(() => {
+    if (closing) return;
     const onDown = (e: Event) => {
       if (e.target instanceof Element && ref.current?.contains(e.target)) return;
       onClose();
@@ -310,7 +311,7 @@ function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTM
       window.removeEventListener("blur", onBlur);
       transcript?.removeEventListener("scroll", onScroll);
     };
-  }, [ref, opener, onClose]);
+  }, [ref, opener, onClose, closing]);
 }
 
 /** Close, then put focus back on the opener unless the action already moved it. */
@@ -349,7 +350,7 @@ export const MENU_CLASS =
 const ROW_CLASS =
   `flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink ${MENU_ITEM_HOVER}`;
 const EMOJI_CLASS =
-  "flex size-8 items-center justify-center rounded-full text-[17px] leading-none transition-transform hover:scale-110 hover:bg-control";
+  "flex size-8 items-center justify-center rounded-full text-[17px] leading-none hover:bg-control";
 
 export function MessageMenu({
   x,
@@ -360,6 +361,7 @@ export function MessageMenu({
   onPin,
   onReact,
   onClose,
+  closing = false,
 }: {
   x: number;
   y: number;
@@ -369,11 +371,12 @@ export function MessageMenu({
   onPin: (message: Message) => void;
   onReact?: (emoji: string) => void;
   onClose: () => void;
+  closing?: boolean;
 }) {
   const { t } = useI18n();
   const { message, copyText, user, pinned, canPin } = target;
   const [expanded, setExpanded] = useState(false);
-  useBackLayer(expanded, () => setExpanded(false));
+  useBackLayer(expanded && !closing, () => setExpanded(false));
   const [touch] = useState(isTouchPrimary);
   // kept against the row, since the transcript can scroll before Select text
   const [held] = useState(() => {
@@ -382,20 +385,20 @@ export function MessageMenu({
   });
   const ref = useRef<HTMLDivElement>(null);
   const box = useMenuPlacement(ref, x, y, expanded);
-  useMenuDismiss(ref, opener, onClose);
+  useMenuDismiss(ref, opener, onClose, closing);
   // App holds a Back entry while it is open, the same way as the model picker
   useEffect(() => {
-    if (!touch) return;
+    if (!touch || closing) return;
     window.dispatchEvent(new CustomEvent("orbit:message-menu", { detail: true }));
     return () => {
       window.dispatchEvent(new CustomEvent("orbit:message-menu", { detail: false }));
     };
-  }, [touch]);
+  }, [touch, closing]);
   useEffect(() => {
-    if (!touch) return;
+    if (!touch || closing) return;
     window.addEventListener("orbit:close-message-menu", onClose);
     return () => window.removeEventListener("orbit:close-message-menu", onClose);
-  }, [touch, onClose]);
+  }, [touch, onClose, closing]);
   const mine = useMemo(
     () => new Set(
       (message.reactions ?? []).filter((reaction) => reaction.by === "user").map((reaction) => reaction.emoji),
@@ -406,8 +409,8 @@ export function MessageMenu({
   // Portalled out of the transcript, the menu is no longer the row's tab
   // neighbour, so opening it carries focus across.
   useLayoutEffect(() => {
-    ref.current?.querySelector("button")?.focus();
-  }, [expanded]);
+    if (!closing) ref.current?.querySelector("button")?.focus();
+  }, [expanded, closing]);
 
   const toggle = (emoji: string) => {
     onReact?.(emoji);
@@ -437,7 +440,9 @@ export function MessageMenu({
       <div
         ref={ref}
         role="menu"
-        data-message-menu
+        data-message-menu={!closing || undefined}
+        data-closing={closing || undefined}
+        inert={closing}
         style={{ top: box.top, left: box.left }}
         onKeyDown={(e) => menuKeyDown(ref, e)}
         className={cn(MENU_CLASS, touch ? "w-[304px]" : "w-[248px]")}
@@ -473,7 +478,10 @@ export function MessageMenu({
     <div
       ref={ref}
       role="menu"
-      data-message-menu
+      // the room composer's Escape reads this marker as an open menu
+      data-message-menu={!closing || undefined}
+      data-closing={closing || undefined}
+      inert={closing}
       style={{ top: box.top, left: box.left }}
       onKeyDown={(e) => menuKeyDown(ref, e)}
       className={cn(MENU_CLASS, touch ? "w-[304px]" : "w-[248px]")}
@@ -586,28 +594,32 @@ export function SelectionMenu({
   opener,
   text,
   onClose,
+  closing = false,
 }: {
   x: number;
   y: number;
   opener: HTMLElement;
   text: string;
   onClose: () => void;
+  closing?: boolean;
 }) {
   const { t } = useI18n();
-  useBackLayer(true, onClose);
+  useBackLayer(!closing, onClose);
   const ref = useRef<HTMLDivElement>(null);
   const box = useMenuPlacement(ref, x, y);
-  useMenuDismiss(ref, opener, onClose);
+  useMenuDismiss(ref, opener, onClose, closing);
 
   useLayoutEffect(() => {
-    ref.current?.querySelector("button")?.focus();
-  }, []);
+    if (!closing) ref.current?.querySelector("button")?.focus();
+  }, [closing]);
 
   return createPortal(
     <div
       ref={ref}
       role="menu"
-      data-selection-menu
+      data-selection-menu={!closing || undefined}
+      data-closing={closing || undefined}
+      inert={closing}
       style={{ top: box.top, left: box.left }}
       onKeyDown={(e) => menuKeyDown(ref, e)}
       className={cn(MENU_CLASS, "w-[220px]")}

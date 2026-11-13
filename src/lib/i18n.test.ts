@@ -363,14 +363,6 @@ describe("complete phrases", () => {
     expect(ko["room.chooseSharedFolder"]).toBe("건너뛰기 — 봇마다 자신의 폴더");
     expect(en["room.eachBotFolder"]).toBe("Each bot's own folder");
     expect(ko["room.eachBotFolder"]).toBe("봇마다 자신의 폴더");
-    expect(en["room.eachBotFolderPath"]).toMatch(/Skip — each bot's own folder/);
-    expect(ko["room.eachBotFolderPath"]).toMatch(/건너뛰기 — 봇마다 자신의 폴더/);
-    expect(en["room.workingFolderChip"]).toMatch(/No shared folder/i);
-    expect(ko["room.workingFolderChip"]).toMatch(/공유 폴더 없음/);
-    expect(en["room.workingFolderNamed"]).toBe("Shared folder: {folder}");
-    expect(ko["room.workingFolderNamed"]).toBe("공유 폴더: {folder}");
-    expect(en["room.projectFolderChip"]).toBe("No shared folder");
-    expect(ko["room.projectFolderChip"]).toBe("공유 폴더 없음");
     expect(en["chrome.resizeSidebar"]).toBe("Resize sidebar");
     expect(ko["chrome.resizeSidebar"]).toBe("사이드바 너비 조절");
     expect(en["chrome.sidebarWidthPixels"]).toBe("{width} pixels");

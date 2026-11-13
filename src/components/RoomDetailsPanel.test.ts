@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useSearchFindSeed } from "@/lib/chat-find";
+import { PHONE_QUERY } from "@/lib/phone-swipe";
 import type { JoinedView } from "@/lib/team-rooms";
 import { setSaveStatus } from "@/state/description-save-status";
 import type { Action, Bot, Group, InstanceInfo } from "@/state/store";
@@ -370,6 +372,75 @@ describe("People", () => {
     expect(body.className.split(" ")).toEqual(expect.arrayContaining(["min-h-0", "flex-1", "overflow-y-auto"]));
     expect(section("people").querySelectorAll("li")).toHaveLength(41);
     expect(removeButtons()).toHaveLength(15);
+  });
+});
+
+describe("room settings", () => {
+  const kaiRay = { ...group, memberIds: ["b1", "b2"] };
+  const bodies = () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) => init?.method === "PATCH").map(([path, init]) => [path, JSON.parse(String(init.body))]);
+
+  it.each([
+    ["en", "Folder", "Each bot's own folder"],
+    ["ko", "폴더", "봇마다 자신의 폴더"],
+  ] as const)("sets the room's folder from the Room section in %s", async (locale, label, empty) => {
+    mock.state.bots = [bot("b1", "Kai"), bot("b2", "Ray")];
+    vi.stubGlobal("ogb", { pickFolder: async () => "/Users/mina/work/wink-release-crew" });
+    await open({ group: kaiRay }, () => json({ group: { ...kaiRay, cwd: "/Users/mina/work/wink-release-crew" } }), locale);
+    const row = section("room").querySelector<HTMLElement>("[data-room-folder]")!;
+    expect(row.textContent).toContain(label);
+    expect(row.textContent).toContain(empty);
+    await act(async () => row.querySelector<HTMLButtonElement>("button")!.click());
+    await settle();
+    expect(bodies()).toEqual([["/api/groups/group-1", { cwd: "/Users/mina/work/wink-release-crew" }]]);
+  });
+
+  it("shows the folder a room already works in, fixed", async () => {
+    mock.state.bots = [bot("b1", "Kai")];
+    await open({ group: { ...group, memberIds: ["b1"], cwd: "/Users/mina/work/wink", pinnedCwd: "/Users/mina/work/wink" } });
+    const row = section("room").querySelector<HTMLElement>("[data-room-folder]")!;
+    expect(row.textContent).toContain("wink");
+    expect(row.textContent).toContain("Every bot in this group uses this folder.");
+    expect(row.querySelector("button, input")).toBeNull();
+  });
+
+  it("has no folder or who answers before a bot is in", async () => {
+    await open({ group });
+    expect(host.querySelector("[data-room-folder], [data-who-answers]")).toBeNull();
+  });
+
+  it.each([
+    ["en", ["Everyone responds", "Kai", "research Desk v2 / Seoul HQ", "Only @mentioned members"]],
+    ["ko", ["모두 응답", "Kai", "research Desk v2 / Seoul HQ", "@로 언급된 구성원만"]],
+  ] as const)("picks who answers from the Bots section in %s", async (locale, options) => {
+    mock.state.bots = [bot("b1", "Kai"), bot("b2", "research Desk v2 / Seoul HQ")];
+    await open({ group: kaiRay }, undefined, locale);
+    const pick = section("bots").querySelector<HTMLSelectElement>("select[data-who-answers]")!;
+    expect([...pick.options].map((option) => option.textContent)).toEqual(options);
+    expect(pick.value).toBe("everyone");
+    for (const [value, responder] of [["member:b2", { kind: "member", botId: "b2" }], ["mentions", { kind: "mentions" }]] as const) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(pick, value);
+        pick.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { defaultResponder: responder } });
+    }
+  });
+
+  it.each([[true, 1], [false, 0]] as const)("Search this chat on a phone (%s) closes details and opens the chat's find bar", async (phone, rows) => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: phone && query === PHONE_QUERY, media: query, addEventListener() {}, removeEventListener() {} }));
+    const Probe = () => createElement("i", { "data-find-open": String(useSearchFindSeed("thread-1").findOpen) });
+    const probe = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => probe.render(createElement(Probe)));
+    mock.state.bots = [bot("b1", "Kai")];
+    await open({ group: { ...group, memberIds: ["b1"] } });
+    const search = [...section("room").querySelectorAll("button")].filter((each) => each.textContent === "Search this chat");
+    expect(search).toHaveLength(rows);
+    if (phone) {
+      await act(async () => search[0]!.click());
+      expect(mock.dispatched).toContainEqual({ type: "toggleSettings", open: false });
+      expect(document.querySelector("[data-find-open]")!.getAttribute("data-find-open")).toBe("true");
+    }
+    await act(async () => probe.unmount());
   });
 });
 

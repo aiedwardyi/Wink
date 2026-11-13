@@ -42,10 +42,10 @@ describe("configuration boundaries", () => {
   });
 
   it("keeps the call voice and language across other updates, maps old picks and drops a retired voice", () => {
-    saveConfig(parseConfigPatch({ liveCall: { voice: "Achird" } }));
+    saveConfig(parseConfigPatch({ liveCall: { voice: "Alnilam" } }));
     saveConfig(parseConfigPatch({ liveCall: { language: "ko" } }));
-    expect(loadConfig().liveCall).toEqual({ voice: "Achird", language: "ko" });
-    expect([parseStoredConfig({ liveCall: { voice: "Kore" } }).liveCall, parseStoredConfig({ liveCall: { voice: "Charon" } }).liveCall]).toEqual([{ voice: "Aoede" }, { voice: "Achird" }]);
+    expect(loadConfig().liveCall).toEqual({ voice: "Alnilam", language: "ko" });
+    expect(["Kore", "Aoede", "Charon", "Achird"].map((voice) => parseStoredConfig({ liveCall: { voice } }).liveCall)).toEqual([{ voice: "Aoede" }, { voice: "Aoede" }, { voice: "Alnilam" }, { voice: "Alnilam" }]);
     expect(parseStoredConfig({ liveCall: { voice: "Zephyr", language: "ko" } }).liveCall).toEqual({ language: "ko" });
   });
 
