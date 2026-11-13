@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, FolderOpen } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
+import { MOTION_FAST_MS } from "@/lib/motion";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 import { WorkingFolderField } from "./WorkingFolderField";
 import "./FolderFix.css";
@@ -29,7 +30,7 @@ export function FolderFix({ folder, botId, group, onRetry }: {
 
   useEffect(() => {
     if (!saved) return;
-    const fade = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 200;
+    const fade = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : MOTION_FAST_MS;
     const finishFade = fade ? setTimeout(() => setSettled(true), fade) : undefined;
     const rerun = setTimeout(() => retry.current?.(), fade + 700);
     return () => { clearTimeout(finishFade); clearTimeout(rerun); };
@@ -87,7 +88,7 @@ export function FolderFix({ folder, botId, group, onRetry }: {
             </div>
             {onRetry && target && (
               editing ? <WorkingFolderField value={draft} onChange={setDraft} onSave={() => void submit()} disabled={busy || !draft.trim()} className="font-mono text-[12.5px]" /> : (
-                <button onClick={() => void choose()} disabled={busy || Boolean(saved)} className="mt-1.5 flex items-center gap-1.5 rounded-full border border-danger/30 px-2.5 py-1 text-[12.5px] hover:bg-danger/15 disabled:opacity-50">
+                <button onClick={() => void choose()} disabled={busy || Boolean(saved)} className="mt-1.5 flex items-center gap-1.5 rounded-full border border-danger/30 px-2.5 py-1 text-[12.5px] hover:bg-danger/10 disabled:opacity-50">
                   <FolderOpen size={12} /> {t("chat.chooseFolder")}
                 </button>
               )

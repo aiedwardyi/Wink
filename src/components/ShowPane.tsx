@@ -63,7 +63,7 @@ export function ShowPane({ item, watch, media = false, check = false, card, sour
   }, [closing, expanded]);
 
   const pane = (
-    <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className="verify-watch show-pane animate-panel-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
+    <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className="verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
         {!phone && <button type="button" onClick={closePane} aria-label={t("show.collapse")} title={t("show.collapse")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"><ChevronRight size={18} /></button>}
         <div role="tablist" className="show-pane-tabs">

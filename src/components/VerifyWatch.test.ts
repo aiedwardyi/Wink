@@ -524,7 +524,7 @@ it("slides the docked panel in and keeps it mounted, inert and click-through, wh
   const panel = (closing: boolean) => act(async () => root.render(createElement(ShowPane, { watch: { card, threadId: "t", live: false }, hidden: false, closing })));
   const aside = () => host.querySelector("aside.verify-watch")!;
   await panel(false);
-  expect(aside().classList.contains("animate-panel-in")).toBe(true);
+  expect(aside().classList.contains("md:animate-panel-slide")).toBe(true);
   expect(aside().hasAttribute("data-side-panel")).toBe(true);
   expect(aside().hasAttribute("data-closing")).toBe(false);
   await panel(true);

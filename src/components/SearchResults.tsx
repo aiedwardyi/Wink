@@ -73,7 +73,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
           <button
             key={`${hit.threadId}:${hit.messageId}`}
             onClick={() => void land(hit)}
-            className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-raised/60"
+            className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-raised/50"
           >
             {bot ? (
               <BotAvatar bot={bot} state="idle" size={26} animated={false} />

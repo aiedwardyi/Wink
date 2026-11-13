@@ -90,7 +90,6 @@ export function QuestionChoiceCard({
               onClick={() => onPick(option)}
               className={cn(
                 "group/choice relative grid w-full grid-cols-[24px_minmax(0,1fr)_16px] items-start gap-3 rounded-lg border border-transparent px-2.5 py-3 text-left",
-                "transition-[background-color,border-color] duration-[90ms] ease-out motion-reduce:transition-none",
                 "focus-visible:bg-raised-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
                 !locked && "hover:bg-raised-hover",
                 chosen &&

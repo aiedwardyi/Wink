@@ -683,43 +683,80 @@ describe("relative file links", () => {
   });
 
   describe("file link right-click", () => {
-    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string) => {
+    const rightClick = async (ogb: object | undefined, text: string, baseDir?: string, then?: (host: HTMLElement) => Promise<void>) => {
       if (ogb) Object.defineProperty(window, "ogb", { configurable: true, value: ogb });
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
       try {
         await act(async () => root.render(createElement(ChatMarkdown, { text, baseDir })));
-        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
         await act(async () => void host.querySelector("button")!.dispatchEvent(event));
-        return { prevented: event.defaultPrevented, text: host.textContent };
+        const items = [...document.querySelectorAll("[data-file-menu] [role=menuitem]")].map((item) => item.textContent);
+        await then?.(host);
+        return { prevented: event.defaultPrevented, text: host.textContent, items };
       } finally {
         await act(async () => root.unmount());
         host.remove();
         Reflect.deleteProperty(window, "ogb");
       }
     };
+    const item = (name: string) => [...document.querySelectorAll<HTMLButtonElement>("[data-file-menu] [role=menuitem]")].find((each) => each.textContent === name)!;
 
-    it("opens the native menu and keeps the browser menu away", async () => {
-      const fileMenu = vi.fn().mockResolvedValue(undefined);
-      const openFile = vi.fn();
-      const result = await rightClick({ fileMenu, openFile }, "[1080p](clip.mp4)", "/p");
-      expect(fileMenu).toHaveBeenCalledWith("/p/clip.mp4", "/p");
-      expect(openFile).not.toHaveBeenCalled();
+    it("opens the app menu with the native menu's actions and keeps the browser menu away", async () => {
+      const fileMenu = vi.fn();
+      const openFile = vi.fn().mockResolvedValue(undefined);
+      const showInFolder = vi.fn().mockResolvedValue(undefined);
+      const saveFile = vi.fn().mockResolvedValue(undefined);
+      const localMediaFile = vi.fn().mockResolvedValue("/p/real/clip.mp4");
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ fileMenu, openFile, showInFolder, saveFile, localMediaFile }, "[1080p](clip.mp4)", "/p", async () => {
+        expect(localMediaFile).toHaveBeenCalledWith({ path: "/p/clip.mp4" });
+        await act(async () => item("Show in folder").click());
+        expect(showInFolder).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+        expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+        await act(async () => item("Save as").click());
+        expect(saveFile).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 1 })));
+        await act(async () => item("Copy path").click());
+        expect(writeText).toHaveBeenCalledWith("/p/real/clip.mp4");
+        await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 2 })));
+        await act(async () => item("Open").click());
+        expect(openFile).toHaveBeenCalledWith("/p/clip.mp4", "/p");
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Save as", "Copy path"]);
+      expect(fileMenu).not.toHaveBeenCalled();
       expect(result.prevented).toBe(true);
+    });
+
+    it("offers no Save as and copies the link's own path when it resolves outside the bot's folder", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ openFile: vi.fn(), showInFolder: vi.fn(), saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue("/elsewhere/secret.py") }, "[report](report.py)", "/p", async () => {
+        await act(async () => item("Copy path").click());
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
+      expect(writeText).toHaveBeenCalledWith("/p/report.py");
     });
 
     it("leaves the default menu alone without the bridge", async () => {
       expect((await rightClick(undefined, "[notes](C:/My%20Drive/notes.md)")).prevented).toBe(false);
-      const older = await rightClick({ openFile: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
+      const older = await rightClick({ fileMenu: vi.fn() }, "[notes](C:/My%20Drive/notes.md)");
       expect(older.prevented).toBe(false);
     });
 
-    it("says why when the file is rejected", async () => {
-      const fileMenu = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
-      const result = await rightClick({ fileMenu }, "[gone](gone.py)", "/p");
+    it("offers no Save as for a folder or a missing file, and says why Show in folder failed", async () => {
+      const showInFolder = vi.fn().mockRejectedValue(new Error("That file no longer exists"));
+      const result = await rightClick({ openFile: vi.fn(), showInFolder, saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue(null) }, "[gone](gone.py)", "/p", async (host) => {
+        await act(async () => item("Show in folder").click());
+        expect(host.textContent).toContain("That file no longer exists");
+      });
       expect(result.prevented).toBe(true);
-      expect(result.text).toContain("That file no longer exists");
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
     });
   });
 
