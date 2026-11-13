@@ -114,7 +114,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -1164,6 +1164,7 @@ function respondToDisplayMediaRequest(callback, response) {
 }
 
 let cachedTailnet = "";
+let cachedSelfHost = "";
 
 function tailscaleStatus(command) {
   return new Promise((resolve) => {
@@ -1174,11 +1175,16 @@ function tailscaleStatus(command) {
 // Only a found tailnet is cached: Tailscale may start after Orbit.
 async function localTailnet() {
   const fromHost = deviceTailnet(process.env.ORBIT_REMOTE_HOST);
-  if (fromHost) return fromHost;
+  if (fromHost) {
+    cachedSelfHost = normalizedHost(process.env.ORBIT_REMOTE_HOST);
+    return fromHost;
+  }
   if (cachedTailnet) return cachedTailnet;
   const commands = process.platform === "win32" ? ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"] : ["tailscale"];
   for (const command of commands) {
-    cachedTailnet = tailnetFromStatus(await tailscaleStatus(command));
+    const status = await tailscaleStatus(command);
+    cachedTailnet = tailnetFromStatus(status);
+    cachedSelfHost = selfHostFromStatus(status);
     if (cachedTailnet) break;
   }
   return cachedTailnet;
@@ -1281,6 +1287,10 @@ async function openDeviceWindow(rawHost, rawName) {
       }
       if (sameDesktopViewerOrigin(target, url.origin)) return;
       event.preventDefault();
+      // The PC menu jumps in place; from here this PC is the main window and another PC gets its own.
+      const pc = devicePickTarget(target, tailnet, cachedSelfHost);
+      if (pc === "self") return activateMainWindow();
+      if (pc) return void openDeviceWindow(pc, pc.split(".")[0]);
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
     });
