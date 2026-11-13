@@ -162,6 +162,7 @@ import {
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
+import { chatListPage, paneNoteWaitingAtBoot, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -287,7 +288,7 @@ import { createTerminalLive } from "./terminal-live.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
-import { hasLocalUndeliveredPaneNote, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
+import { isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
 import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
@@ -8098,11 +8099,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) =>
-        limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
+      const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
+      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+        if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
+        return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
+      };
+      if (typeof open === "string") warmFirst(open);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
+        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -9005,6 +9011,7 @@ googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
 startupTiming.measure("quick asks", () => recoverQuickAsks(store));
+const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 const backups = startBackups({ dataDir: DATA_DIR, syncFolders: () => [...(profileSyncSettings.folder ? [profileSyncSettings.folder] : []), ...uploadCloudRoots], idle: () => !store.bots.some((bot) => bot.busy), log: (line) => console.warn(line) });
@@ -9029,7 +9036,7 @@ startupTiming.measure("paneWake", () => {
   for (const bot of store.bots) {
     const task = store.taskByThread(bot.id, bot.threadId);
     const deliveredId = task?.paneNotesDeliveredId;
-    if (deliveredId !== undefined && hasLocalUndeliveredPaneNote(store.activePath(bot.threadId), deliveredId ?? undefined, profileSyncSettings.deviceId, task?.paneNotesSkippedId)) {
+    if (deliveredId !== undefined && paneNoteWaitingAtBoot(store, bot.threadId, deliveredId ?? undefined, profileSyncSettings.deviceId, task?.paneNotesSkippedId)) {
       paneWake.noteArrived(bot.id, bot.threadId);
     }
   }

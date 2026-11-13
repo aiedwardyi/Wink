@@ -1293,7 +1293,13 @@ export class Store {
   }
 
   activeLeaf(threadId: string): string | null {
-    return this.thread(threadId).activeLeafId;
+    const head = this.threads.has(threadId) ? undefined : mdb.storedHead(threadId);
+    return head === undefined ? this.thread(threadId).activeLeafId : head;
+  }
+
+  /** Whether the transcript is in memory; the chat list reads an unloaded one's tail instead. */
+  loaded(threadId: string): boolean {
+    return this.threads.has(threadId);
   }
 
   /** The visible conversation: root → activeLeafId. */

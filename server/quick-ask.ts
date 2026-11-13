@@ -12,6 +12,7 @@ import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
+import { storedUnansweredAsks, unansweredAsks } from "./quick-ask-rows.ts";
 import { nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
 import { queueSteeredMessage } from "./steer-queue.ts";
@@ -211,8 +212,10 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "message
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
   for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   for (const [threadId, id] of threads) {
-    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
-    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
+    // a thread is loaded only when it holds an unanswered ask
+    const asks = storedUnansweredAsks(threadId) ?? unansweredAsks(store.messagesFor(threadId));
+    if (!asks.size) continue;
+    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && asks.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
   saveRunning();
 }
