@@ -12,7 +12,7 @@ import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
 import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
-import { RainbowRing } from "./Composer";
+import { RainbowRing } from "./RainbowRing";
 import { useModelDialFits } from "./ModelDial";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";

@@ -120,8 +120,8 @@ describe("idle motion attribute", () => {
 
   it("pauses the theme colors ring with the rainbow, changing only its colors", () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
-    const composer = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/Composer.tsx"), "utf8");
-    expect(composer).toContain('data-orbit-rainbow={theme ? "theme" : ""}');
+    const ring = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/RainbowRing.tsx"), "utf8");
+    expect(ring).toContain('data-orbit-rainbow={theme ? "theme" : ""}');
     const start = css.indexOf('[data-orbit-rainbow="theme"] > span {');
     expect(start).toBeGreaterThan(-1);
     const theme = css.slice(start, css.indexOf("}", start));
