@@ -649,7 +649,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       }
       for (const threadId of await transport.legacyThreads(target.botSyncId)) register(threadId, target, true);
     }
-    for (const target of host.rooms?.scopes() ?? []) for (const threadId of host.rooms!.threads(target.botId)) register(threadId, target);
+    if (host.rooms) for (const target of host.rooms.scopes()) for (const threadId of host.rooms.threads(target.botId)) register(threadId, target);
     tasks.push(...withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE eligible = 0").all())));
     for (const task of tasks) await migrate(task, true);
     if (withMessageTransaction((db) => db.prepare("SELECT 1 FROM sync_v2_migration WHERE phase = 'snapshot' AND error IS NULL LIMIT 1").get())) return;
