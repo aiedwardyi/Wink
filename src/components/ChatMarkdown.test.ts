@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
@@ -19,6 +20,17 @@ beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
 
 describe("bare domain links", () => {
+  it.each([
+    ["https://example.com/Edward's-notes", "https://example.com/Edward's-notes"],
+    ["starzum.com/Edward's-notes", "https://starzum.com/Edward's-notes"],
+    ["'starzum.com/notes'", "https://starzum.com/notes"],
+  ])("keeps apostrophes inside %s and surrounding quotes outside", (text, href) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(LinkedText, { text }));
+    expect(host.querySelector("a")?.getAttribute("href")).toBe(href);
+    expect(host.textContent).toBe(text);
+  });
+
   it.each(["starzum.com", "www.x.io", "x.co.kr", "https://starzum.com", "http://x.io/a", "STARZUM.COM", "example.technology", "한글.kr"])("links %s in a bot reply", (text) => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));

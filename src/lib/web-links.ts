@@ -1,9 +1,9 @@
 import { topLevelDomains } from "./top-level-domains";
 
-const WEB_LINK = /https?:\/\/[^\s<>"'`]+|(?<![\p{L}\p{N}_@./\\-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#][^\s<>"'`]+)?/giu;
+const WEB_LINK = /https?:\/\/[^\s<>"`]+|(?<![\p{L}\p{N}_@./\\-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#][^\s<>"`]+)?/giu;
 
 function trimLink(value: string): string {
-  let text = value.replace(/[.,;:!?]+$/, "");
+  let text = value.replace(/[.,;:!?']+$/, "");
   const balance: Record<string, number> = { ")": 0, "]": 0, "}": 0 };
   const pairs: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
   for (const char of text) {
@@ -14,7 +14,7 @@ function trimLink(value: string): string {
     balance[text.at(-1)!]++;
     text = text.slice(0, -1);
   }
-  return text.replace(/[.,;:!?]+$/, "");
+  return text.replace(/[.,;:!?']+$/, "");
 }
 
 export function webLinks(text: string): Array<{ start: number; text: string; href: string }> {
