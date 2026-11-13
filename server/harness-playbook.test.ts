@@ -179,6 +179,7 @@ describe("harness playbook", () => {
     expect(prompt).toContain("- Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.");
     expect(prompt).toContain("- No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.");
     expect(prompt).toContain("- Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.");
+    expect(prompt).toContain("Quote the user's latest words verbatim.");
     expect(prompt).toContain("Before you relay a worker's plan or answer its question, check it against every item and limit the user named last.");
   });
 
