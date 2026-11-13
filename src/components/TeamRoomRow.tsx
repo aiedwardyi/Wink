@@ -19,6 +19,7 @@ import { AttachedImageGallery } from "./AttachmentPreview";
 import { BotAvatar } from "./Avatar";
 import { CopyButton, TimestampLabel } from "./ChatBubble";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { LinkedText } from "./LinkedText";
 import { DaySeparator } from "./DaySeparator";
 import { FileAttachmentRow } from "./FileAttachmentRow";
 import { JumpToLatest } from "./JumpToLatest";
@@ -59,21 +60,6 @@ export function RoomFileRows({ base, files, className }: { base: string; files: 
       )}
     </>
   );
-}
-
-const WEB_LINK = /https?:\/\/[^\s<>"]*[^\s<>"'.,;:!?)\]}]/g;
-
-/** A person's line stays plain text; only web links become links. */
-function LinkedText({ text }: { text: string }) {
-  const parts: ReactNode[] = [];
-  let from = 0;
-  for (const match of text.matchAll(WEB_LINK)) {
-    parts.push(text.slice(from, match.index));
-    parts.push(<a key={match.index} href={match[0]} target="_blank" rel="noreferrer" className="break-words text-accent underline decoration-accent/40 hover:decoration-accent">{match[0]}</a>);
-    from = match.index + match[0].length;
-  }
-  parts.push(text.slice(from));
-  return <>{parts}</>;
 }
 
 export function RoomLineText({ base, entryId, text, canTranslate, children }: { base: string; entryId?: string; text: string; canTranslate: boolean; children?: ReactNode }) {

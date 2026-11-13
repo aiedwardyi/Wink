@@ -13,6 +13,9 @@ import type { Message } from "@/state/store-types";
 import { JoinedRoomView } from "./JoinedRoomView";
 import { TeamRoomComposer } from "./TeamRoomComposer";
 import { TeamRoomView } from "./TeamRoomView";
+import { Composer } from "./Composer";
+import { roomResponder } from "../../shared/room-routing";
+import type { Bot } from "@/state/store-types";
 
 const joined = vi.hoisted(() => ({ view: null as (JoinedView & { entries: [] }) | null, dispatched: [] as unknown[] }));
 vi.mock("@/lib/joined-rooms", () => ({ useJoinedRoom: () => joined.view }));
@@ -394,6 +397,47 @@ describe("room drafts", () => {
 });
 
 describe("room mentions", () => {
+  const peers = [{ id: "p2", name: "Sora" }];
+  const teamBots = [{ id: "tb1", name: "Sora Coder", color: "blue", owner: "p2" }];
+  const own = { id: "b1", name: "Wink", color: "blue", modelSelection: { instanceId: "claude", model: "m" } } as Bot;
+  async function openMentions(text = "@") {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), text);
+      box().setSelectionRange(text.length, text.length);
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return [...host.querySelectorAll<HTMLElement>('[role="option"]')];
+  }
+
+  it("offers people and teammate bots alongside the host's room bots", async () => {
+    const hosted = { ...group, memberIds: [own.id], room: { people: peers, teamBots } } as TeamRoom;
+    await act(async () => root.render(createElement(Composer, { group: hosted, members: [own] })));
+    const options = await openMentions();
+    expect(options.map((option) => option.textContent)).toEqual(["everyoneGroup", "WinkAgent", "Sora Coder · Sora'sAgent", "SoraPerson"]);
+  });
+
+  it("offers teammate bots in a host room with no local bots", async () => {
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, room: { people: peers, teamBots } } as TeamRoom })));
+    expect((await openMentions()).map((option) => option.textContent)).toEqual(["Sora Coder · Sora'sAgent", "SoraPerson"]);
+  });
+
+  it.each(["en", "ko"] as const)("offers all joined room bots and inserts the routed name without its %s owner label", async (locale) => {
+    applyLocale(locale);
+    joined.view!.state = { roomName: "Design team", host: "Edward", people: peers, bots: [{ id: own.id, name: own.name, color: own.color }], teamBots };
+    await render("joined");
+    const options = await openMentions("@Sora C");
+    expect(options).toHaveLength(1);
+    expect(options[0]?.textContent).toContain(locale === "en" ? "Sora Coder · Sora's" : "Sora Coder · Sora의 봇");
+    await act(async () => options[0]?.click());
+    expect(box().value).toBe("@Sora Coder ");
+    expect(roomResponder(box().value, teamBots, peers.map((person) => person.name))).toBe(teamBots[0]);
+    expect(host.querySelector('[role="listbox"]')).toBeNull();
+    await send();
+    const sent = vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/send")).at(-1);
+    expect(sent?.[0]).toBe("/api/joined/rooms/r9/send");
+    expect(JSON.parse(String(sent?.[1]?.body)).text).toBe("@Sora Coder");
+  });
+
   it("offers a teammate the room's bots and people", async () => {
     joined.view!.state = { roomName: "Design team", host: "Edward", people: [{ id: "p2", name: "Sora" }], bots: [{ id: "b1", name: "Wink", color: "blue" }] } as NonNullable<JoinedView["state"]>;
     await render("joined");
