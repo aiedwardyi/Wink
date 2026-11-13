@@ -85,6 +85,8 @@ export interface MspSupport {
   warmPool?: WarmPool;
   /** Extra `serve` argv for this CLI's `--version` line. */
   serveArgs?(version: string | null, wsl: boolean): string[];
+  /** The engine exe and env to start a host with, skipping the CLI's launcher; null keeps the launcher. */
+  directHost?(cli: string, env: Record<string, string | undefined>): { command: string; env: Record<string, string | undefined> } | null;
   /** One-shot text for summaries, outside any MSP session. */
   text?(ctx: CliTextContext): CliText;
 }
@@ -434,7 +436,22 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       };
       const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
         const args = ["serve", ...(support.serveArgs?.(cliVersion, isWslCli()) ?? [])];
-        const child = spawnCli(effectiveCli(), args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+        const launch = (command: string, childEnv: typeof env) =>
+          spawnCli(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+        // A failed direct start throws (bad image) or has no pid (ENOENT, EACCES); the launcher still runs.
+        const startDirect = () => {
+          const direct = support.directHost?.(effectiveCli(), env);
+          if (!direct) return null;
+          try {
+            const started = launch(direct.command, direct.env);
+            if (started.pid !== undefined) return started;
+            started.once("error", () => {});
+          } catch {
+            // fall through to the launcher
+          }
+          return null;
+        };
+        const child = startDirect() ?? launch(effectiveCli(), env);
         children.add(child);
         const host: Host = {
           child,

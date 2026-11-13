@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MspMuseAgentDriver, MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS, museServeArgs } from "./muse.ts";
+import { MspMuseAgentDriver, MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS, museDirectHost, museServeArgs } from "./muse.ts";
 import { classifyMuseError, museDefaultCli } from "../acp/muse.ts";
 import { setWslGateForTests } from "../../wsl-gate.ts";
 import { defaultModelEffort } from "../../../shared/model-effort.ts";
+import { fakeMuseInstall, museReleaseInfo } from "../../testing/fake-muse-install.ts";
 
 describe("classifyMuseError MSP turn errors", () => {
   it("maps authRequired to invalid_credentials, leaves the rest generic", () => {
@@ -36,6 +37,62 @@ describe("museServeArgs", () => {
     expect(museServeArgs("", false)).toEqual([]);
     expect(museServeArgs(null, false)).toEqual([]);
     expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", true)).toEqual([]);
+  });
+});
+
+describe.runIf(process.platform === "win32")("museDirectHost (launcher mirror)", () => {
+  const now = Date.now();
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-muse-launcher-"));
+    return { dir, ...fakeMuseInstall(dir, "unused.js") };
+  };
+  const checkedAt = (dir: string, seconds: number) => writeFileSync(join(dir, ".muse-update-checked-at"), `${seconds}\n`);
+
+  it("names the active exe and hands it the launcher's env", () => {
+    const { dir, cli, exe } = setup();
+    expect(museDirectHost(cli, { PATH: "p" }, now)).toEqual({
+      command: exe,
+      env: { PATH: "p", PSExecutionPolicyPreference: "Bypass", MUSE_RELEASE_INFO: readFileSync(join(dir, ".muse-release-info.json"), "utf8") },
+    });
+  });
+
+  it("drops release info that names another build, like the launcher", () => {
+    const { dir, cli } = setup();
+    writeFileSync(join(dir, ".muse-release-info.json"), museReleaseInfo("1.4.17-R1.1"));
+    expect(museDirectHost(cli, { MUSE_RELEASE_INFO: "stale" }, now)?.env).not.toHaveProperty("MUSE_RELEASE_INFO");
+  });
+
+  it.each<[string, Record<string, string>, (dir: string) => void]>([
+    ["an update check is due", {}, (dir) => checkedAt(dir, 0)],
+    ["the check time is unreadable", {}, (dir) => writeFileSync(join(dir, ".muse-update-checked-at"), "soon\n")],
+    ["a sync update is asked for", { MUSE_SYNC_UPDATE: "1" }, () => {}],
+    ["the channel switches", { MUSE_CHANNEL: "muse-canary" }, () => {}],
+    ["the channel is unsupported", { MUSE_CHANNEL: "nightly" }, () => {}],
+    ["the version is malformed", {}, (dir) => writeFileSync(join(dir, ".muse-version"), "latest\n")],
+    ["an install is running", { MUSE_LAUNCHER_INSTALL: "1" }, () => {}],
+    ["an internal update is running", { MUSE_INTERNAL_UPDATE: "1" }, () => {}],
+  ])("keeps the launcher when %s", (_, env, edit) => {
+    const { dir, cli } = setup();
+    edit(dir);
+    expect(museDirectHost(cli, env, now)).toBeNull();
+  });
+
+  it("follows the update interval and the auto-update switch", () => {
+    const { dir, cli, exe } = setup();
+    checkedAt(dir, Math.floor(now / 1000) - 10);
+    expect(museDirectHost(cli, {}, now)?.command).toBe(exe);
+    expect(museDirectHost(cli, { MUSE_UPDATE_INTERVAL_SECONDS: "5" }, now)).toBeNull();
+    checkedAt(dir, 0);
+    expect(museDirectHost(cli, { MUSE_NO_AUTO_UPDATE: "1" }, now)?.command).toBe(exe);
+  });
+
+  it("leaves a CLI that is not the Muse launcher alone", () => {
+    expect(museDirectHost(process.execPath, {}, now)).toBeNull();
+  });
+
+  it("keeps the launcher for a configured CLI with fixed args", () => {
+    const { cli } = setup();
+    expect(museDirectHost(`"${cli}" --profile work`, {}, now)).toBeNull();
   });
 });
 
