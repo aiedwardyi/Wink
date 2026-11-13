@@ -11,12 +11,12 @@ const L5 = ["low", "medium", "high", "xhigh", "max"] as const;
 const dispatch = vi.fn();
 let root: Root;
 
-function engine(instanceId: string, driverKind: string, ids: string[], signedIn = true): InstanceInfo {
+function engine(instanceId: string, driverKind: string, ids: string[], signedIn = true, levels: NonNullable<NonNullable<InstanceInfo["capabilities"]>["effortLevels"]> = [...L5], local: string[] = []): InstanceInfo {
   return {
     instanceId, driverKind, displayName: instanceId,
     snapshot: { state: "available", authenticated: signedIn },
-    models: { default: ids[0]!, options: ids.map((id) => ({ id, label: id })) },
-    capabilities: { effortLevels: [...L5] },
+    models: { default: ids[0]!, options: [...ids.map((id) => ({ id, label: id })), ...local.map((id) => ({ id, label: id, custom: true }))] },
+    capabilities: { effortLevels: levels },
   };
 }
 
@@ -33,11 +33,11 @@ function media(reduce: boolean) {
   }));
 }
 
-async function mount({ view = "chart", grokSignedIn = true } = {}) {
+async function mount({ view = "chart", grokSignedIn = true, local = [] as string[] } = {}) {
   localStorage.setItem("omb-model-picker-view", view);
   const instances = [
-    engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"]),
-    engine("codex", "codex", ["gpt-6.1-sol", "gpt-6-luna"]),
+    engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"], true, [...L5], local),
+    engine("codex", "codex", ["gpt-6.1-sol", "gpt-6-luna"], true, ["minimal", ...L5]),
     engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"], grokSignedIn),
   ];
   const bot: Bot = { id: "bot-1", threadId: "thread-1", name: "Machine", title: "", description: "", color: "green", notifications: false, unread: false, messages: [], modelSelection: { instanceId: "claude", model: "claude-opus-5-5", effort: "high", mode: "pinned" } };
@@ -55,9 +55,11 @@ async function mount({ view = "chart", grokSignedIn = true } = {}) {
 }
 
 async function press(key: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
   await act(async () => {
-    (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
+    (document.activeElement ?? document.body).dispatchEvent(event);
   });
+  return event;
 }
 
 const machine = () => document.querySelector(".model-machine");
@@ -206,6 +208,35 @@ describe("ModelMachine", () => {
     await click("[data-machine-pick]");
     expect(saved()).toMatchObject({ model: "gpt-6.1-sol" });
     expect(audio.sounds).toBe(1);
+  });
+
+  it("leaves keys native in the local-model controls and Tab reaches the search box", async () => {
+    await mount({ local: ["llama-local"] });
+    await hotkey();
+    const toggle = document.querySelector<HTMLButtonElement>(".vm-setup [aria-expanded]")!;
+    await act(async () => toggle.focus());
+    expect((await press("Enter")).defaultPrevented).toBe(false);
+    expect(saved()).toBeUndefined();
+    await click(".vm-setup [aria-expanded]");
+    await act(async () => toggle.focus());
+    await press("Tab");
+    const search = document.querySelector<HTMLInputElement>(".vm-setup input")!;
+    expect(document.activeElement).toBe(search);
+    for (const key of ["b", "2", "ArrowLeft", "ArrowUp", "Enter"]) expect((await press(key)).defaultPrevented).toBe(false);
+    expect(saved()).toBeUndefined();
+    expect(document.querySelector("[data-machine-slot][data-on]")?.getAttribute("data-machine-slot")).toBe("claude-opus-5-5");
+    expect(document.activeElement).toBe(search);
+    await press("Escape");
+    expect(machine()).toBeNull();
+  });
+
+  it("offers every effort the engine supports, minimal included", async () => {
+    await mount();
+    await hotkey();
+    await click('[data-machine-slot="gpt-6.1-sol"]');
+    await click('[data-machine-effort="minimal"]');
+    await click("[data-machine-pick]");
+    expect(saved()).toMatchObject({ model: "gpt-6.1-sol", effort: "minimal" });
   });
 
   it("never vends a signed-out engine", async () => {

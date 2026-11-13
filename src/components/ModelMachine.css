@@ -161,7 +161,7 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
 
 .vm-block h3 { margin: 0 0 7px; display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; font-weight: 600; letter-spacing: .24em; text-transform: uppercase; color: var(--blush); opacity: .9; }
 .vm-block h3 span { letter-spacing: .06em; font-size: 12.5px; color: var(--cream); text-transform: none; }
-.vm-effort { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; align-items: end; }
+.vm-effort { display: grid; grid-template-columns: repeat(var(--levels, 5), 1fr); gap: 7px; align-items: end; }
 .vm-effort button { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; height: 68px; border-radius: 8px; }
 .vm-effort i { display: block; height: calc(7px + var(--k) * 7.5px); border-radius: 5px; background: rgba(255, 255, 255, .13); transition: background .16s, transform .16s; }
 .vm-effort span { font-size: 12px; letter-spacing: .04em; text-align: center; color: #bfa6ba; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .16s; }

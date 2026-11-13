@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Lock, X } from "lucide-react";
 import type { ModelSelection } from "@/state/store";
 import { pickerModels, selectPickerEffort, selectPickerModel, withPickerEffort, type PickerRow } from "@/lib/cross-model-picker";
@@ -15,6 +15,8 @@ import { clunk } from "./model-machine-sound";
 import "./ModelMachine.css";
 
 const LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const EFFORTS = ["none", "minimal", ...LEVELS, "ultra"];
+const rank = (level: string) => EFFORTS.includes(level) ? EFFORTS.indexOf(level) : EFFORTS.length;
 const LETTERS = "ABCDEFGHI";
 const DROP_MS = 570;
 // The can lands in the tray halfway through its 620 ms bounce.
@@ -140,8 +142,8 @@ type ModelMachineProps = {
 
 export default function ModelMachine({ rows, draft, current, canCommit, onDraft, onSave, onClose, children }: ModelMachineProps) {
   const { t } = useI18n();
-  const lines = pickerModels(rows).map(lineOf);
-  const products = stock(rows, lines);
+  const lines = useMemo(() => pickerModels(rows).map(lineOf), [rows]);
+  const products = useMemo(() => stock(rows, lines), [rows, lines]);
   const { line, stop, level } = locate(lines, draft);
   const cur = products.find((product) => product.line === line);
   const now = locate(lines, withPickerEffort(rows.find((row) => row.instance.instanceId === current.instanceId)?.instance, current));
@@ -211,12 +213,18 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
   const onKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     // Modified keys belong to the picker: Alt+M closes it, Alt+Shift+M toggles the machine.
     if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-    event.stopPropagation();
     const k = event.key;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    // Setup controls keep their native keys; Enter on a local option still commits through the picker.
+    if (target?.closest(".vm-setup") && k !== "Escape" && k !== "Tab") {
+      if (!(k === "Enter" && target.closest("[data-custom-option]"))) event.stopPropagation();
+      return;
+    }
+    event.stopPropagation();
     const letter = k.length === 1 ? LETTERS.toLowerCase().indexOf(k.toLowerCase()) : -1;
     if (k === "Escape") onClose();
     else if (k === "Tab") {
-      const all = [...(root.current?.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"])') ?? [])];
+      const all = [...(root.current?.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), a[href]') ?? [])];
       const i = all.indexOf(document.activeElement as HTMLElement);
       all[event.shiftKey ? (i <= 0 ? all.length - 1 : i - 1) : (i + 1) % all.length]?.focus();
     } else if (letter >= 0 && letter < rows.length) { flash(`lab${letter}`); goLab(letter); }
@@ -224,7 +232,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
     else if (k === "ArrowLeft" || k === "ArrowRight") { if (!vend) onDraft(dialShift(rows, draft, k === "ArrowLeft" ? -1 : 1)); }
     else if (k === "ArrowUp" || k === "ArrowDown") { if (!vend) onDraft(dialStep(rows, draft, k === "ArrowUp" ? -1 : 1)); }
     else if (k === "Enter") {
-      if (event.target instanceof HTMLElement && event.target.closest("[data-machine-close]")) return;
+      if (target?.closest("[data-machine-close]")) return;
       flash("pick");
       pick(true);
     } else return;
@@ -242,6 +250,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
   const fullName = (product: Product) => product.line.name + (product.line.tag ? ` ${product.line.tag}` : "");
   const tagName = (product: Product) => product.line.tag || product.line.name.replace(/^(Gemini|Meta)\s+/, "");
   const selLevel = levelOf(stop);
+  const levels = [...new Set([...LEVELS, ...(line?.stops.flatMap((s) => s.option ? [s.label] : []) ?? [])])].sort((a, b) => rank(a) - rank(b));
 
   return (
     <div ref={root} className="model-machine" tabIndex={-1} onKeyDown={onKey}>
@@ -346,8 +355,8 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
 
           <section className="vm-block">
             <h3>{t("model.effort")} <span>{effortText(stop)}</span></h3>
-            <div className="vm-effort" role="radiogroup" aria-label={t("model.effort")}>
-              {LEVELS.map((label, k) => {
+            <div className="vm-effort" role="radiogroup" aria-label={t("model.effort")} style={{ "--levels": levels.length } as CSSProperties}>
+              {levels.map((label, k) => {
                 const option = line?.stops.find((s) => s.option && s.label === label);
                 const sel = label === selLevel;
                 return (
@@ -359,8 +368,8 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
                     tabIndex={sel ? 0 : -1}
                     disabled={!option}
                     data-machine-effort={label}
-                    data-fill={(option && selLevel && k < LEVELS.indexOf(selLevel)) || undefined}
-                    style={{ "--k": k + 1 } as CSSProperties}
+                    data-fill={(option && selLevel && k < levels.indexOf(selLevel)) || undefined}
+                    style={{ "--k": ((k + 1) * LEVELS.length) / levels.length } as CSSProperties}
                     onClick={() => effort(option?.option)}
                   ><i /><span>{modelEffortLabel(label, t)}</span></button>
                 );
