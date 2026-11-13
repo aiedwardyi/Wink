@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import type { MapDiff, MapDiffLine, MapRepo, MapSnapshot } from "../../shared/map-pane";
 import { request } from "@/lib/api-request";
@@ -12,10 +12,10 @@ import "./MapPane.css";
 const copy = {
   en: { empty: "No live workers", walk: (total: number) => `${total.toLocaleString("en-US")} files · Not a git folder`, workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>Changed {n} of {total.toLocaleString("en-US")} files</>,
     team: (workers: number, n: number, total: number, clashes: number) => <><b>{workers}</b> workers · <b>{n}</b> of {total.toLocaleString("en-US")} files changed{clashes > 0 && <> · <b>{clashes}</b> {clashes === 1 ? "clash" : "clashes"}</>}</>, crew: (n: number) => `${n} workers`,
-    tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", loading: "Loading changes", retry: "Retry", whole: "Whole file" },
+    tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", loading: "Loading changes", retry: "Retry", whole: "Whole file", changes: "Changes only" },
   ko: { empty: "실행 중인 작업자가 없어요", walk: (total: number) => `파일 ${total.toLocaleString("ko-KR")}개 · Git 폴더가 아니에요`, workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>,
     team: (workers: number, n: number, total: number, clashes: number) => <>작업자 <b>{workers}</b>명 · 파일 {total.toLocaleString("ko-KR")}개 중 <b>{n}</b>개 변경{clashes > 0 && <> · 겹침 <b>{clashes}</b>개</>}</>, crew: (n: number) => `작업자 ${n}명`,
-    tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일" },
+    tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일", changes: "변경만" },
 };
 const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
@@ -29,7 +29,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [selection, setSelection] = useState<MapSelection>(INITIAL);
   const [menu, setMenu] = useState(false);
   const [diff, setDiff] = useState<{ worker: string; path: string; whole: boolean; data: MapDiff; step?: Step; full?: MapDiff; opened?: number[] } | null>(null);
-  const [whole, setWhole] = useState(false);
+  const [whole, setWhole] = useState(true);
   const cache = useRef({ key: "", diffs: new Map<string, MapDiff>() });
   const [repo, setRepo] = useState<(MapRepo & { worker: string }) | null>(null);
   const [failed, setFailed] = useState(false);
@@ -42,6 +42,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const menuRef = useRef<HTMLDivElement>(null);
   const slots = useRef<ReadonlyMap<string, number>>(new Map());
   slots.current = mapWorkerSlots(slots.current, snapshot.workers.map(worker => worker.id));
+  const codeRef = useRef<HTMLDivElement>(null);
+  const scrolled = useRef<{ code: HTMLElement | null; key: string }>({ code: null, key: "" });
   const chosen = mapFollow(selection, snapshot.workers);
   const worker = snapshot.workers.find(worker => worker.id === chosen.worker);
   const files = worker?.files ?? [];
@@ -112,7 +114,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const diffs = cached(`${id}\0${worker.editedAt}\0${connection}`);
     const hit = diffs.get(`${whole}\0${path}`);
     if (hit) { setDiff({ worker: id, path, whole, data: hit, step }); return; }
-    request(`${base}/file?${new URLSearchParams({ worker: id, path, ...whole && { whole: "1" } })}`, { signal: controller.signal }).then((data: MapDiff) => {
+    const get = (all: boolean): Promise<MapDiff> => request(`${base}/file?${new URLSearchParams({ worker: id, path, ...all && { whole: "1" } })}`, { signal: controller.signal });
+    get(whole).then(async data => whole && data.capped ? { ...await get(false), capped: true } : data).then(data => {
       if (controller.signal.aborted) return;
       diffs.set(`${whole}\0${path}`, data);
       setDiff({ worker: id, path, whole, data, step });
@@ -131,15 +134,24 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   const loaded = !failed && diff?.worker === worker?.id ? diff : null;
   const shown = loaded ? loaded.path : chosen.path;
+  useLayoutEffect(() => {
+    const code = codeRef.current;
+    const key = loaded ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
+    if (!code || scrolled.current.code === code && scrolled.current.key === key) return;
+    scrolled.current = { code, key };
+    if (!loaded) return;
+    const row = code.querySelector<HTMLElement>('.map-code-row:not([data-kind="context"])');
+    code.scrollTop = row ? code.scrollTop + row.getBoundingClientRect().top - code.getBoundingClientRect().top - code.clientHeight / 4 : 0;
+  }, [loaded]);
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
     if (!base || !loaded) return;
     const { worker: id, path, data } = loaded;
     const diffs = cache.current.diffs;
     const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
-    const hit = diffs.get(`true\0${path}`);
+    const hit = diffs.get(`full\0${path}`);
     if (hit) return show(hit);
-    request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((full: MapDiff) => { diffs.set(`true\0${path}`, full); show(full); }, () => {});
+    request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((full: MapDiff) => { diffs.set(`full\0${path}`, full); show(full); }, () => {});
   };
   const move = (event: React.KeyboardEvent) => {
     const delta = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
@@ -179,7 +191,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       {worker.git && files.length > 0 && <>
         <div className="map-crumbs">
           <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
-          <button type="button" className="map-whole" aria-pressed={whole} onClick={() => setWhole(!whole)}>{c.whole}</button>
+          <button type="button" className="map-whole" onClick={() => setWhole(!whole)}>{whole ? c.changes : c.whole}</button>
           <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
         </div>
         {shown && <div key={`${shown}:${step?.editedAt}`} className="map-step">
@@ -188,7 +200,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
           {step && step.editedAt > 0 && <time dateTime={new Date(step.editedAt).toISOString()}>{clock(step.editedAt)}</time>}
           {step?.reason && <p>{shown}</p>}
         </div>}
-        <div className="map-code" aria-busy={!failed && (loaded?.path !== chosen.path || loaded.whole !== whole)}>
+        <div ref={codeRef} className="map-code" aria-busy={!failed && (loaded?.path !== chosen.path || loaded.whole !== whole)}>
           {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
             {loaded.data.lines.map((line, index) => {
               if (line.kind !== "fold") return codeRow(line, index);
