@@ -1,7 +1,7 @@
-// This PC's own bots in rooms it joined. Only this PC's person wakes one, by
-// @name or a reply to its line; it works here in one hidden task per room and
-// its answer goes back through the door under its room name.
-import { roomResponder } from "../../shared/room-routing.ts";
+// This PC's own bots in rooms it joined. This PC's person wakes one by @name
+// or a reply to its line, and a room bot by @name; it works here in one hidden
+// task per room and its answer goes back through the door under its room name.
+import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
@@ -24,6 +24,8 @@ export interface MyRoomBotDeps {
 
 type Waiting = { roomId: string; id: string; botId: string; after: number; entry: JoinedEntry };
 type Running = Waiting & { since: number };
+
+const DAY = 24 * 60 * 60 * 1000;
 
 const lineOf = (entry: JoinedEntry) => `${entry.author.name}: ${entry.text}`;
 
@@ -49,6 +51,8 @@ export class MyRoomBotTurns {
   private readonly running = new Map<string, Running>();
   private readonly waiting: Waiting[] = [];
   private readonly active = new Map<string, Waiting>();
+  /** Head seq at the host's last Stop, per room. */
+  private readonly stops = new Map<string, number>();
   private readonly deps: MyRoomBotDeps;
 
   constructor(deps: MyRoomBotDeps) {
@@ -70,7 +74,34 @@ export class MyRoomBotTurns {
     const others = state.teamBots.filter((bot) => !own.includes(bot)).map((bot) => bot.name);
     const quote = entry.replyToId ? joinedEntry(roomId, entry.replyToId) : null;
     const hit = roomResponder(entry.text, [...state.bots, ...own], [state.host, ...state.people.map((person) => person.name), ...others], quote?.author.kind === "bot" ? quote.author.id : undefined, false);
-    const bot = hit && mine.get(hit.id);
+    this.queue(roomId, hit && mine.get(hit.id), entry);
+  }
+
+  /** A bot's line wakes the bot it @'s when that bot is this PC's. */
+  heard(roomId: string, entry: JoinedEntry): void {
+    const room = joinedRoom(roomId);
+    const state = room?.state;
+    if (room?.status !== "joined" || !state?.teamBots || entry.author.kind !== "bot" || Date.now() - entry.at > DAY || this.halted(roomId, entry.seq)) return;
+    const hit = botLineResponder(entry.text, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)], entry.author.id);
+    const own = hit && state.teamBots.some((bot) => bot.id === hit.id && bot.owner === room.me.id);
+    this.queue(roomId, own ? myRoomBots(roomId).find((bot) => bot.id === hit.id) : undefined, entry);
+  }
+
+  /** Room Stop: bot lines wake no bot here until a person or the host speaks. */
+  stop(roomId: string): void {
+    this.stops.set(roomId, joinedEntries(roomId, 1)[0]?.seq ?? 0);
+    this.drain();
+  }
+
+  private halted(roomId: string, seq: number): boolean {
+    const stop = this.stops.get(roomId);
+    if (stop === undefined) return false;
+    if (!joinedEntries(roomId, Math.max(seq - stop - 1, 0), seq).some((entry) => entry.author.kind !== "bot")) return true;
+    this.stops.delete(roomId);
+    return false;
+  }
+
+  private queue(roomId: string, bot: MyRoomBot | null | undefined, entry: JoinedEntry): void {
     if (!bot || entry.seq <= bot.seenSeq || this.waiting.some((row) => row.roomId === roomId && row.entry.id === entry.id) || [...this.active.values()].some((row) => row.roomId === roomId && row.entry.id === entry.id)) return;
     this.waiting.push({ roomId, id: bot.id, botId: bot.botId, after: bot.seenSeq, entry });
     this.drain();
@@ -81,7 +112,8 @@ export class MyRoomBotTurns {
       const room = joinedRoom(row.roomId);
       const bot = myRoomBots(row.roomId).find((candidate) => candidate.id === row.id && candidate.botId === row.botId);
       const listed = room?.state?.teamBots?.find((candidate) => candidate.id === row.id && candidate.owner === room.me.id);
-      if (room?.status !== "joined" || row.entry.author.id !== room.me.id || !bot || !listed || !this.deps.bot(row.botId)) {
+      const asker = row.entry.author.kind === "bot" ? !this.halted(row.roomId, row.entry.seq) : row.entry.author.id === room?.me.id;
+      if (room?.status !== "joined" || !asker || !bot || !listed || !this.deps.bot(row.botId)) {
         this.waiting.splice(this.waiting.indexOf(row), 1);
         this.set(row.roomId, row.id, undefined);
         continue;
@@ -123,12 +155,23 @@ export class MyRoomBotTurns {
       }
       const files = await this.files(roomId, [...(entry.files ?? []), ...(quote?.files ?? [])]);
       const window = since(roomId, row.after, entry.seq);
+      const { state } = room;
+      const ownerOf = (owner?: string) => (owner ? state.people.find((person) => person.id === owner)?.name : state.host);
+      const others = [
+        ...state.bots.map((other) => [other.name, state.host] as const),
+        ...(state.teamBots ?? []).filter((other) => other.id !== bot.id).map((other) => [other.name, ownerOf(other.owner)] as const),
+      ].flatMap(([name, owner]) => (owner ? [`${JSON.stringify(name)} (${JSON.stringify(owner)})`] : []));
+      const me = JSON.stringify(room.me.name);
+      const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
+      const asker = entry.author.kind !== "bot" ? me : `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
       const prompt = [
-        `(You are in the team room ${JSON.stringify(room.state.roomName)} on ${JSON.stringify(room.state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. Only ${JSON.stringify(room.me.name)}, who runs you, can ask you.)`,
+        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${others.length
+          ? `${me}, who runs you, and this room's bots can ask you. Bots here: ${others.join(", ")}. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
+          : `Only ${me}, who runs you, can ask you.`})`,
         ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),
         ...(quote ? [`They replied to: ${lineOf(quote)}`] : []),
         ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
-        `${JSON.stringify(room.me.name)} asked you: ${entry.text}`,
+        `${asker} asked you: ${entry.text}`,
       ].join("\n");
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {

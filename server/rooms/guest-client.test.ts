@@ -699,6 +699,34 @@ describe("bot lines", () => {
     expect(c.room("r1")!.unread).toBe(2);
   });
 
+  it("hands on each new bot line once, never a backfill or a person's line, and a Stop", async () => {
+    const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
+    const frame = (body: unknown) => `data: ${JSON.stringify(body)}
+
+`;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: STATE.me, key: KEY });
+      if (req.url?.includes("/snapshot")) return reply(res, 200, { head: 1, entries: [line(1, "@Pete old")], state: STATE });
+      if (req.url?.includes("/bot-send")) return reply(res, 200, { entry: { seq: 4, id: "e4", at: 4, author: mine, text: "@Wink yours" } });
+      if (req.url?.includes("/stream")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ kind: "entry", entry: line(2, "@Pete new") }) + frame({ kind: "entry", entry: line(2, "@Pete new") }));
+        res.write(frame({ kind: "entry", entry: { seq: 3, id: "e3", at: 3, author: { kind: "person", ...STATE.me }, text: "@Pete hi" } }) + frame({ kind: "stop" }));
+        return;
+      }
+      reply(res, 404, { error: "not found" });
+    };
+    const onBotLine = vi.fn();
+    const onStop = vi.fn();
+    const c = guest({ onBotLine, onStop });
+    expect((await c.join(CODE)).ok).toBe(true);
+    await until(() => onStop.mock.calls.length === 1);
+    expect(c.room("r1")!.entries).toHaveLength(3);
+    await c.botSend("r1", "tb-pete", "@Wink yours");
+    expect(onBotLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e4"]]);
+    expect(onStop).toHaveBeenCalledWith("r1");
+  });
+
   it("reads an older host's state with no bots as none", async () => {
     const { bots: _bots, ...older } = STATE;
     route = (req, res) => {

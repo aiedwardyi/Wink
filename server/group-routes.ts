@@ -16,6 +16,7 @@ import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
 import { roomBotsRefusal } from "./rooms/guards.ts";
 import { roomFile } from "./rooms/files.ts";
 import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/people-only.ts";
+import { stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -463,6 +464,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
+      if (group.hosted) stopBotChain(group.hosted.roomId);
       const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;

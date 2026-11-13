@@ -90,7 +90,7 @@ describe("the host bot's room prompt", () => {
     expect(prompt()).toContain("Room members: @Wink, and Edward (the human).");
     expect(prompt()).toContain("Teammates in this room: Sora.");
     expect(prompt()).toContain('Team bots (owner): "Sora-Code" ("Sora").');
-    expect(prompt()).toContain("Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first.");
+    expect(prompt()).toContain("@ one only to hand it real work, never just to thank or confirm; it answers here. When the job is done, say so and tag no bot.");
     expect(prompt()).toContain("Unlisted @names reach no one.");
     expect(Buffer.byteLength(prompt()) - Buffer.byteLength(prompt(() => "Teammates in this room: Sora."))).toBeLessThan(250);
   });

@@ -245,3 +245,90 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.startTurn).not.toHaveBeenCalled();
   });
 });
+
+describe("a room bot's @ to this PC's bot", () => {
+  const edbot = { kind: "bot" as const, id: "b1", name: "EdBot" };
+  const mini = { kind: "bot" as const, id: MINI.id, name: MINI.name, owner: "p2" };
+  const now = () => ({ at: Date.now() });
+
+  it("wakes it once with the room's bots in its prompt, and posts the answer back", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    const ask = line(edbot, "@Pete-Coder what works for Peter on Saturday?", now());
+    turns.heard(ROOM, ask);
+    turns.heard(ROOM, ask);
+    await settle();
+    expect(deps.startTurn).toHaveBeenCalledTimes(1);
+    const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
+    expect(typed).toBe(ask.text);
+    expect(prompt).toContain('"Peter", who runs you, and this room\'s bots can ask you. Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
+    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @Pete-Coder what works for Peter on Saturday?');
+    thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
+    await turns.settled("task-1", true);
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
+  });
+
+  it("wakes it for this PC's other bot", async () => {
+    const two = { id: "tb-CCCCCCCCCCCCCCCC", name: "Pete-Two", color: "", owner: ME.id };
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE, two] });
+    saveMyRoomBot(ROOM, two.id, "local-two");
+    deps.bot = (botId) => ({ id: botId, name: botId });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "@Pete-Two review this", now()));
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[0])).toEqual(["local-two"]);
+  });
+
+  it("never wakes for a self-tag, a reply, someone else's bot, a stale line or a line with no bot tag", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    const answer = line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "@Pete-Coder noted", now());
+    for (const entry of [
+      answer,
+      line(edbot, "thanks", { ...now(), replyToId: answer.id }),
+      line(edbot, "@Mini your turn", now()),
+      line(mini, "Done: Sat 7:30. @Peter @Edward", now()),
+      line(edbot, "@Pete-Coder old news", { at: Date.now() - 25 * 60 * 60 * 1000 }),
+    ]) turns.heard(ROOM, entry);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("waits behind a busy bot, then answers", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(edbot, "@Pete-Coder over to you", now()));
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the chain on Stop until a person speaks", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(edbot, "@Pete-Coder first", now()));
+    await settle();
+    turns.stop(ROOM);
+    turns.heard(ROOM, line(mini, "@Pete-Coder second", now()));
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+    line({ kind: "person", id: "p2", name: "Mina" }, "keep going", now());
+    turns.heard(ROOM, line(edbot, "@Pete-Coder third", now()));
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual(["@Pete-Coder third"]);
+  });
+
+  it("keeps the header byte-for-byte when the room has no other bots", async () => {
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME], bots: [], teamBots: [PETE] });
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
+    await settle();
+    expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. Only "Peter", who runs you, can ask you.)\n"Peter" asked you: @Pete-Coder hi');
+  });
+});

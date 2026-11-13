@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { roomResponder } from "./room-routing.ts";
+import { botLineResponder, roomResponder } from "./room-routing.ts";
 
 const wink = { id: "b-wink", name: "Wink" };
 const helper = { id: "b-helper", name: "위키" };
@@ -50,5 +50,23 @@ describe("roomResponder", () => {
 
   it("ignores an address glued to a word", () => {
     expect(roomResponder("mail me at user@Wink", bots, [])).toBeNull();
+  });
+});
+
+describe("botLineResponder", () => {
+  const starzoom = { id: "tb-star", name: "스타줌" };
+  const all = [...bots, starzoom];
+
+  it("wakes on an explicit @ only", () => {
+    expect(botLineResponder("@스타줌 what works for JJ?", all, ["Edward"], wink.id)).toBe(starzoom);
+    expect(botLineResponder("thanks", all, [], wink.id)).toBeNull();
+    expect(botLineResponder("done", [wink, starzoom], [], starzoom.id)).toBeNull();
+    expect(botLineResponder("Done: Sat 7:30. @Edward @JJ", all, ["Edward", "JJ"], starzoom.id)).toBeNull();
+  });
+
+  it("takes the first @bot room-wide and never its author", () => {
+    expect(botLineResponder("@위키 then @스타줌", all, [], wink.id)).toBe(helper);
+    expect(botLineResponder("@스타줌 here. @Wink over to you", all, [], starzoom.id)).toBe(wink);
+    expect(botLineResponder("@스타줌 noted", all, [], starzoom.id)).toBeNull();
   });
 });
