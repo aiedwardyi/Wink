@@ -24,6 +24,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [failed, setFailed] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [retry, setRetry] = useState(0);
+  const [connection, setConnection] = useState(0);
+  const liveReady = useRef(false);
   const [ready, setReady] = useState(!botId);
   const treeRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -34,22 +36,26 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const base = botId && `/api/bots/${encodeURIComponent(botId)}/map`;
 
   useEffect(() => {
+    liveReady.current = false;
     if (!base || !active) return;
+    setReady(false);
     const stream = new EventSource(`${base}/live`);
     stream.onmessage = event => {
       try {
         const data: MapSnapshot = JSON.parse(event.data);
+        if (!liveReady.current) setConnection(value => value + 1);
+        liveReady.current = true;
         setSnapshot(data);
         setConnectionFailed(false);
         setReady(true);
       } catch { setConnectionFailed(true); }
     };
-    stream.onerror = () => { setConnectionFailed(true); setReady(true); };
-    return () => stream.close();
+    stream.onerror = () => { liveReady.current = false; setConnectionFailed(true); setReady(true); };
+    return () => { liveReady.current = false; stream.close(); };
   }, [base, active]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !liveReady.current) return;
     if (!base || !worker?.git || !chosen.path) { setDiff(null); return; }
     const controller = new AbortController();
     setDiff(null);
@@ -59,7 +65,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       if (!controller.signal.aborted) setDiff(data);
     }, () => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
-  }, [base, worker?.id, worker?.editedAt, worker?.git, chosen.path, retry, active]);
+  }, [base, worker?.id, worker?.editedAt, worker?.git, chosen.path, retry, active, connection]);
 
   useEffect(() => {
     if (!menu) return;
@@ -101,7 +107,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       if (!folder) setSelection({ ...chosen, follow: false, path: node.path });
       else setClosed(previous => { const next = new Set(previous); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; });
     };
-    return <div key={node.path} role="none">
+    return <div key={folder ? `${node.path}/` : node.path} role="none">
       <button type="button" role="treeitem" aria-level={depth + 1} aria-expanded={folder ? Boolean(expanded) : undefined} aria-selected={!folder ? chosen.path === node.path : undefined} data-map-file={!folder ? node.path : undefined} data-hot={!folder && worker?.path === node.path || undefined} className="map-row" style={{ paddingLeft: 6 + depth * 12 }} onClick={select} title={node.path}>
         {folder ? expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} /> : <FileCode size={12} />}
         {folder && <Folder size={12} />}

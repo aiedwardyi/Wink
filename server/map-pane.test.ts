@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -67,10 +67,44 @@ it("handles literal unusual paths, deleted files, binary files and large new fil
   expect(large.lines[0].text).toHaveLength(2000);
 });
 
+it("reads plain patches when user Git colors are always enabled", async () => {
+  const { root, git, base } = repo();
+  git("config", "color.ui", "always");
+  git("config", "color.diff", "always");
+  writeFileSync(join(root, "file.ts"), "const colored = 2;\n");
+  const files = await mapFiles(root, base);
+  expect((await mapFileDiff(root, base, files[0])).lines).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "remove", text: "const before = 1;" }),
+    expect.objectContaining({ kind: "add", text: "const colored = 2;" }),
+  ]));
+});
+
+it("keeps a deleted file diff separate from its replacement directory", async () => {
+  const { root, git, base } = repo();
+  git("rm", "-q", "file.ts");
+  mkdirSync(join(root, "file.ts"));
+  writeFileSync(join(root, "file.ts", "app.ts"), "new\n");
+  git("add", ".");
+  const files = await mapFiles(root, base);
+  expect(files).toHaveLength(2);
+  expect((await mapFileDiff(root, base, files.find(file => file.path === "file.ts")!)).lines).toEqual([
+    { kind: "remove", text: "const before = 1;", line: 1 },
+  ]);
+  expect((await mapFileDiff(root, base, files.find(file => file.path === "file.ts/app.ts")!)).lines).toEqual([
+    { kind: "add", text: "new", line: 1 },
+  ]);
+});
+
 it("folds unchanged runs between unified hunks and caps rendered lines", () => {
   const diff = mapDiffLines("@@ -20,1 +20,1 @@\n-old\n+new\n@@ -50,1 +50,1 @@\n-next\n+last\n");
   expect(diff.lines.filter(line => line.kind === "fold").map(line => line.count)).toEqual([19, 29]);
   expect(mapDiffLines("@@ -1,0 +1,1000 @@\n" + "+x\n".repeat(1000))).toMatchObject({ capped: true });
+});
+
+it.each([1999, 2000, 2001])("caps tracked content at 2000 characters (%s)", length => {
+  const diff = mapDiffLines(`@@ -0,0 +1,1 @@\n+${"x".repeat(length)}\n`);
+  expect(diff.lines[0].text).toHaveLength(Math.min(length, 2000));
+  expect(diff.capped).toBe(length > 2000);
 });
 
 it("does no work before opening, refreshes from real edit events, and stops on close", async () => {
@@ -151,4 +185,13 @@ it("subscribes to authorized lifecycle events and disconnects when Map closes", 
   await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
   stop();
   await vi.waitFor(() => expect(closed).toBe(true));
+});
+
+it("disconnects when the lifecycle bridge rejects the request", async () => {
+  const server = createServer((_req, res) => { res.writeHead(503); res.end(); });
+  servers.push(server);
+  const disconnected = vi.fn();
+  const stop = watchMapPanes({ url: `http://127.0.0.1:${await listenLocal(server)}`, token: "secret" }, "bot", vi.fn(), disconnected);
+  try { await vi.waitFor(() => expect(disconnected).toHaveBeenCalledOnce()); }
+  finally { stop(); }
 });

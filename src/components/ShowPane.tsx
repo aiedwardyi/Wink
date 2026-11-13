@@ -35,7 +35,7 @@ interface ShowPaneProps {
 
 /** The right slot's one pane: a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
 export function ShowPane({ item, watch, media = false, check = false, map = false, botId, card, source, hidden, closing = false }: ShowPaneProps) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const phone = useIsPhone();
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !phone;
@@ -73,7 +73,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
           <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
           {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
           {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
-          {source && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{locale === "ko" ? "맵" : "Map"}</button>}
+          {source && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}

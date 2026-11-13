@@ -25,6 +25,16 @@ it("keeps branching folders and counts each file once", () => {
   expect(mapTree([])).toEqual([]);
 });
 
+it.each([false, true])("keeps a deleted file separate from a replacement directory (reverse: %s)", reverse => {
+  const files = [{ path: "config", added: 0, removed: 2 }, { path: "config/app.json", added: 3, removed: 0 }];
+  const tree = mapTree(reverse ? files.reverse() : files);
+  expect(tree).toMatchObject([
+    { name: "config/", added: 3, removed: 0, children: [{ path: "config/app.json", added: 3, removed: 0 }] },
+    { name: "config", added: 0, removed: 2 },
+  ]);
+  expect(tree[1].children).toBeUndefined();
+});
+
 const workers = [
   { id: "a", nick: "ALPHA", task: "Fix layout", git: true, editedAt: 1, path: "a.ts", files: [{ path: "a.ts", added: 1, removed: 0 }] },
   { id: "b", nick: "BETA", task: "Fix calls", git: true, editedAt: 2, path: "b.ts", files: [{ path: "b.ts", added: 0, removed: 1 }] },

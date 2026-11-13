@@ -14,12 +14,13 @@ export function mapTree(files: readonly MapFile[]): MapNode[] {
     parts.forEach((name, index) => {
       const folder = index < parts.length - 1;
       const path = parts.slice(0, index + 1).join("/");
-      let node = paths.get(path);
+      const key = folder ? `${path}/` : path;
+      let node = paths.get(key);
       if (!node) {
         node = { ...file, path, name: folder ? `${name}/` : name, added: 0, removed: 0 };
         if (folder) node.children = [];
         parent.children!.push(node);
-        paths.set(path, node);
+        paths.set(key, node);
       }
       node.added += file.added;
       node.removed += file.removed;

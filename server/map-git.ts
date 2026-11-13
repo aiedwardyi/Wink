@@ -59,7 +59,7 @@ async function addedFile(cwd: string, path: string): Promise<MapFile> {
 
 export async function mapFiles(cwd: string, base: string): Promise<MapFile[]> {
   const [numstat, untracked] = await Promise.all([
-    mapGit(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
+    mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
     mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
   const files: MapFile[] = [];
@@ -110,7 +110,7 @@ export function mapDiffLines(patch: string, totalLines?: number): MapDiff {
     if (!hunk || !/^[ +-]/.test(text)) continue;
     if (lines.length >= MAP_LINE_LIMIT) { capped = true; break; }
     const kind = text[0] === "+" ? "add" : text[0] === "-" ? "remove" : "context";
-    lines.push({ kind, text: text.slice(1, 2000), line: kind === "remove" ? oldLine : newLine });
+    lines.push({ kind, text: text.slice(1, 2001), line: kind === "remove" ? oldLine : newLine });
     if (text.length > 2001) capped = true;
     if (kind !== "add") oldLine++;
     if (kind !== "remove") newLine++;
@@ -127,13 +127,14 @@ export async function mapFileDiff(cwd: string, base: string, file: MapFile): Pro
   if (existed) {
     try {
       const [patch, total] = await Promise.all([
-        mapGit(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, "--", file.path]),
+        mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, "--", file.path]),
         addedFile(cwd, file.path).then(file => file.added, () => undefined),
       ]);
-      return mapDiffLines(patch, total);
+      // A deleted file's pathspec also matches its replacement directory.
+      return mapDiffLines(patch.split("\ndiff --git ", 1)[0], total);
     } catch (error) {
       const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
-      if (partial.success) return { ...mapDiffLines(partial.data.stdout), capped: true };
+      if (partial.success) return { ...mapDiffLines(partial.data.stdout.split("\ndiff --git ", 1)[0]), capped: true };
       throw error;
     }
   }

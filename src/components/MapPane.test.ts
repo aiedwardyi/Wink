@@ -89,6 +89,21 @@ it("pauses hidden views without losing the user's manual selection", async () =>
   expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
 });
 
+it("waits for the renewed snapshot before requesting an unchanged selected file", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  const read = vi.mocked(fetch);
+  expect(read).toHaveBeenCalledTimes(1);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  read.mockRejectedValueOnce(new Error("snapshot not ready"));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
+  expect(read).toHaveBeenCalledTimes(1);
+  read.mockReset().mockResolvedValue(Response.json({ lines: [{ kind: "add", text: "renewed diff", line: 1 }] }));
+  await emit();
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain("renewed diff");
+});
+
 it("lets a folder fold and reveals the edited file on the next hop", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);

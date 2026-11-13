@@ -211,6 +211,12 @@ it("has no Check tab without a check", async () => {
   expect(tabs()).toEqual(["Show", "Media", "Map"]);
 });
 
+it("renders the Map tab in Korean with the surrounding labels", async () => {
+  await act(async () => applyLocale("ko"));
+  await render({ item: item("C:\\w\\a.png", "image"), source, hidden: false });
+  expect(tabs()).toEqual(["보기", "미디어", "맵"]);
+});
+
 it("the checker opens on Check, and Show keeps its file", async () => {
   const shown = item("C:\\w\\a.png", "image");
   await act(async () => showItem(shown));
