@@ -21,11 +21,11 @@ describe("wink guide", () => {
   });
 
   it("covers rooms, calls, side pane, to-do list and skills in a short read", () => {
-    const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
+    const lines = readFileSync(PACKAGED_FILES.winkGuide, "utf8").trimEnd().split(/\r?\n/);
     for (const heading of ["## Groups and team rooms", "## Calls", "## Side pane", "## Bot details and to-do list", "## Skills"]) {
-      expect(guide).toContain(`\n${heading}\n`);
+      expect(lines).toContain(heading);
     }
-    expect(guide.trimEnd().split("\n").length).toBeLessThanOrEqual(150);
+    expect(lines.length).toBeLessThanOrEqual(150);
   });
 
   it("warns on and skips the pointer when the guide is missing", () => {
