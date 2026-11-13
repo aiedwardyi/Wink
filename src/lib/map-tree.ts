@@ -180,6 +180,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
   const width = (row: TreeItem[]) => row.reduce((sum, it) => sum + it.w, 0) + GAP * (row.length - 1);
   const items: TreeItem[] = [];
   let y = 0;
+  let tight = false;
   rows.forEach((row, r) => {
     for (const it of row) measure(it, o, maxStack);
     // A big repo's top row folds its smallest closed folders into one "+N folders" box until it fits.
@@ -210,6 +211,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
     }
     const span = () => { for (const group of groups) group.w = width(group.items); return groups.reduce((sum, group) => sum + group.w, 0) + GAP * 2 * (groups.length - 1); };
     for (let guard = 0; span() > W && guard < 14; guard++) { maxStack = Math.max(96, maxStack - 12); for (const it of row) measure(it, o, maxStack); }
+    if (span() > W) tight = true;
     let end = -GAP * 2;
     for (const group of groups) {
       const center = group.parent ? group.parent.x + group.parent.bw / 2 : W / 2;
@@ -224,6 +226,8 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
     }
     y += h + VGAP;
   });
+  // Branches that cannot sit side by side fold the way a phone does: only the current file's path stays open.
+  if (tight && !o.phone && o.current) return treeLayout(index, { ...o, phone: true });
   return { items, height: y - VGAP + 2, lit };
 }
 
