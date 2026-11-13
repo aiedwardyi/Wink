@@ -9,13 +9,15 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Merlot replaces the Moss theme: black cherry backgrounds, a wine accent and brighter text. A saved Moss theme switches to Merlot.
 - Room bots can search their owner's 1:1 chat with them. Only the owner sees the "Searched your 1:1" note.
 - New call voices: Jenn and Eddie sound new, and Adele joins with a British accent.
+- Every group gets the same header: picture, name, bell and side pane, with Ctrl+F search.
 
 ### Changed
 - The call button lives in the message box: Call when idle, Send while typing, Stop while busy, and End with Mute beside it during a call. The header no longer has a call button.
 - Picture and file menus work the same everywhere, and menus, pickers and close buttons share one hover style. On phones, Copy appears for Wink pictures and readable outside pictures.
 - In team rooms, host bots name each team bot and its owner and hand off through the owner; an @name that matches no one reaches no one.
 - The call voice says each reply once, stops re-offering the same change, and sticks to what the chat shows.
-- Asking a busy bot in a room now waits and answers automatically, in order, once the bot is free.
+- Asking a bot that is already answering in the room now waits and answers automatically, in order, once it is free.
+- A bot busy in a 1:1 now answers in groups right away.
 - Calls, question cards and Settings open faster the first time.
 - Bots know more about Wink: groups and team rooms, calls, the side pane, the To Do list and skills.
 - Bot replies put gaps first, say who did or checked each thing, and quote numbers only from a source they opened.
