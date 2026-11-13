@@ -231,7 +231,6 @@ describe("SettingsPanel lean startup", () => {
   });
 
   it("shows Load skills and plugins on by default with no hint", async () => {
-    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
@@ -246,7 +245,6 @@ describe("SettingsPanel lean startup", () => {
   });
 
   it("shows off when leanStartup is true", async () => {
-    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
