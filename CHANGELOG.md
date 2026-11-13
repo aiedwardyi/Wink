@@ -19,6 +19,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Calls, question cards and Settings open faster the first time.
 - Bots know more about Wink: groups and team rooms, calls, the side pane, the To Do list and skills.
 - Bot replies put gaps first, say who did or checked each thing, and quote numbers only from a source they opened.
+- Bot replies are warm without flattery: they celebrate real wins and acknowledge frustration briefly.
 - Worker bots follow clearer playbook rules, and their cards quote your latest words.
 - The side pane button shows an arrow, like the bot list button.
 
