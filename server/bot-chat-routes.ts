@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { closedAskNotes } from "./ask-user.ts";
+import { closedAskNotes, settledAsk } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -59,6 +59,7 @@ type BotChatRouteDeps = {
   markThreadInterrupted: (threadId: string, botId: string, epoch: number) => void;
   flushInterruptedTask: (threadId: string, botId: string, reason: RecoveryFlushReason) => TaskResumePacket | null;
   releaseInterruptedBot: (botId: string, threadId: string) => void;
+  roomLaneThread?: (botId: string) => string | undefined;
   clearUnattended: (botId: string) => void;
   routines: RoutineManager;
   busyResumeThreads: Set<string>;
@@ -273,6 +274,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const existing = store.messagesFor(bot.threadId).find((msg) => msg.id === m![2]);
       if (!existing?.card) return json(res, 404, { error: "no such card" });
       const body = await readBody(req);
+      const settled = body.answered !== undefined && settledAsk(store.activePath(bot.threadId), existing.id);
+      if (settled) return json(res, 409, { error: "question already settled", message: clientMessage(settled) });
       const patched = store.patchMessage(bot.threadId, m[2], {
         card: {
           ...existing.card,
@@ -538,7 +541,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const instance = instanceForBot(bot);
       // a bot busy in a ROOM is running on the room's thread - stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
-      const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
+      // a room on the bot's second lane has its own Stop
+      const busyGroup = store.groups.find((g) => g.busyBotId === bot.id && deps.roomLaneThread?.(bot.id) !== g.threadId);
       if (busyGroup) {
         if (expectedThreadId !== undefined && busyGroup.threadId !== expectedThreadId) {
           return json(res, 409, { error: `this bot is working in channel ${busyGroup.id}` });

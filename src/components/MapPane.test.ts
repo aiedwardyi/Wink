@@ -1,0 +1,138 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MapPane } from "./MapPane";
+import { applyLocale } from "@/lib/i18n";
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+let root: Root;
+let host: HTMLDivElement;
+interface TestStream {
+  onmessage?: (event: { data: string }) => void;
+  onerror?: () => void;
+  close(): void;
+}
+let stream: TestStream;
+const close = vi.fn();
+const workers = [
+  { id: "a", nick: "ALPHA", task: "Fix layout", reason: "Keep the live edit in view", git: true, editedAt: 1, path: "src/a.ts", files: [{ path: "src/a.ts", added: 1, removed: 1 }, { path: "src/manual.ts", added: 2, removed: 0 }] },
+  { id: "b", nick: "BETA", task: "Fix calls", git: true, editedAt: 2, path: "b.ts", files: [{ path: "b.ts", added: 1, removed: 0 }] },
+];
+const repo = { name: "wink", paths: ["README.md", "b.ts", "src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts"] };
+const reads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/file?"));
+const emit = (items = workers) => act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: items }) }); });
+const click = (selector: string) => act(async () => { host.querySelector<HTMLButtonElement>(selector)!.click(); });
+
+beforeEach(() => {
+  close.mockReset();
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  vi.stubGlobal("EventSource", vi.fn(function () { stream = { close }; return stream; }));
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
+});
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); applyLocale("en"); });
+
+it("follows edits across workers, pins a worker, and keeps a manual file with Follow off", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("b");
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(2)');
+  expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("a");
+  expect(host.querySelector(".map-step h3")?.textContent).toBe("Keep the live edit in view");
+  expect(host.querySelector(".map-step p")?.textContent).toBe("src/a.ts");
+  await emit([workers[0], { ...workers[1], editedAt: 3 }]);
+  expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("a");
+  await click('[data-map-file="src/manual.ts"]');
+  await emit([{ ...workers[0], editedAt: 4 }, workers[1]]);
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("src/manual.ts");
+  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+  expect(host.querySelector(".map-code")?.textContent).toContain("const edited = true;");
+  await act(async () => root.unmount());
+  expect(close).toHaveBeenCalledOnce();
+  root = createRoot(host);
+});
+
+it("uses plain empty and non-git lines in both languages", async () => {
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, {})); });
+  expect(host.textContent).toContain("실행 중인 작업자가 없어요");
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], git: false, files: [] }]);
+  expect(host.textContent).toContain("Git 폴더가 아니에요");
+});
+
+it("requests only the selected file and recovers from a failed diff", async () => {
+  const read = vi.mocked(fetch);
+  const reply = read.getMockImplementation()!;
+  let offline = true;
+  read.mockImplementation(async (url, init) => String(url).includes("/file?") && offline ? (offline = false, Promise.reject(new Error("offline"))) : reply(url, init));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  expect(reads()).toHaveLength(1);
+  expect(String(reads()[0][0])).toContain("worker=b&path=b.ts");
+  expect(host.textContent).toContain("Could not load changes");
+  await emit();
+  expect(host.textContent).toContain("Could not load changes");
+  await click(".map-empty button");
+  expect(host.textContent).toContain("const edited = true;");
+});
+
+it("pauses hidden views without losing the user's manual selection", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  await click(".map-follow");
+  const count = vi.mocked(fetch).mock.calls.length;
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  expect(close).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledTimes(count);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
+  await emit([{ ...workers[0], editedAt: 8 }, workers[1]]);
+  expect(host.querySelector("[data-map-worker]")?.getAttribute("data-map-worker")).toBe("b");
+  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+});
+
+it("waits for the renewed snapshot before requesting an unchanged selected file", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  const read = vi.mocked(fetch);
+  expect(read).toHaveBeenCalledTimes(2);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  read.mockRejectedValueOnce(new Error("snapshot not ready"));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
+  expect(read).toHaveBeenCalledTimes(2);
+  read.mockReset().mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "renewed diff", line: 1 }] }));
+  await emit();
+  expect(reads()).toHaveLength(1);
+  expect(host.textContent).toContain("renewed diff");
+});
+
+it("lights changed squares by folder and opens a lit square's diff", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("2 of 6 files changedwink / ALPHA");
+  expect([...host.querySelectorAll(".map-cells i")].map(cell => cell.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts", "src/z.ts", "README.md", "b.ts", "server/x.ts"]);
+  expect([...host.querySelectorAll(".map-cells i[data-on]")].map(cell => cell.getAttribute("title"))).toEqual(["src/a.ts", "src/manual.ts"]);
+  expect(host.textContent).toContain("One square, one file. Lit ones changed.");
+  await act(async () => { host.querySelector<HTMLElement>('[data-square="src/manual.ts"]')!.click(); });
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("src/manual.ts");
+  expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
+  expect(String(reads().at(-1)?.[0])).toContain("path=src%2Fmanual.ts");
+});
+
+it("moves the arrow to the row just edited and shows the path when the worker left no note", async () => {
+  let resized: (() => void) | undefined;
+  vi.stubGlobal("ResizeObserver", vi.fn(function (callback: () => void) { resized = callback; return { observe() {}, disconnect() {} }; }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
+  const row = host.querySelector('[data-map-file="b.ts"]')!;
+  Object.defineProperties(row, { offsetLeft: { value: 220 }, offsetTop: { value: 48 } });
+  await act(async () => resized?.());
+  expect(host.querySelector<HTMLElement>(".map-pin")?.style.transform).toBe("translate(222px, 51px)");
+  expect(row.querySelector(".map-delta")?.textContent).toBe("+1");
+  expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
+  expect(host.querySelector(".map-step p")).toBeNull();
+  expect(host.querySelector(".map-step time")?.getAttribute("datetime")).toBe("2026-11-13T01:16:07.000Z");
+});

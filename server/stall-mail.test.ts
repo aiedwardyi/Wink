@@ -41,7 +41,7 @@ it("releases a reply handed to a turn the watchdog stopped", async () => {
     settleMail, paneWake: { noteArrived, settled() {} }, groupSpeakers: new Map(), stopScreenPoller() {}, activeVpsThreads: new Map(),
     drainQueuedSends() {}, drainConnectorResumes() {}, drainSecretResumes() {},
     workerTurns: { capture() {}, settled() {} },
-    usageBoard: { turnSettled() {} },
+    usageBoard: { turnSettled() {} }, roomLanes: { thread: () => undefined, settle() {} },
   };
   new Function(...Object.keys(deps), `${javascript}\nreturn onStall;`)(...Object.values(deps))({ botId: bot.id, threadId: bot.threadId });
   await vi.advanceTimersByTimeAsync(6_000);

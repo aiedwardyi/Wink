@@ -19,7 +19,7 @@ type Listing = z.infer<typeof listingSchema>;
 const FOCUSABLE = 'a[href], button:not([disabled])';
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const IN_TAB = /\.(html?|pdf|mp4|webm|mov|m4v|mp3|m4a|wav|ogg|aac|flac)$/i;
-const ROW = "flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-raised/60 focus-visible:outline-2 focus-visible:outline-accent";
+const ROW = "flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-raised/50";
 
 function folderName(folderPath: string): string {
   return folderPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folderPath;
@@ -132,7 +132,7 @@ function LinkedFolderSheet({ name, listing, fileSrc, onClose }: { name: string; 
                 return (
                   <button key={file.path} type="button" title={file.name} aria-label={t("viewer.open", { name: file.name })}
                     onClick={() => setImage(markdownImage(src, file.name))}
-                    className="aspect-square overflow-hidden rounded-lg bg-raised focus-visible:outline-2 focus-visible:outline-accent">
+                    className="aspect-square overflow-hidden rounded-lg bg-raised">
                     <img src={src} alt="" loading="lazy" className="size-full object-cover" />
                   </button>
                 );
@@ -152,7 +152,7 @@ function LinkedFolderSheet({ name, listing, fileSrc, onClose }: { name: string; 
                   <span className="shrink-0 text-[11.5px] text-ink-secondary">{size}</span>
                 </a>
                 <a href={src} download={file.name} data-folder-download aria-label={t("viewer.download", { name: file.name })} title={t("viewer.downloadTitle")}
-                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
+                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink">
                   <Download size={16} />
                 </a>
               </div>

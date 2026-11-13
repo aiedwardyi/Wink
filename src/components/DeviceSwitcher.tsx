@@ -7,6 +7,7 @@ import { onThisPc } from "@/lib/devices-setup";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { api, useStoreDispatch } from "@/state/store";
@@ -191,7 +192,8 @@ export function DeviceSwitcher({
                       close();
                     }}
                     className={cn(
-                      "flex min-w-0 flex-1 items-center gap-3 py-2 pl-3.5 text-left text-[14px] text-ink hover:bg-raised/70 disabled:hover:bg-transparent",
+                      "flex min-w-0 flex-1 items-center gap-3 py-2 pl-3.5 text-left text-[14px] text-ink disabled:hover:bg-transparent",
+                      MENU_ITEM_HOVER,
                       device.current ? "pr-2" : "pr-3.5",
                       (device.offline || device.checking) && !device.current && "opacity-50",
                     )}
@@ -225,17 +227,19 @@ export function DeviceSwitcher({
                 </li>
               ),
             )}
-            {onThisPc() && <li className="mt-1 border-t border-hairline/40 pt-1">
+            {onThisPc() && <li>
+              <div className="mx-2 my-1 border-t border-hairline/40" />
               <button type="button" data-connect-device onClick={() => {
                 close();
                 dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
-              }} className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:bg-raised/70 hover:text-ink">
+              }} className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:text-ink", MENU_ITEM_HOVER)}>
                 <Plus size={16} className="shrink-0" />
                 <span>{t("settings.devices.connect")}</span>
               </button>
             </li>}
-            {picker && <li className={cn(devices.length > 0 && "mt-1 border-t border-hairline/40 pt-1")}>
-              <a href={picker} data-pc-picker className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:bg-raised/70 hover:text-ink">
+            {picker && <li>
+              {devices.length > 0 && <div className="mx-2 my-1 border-t border-hairline/40" />}
+              <a href={picker} data-pc-picker className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:text-ink", MENU_ITEM_HOVER)}>
                 <ArrowLeftRight size={16} className="shrink-0" />
                 <span>{t("chrome.choosePc")}</span>
               </a>

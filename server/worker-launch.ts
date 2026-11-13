@@ -202,8 +202,7 @@ export function createWorkerLaunch(options: {
     const session = workerSession(command.executable, args, source, template);
     if (session && resume) session.nativeId = resume.nativeId;
     if (resume?.unrouted) {
-      const usage = await deps.usage(input.botId, input.label ?? "", resume.engine, undefined, true);
-      if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
+      const usage = await deps.usage(resume.engine);
       const current = await deps.resumeAccount?.(resume.accountId, resume.accountGeneration);
       if (!deps.available(account.id, account.generation) || current?.id !== account.id || current.generation !== account.generation) throw new Error("Worker account changed before launch");
       return { kind: "unrouted" as const, account: { id: account.id, generation: account.generation }, executable: command.executable, args, workerSettings, session, line: usage.line };
@@ -226,8 +225,7 @@ export function createWorkerLaunch(options: {
       if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
     }
     const captured = Object.freeze({ id: account.id, generation: account.generation, name: selected ? deps.nameOf?.(account.id, command.name) ?? command.name : command.name });
-    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
-    if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
+    const usage = await deps.usage(input.command, captured);
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
     if (command.driver === "codex") requireCodexPromoAccount(account.home, account.generation);
     const nowMain = sameEngine || selected ? undefined : deps.mainAccount?.(baseId);

@@ -12,6 +12,7 @@ import { asksAboutDone, asksForChange, asksToRepeat, claimOf } from "./guard";
 export const MIC_BLOCKED = "Microphone blocked";
 export const MIC_MISSING = "Microphone missing";
 export const MIC_BUSY = "Microphone busy";
+export const VOICE_OUT = "Voice limit reached";
 const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "paused" | "ended" | "failed";
@@ -33,8 +34,6 @@ export type CallAudioPort = {
   play(pcm: Int16Array): void;
   flush(): void;
   close(): void;
-  ring(): void;
-  stopRing(): void;
   boop(): void;
   heardShare(): number;
   readonly playing: boolean;
@@ -70,6 +69,8 @@ type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: ()
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
+const QUOTA = /quota|resource.?exhausted/i;
+const VOICE_OUT_LINE = { en: "I'm out of voice for today. Keep typing, I'm still on it.", ko: "오늘 음성은 여기까지야. 채팅으로 계속해 줘, 작업은 계속할게." };
 const MAX_NUDGES = 3;
 const MIC_CHECK_MS = 1_000;
 const MIC_GAP_MS = 3_000;
@@ -276,7 +277,6 @@ export class LiveCall {
     this.frameAt = this.now();
     this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
     this.set({ startedAt: this.now() });
-    if (!this.snapshot.muted) this.deps.audio.ring();
     this.connect(session);
   }
 
@@ -290,6 +290,10 @@ export class LiveCall {
     }
     if (posted.status === 409 && !this.callId) {
       this.set({ status: "needsKey" });
+      return null;
+    }
+    if (posted.status === 429) {
+      this.outOfVoice();
       return null;
     }
     if (posted.status !== 200) {
@@ -312,12 +316,11 @@ export class LiveCall {
         clearTimeout(this.readyTimer);
         this.connected = true;
         this.wasLive = true;
-        this.deps.audio.stopRing();
         const resumed = Boolean(session.handle);
         this.reconnecting = 0;
         this.refresh();
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
-        if (!resumed) engine.sendText("[Wink] The call just started. Greet the user in one short sentence.");
+        if (!resumed) engine.sendText("[Wink] The call just started. Busy? Nod to the job in a few words.");
         else this.release();
       },
       audio: (pcm) => {
@@ -415,9 +418,10 @@ export class LiveCall {
       resumable: (handle) => { this.handle = handle; },
       goAway: () => { if (mine()) void this.reconnect(); },
       usage: (total) => { this.stats.usage += total; },
-      closed: (code) => {
+      closed: (code, reason) => {
         if (this.stats.closeCodes.length < 32) this.stats.closeCodes.push(code);
         if (this.engine !== engine || this.ended) return;
+        if (QUOTA.test(reason)) return this.outOfVoice();
         this.connected = false;
         void this.reconnect();
       },
@@ -929,10 +933,7 @@ export class LiveCall {
 
   mute(muted: boolean) {
     this.set({ muted });
-    if (muted) {
-      this.deps.audio.stopRing();
-      this.engine?.audioPaused();
-    }
+    if (muted) this.engine?.audioPaused();
   }
 
   hidden(isHidden: boolean) {
@@ -976,6 +977,14 @@ export class LiveCall {
     if (!this.micMisses++) return void this.heal();
     this.stalled = true;
     this.refresh();
+  }
+
+  /** No retry: a live call ends quietly with its last line in the chat, one not yet live fails softly. */
+  private outOfVoice() {
+    if (!this.wasLive) return this.fail(VOICE_OUT);
+    this.postLines([{ who: "voice", text: VOICE_OUT_LINE[activeLocale() === "ko" ? "ko" : "en"], at: this.now() }]);
+    this.teardown();
+    this.set({ status: "ended" });
   }
 
   private fail(error: string) {

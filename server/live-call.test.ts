@@ -50,7 +50,7 @@ describe("call token", () => {
     const first = await h.post("token", { locale: "ko" });
     await h.post("token", { callId: first.data.callId, locale: "en", resume: true });
     expect(h.sent(1).bidiGenerateContentSetup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Greet once in Korean in");
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
   it("sends the saved voice and language in the Live setup", async () => {
@@ -61,7 +61,7 @@ describe("call token", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
     expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
-    expect(setup.systemInstruction.parts[0].text).toContain("Greet once in Korean in");
+    expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
   it("defaults to Aoede and Auto: English or Korean as spoken, else the app language", async () => {
@@ -141,11 +141,14 @@ describe("call token", () => {
     expect(brief).toContain("Busy in STATUS never stops new work: offer it and call propose_work, it queues.");
   });
 
-  it("brief greets in the app language", async () => {
+  it("brief opens softly in the app language, no name or intro", async () => {
     const h = harness();
     await h.post("token", { locale: "ko" });
-    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Greet once in Korean in a few casual words.");
+    await h.post("token", { locale: "en" });
+    expect(h.sent(0).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
+    const brief = h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
+    expect(brief).not.toMatch(/Greet/);
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -170,7 +173,7 @@ describe("call token", () => {
     expect(brief).toContain("with contractions, never formal");
     expect(brief).toContain("Speak as I, never we or our.");
     expect(brief).toContain("open with a cue like \"Quick update:\"");
-    expect(brief).toContain("Greet once in English in a few casual words.");
+    expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -253,6 +256,12 @@ describe("call token", () => {
     expect(cards[0]!.secret).toMatchObject({ target: "geminiApiKey", helpUrl: "https://aistudio.google.com/apikey" });
     expect(isCallKeyCard(cards[0]!.secret!)).toBe(true);
     expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it("passes Google's quota 429 through", async () => {
+    const h = harness({ reply: () => Response.json({ error: { message: "You exceeded your current quota", status: "RESOURCE_EXHAUSTED" } }, { status: 429 }) });
+    const { status } = await h.post("token");
+    expect(status).toBe(429);
   });
 
   it("502s with Google's message", async () => {

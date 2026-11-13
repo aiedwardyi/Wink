@@ -515,37 +515,21 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("persists room setup and blocks the first message until it is finished", async () => {
+  it("opens a new room with setup already skipped", async () => {
     const bot = (await api("GET", "/api/bots")).body.bots[0];
     const created = await api("POST", "/api/groups", { name: "Setup probe", memberIds: [bot.id] });
     expect(created.status).toBe(201);
     const group = created.body.group;
     try {
-      expect(group).toMatchObject({ setupCompletedAt: null, setupSkippedAt: null, messages: [] });
-      const blocked = await api("POST", `/api/groups/${group.id}/messages`, { text: "before setup" });
-      expect(blocked.status).toBe(409);
-      expect((await api("GET", "/api/bots")).body.groups.find((candidate: { id: string }) => candidate.id === group.id).messages).toHaveLength(0);
-
-      const invalid = await api("PATCH", `/api/groups/${group.id}/setup`, {
-        action: "complete",
-        cwd: null,
-        bulletin: "",
-        defaultResponder: { kind: "member", botId: "missing" },
-      });
-      expect(invalid.status).toBe(400);
-
-      const completed = await api("PATCH", `/api/groups/${group.id}/setup`, {
+      expect(group).toMatchObject({ setupCompletedAt: null, setupSkippedAt: expect.any(Number), messages: [] });
+      const late = await api("PATCH", `/api/groups/${group.id}/setup`, {
         action: "complete",
         cwd: null,
         bulletin: "shared brief",
         defaultResponder: { kind: "member", botId: bot.id },
       });
-      expect(completed.status).toBe(200);
-      expect(completed.body.group).toMatchObject({ bulletin: "shared brief", setupCompletedAt: expect.any(Number) });
-      expect((await api("GET", "/api/bots")).body.groups.find((candidate: { id: string }) => candidate.id === group.id)).toMatchObject({
-        bulletin: "shared brief",
-        setupSkippedAt: null,
-      });
+      expect(late.status).toBe(200);
+      expect(late.body.group).toMatchObject({ bulletin: "", setupCompletedAt: null, setupSkippedAt: group.setupSkippedAt });
     } finally {
       await api("DELETE", `/api/groups/${group.id}`);
     }

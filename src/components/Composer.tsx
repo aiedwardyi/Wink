@@ -79,6 +79,7 @@ import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
+import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
@@ -180,29 +181,6 @@ function queuedFromRoomHold(hold: PersistedRoomHold, draftId: string): QueuedGro
       threadId: hold.threadId,
     },
   };
-}
-
-// An absolute child sits on the frame's padding box; the inset reaches out over each skin's border.
-function RainbowRing({ theme }: { theme: boolean }) {
-  const ring = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    const el = ring.current;
-    const frame = el?.parentElement;
-    if (!el || !frame) return;
-    const fit = () => {
-      const s = getComputedStyle(frame);
-      el.style.inset = `-${s.borderTopWidth} -${s.borderRightWidth} -${s.borderBottomWidth} -${s.borderLeftWidth}`;
-    };
-    fit();
-    const appearance = new MutationObserver(fit);
-    appearance.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "data-shape"] });
-    return () => appearance.disconnect();
-  }, []);
-  return (
-    <span ref={ring} aria-hidden data-orbit-rainbow={theme ? "theme" : ""}>
-      <span />
-    </span>
-  );
 }
 
 /** Renders the editable message composer and its pending attachments. */

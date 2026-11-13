@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LIVE_VAD, type CallLine } from "../../../shared/live-call";
 import type { Message } from "@/state/store-types";
-import { asRequest, LiveCall, spokenText, told, type CallAudioPort, type Posted } from "./controller";
+import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 
 class FakeEngine implements LiveEngine {
@@ -34,8 +34,6 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     play() {},
     flush() { this.flushed += 1; },
     close() {},
-    ring() { this.cues.push("ring"); },
-    stopRing() { this.cues.push("stopRing"); },
     boop() { this.cues.push("boop"); },
     cues: [] as string[],
     heardShare: () => 0.5,
@@ -90,15 +88,15 @@ describe("spokenText", () => {
 });
 
 describe("LiveCall cues", () => {
-  it("rings while connecting, stops the ring on connect, and boops on a user hang-up", async () => {
+  it("connects without a ring and boops on a user hang-up", async () => {
     const audio = fakeAudio();
     const { call, engine } = setup({}, audio);
     await call.start();
-    expect(audio.cues).toEqual(["ring"]);
+    expect(audio.cues).toEqual([]);
     engine().events.ready();
-    expect(audio.cues).toEqual(["ring", "stopRing"]);
+    expect(audio.cues).toEqual([]);
     call.end();
-    expect(audio.cues).toEqual(["ring", "stopRing", "boop"]);
+    expect(audio.cues).toEqual(["boop"]);
     call.end();
     expect(audio.cues.filter((cue) => cue === "boop")).toHaveLength(1);
   });
@@ -108,7 +106,7 @@ describe("LiveCall cues", () => {
     const early = setup({}, hungUp);
     await early.call.start();
     early.call.end();
-    expect(hungUp.cues).toEqual(["ring"]);
+    expect(hungUp.cues).toEqual([]);
 
     const denied = fakeAudio();
     denied.capture = async () => { throw Object.assign(new Error("x"), { name: "NotAllowedError" }); };
@@ -141,15 +139,40 @@ describe("LiveCall cues", () => {
     await call.start();
     engine().events.ready();
     call.end();
-    expect(audio.cues.filter((cue) => cue === "ring" || cue === "boop")).toEqual([]);
+    expect(audio.cues).toEqual([]);
+  });
+});
+
+describe("LiveCall voice limit", () => {
+  const QUOTA = "You exceeded your current quota, please check your plan and billing details.";
+
+  it("ends softly without a retry when the quota is out at start", async () => {
+    const { call, engines, posts } = setup({ "/call/token": { status: 429, data: { error: QUOTA } } });
+    await call.start();
+    expect(call.state()).toMatchObject({ status: "failed", error: VOICE_OUT });
+    expect(engines).toHaveLength(0);
+    expect(posts.filter((p) => p.path.endsWith("/call/token"))).toHaveLength(1);
   });
 
-  it("cuts a ring in progress when the call is muted", async () => {
-    const audio = fakeAudio();
-    const { call } = setup({}, audio);
+  it("ends softly when the socket closes on quota before the call is live", async () => {
+    const { call, engine, engines } = setup();
     await call.start();
-    call.mute(true);
-    expect(audio.cues).toEqual(["ring", "stopRing"]);
+    engine().events.closed(1011, QUOTA);
+    await flush();
+    expect(call.state()).toMatchObject({ status: "failed", error: VOICE_OUT });
+    expect(engines).toHaveLength(1);
+  });
+
+  it("leaves one line in the chat and hangs up quietly when the quota runs out mid-call", async () => {
+    const audio = fakeAudio();
+    const { call, engine, engines, posts } = await started({}, audio);
+    engine().events.closed(1011, QUOTA);
+    await flush();
+    expect(call.state().status).toBe("ended");
+    expect(engines).toHaveLength(1);
+    expect(audio.cues).toEqual([]);
+    expect(posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines)).toEqual([expect.objectContaining({ who: "voice", text: "I'm out of voice for today. Keep typing, I'm still on it." })]);
+    expect(posts.map((p) => p.path).filter((path) => !/\/call\/(token|lines|end)$/.test(path))).toEqual([]);
   });
 });
 

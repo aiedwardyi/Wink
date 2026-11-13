@@ -17,14 +17,14 @@ const YMAX = 70;
 // jsdom and the first frame measure 0; a desktop-sized plot keeps the dots clickable until the real size lands.
 const FALLBACK = { w: 900, h: 560 };
 
-type Stop = { option?: PickerEffort; label: string; score?: number; coding?: number; cost?: number };
+export type Stop = { option?: PickerEffort; label: string; score?: number; coding?: number; cost?: number };
 type Item = ReturnType<typeof pickerModels>[number];
-type Line = { row: Item; key: string; name: string; tag: string; offList?: boolean; stops: Stop[] };
+export type Line = { row: Item; key: string; name: string; tag: string; offList?: boolean; stops: Stop[] };
 type Point = { x: number; y: number };
 type Box = Point & { w: number; h: number };
 type Plot = { W: number; H: number; phone: boolean; pad: { l: number; r: number; t: number; b: number }; cw: number };
 
-const charted = (stop: Stop | undefined) => stop?.score != null && stop.cost != null;
+export const charted = (stop: Stop | undefined) => stop?.score != null && stop.cost != null;
 const usd = (cost: number | undefined) => cost == null ? "-" : `$${cost < 0.1 ? cost.toFixed(3) : cost.toFixed(2)}`;
 const one = (value: number | undefined) => value == null ? "-" : value.toFixed(1);
 const signed = (n: number, format: (value: number) => string) => (n < 0 ? "−" : "+") + format(Math.abs(n));
@@ -38,7 +38,7 @@ function anchor(line: Line | undefined, at: number): number {
   return line.stops.map((_, k) => k).filter((k) => charted(line.stops[k])).sort((a, b) => Math.abs(a - at) - Math.abs(b - at) || b - a)[0] ?? -1;
 }
 
-function lineOf(item: Item): Line {
+export function lineOf(item: Item): Line {
   const option = item.cell.options[0]!;
   const contrib = !item.cell.offList && item.cell.options.length === 1 && /-contributor$/i.test(option.id);
   const efforts = pickerEfforts(item, item.cell);
@@ -49,7 +49,7 @@ function lineOf(item: Item): Line {
   return { row: item, key: option.id, name: contrib ? option.label.replace(/\s+contributor$/i, "") : item.cell.label, tag: contrib ? "Contrib" : "", offList: item.cell.offList, stops };
 }
 
-function locate(lines: Line[], selection: ModelSelection) {
+export function locate(lines: Line[], selection: ModelSelection) {
   const index = lines.findIndex((line) => line.row.instance.instanceId === selection.instanceId && line.row.cell.options.some((option) => option.id === selection.model));
   const line = lines[index];
   const level = line ? line.stops.findIndex((stop) => !stop.option || (stop.option.model ? stop.option.model === selection.model : stop.option.effort === selection.effort)) : -1;

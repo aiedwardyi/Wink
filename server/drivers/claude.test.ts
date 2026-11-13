@@ -1215,6 +1215,20 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Edit");
   });
 
+  it("runs a read-only turn without file edits or shell", async () => {
+    await create("edit", {}, { disallowedTools: ["Bash(git *)"] });
+    const dump = join(scratch, "read-only-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-read-only", text: "go", cwd: scratch, approval: "auto", readOnly: true });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    expect(existsSync(join(scratch, "made.txt"))).toBe(false);
+    expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
+    expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+  });
+
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
     await create(undefined, {}, { tools: [], disallowedTools: [] });
     const dump = join(scratch, "no-builtins.json");

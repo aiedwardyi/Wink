@@ -210,6 +210,13 @@ export function watchChatFindHighlight(root: HTMLElement, query: string): () => 
   };
 }
 
+const findRequests = new Set<() => void>();
+
+/** Opens the on-screen chat's find bar, as Ctrl+F does: a phone has no Ctrl+F. */
+export function requestFind(): void {
+  for (const open of [...findRequests]) open();
+}
+
 export function useSearchFindSeed(threadId: string) {
   const { state } = useStore();
   const [findOpen, setFindOpen] = useState(false);
@@ -238,6 +245,10 @@ export function useSearchFindSeed(threadId: string) {
     });
   }, []);
   const openFind = useCallback(() => setFindOpen(true), []);
+  useEffect(() => {
+    findRequests.add(openFind);
+    return () => void findRequests.delete(openFind);
+  }, [openFind]);
   useEffect(() => { if (findOpen) trackScreen("find"); }, [findOpen]);
 
   return { findOpen, findSeed, closeFind, toggleFind, openFind };

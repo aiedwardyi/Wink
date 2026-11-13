@@ -302,9 +302,9 @@ export interface GroupRecord {
    * namespace so one heading can hold a project's room and its people */
   section?: string;
   pinned?: boolean;
-  /** New user-created rooms start with setup pending. Null timestamps are
-   * intentional: records from before room setup has existed omit both keys
-   * and remain immediately usable. */
+  /** New rooms start with setup skipped, so older builds skip the setup page
+   * too; both null is a room still pending from before. Records from before
+   * room setup existed omit both keys and remain immediately usable. */
   setupCompletedAt?: number | null;
   setupSkippedAt?: number | null;
 }
@@ -1119,7 +1119,7 @@ export class Store {
     if (!dm) {
       group.tasks = [{ threadId, title: UNTITLED_TASK, createdAt }];
       group.setupCompletedAt = setup?.completed ? createdAt : null;
-      group.setupSkippedAt = null;
+      group.setupSkippedAt = setup?.completed ? null : createdAt;
     }
     this.groups.unshift(group);
     this.saveGroups();
