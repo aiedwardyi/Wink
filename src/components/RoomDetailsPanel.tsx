@@ -1,6 +1,6 @@
 // Room details: People, Bots and the room itself, in the slot and look of Bot details.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, LogOut, Pencil, X } from "lucide-react";
+import { LogOut, Pencil, X } from "lucide-react";
 
 import { request } from "@/lib/api-request";
 import { cn } from "@/lib/cn";
@@ -86,13 +86,10 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
 
   return (
     <aside ref={panelRef} data-room-details="" data-side-panel="" data-closing={closing || undefined} inert={closing} className="max-md:animate-panel-in md:animate-panel-slide relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel [&_:is(button:not(:disabled),summary)]:cursor-pointer md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full">
-      <div className="flex items-center justify-between px-4 py-3">
-        <button onClick={close} aria-label={t("room.collapseDetails")} title={t("room.collapseDetails")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink">
-          <ChevronRight size={18} />
-        </button>
+      <div className="flex h-16 items-center justify-between pl-4 pr-1.5 max-md:pr-0">
         <span className="text-[15px] font-semibold text-ink">{t("room.details")}</span>
-        <button onClick={close} aria-label={t("room.closeDetails")} title={t("room.closeDetails")} className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink">
-          <X size={18} />
+        <button onClick={close} aria-label={t("room.closeDetails")} title={t("room.closeDetails")} className="flex size-7 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink max-md:size-11">
+          <X size={15} />
         </button>
       </div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-5 pt-2">
