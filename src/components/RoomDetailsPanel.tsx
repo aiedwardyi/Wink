@@ -10,7 +10,7 @@ import { hapticTick } from "@/lib/phone-swipe";
 import { nextRename } from "@/lib/rename";
 import { nextBulletin } from "@/lib/room-bulletin";
 import { useRoomDetailsTarget, type RoomDetailsSection } from "@/lib/room-details";
-import { joinedRoomBase, joinedSelection, roomPeople, roomPictureUrl, roomTeamBots, type TeamRoom } from "@/lib/team-rooms";
+import { isTeamRoom, joinedRoomBase, joinedSelection, roomPeople, roomPictureUrl, roomTeamBots, type TeamRoom } from "@/lib/team-rooms";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Presence } from "@/lib/use-presence";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -22,6 +22,7 @@ import { RenameActions } from "./RenameActions";
 import { useRoomAlerts } from "./RoomAlertsBell";
 import { RoomDetailsBots } from "./RoomDetailsBots";
 import { HostPeople, JoinedPeople } from "./RoomDetailsPeople";
+import { RoomFolderRow, SearchChatRow } from "./RoomDetailsRows";
 import { RoomPicture, TeamRoomPicture } from "./RoomPicture";
 import { SaveStatus } from "./SaveStatus";
 import { JoinedBots } from "./RoomTeamBots";
@@ -97,7 +98,7 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-5 pt-2">
         {group ? (
           <>
-            {section("room", t("room.section"), <HostRoom group={group} />, false)}
+            {section("room", t("room.section"), <HostRoom group={group} phone={phone} />, false)}
             {!group.dm && section("people", `${t("teamRoom.people")} (${1 + roomPeople(group).length})`, <HostPeople group={group} />)}
             {!group.dm && section("bots", `${t("chrome.bots")} (${group.memberIds.length + roomTeamBots(group).length})`, <RoomDetailsBots group={group} />)}
           </>
@@ -114,7 +115,7 @@ export function RoomDetailsPanel({ group, joinedId, closing = false }: { group?:
   );
 }
 
-function HostRoom({ group }: { group: Group }) {
+function HostRoom({ group, phone }: { group: Group; phone: boolean }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
   const [name, setName] = useState<string | null>(null);
@@ -197,7 +198,9 @@ function HostRoom({ group }: { group: Group }) {
             onBlur={leaveBulletin}
           />
         </div>
-        {group.hosted && <AlertsRow chat={group.id} />}
+        {!group.dm && group.memberIds.length > 0 && <RoomFolderRow group={group} />}
+        <AlertsRow chat={group.id} />
+        {phone && !isTeamRoom(group) && <SearchChatRow />}
       </div>
     </>
   );
