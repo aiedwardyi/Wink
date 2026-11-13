@@ -64,8 +64,8 @@ export function warmActivity(): Promise<ReplyActivity | null> {
   return pending;
 }
 
-/** Each engine's share of replies, biggest first; engines that share a lab share a row. */
-export function engineShares(engines: ReplyActivity["engines"]): Array<{ name: string; kind: string; share: string }> {
+/** Each engine's share of all replies, biggest first; engines that share a lab share a row. */
+export function engineShares(engines: ReplyActivity["engines"], replies: number): Array<{ name: string; kind: string; share: string }> {
   const named = new Map<string, { kind: string; count: number }>();
   for (const { engine, count } of [...engines].sort((a, b) => b.count - a.count)) {
     const name = ENGINE_NAMES[engine] ?? engine.replace(/Agent$/, "").replace(/^./, (first) => first.toUpperCase());
@@ -73,7 +73,8 @@ export function engineShares(engines: ReplyActivity["engines"]): Array<{ name: s
     if (row) row.count += count;
     else if (count > 0) named.set(name, { kind: engine, count });
   }
-  const total = [...named.values()].reduce((sum, row) => sum + row.count, 0);
+  // Engines also count future-dated replies, which the total stops before.
+  const total = Math.max(replies, [...named.values()].reduce((sum, row) => sum + row.count, 0));
   return [...named]
     .sort(([a, x], [b, y]) => y.count - x.count || a.localeCompare(b))
     .map(([name, { kind, count }]) => {
@@ -166,7 +167,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
   const dayName = new Intl.DateTimeFormat(tag, { month: "short", day: "numeric" });
   const busiest = activity.busiest && dayName.format(dayDate(activity.busiest.day));
   const since = activity.since && new Intl.DateTimeFormat(tag, { month: "short", year: "numeric" }).format(dayDate(activity.since));
-  const shares = engineShares(activity.engines);
+  const shares = engineShares(activity.engines, activity.total);
   const active = activity.counts.filter(Boolean).sort((a, b) => a - b);
   const cuts = [1, 2, 3].map((quarter) => active[Math.floor((quarter / 4) * (active.length - 1))]!);
   const shade = (count: number) => (count ? 1 + cuts.filter((cut) => count > cut).length : 0);

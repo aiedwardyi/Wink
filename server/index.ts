@@ -8045,9 +8045,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/activity") {
+      // A shadow (driver missing or failed to start) still knows its engine.
+      const kinds = new Map(registry.entries().map((entry) => [entry.instanceId, entry.live?.driverKind ?? entry.shadow?.driverKind]));
       return json(res, 200, replyActivity(Date.now(), (threadId, botId) => {
         const bot = botId ? store.bot(botId) : store.botByThread(threadId);
-        return bot ? registry.get(bot.modelSelection.instanceId)?.driverKind ?? null : null;
+        return bot ? kinds.get(bot.modelSelection.instanceId) ?? null : null;
       }));
     }
 

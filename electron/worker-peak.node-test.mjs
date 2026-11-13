@@ -49,3 +49,14 @@ test("opening panes raises the peak by this instance's live panes", (t) => {
   cleanup.opened(pane("p4"));
   assert.equal(peakOf(file), 3);
 });
+
+test("the peak seeds from this instance's ledger rows only", (t) => {
+  const dir = home(t);
+  const row = (id, instance, openedAt, closedAt) => ({ id, cwd: dir, tempRoot: dir, ...(instance ? { instance } : {}), openedAt, closedAt });
+  fs.mkdirSync(path.join(dir, ".orbit"));
+  fs.writeFileSync(path.join(dir, ".orbit", "pane-ledger.json"), JSON.stringify([row("d1", "dev", 1, null), row("d2", "dev", 2, 8), row("a1", "app", 3, 6), row("a2", "app", 4, 7), row("old", null, 5, 6)]));
+  const file = path.join(dir, "data", "worker-peak.json");
+  const cleanup = createPaneCleanup({ home: dir, tempRoot: dir, peakFile: file, instance: "app", now: () => 10, schedule: () => ({}), cancel: () => {} });
+  t.after(() => cleanup.dispose());
+  assert.equal(peakOf(file), 3);
+});

@@ -265,7 +265,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   entries = entries.filter((entry) => entry && typeof entry.id === "string" && typeof entry.cwd === "string" && typeof entry.tempRoot === "string");
   // Rows from before instance ids stay closable by any instance.
   for (const entry of entries) if (!entry.closedAt && (entry.instance ?? instance) === instance) entry.closedAt = now();
-  const peak = peakFile ? createWorkerPeak(peakFile, entries, now, warn) : null;
+  const peak = peakFile ? createWorkerPeak(peakFile, entries.filter((entry) => (entry.instance ?? instance) === instance), now, warn) : null;
   let panes = () => [];
   let tail = Promise.resolve();
   let timer = null;
