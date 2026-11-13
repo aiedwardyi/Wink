@@ -16,7 +16,7 @@ vi.mock("./ShowPdf", () => ({ default: () => null }));
 // every cell asks for its thumb on each render, so the calls count the grid's renders
 vi.mock("@/lib/media-thumbs", async (load) => {
   const real = await load<typeof import("@/lib/media-thumbs")>();
-  return { useThumb: vi.fn((src: string) => real.useThumb(src)) };
+  return { useThumb: vi.fn((src: string, clip?: boolean) => real.useThumb(src, clip)) };
 });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -84,6 +84,7 @@ afterEach(() => {
   delete window.ogb;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  for (const name of ["videoWidth", "videoHeight"]) delete (HTMLVideoElement.prototype as unknown as Record<string, unknown>)[name];
   for (const [name, descriptor] of sizes) Object.defineProperty(HTMLElement.prototype, name, descriptor);
 });
 
@@ -114,6 +115,30 @@ const tiles = () => [...host.querySelectorAll("[data-media-grid] [data-media-key
 const scroller = () => host.querySelector<HTMLElement>(".show-media-scroll")!;
 const pointer = (el: Element, type: string, clientY: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientY })); });
 const chat: MediaSource = { threadId: "t1", messages: [upload, reply] };
+const clipChat = (name: string): MediaSource => ({ threadId: "t1", messages: [{ id: "c1", role: "bot", kind: "text", at: 1, text: `Cut: [${name}](C:\\w\\${name})` }] });
+const hover = (el: Element, type: string, pointerType = "mouse") => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType })); });
+const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+class Shrinker {
+  onmessage?: (event: { data: unknown }) => void;
+  postMessage({ id }: { id: number }) { setTimeout(() => this.onmessage?.({ data: { id, blob: new Blob(["frame"]) } })); }
+  terminate() {}
+}
+
+// happy-dom has no media pipeline: a clip's metadata and seek, or its error, land a tick after its src
+function frames(ok: boolean) {
+  vi.stubGlobal("OffscreenCanvas", class {});
+  vi.stubGlobal("Worker", Shrinker);
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ close() {} })));
+  for (const [name, value] of [["videoWidth", 640], ["videoHeight", 360]] as const) Object.defineProperty(HTMLVideoElement.prototype, name, { configurable: true, value });
+  vi.spyOn(HTMLMediaElement.prototype, "src", "set").mockImplementation(function (this: HTMLMediaElement) {
+    setTimeout(() => {
+      if (!ok) return this.onerror?.(new Event("error"));
+      this.onloadedmetadata?.(new Event("loadedmetadata"));
+      this.onseeked?.(new Event("seeked"));
+    });
+  });
+}
 const deck: ShowItem = { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" };
 
 it("switches between Show and Media", async () => {
@@ -462,4 +487,57 @@ it("mounts only the file rows on screen out of 5,000, with the full height known
   const later = names();
   expect(later.length).toBeLessThan(60);
   expect(Number(later[0]!.match(/doc-(\d+)/)![1])).toBeGreaterThan(2_000);
+});
+
+it("a video tile shows its first frame and plays muted only while a mouse rests on it", async () => {
+  frames(true);
+  await act(async () => showMedia("t1"));
+  await render(clipChat("walk.mp4"));
+  await settle();
+  const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="walk.mp4"]')!;
+  expect(tile.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+  expect(tile.textContent).toBe("walk.mp4");
+  const clip = tile.firstElementChild!;
+  await hover(clip, "pointerover");
+  expect(tile.querySelector("video")).toBeNull();
+  await wait(300);
+  const video = tile.querySelector("video")!;
+  expect(video.getAttribute("src")).toBe("/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\walk.mp4"));
+  expect(video.muted).toBe(true);
+  expect(video.loop).toBe(true);
+  await hover(clip, "pointerout");
+  expect(tile.querySelector("video")).toBeNull();
+  await hover(clip, "pointerover");
+  await wait(300);
+  await act(async () => { scroller().dispatchEvent(new Event("scroll")); });
+  expect(tile.querySelector("video")).toBeNull();
+  await hover(clip, "pointerout");
+  await hover(clip, "pointerover", "touch");
+  await wait(300);
+  expect(tile.querySelector("video")).toBeNull();
+});
+
+it("a video tile reads its frame only once the scroll rests", async () => {
+  frames(true);
+  await act(async () => showMedia("t1"));
+  await render(clipChat("pan.mp4"));
+  await settle();
+  await act(async () => { scroller().dispatchEvent(new Event("scroll")); });
+  await render({ threadId: "t1", messages: [...clipChat("pan.mp4").messages, { ...clipChat("tilt.mp4").messages[0], id: "c2", at: 2 }] });
+  await settle();
+  const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="tilt.mp4"]')!;
+  expect(tile.querySelector("img")).toBeNull();
+  await wait(250);
+  expect(tile.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+});
+
+it("a video whose frame can't be read keeps its play icon and name", async () => {
+  frames(false);
+  await act(async () => showMedia("t1"));
+  await render(clipChat("broken.mov"));
+  await settle();
+  const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="broken.mov"]')!;
+  expect(tile.querySelector("img")).toBeNull();
+  expect(tile.querySelector(".lucide-play")).not.toBeNull();
+  expect(tile.querySelector(".truncate")!.textContent).toBe("broken.mov");
 });
