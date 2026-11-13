@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { ActivityChip, ErrorRow, NoteMessage, PinnedBanner, commPeer } from "./ChatView";
-import { FoldToggle, TimestampLabel, USER_FOLD_CLASS, userTextFolds } from "./ChatBubble";
+import { CopyButton, FoldToggle, TimestampLabel, USER_FOLD_CLASS, userTextFolds } from "./ChatBubble";
 import { AppErrorBanner } from "./AppErrorBanner";
 import { DaySeparator } from "./DaySeparator";
 import { JumpToLatest } from "./JumpToLatest";
@@ -57,7 +57,7 @@ import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
 import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
-import { RoomFileRows, RoomLineText, roomPictures } from "./TeamRoomRow";
+import { RoomFileRows, RoomLineTranslation, RoomTranslateButton, RoomTranslationText, roomPictures } from "./TeamRoomRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
@@ -390,6 +390,9 @@ export const Transcript = memo(function Transcript({
         const markdownText =
           optionChoices?.messagePrefix != null ? optionChoices.messagePrefix : (m.text ?? "");
         const choicesOnly = Boolean(optionChoices) && !markdownText.trim() && !m.replyToId;
+        const copyText = attachedImages?.display ?? m.text ?? "";
+        const translateText = user ? copyText : markdownText;
+        const translateId = !roomBase ? undefined : user ? (person ? m.roomEntryId : undefined) : `m-${m.id}`;
         // the room's pinned folder, else its shared desk, else the writer's own
         const botFolder = (group.pinnedCwd === undefined ? group.cwd : group.pinnedCwd) ?? memberOf(m.from?.botId)?.cwd;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
@@ -488,16 +491,18 @@ export const Transcript = memo(function Transcript({
                 });
               } : undefined}
             >
+              <RoomLineTranslation base={roomBase ?? ""} entryId={translateId} text={translateText} canTranslate={canTranslate && !streaming}>{(translation) => (
               <div
                 data-orbit-message-body
                 data-strip={m.reactions?.length ? "" : undefined}
-                className={cn("relative w-fit max-w-[min(42rem,78%)]", Boolean(m.reactions?.length) && "pb-3.5")}
+                className={cn("relative w-fit max-w-[min(42rem,78%)]", !readOnly && "pb-8")}
               >
                 {mine && !readOnly && (
                   <div
                     data-message-hover-actions
-                    className="pointer-events-none absolute top-1/2 right-full z-20 mr-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                    className="pointer-events-none absolute right-0 bottom-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                   >
+                    <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
                       onClick={() => onReply(m)}
@@ -526,7 +531,8 @@ export const Transcript = memo(function Transcript({
                       )}
                       {roomBase && m.roomFiles && <AttachedImageGallery pictures={roomPictures(roomBase, m.roomFiles)} className={cn(!mine && "justify-start")} />}
                       <div className={cn(folded && USER_FOLD_CLASS)}>
-                        {roomBase ? <RoomLineText base={roomBase} entryId={person ? m.roomEntryId : undefined} text={attachedImages?.display ?? m.text ?? ""} canTranslate={canTranslate} /> : <LinkedText text={attachedImages?.display ?? m.text ?? ""} />}
+                        <LinkedText text={translateText} />
+                        {translation && <RoomTranslationText translation={translation} />}
                       </div>
                       {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(attachedImages.display && "mt-2")} />}
                       {roomBase && m.roomFiles && <RoomFileRows base={roomBase} files={m.roomFiles} className={cn(m.text && "mt-2")} />}
@@ -534,9 +540,8 @@ export const Transcript = memo(function Transcript({
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      {roomBase ? <RoomLineText base={roomBase} entryId={`m-${m.id}`} text={markdownText} canTranslate={canTranslate && !streaming}>
-                        <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
-                      </RoomLineText> : <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />}
+                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
+                      {translation && <RoomTranslationText translation={translation} />}
                     </MessageBoundary>
                   ) : null}
                 </div>
@@ -544,9 +549,11 @@ export const Transcript = memo(function Transcript({
                 {!mine && !streaming && !docked?.live && !readOnly && (
                   <div
                     data-message-hover-actions
-                    className="pointer-events-none absolute top-1/2 left-full z-20 ml-0.5 flex -translate-y-1/2 items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
+                    // left, not right: the row is wider than a short bubble, and the wrapper is w-fit
+                    className="pointer-events-none absolute bottom-0 left-0 z-20 flex items-center gap-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
                   >
                     <ReactionBar threadId={group.threadId} message={m} />
+                    <CopyButton text={copyText} className="opacity-100" />
                     <button
                       type="button"
                       onClick={() => onReply(m)}
@@ -556,7 +563,7 @@ export const Transcript = memo(function Transcript({
                     >
                       <MessageSquareReply size={14} />
                     </button>
-
+                    {translation && <RoomTranslateButton translation={translation} />}
                   </div>
                 )}
                 <ReactionChips
@@ -568,6 +575,7 @@ export const Transcript = memo(function Transcript({
                   className={cn("bottom-3.5", readOnly && "pointer-events-none")}
                 />
               </div>
+              )}</RoomLineTranslation>
               {optionChoices && (
                 <ChatOptionChips
                   options={optionChoices.options}

@@ -7562,6 +7562,7 @@ const botRoutes = createBotRoutes({
   defaultSelection,
   botJobSchema,
   checkedModelSelection,
+  restoreWait: (of) => (of === undefined ? undefined : accountRuntime.restoredFor(of)) ?? startupTiming.waitFor("accounts"),
   store,
   keepGoing,
   wireBot,
