@@ -632,7 +632,9 @@ export const Transcript = memo(function Transcript({
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
+                      {roomBase ? <RoomLineText base={roomBase} entryId={`m-${m.id}`} text={markdownText} canTranslate={canTranslate && !streaming}>
+                        <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
+                      </RoomLineText> : <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />}
                     </MessageBoundary>
                   ) : null}
                 </div>

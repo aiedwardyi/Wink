@@ -34,8 +34,8 @@ export function useTranslationAvailable(base: string): boolean {
 
 type Translation = { key: string; visible: boolean; pending: boolean; failed: boolean; text?: string };
 
-export function useRoomTranslation(base: string, entryId: string, lang: LocaleId) {
-  const key = `${base}/${entryId}/${lang}`;
+export function useRoomTranslation(base: string, entryId: string, lang: LocaleId, text?: string) {
+  const key = JSON.stringify([base, entryId, lang, text]);
   const [state, setState] = useState<Translation>({ key, visible: false, pending: false, failed: false });
   const current = state.key === key ? state : { key, visible: false, pending: false, failed: false };
   const latest = useRef<Translation>(current);

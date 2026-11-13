@@ -108,6 +108,36 @@ describe("people in a shared group's chat", () => {
     const host = await show([mine], [{ personId: "p1", name: "서연", at: day + 1 }]);
     expect(host.querySelector("[data-room-join]")?.textContent).toBe("서연 님이 참여했어요. 여기 있는 모두가 채팅 전체를 볼 수 있어요.");
   });
+
+  it.each([undefined, "p1"])("translates a bot line with owner %s and keeps its Markdown", async (owner) => {
+    const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
+      url === "/api/rooms/r1/translate" ? { available: true } : { text: "The launch is ready. (For Eddie: ready)" },
+    )));
+    vi.stubGlobal("fetch", fetch);
+    const bot: Message = { id: "b1", role: "bot", kind: "text", at: day, text: "**출시 준비를 모두 마쳤어요.** (For Eddie: ready)", author: { kind: "bot", id: "bot-1", name: "Rando", ...(owner ? { owner } : {}) }, from: { botId: "bot-1", name: "Rando", color: "blue" }, roomEntryId: "e3" };
+    const host = await show([bot, { ...bot, id: "b2", roomEntryId: "e4", text: "The checklist is ready." }]);
+    const row = host.querySelector('[data-mid="b1"]')!;
+    expect(row.querySelector("strong")?.textContent).toBe("출시 준비를 모두 마쳤어요.");
+    const button = row.querySelector<HTMLButtonElement>("[data-room-translate]");
+    expect(button).not.toBeNull();
+    expect(host.querySelector('[data-mid="b2"] [data-room-translate]')).toBeNull();
+    await act(async () => button!.click());
+    expect(row.querySelector("[data-room-translation]")?.textContent).toBe("The launch is ready. (For Eddie: ready)");
+    expect(fetch).toHaveBeenCalledWith("/api/rooms/r1/entries/m-b1/translate", expect.objectContaining({ body: '{"lang":"en"}' }));
+    expect(row.querySelector("strong")?.textContent).toBe("출시 준비를 모두 마쳤어요.");
+  });
+
+  it("translates an earlier Korean bubble when the committed turn ends in English", async () => {
+    const fetch = vi.fn(async (path: string) => new Response(JSON.stringify(path.endsWith("/entries/m-b1/translate") ? { text: "The launch is ready." } : { available: true })));
+    vi.stubGlobal("fetch", fetch);
+    const first: Message = { id: "b1", role: "bot", kind: "text", at: day, text: "출시 준비를 모두 마쳤어요.", from: { botId: "bot-1", name: "Rando", color: "blue" } };
+    const host = await show([first, { ...first, id: "b2", text: "For Eddie: ready.", roomEntryId: "turn-entry" }]);
+    expect(host.querySelector('[data-mid="b1"] [data-room-translate]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="b2"] [data-room-translate]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-mid="b1"] [data-room-translate]')!.click());
+    expect(host.querySelector('[data-mid="b1"] [data-room-translation]')?.textContent).toBe("The launch is ready.");
+    expect(fetch).toHaveBeenCalledWith("/api/rooms/r1/entries/m-b1/translate", expect.objectContaining({ body: '{"lang":"en"}' }));
+  });
 });
 
 describe("header roster", () => {
