@@ -714,10 +714,10 @@ describe("bundled-face skins", () => {
 const FRESH_SKINS = [
   { id: "inkwell", name: "Inkwell", face: "Atkinson Hyperlegible Next", file: "AtkinsonHyperlegibleNext-Variable.woff2", ratios: [12.4, 11.5, 1.12, 1.2] },
   { id: "graphite", name: "Graphite", face: "Lexend", file: "Lexend-Variable.woff2", ratios: [10.9, 9.8, 1.15, 1.28] },
-  { id: "moss", name: "Moss", face: "Nunito", file: "Nunito-Variable.woff2", ratios: [12.6, 9.3, 1.12, 1.5] },
+  { id: "merlot", name: "Merlot", face: "Manrope", file: "Manrope-Variable.woff2", ratios: [14.1, 11.6, 1.12, 1.36] },
 ] as const;
 
-describe("Inkwell, Graphite and Moss", () => {
+describe("Inkwell, Graphite and Merlot", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
   it("registers the three dark skins and keeps Wink Violet, Wink Black, Pewter and the default", () => {
@@ -744,7 +744,7 @@ describe("Inkwell, Graphite and Moss", () => {
   });
 
   it("puts both sides in wide bubbles", () => {
-    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {';
+    const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="merlot"], [data-skin="bronze"], [data-skin="dim-sand"])) to ([data-skin]) {';
     const body = css.slice(css.indexOf(scope), css.indexOf("\n}\n", css.indexOf(scope)));
     expect(body).toContain("max-width: min(54rem, 94%);");
     expect(body).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
@@ -778,7 +778,7 @@ describe("Precision Dimmed, Bronze, Dim Sand and the Light and Atelier fixes", (
       { id: "bronze", name: "Bronze" },
       { id: "dim-sand", name: "Dim Sand" },
     ]);
-    expect(SKINS.find((skin) => skin.id === "moss")?.name).toBe("Moss");
+    expect(SKINS.find((skin) => skin.id === "merlot")?.name).toBe("Merlot");
     expect([...LIGHT_SKIN_IDS].filter((id) => ["precision-dimmed", "bronze", "dim-sand"].includes(id))).toEqual(["dim-sand"]);
   });
 
@@ -826,7 +826,7 @@ describe("Precision Dimmed, Bronze, Dim Sand and the Light and Atelier fixes", (
 });
 
 describe("Bot name on wide bubbles", () => {
-  const WIDE = ["precision", "inkwell", "graphite", "moss", "precision-dimmed", "bronze", "dim-sand"];
+  const WIDE = ["precision", "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand"];
   const NAMED_ALREADY = [
     "wink", "wink-cyber", "wink-violet", "wink-black", "wink-day", "community", "community-light", "code-review",
     "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
@@ -1683,6 +1683,11 @@ describe("skin persistence", () => {
     expect(readSkin()).toBe("tui-slate");
     store.set("omb-skin", "tui-vga");
     expect(readSkin()).toBe("tui-smoke");
+  });
+
+  it("migrates a stored Moss to Merlot", () => {
+    store.set("omb-skin", "moss");
+    expect(readSkin()).toBe("merlot");
   });
 
   it("lists the same light skins as the desktop overlay", () => {
