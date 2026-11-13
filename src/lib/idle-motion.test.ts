@@ -128,7 +128,7 @@ describe("idle motion attribute", () => {
     expect(theme).toContain("var(--color-accent)");
     expect(theme).not.toContain("animation");
     expect(css).toContain("html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,");
-    expect(css).toContain("html[data-orbit-idle] [data-segmented-thumb] > [data-orbit-rainbow] > span {");
+    expect(css).toContain('html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {');
   });
 
   it("keeps every indicator ring paused while blurred and visible", () => {

@@ -86,13 +86,15 @@ describe("scroll cue", () => {
 });
 
 describe("selected ring", () => {
-  it("draws the ring inside the selected thumb in place of its hairline", () => {
+  it("draws the ring on a full-height thumb in place of its hairline", () => {
     act(() => root.render(createElement(Segmented, { label: "Chat Box", value: "1", options, onChange: () => undefined, ring: createElement("i", { "data-ring": "" }) })));
     const thumb = () => group().querySelector<HTMLElement>("[data-segmented-thumb]")!;
     expect(thumb().querySelector("[data-ring]")).not.toBeNull();
     expect(thumb().className).not.toContain("ring-1");
+    expect(thumb().className).toContain("inset-y-0");
     render("1", false);
     expect(group().querySelector("[data-ring]")).toBeNull();
     expect(thumb().className).toContain("ring-1");
+    expect(thumb().className).toContain("inset-y-[3px]");
   });
 });

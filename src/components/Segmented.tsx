@@ -74,7 +74,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
         <span
           aria-hidden
           data-segmented-thumb
-          className={cn("pointer-events-none absolute inset-y-[3px] left-0 rounded-[max(0px,calc(var(--radius-lg)_-_3px))] bg-raised shadow-sm transition-[transform,width]", !ring && "ring-1 ring-hairline/60")}
+          className={cn("pointer-events-none absolute left-0 bg-raised shadow-sm transition-[transform,width,top,bottom,border-radius]", ring ? "inset-y-0 rounded-lg border border-transparent" : "inset-y-[3px] rounded-[max(0px,calc(var(--radius-lg)_-_3px))] ring-1 ring-hairline/60")}
           style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
         >
           {ring}
