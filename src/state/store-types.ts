@@ -393,7 +393,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
+  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors

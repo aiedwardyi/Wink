@@ -71,11 +71,17 @@ const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
 const MAX_RECONNECTS = 3;
 const MAX_NUDGES = 3;
+const MIC_CHECK_MS = 1_000;
+const MIC_GAP_MS = 3_000;
 // A gate input with no engine event for this long is stale: a stray fragment, not a turn.
 const QUIET_MS = 4_000;
+// A socket that never sets up would hold the call open and silent.
+const READY_MS = 15_000;
 const REPORT_CHARS = 1_500;
 const RETRY_MS = 1_500;
 const STATUS_MS = 30_000;
+// Speech the voice never stirred at; counted only, since noise gets no answer either.
+const UNHEARD_MS = 8_000;
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const reached = (result: string) => result === "sent" || result === "queued";
@@ -177,13 +183,17 @@ export class LiveCall {
   private settled = new Set<string>();
   private toldNeeds = new Set<string>();
   private spokeAt = 0;
+  private loudAt = 0;
+  private frameAt = 0;
+  private micMisses = 0;
+  private micTimer?: ReturnType<typeof setInterval>;
   private turnHadAudio = false;
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
   private context: string[] = [];
   private letters = { hangul: 0, all: 0 };
   private stats = {
-    turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0,
+    turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
     asks: { sent: 0, retried: 0, answered: 0 },
     guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
@@ -247,14 +257,21 @@ export class LiveCall {
     if (!session) return;
     try {
       await this.deps.audio.capture((pcm) => {
+        this.frameAt = this.now();
+        this.micMisses = 0;
         if (!this.connected || this.snapshot.muted) return;
-        if (loud(pcm)) this.spokeAt = this.now();
+        if (loud(pcm)) {
+          this.spokeAt = this.now();
+          this.loudAt ||= this.spokeAt;
+        }
         this.engine?.sendAudio(pcm);
       });
     } catch (error) {
       return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     }
     if (this.ended) return;
+    this.frameAt = this.now();
+    this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
     this.set({ startedAt: this.now() });
     if (!this.snapshot.muted) this.deps.audio.ring();
     this.connect(session);
@@ -284,9 +301,11 @@ export class LiveCall {
     const engine = this.deps.engine();
     this.engine = engine;
     const mine = () => this.engine === engine && !this.ended;
+    const stuck = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
     const events: LiveEvents = {
       ready: () => {
         if (!mine()) return;
+        clearTimeout(stuck);
         this.connected = true;
         this.wasLive = true;
         this.deps.audio.stopRing();
@@ -881,6 +900,7 @@ export class LiveCall {
   }
 
   private stir() {
+    this.loudAt = 0;
     this.quiet = false;
     clearTimeout(this.quietTimer);
     this.quietTimer = setTimeout(() => {
@@ -938,6 +958,22 @@ export class LiveCall {
     this.refresh();
   }
 
+  // A mic that stops sending (an ended track, a suspended context) leaves the voice deaf with nothing on screen.
+  private checkMic() {
+    if (!this.connected || this.snapshot.muted || this.stalled) return;
+    const now = this.now();
+    if (this.loudAt && now - this.loudAt > UNHEARD_MS) {
+      this.stats.unheard += 1;
+      this.loudAt = 0;
+    }
+    if (now - this.frameAt < MIC_GAP_MS) return;
+    this.frameAt = now;
+    this.stats.micGaps += 1;
+    if (!this.micMisses++) return void this.heal();
+    this.stalled = true;
+    this.refresh();
+  }
+
   private fail(error: string) {
     this.teardown();
     this.set({ status: "failed", error });
@@ -970,6 +1006,7 @@ export class LiveCall {
     clearTimeout(this.status?.timer);
     clearTimeout(this.quietTimer);
     clearTimeout(this.settleTimer);
+    clearInterval(this.micTimer);
     engine?.close();
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;

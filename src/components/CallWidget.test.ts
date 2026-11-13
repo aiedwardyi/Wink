@@ -160,6 +160,29 @@ describe("call follows you", () => {
     expect(host.querySelector("[data-call-box]")).not.toBeNull();
   });
 
+  it("keeps talking through a chat switch and a voice change, and shows the saved voice", async () => {
+    await mount(atlas);
+    const engine = await call();
+    await render(juno);
+    await act(async () => pills("Call voice")[1]!.click());
+    await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:3", ...CONFIG, liveCall: { voice: "Achird", language: "auto" } }), lastEventId: "qa:3" }));
+    expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(fakes.engines).toEqual([engine]);
+    expect(engine.closed).toBe(false);
+    expect(button(widget()!, "Mute")).not.toBeNull();
+  });
+
+  it("says a call that dropped in another chat failed and stops its clock", async () => {
+    await mount(atlas);
+    const engine = await call();
+    await render(juno);
+    await act(async () => engine.events.closed(1006, ""));
+    const shown = widget()!;
+    expect(shown.querySelector("[role=alert]")?.textContent).toBe("Call failed: The call dropped");
+    expect(shown.textContent).not.toMatch(/\d:\d\d/);
+    expect(button(shown, "End")).not.toBeNull();
+  });
+
   it("opens the call's chat from the widget and hangs up from it", async () => {
     await mount(atlas);
     const engine = await call();

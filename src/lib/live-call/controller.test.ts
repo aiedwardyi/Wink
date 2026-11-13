@@ -42,7 +42,7 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio()) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -51,7 +51,7 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
     device: "phone",
     engine: () => { const engine = new FakeEngine(); engines.push(engine); return engine; },
     audio,
-    now: () => 1_000,
+    now,
     post: async (path, body) => {
       posts.push({ path, body });
       const hit = Object.entries(responses).find(([suffix]) => path.endsWith(suffix));
@@ -573,6 +573,64 @@ describe("LiveCall", () => {
     expect(posts.filter((p) => p.path.endsWith("/call/token")).at(-1)?.body).toEqual({ locale: "en", callId: "c-0123456789ab", resume: true });
     engine().events.ready();
     expect(engine().texts).toEqual([]);
+  });
+
+  it("retries a socket that never sets up, then fails instead of sitting silent", async () => {
+    vi.useFakeTimers();
+    const { call, engines, engine } = await started();
+    engine().events.resumable("h1");
+    engine().events.closed(1006, "");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(engines).toHaveLength(2);
+    for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(15_000);
+    expect(engines).toHaveLength(4);
+    expect(call.state()).toMatchObject({ status: "failed", error: "The call dropped" });
+  });
+
+  it("heals a mic that stops sending, then asks for a tap instead of sitting deaf", async () => {
+    vi.useFakeTimers();
+    let t = 1_000;
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), heal: vi.fn(async () => true), async capture(onFrame: (pcm: ArrayBuffer) => void) { frame = onFrame; } };
+    const { call, engine, posts } = setup({}, audio, () => t);
+    await call.start();
+    engine().events.ready();
+    const tick = async (ms: number) => { t += ms; await vi.advanceTimersByTimeAsync(ms); };
+    frame(new Int16Array(640).buffer);
+    await tick(2_000);
+    expect(audio.heal).not.toHaveBeenCalled();
+    await tick(2_000);
+    expect(audio.heal).toHaveBeenCalledTimes(1);
+    expect(call.state().status).toBe("listening");
+    await tick(3_000);
+    expect(call.state().status).toBe("paused");
+    call.end();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats).toMatchObject({ micGaps: 2 });
+  });
+
+  it("counts speech the voice never stirred at", async () => {
+    vi.useFakeTimers();
+    let t = 1_000;
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(onFrame: (pcm: ArrayBuffer) => void) { frame = onFrame; } };
+    const { call, engine, posts } = setup({}, audio, () => t);
+    await call.start();
+    engine().events.ready();
+    const speak = async (heard?: string) => {
+      frame(new Int16Array(640).fill(8_000).buffer);
+      for (let i = 0; i < 10; i++) {
+        if (i === 2 && heard) engine().events.heard(heard);
+        t += 1_000;
+        frame(new Int16Array(640).buffer);
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+    };
+    await speak("Hello?");
+    await speak();
+    call.end();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats).toMatchObject({ unheard: 1, micGaps: 0 });
   });
 
   it("mutes with audioStreamEnd and writes stats on end", async () => {
