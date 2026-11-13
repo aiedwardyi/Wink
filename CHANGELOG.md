@@ -22,6 +22,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Bot replies are warm without flattery: they celebrate real wins and acknowledge frustration briefly.
 - Worker bots follow clearer playbook rules, and their cards quote your latest words.
 - The side pane button shows an arrow, like the bot list button.
+- Chat menus fade out when they close, and file links in chat open the file menu: Open, Show in folder, Save as, Copy path. Hovers, focus rings and motion match across chat cards, panels and tooltips.
 
 ### Fixed
 - Linked HTML pages render in Show, and HTML files open in your default app.
@@ -32,6 +33,9 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - The Memory card scrollbar stays inside its rounded corners.
 - Claude bots show Load Skills & Plugins in Bot details again.
 - The Max effort rainbow is bright again on light skins.
+- Web addresses like starzum.com link without https://, while file names like README.md stay plain.
+- In team rooms, picking a name from the @ list completes the mention.
+- Passwords and room invite codes are masked in private room memory.
 
 ## [1.0.259] - 2026-11-13
 
