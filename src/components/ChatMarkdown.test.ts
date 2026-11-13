@@ -62,6 +62,8 @@ describe("web links", () => {
     host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(https://starzum.com/a(b)). [starzum.com](https://example.org) ./starzum.com wrong.invalidtld file.ts" }));
     expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org"]);
   });
+});
+
 // warm-views swallows a throw, so a hook in react-markdown would silently undo the warm.
 it("warms the parser outside a render", () => {
   expect(() => warmMarkdown()).not.toThrow();
