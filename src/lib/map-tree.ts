@@ -181,7 +181,10 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
   const items: TreeItem[] = [];
   let y = 0;
   let tight = false;
+  const gone = new Set<TreeItem>();
   rows.forEach((row, r) => {
+    for (let i = row.length; i--;) if (gone.has(row[i].parent!)) { gone.add(row[i]); row.splice(i, 1); }
+    if (!row.length) return;
     for (const it of row) measure(it, o, maxStack);
     // A big repo's top row folds its smallest closed folders into one "+N folders" box until it fits.
     if (r === 1 && !small) {
@@ -204,13 +207,31 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
       if (o.team && width(row) > W) for (const id of ["m:", "f:"]) { const it = row.find(it => it.id === id); if (it && width(row) > W) row.splice(row.indexOf(it), 1); }
       parent.kids = row.filter(it => it.parent === parent);
     }
-    const groups: { parent?: TreeItem; items: TreeItem[]; x: number; w: number }[] = [];
-    for (const it of row) {
-      const group = groups.at(-1);
-      if (group && group.parent === it.parent) group.items.push(it); else groups.push({ parent: it.parent, items: [it], x: 0, w: 0 });
-    }
+    const group = () => {
+      const groups: { parent?: TreeItem; items: TreeItem[]; x: number; w: number }[] = [];
+      for (const it of row) {
+        const group = groups.at(-1);
+        if (group && group.parent === it.parent) group.items.push(it); else groups.push({ parent: it.parent, items: [it], x: 0, w: 0 });
+      }
+      return groups;
+    };
+    let groups = group();
     const span = () => { for (const group of groups) group.w = width(group.items); return groups.reduce((sum, group) => sum + group.w, 0) + GAP * 2 * (groups.length - 1); };
     for (let guard = 0; span() > W && guard < 14; guard++) { maxStack = Math.max(96, maxStack - 12); for (const it of row) measure(it, o, maxStack); }
+    // Siblings that still cannot fit fold, rightmost first, into their parent's "+N folders" box; the current file's path stays open.
+    if (o.phone || !o.current) while (span() > W) {
+      const last = row.findLast(it => (it.kind === "dir" || it.kind === "col" || it.kind === "box") && !o.current?.startsWith(it.dir!.path + "/"));
+      if (!last) break;
+      const parent = last.parent!;
+      let more = row.find(it => it.id === "m:" + parent.dir!.path);
+      if (!more) { more = { kind: "more", id: "m:" + parent.dir!.path, dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 }; row.splice(row.indexOf(last) + 1, 0, more); }
+      row.splice(row.indexOf(last), 1);
+      gone.add(last);
+      more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path);
+      measure(more, o, maxStack);
+      parent.kids = row.filter(it => it.parent === parent);
+      groups = group();
+    }
     if (span() > W) tight = true;
     let end = -GAP * 2;
     for (const group of groups) {

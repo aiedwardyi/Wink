@@ -23,7 +23,7 @@ interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y:
 
 // The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
 const TIP = { x: 1.4, y: 0.7 };
-const widths = new Map<string, number>();
+export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const ease = (k: number) => k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
@@ -31,7 +31,7 @@ const half = (n: number) => Math.round(n) + 0.5;
 // SAFETY: CSSProperties has no custom properties; this sets only --c.
 const tint = (color?: string) => color ? { "--c": color } as CSSProperties : undefined;
 
-function measurer(element: HTMLElement, phone: boolean) {
+export function measurer(element: HTMLElement, phone: boolean) {
   const style = getComputedStyle(element);
   const sans = style.getPropertyValue("--font-sans").trim() || "sans-serif";
   const mono = style.getPropertyValue("--font-mono").trim() || "monospace";
@@ -44,6 +44,7 @@ function measurer(element: HTMLElement, phone: boolean) {
     let width = widths.get(key);
     if (width === undefined) {
       if (canvas) { canvas.font = fonts[font]; width = canvas.measureText(text).width; } else width = text.length * parseFloat(fonts[font].split(" ")[1]) * 0.62;
+      if (widths.size >= 4096) widths.delete(widths.keys().next().value!);
       widths.set(key, width);
     }
     return width;

@@ -125,6 +125,21 @@ it("keeps each changed file's launch line ranges for clash checks", async () => 
   expect(files.find(file => file.path === "new.ts")?.ranges).toEqual([[1, 2]]);
 });
 
+it("maps a worker's ranges onto another worker's launch commit so the same original line compares", async () => {
+  const { root, git } = repo();
+  const lines = Array.from({ length: 200 }, (_, index) => `line ${index + 1}`);
+  const write = (text: string[]) => writeFileSync(join(root, "file.ts"), text.join("\n") + "\n");
+  const commit = (text: string[]) => { write(text); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "step"); return git("rev-parse", "HEAD"); };
+  const common = commit(lines);
+  const shifted = lines.toSpliced(0, 0, ...Array.from({ length: 100 }, (_, index) => `top ${index}`)).toSpliced(160, 1, "gone");
+  const base = commit(shifted);
+  write(shifted.with(149, "edited"));
+  expect((await mapFiles(root, base)).find(file => file.path === "file.ts")?.ranges).toEqual([[150, 150]]);
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[50, 50]]);
+  write(shifted.with(160, "again").with(50, "inside").with(170, "after"));
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[0, 0], [61, 61], [71, 71]]);
+});
+
 it("walks a folder without Git for its file names, skipping dependencies and capping entries", async () => {
   const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
   roots.push(folder);

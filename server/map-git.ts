@@ -60,20 +60,23 @@ async function addedFile(cwd: string, path: string): Promise<MapFile> {
   return result;
 }
 
-export async function mapFiles(cwd: string, base: string): Promise<MapFile[]> {
+export async function mapFiles(cwd: string, base: string, common?: string): Promise<MapFile[]> {
   const [numstat, untracked, ranges] = await Promise.all([
     mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
     mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]),
-    mapRanges(cwd, base),
+    mapRanges(cwd, [base], RANGE_LIMIT),
   ]);
+  // Workers launched at different commits compare on one: each range moves onto the common launch commit's lines.
+  const shift = common && common !== base && ranges.size ? await mapRanges(cwd, [common, base], Infinity, [...ranges.keys()]) : undefined;
   const files: MapFile[] = [];
   for (const line of numstat.split("\0").filter(Boolean)) {
     const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(line);
     if (match) {
       const file: MapFile = { path: match[3], added: Number(match[1]) || 0, removed: Number(match[2]) || 0 };
       if (match[1] === "-") file.binary = true;
-      const lines = ranges.get(file.path);
-      if (lines && !file.binary) file.ranges = lines;
+      const lines = ranges.get(file.path)?.map(launch);
+      const moved = shift?.get(file.path);
+      if (lines && !file.binary) file.ranges = moved ? lines.map(([start, end]) => [onto(start, moved, false), onto(end, moved, true)]) : lines;
       files.push(file);
     }
   }
@@ -87,15 +90,29 @@ export async function mapFiles(cwd: string, base: string): Promise<MapFile[]> {
   return files;
 }
 
-async function mapRanges(cwd: string, base: string): Promise<Map<string, [number, number][]>> {
+type Hunk = [start: number, count: number, at: number, length: number];
+
+const launch = ([start, count]: Hunk): [number, number] => [start, count ? start + count - 1 : start];
+
+function onto(line: number, hunks: Hunk[], end: boolean) {
+  let shift = 0;
+  for (const [start, count, at, length] of hunks) {
+    if (line < (length ? at : at + 1)) break;
+    if (line < at + length) return end && count ? start + count - 1 : start;
+    shift += count - length;
+  }
+  return line + shift;
+}
+
+async function mapRanges(cwd: string, revs: string[], limit: number, paths: string[] = []): Promise<Map<string, Hunk[]>> {
   let patch = "";
-  try { patch = await mapGit(cwd, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", base, "--"]); }
+  try { patch = await mapGit(cwd, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", ...revs, "--", ...paths]); }
   catch (error) {
     const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
     if (partial.success) patch = partial.data.stdout;
   }
-  const ranges = new Map<string, [number, number][]>();
-  let file: [number, number][] | undefined;
+  const ranges = new Map<string, Hunk[]>();
+  let file: Hunk[] | undefined;
   let old = "";
   for (const line of patch.split("\n")) {
     if (line.startsWith("diff --git ")) { file = undefined; old = ""; continue; }
@@ -107,12 +124,8 @@ async function mapRanges(cwd: string, base: string): Promise<Map<string, [number
       continue;
     }
     // Launch-side lines, so two workers off one base compare; a pure insert sits after its line.
-    const hunk = /^@@ -(\d+)(?:,(\d+))? /.exec(line);
-    if (hunk && file && file.length < RANGE_LIMIT) {
-      const start = Number(hunk[1]);
-      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-      file.push([start, count ? start + count - 1 : start]);
-    }
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? /.exec(line);
+    if (hunk && file && file.length < limit) file.push([Number(hunk[1]), hunk[2] === undefined ? 1 : Number(hunk[2]), Number(hunk[3]), hunk[4] === undefined ? 1 : Number(hunk[4])]);
   }
   return ranges;
 }
