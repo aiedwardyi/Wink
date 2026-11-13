@@ -177,6 +177,8 @@ export interface Message {
   quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** Bot replies: the engine driver kind that wrote it; older rows have none. */
+  engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;

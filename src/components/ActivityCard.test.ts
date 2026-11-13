@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { RIPPLE_GAP_MS } from "@/lib/activity-glitter";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
-import { ActivityCard, resetActivity, warmActivity } from "./ActivityCard";
+import { ActivityCard, engineShares, resetActivity, warmActivity } from "./ActivityCard";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,7 +16,7 @@ afterEach(() => {
 
 const activityOf = (counts: number[], start = "2026-05-10") => {
   const total = counts.reduce((sum, count) => sum + count, 0);
-  return { start, counts, streak: 1, busiest: { day: start, count: Math.max(...counts) }, total };
+  return { start, counts, busiest: { day: start, count: Math.max(...counts) }, total, workers: 12, engines: [{ engine: "claudeAgent", count: total }] };
 };
 
 function mount(waved?: { current: boolean }) {
@@ -409,8 +409,8 @@ it("deepens pale squares on a light skin instead of washing them out", async () 
 });
 
 it.each([
-  ["en", "Since Jun 2025", ["Day Streak", "Best Day", "Total Replies"]],
-  ["ko", "2025년 6월부터", ["연속 일수", "최고의 날", "총 답변"]],
+  ["en", "Since Jun 2025", ["Most workers at once", "Best Day", "Total Replies"]],
+  ["ko", "2025년 6월부터", ["최대 동시 작업자", "최고의 날", "총 답변"]],
 ] as const)("keeps the first day on the total's hover in %s", async (locale, title, labels) => {
   persistPreference(locale);
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), since: "2025-06-03", total: 24317 }))));
@@ -423,5 +423,48 @@ it.each([
     expect(host.textContent).not.toContain(title);
   } finally {
     await unmount();
+  }
+});
+
+it("shows the most workers at once where the streak was", async () => {
+  const { host, unmount } = await renderCard(weeks(() => 2));
+  try {
+    expect(host.textContent).not.toContain("Day Streak");
+    expect(host.textContent).toContain("12Most workers at once");
+  } finally {
+    await unmount();
+  }
+});
+
+it.each([
+  [[], []],
+  [[{ engine: "codex", count: 0 }], []],
+  [[{ engine: "claudeAgent", count: 5 }], [["Claude", "100%"]]],
+  [[{ engine: "codex", count: 1 }, { engine: "claudeAgent", count: 1 }], [["Claude", "50%"], ["OpenAI", "50%"]]],
+  [[{ engine: "antigravityAgent", count: 2 }, { engine: "geminiAgent", count: 1 }, { engine: "museAgent", count: 1 }, { engine: "claudeAgent", count: 996 }], [["Claude", "100%"], ["Gemini", "<1%"], ["Muse", "<1%"]]],
+  [[{ engine: "claudeAgent", count: 72 }, { engine: "codex", count: 14 }, { engine: "grokAgent", count: 8 }, { engine: "geminiAgent", count: 4 }, { engine: "museAgent", count: 2 }], [["Claude", "72%"], ["OpenAI", "14%"], ["Grok", "8%"], ["Gemini", "4%"], ["Muse", "2%"]]],
+] as const)("shares %j by engine, biggest first", (engines, shares) => {
+  expect(engineShares([...engines]).map(({ name, share }) => [name, share])).toEqual(shares);
+});
+
+it("lists every engine under the squares, and no row with no replies", async () => {
+  const engines = [{ engine: "codex", count: 1400 }, { engine: "claudeAgent", count: 7200 }, { engine: "grokAgent", count: 800 }, { engine: "geminiAgent", count: 400 }, { engine: "museAgent", count: 200 }];
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), engines }))));
+  const { host, unmount } = mount();
+  await act(async () => {});
+  try {
+    const row = host.querySelector<HTMLElement>("[data-activity-engines]")!;
+    expect([...row.children].map((item) => [item.textContent, item.querySelectorAll("svg").length])).toEqual([["Claude72%", 1], ["OpenAI14%", 1], ["Grok8%", 1], ["Gemini4%", 1], ["Muse2%", 1]]);
+  } finally {
+    await unmount();
+  }
+  resetActivity();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ...activityOf(weeks(() => 2)), engines: [] }))));
+  const empty = mount();
+  await act(async () => {});
+  try {
+    expect(empty.host.querySelector("[data-activity-engines]")).toBeNull();
+  } finally {
+    await empty.unmount();
   }
 });

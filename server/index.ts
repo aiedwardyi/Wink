@@ -3578,8 +3578,8 @@ bus.subscribe((event: RuntimeEvent) => {
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
-            ? { role: "bot", kind: "text", text: event.text, summarized: true }
-            : { role: "bot", kind: "text", text: event.text, ...(stamp ? { comm: stamp } : {}) },
+            ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
+            : { role: "bot", kind: "text", text: event.text, engine: event.provider, ...(stamp ? { comm: stamp } : {}) },
         );
         markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "assistant.persisted", {
           turnId: event.turnId,
@@ -7993,7 +7993,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/activity") {
-      return json(res, 200, replyActivity());
+      return json(res, 200, replyActivity(Date.now(), (threadId, botId) => {
+        const bot = botId ? store.bot(botId) : store.botByThread(threadId);
+        return bot ? registry.get(bot.modelSelection.instanceId)?.driverKind ?? null : null;
+      }));
     }
 
     if (method === "GET" && path === "/api/analytics") {

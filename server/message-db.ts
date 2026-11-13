@@ -54,6 +54,7 @@ function open(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS messages_handed ON messages(thread_id) WHERE json_extract(json, '$.comm.read.state') = 'handed';
     CREATE INDEX IF NOT EXISTS messages_parent ON messages(thread_id, json_extract(json, '$.parentId'));
     CREATE INDEX IF NOT EXISTS messages_bot_text_at ON messages(at) WHERE role = 'bot' AND kind = 'text';
+    CREATE INDEX IF NOT EXISTS messages_bot_engine ON messages(thread_id, json_extract(json, '$.from.botId'), json_extract(json, '$.engine')) WHERE role = 'bot' AND kind = 'text';
     CREATE TABLE IF NOT EXISTS thread_state (
       thread_id TEXT PRIMARY KEY,
       active_leaf_id TEXT
@@ -287,6 +288,15 @@ export function firstBotReplyAt(): number | null {
   // SAFETY: This SELECT list is one MIN over an INTEGER column.
   const row = db().prepare("SELECT MIN(at) AS at FROM messages WHERE role = 'bot' AND kind = 'text'").get() as { at: number | null } | undefined;
   return row?.at ?? null;
+}
+
+/** Bot text replies grouped by thread, room speaker and engine tag, all time. */
+export function botRepliesByEngine(): Array<{ threadId: string; botId: string | null; engine: string | null; count: number }> {
+  // SAFETY: This SELECT list is three TEXT keys and one COUNT.
+  return db().prepare(
+    "SELECT thread_id AS threadId, json_extract(json, '$.from.botId') AS botId, json_extract(json, '$.engine') AS engine, COUNT(*) AS count " +
+      "FROM messages WHERE role = 'bot' AND kind = 'text' GROUP BY 1, 2, 3",
+  ).all() as Array<{ threadId: string; botId: string | null; engine: string | null; count: number }>;
 }
 
 export function deleteThread(threadId: string): void {
