@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 
 import { BOT_PANE_LIMIT } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
+import { streamMapPanes } from "./map-events.mjs";
 
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const GRANT_PREFIX = "orbit-terminal-read-v1";
@@ -242,7 +243,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           return json(res, 500, { error: message });
         }
       }
-      const match = parsed.pathname.match(/^\/v1\/bots\/([a-zA-Z0-9_-]{1,128})\/terminal(?:\/(send|open|main|attention|close|stream|input|resize))?$/);
+      const match = parsed.pathname.match(/^\/v1\/bots\/([a-zA-Z0-9_-]{1,128})\/terminal(?:\/(send|open|main|attention|close|stream|input|resize|map-events))?$/);
       if (!match || !BOT_ID_RE.test(match[1])) return json(res, 404, { error: "Unknown terminal route" });
       const botId = match[1];
       const sendOnly = match[2] === "send" && grantMatches(req.headers.authorization, terminalSendGrant(token, botId));
@@ -252,6 +253,10 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       if (live && !typing) return json(res, 403, { error: "Forbidden" });
       try {
         const sessionId = parsed.searchParams.get("sessionId");
+        if (match[2] === "map-events") {
+          if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });
+          return streamMapPanes(res, host, botId);
+        }
         if (req.method === "GET" && !match[2]) {
           const waitFor = parsed.searchParams.get("waitFor");
           const timeoutParam = parsed.searchParams.get("timeoutMs");

@@ -287,6 +287,7 @@ import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsRespon
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
+import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -7654,6 +7655,7 @@ const threadRoutes = createThreadRoutes({
   approvalBus,
 });
 const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
+const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -8416,6 +8418,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/terminal/pane-counts") {
       const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
       return json(res, counts.status, counts.body);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo)$/);
+    if (m) {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      return await workerMap.handle(req, res, m[1], m[2], url);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/terminal-cwd$/);
     if (m && method === "GET") {
