@@ -52,7 +52,7 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
 .vm-sign h2 { font-size: 14px; font-weight: 600; letter-spacing: .3em; text-transform: uppercase; color: #6a4660; white-space: nowrap; }
 .vm-sign em { margin-left: auto; font-style: normal; font-size: 13px; letter-spacing: .06em; color: #7d566f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vm-close { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: #7d566f; }
-.vm-close:hover { background: rgba(59, 36, 65, .08); color: var(--ink); }
+@media (hover: hover) { .vm-close:hover { background: rgba(59, 36, 65, .08); color: var(--ink); } }
 @keyframes vm-blink { 0%, 100% { transform: scaleY(1); } 35%, 65% { transform: scaleY(.12); } }
 
 /* glass front over lit shelves */
@@ -95,7 +95,7 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
 .vm-mark > * { width: 100% !important; height: 100% !important; }
 .vm-ptext { font: 700 13px var(--font); font-stretch: 76%; letter-spacing: .04em; }
 @media (hover: hover) { .vm-slot:hover .vm-prod { transform: translateY(-3px) rotate(-1.5deg); } }
-.vm-slot[data-on] .vm-prod, .vm-slot[data-on]:hover .vm-prod { transform: translateY(-7px); filter: drop-shadow(0 3px 2px rgba(60, 30, 50, .24)) drop-shadow(0 0 10px rgba(243, 160, 185, .55)); }
+.vm-slot[data-on] .vm-prod { transform: translateY(-7px); filter: drop-shadow(0 3px 2px rgba(60, 30, 50, .24)) drop-shadow(0 0 10px rgba(243, 160, 185, .55)); }
 .vm-slot[data-vend] { z-index: 30; }
 .vm-slot[data-vend] .vm-prod { animation: vm-drop .56s cubic-bezier(.5, 0, .9, .55) forwards; }
 .vm-slot[data-restock] .vm-prod { animation: vm-restock .42s cubic-bezier(.2, .9, .3, 1); }
@@ -151,7 +151,7 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
 .vm-grid { stroke: rgba(248, 213, 220, .13); stroke-width: 1; stroke-dasharray: 2 4; }
 .vm-dot { cursor: pointer; }
 .vm-pt { fill: #8a6883; transition: fill .15s; }
-.vm-dot:hover .vm-pt { fill: var(--blush); }
+@media (hover: hover) { .vm-dot:hover .vm-pt { fill: var(--blush); } }
 .vm-used { fill: none; stroke: var(--disp-ink); stroke-width: 1.2; }
 .vm-trail { fill: none; stroke: var(--blush); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: .75; }
 .vm-step { fill: var(--blush); }
@@ -165,8 +165,11 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
 .vm-effort button { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; height: 68px; border-radius: 8px; }
 .vm-effort i { display: block; height: calc(7px + var(--k) * 7.5px); border-radius: 5px; background: rgba(255, 255, 255, .13); transition: background .16s, transform .16s; }
 .vm-effort span { font-size: 12px; letter-spacing: .04em; text-align: center; color: #bfa6ba; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .16s; }
-.vm-effort button:hover:not(:disabled) i { background: rgba(255, 255, 255, .26); }
-.vm-effort button[data-fill] i, .vm-effort button[data-fill]:hover i { background: var(--blush); }
+.vm-effort button[data-fill] i { background: var(--blush); }
+@media (hover: hover) {
+  .vm-effort button:hover:not(:disabled) i { background: rgba(255, 255, 255, .26); }
+  .vm-effort button[data-fill]:hover i { background: var(--blush); }
+}
 .vm-effort button[aria-checked="true"] i { background: var(--rose); transform: scaleY(1.05); transform-origin: 50% 100%; }
 .vm-effort button[aria-checked="true"] span { color: #fff; font-weight: 700; }
 .vm-effort button:disabled { cursor: default; }
@@ -220,7 +223,7 @@ html[data-orbit-caption="win32"] .model-machine { top: var(--orbit-caption-heigh
   .vm-meta { font-size: 10.5px; justify-content: center; letter-spacing: -.02em; }
   .vm-ptext { display: none; }
   .vm-coil { height: 9px; bottom: -3px; }
-  .vm-slot[data-on] .vm-prod, .vm-slot[data-on]:hover .vm-prod { transform: translateY(-4px); }
+  .vm-slot[data-on] .vm-prod { transform: translateY(-4px); }
   .vm-tray { grid-row: 3; height: 54px; gap: 10px; }
   .vm-bin { flex: none; width: 128px; border-radius: 9px; }
   .vm-item { bottom: 4px; }
