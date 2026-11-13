@@ -4,7 +4,7 @@ import { Check, CircleHelp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { askUserStatus } from "@/lib/open-question";
+import { ANSWERED_IN_CHAT, askUserStatus } from "@/lib/open-question";
 import { AskChoices } from "./PendingQuestion";
 
 export function AskUserRecord({
@@ -44,7 +44,7 @@ export function AskUserRecord({
         {status.state === "answered" ? (
           <>
             <Check size={14} className="shrink-0 text-success" />
-            <span className="min-w-0 truncate">{t("ask.answered", { reply: status.reply })}</span>
+            <span className="min-w-0 truncate">{status.reply === ANSWERED_IN_CHAT ? t("ask.answeredInChat") : t("ask.answered", { reply: status.reply })}</span>
           </>
         ) : status.state === "dismissed" ? (
           <>

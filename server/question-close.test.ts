@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 import { AskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.ts";
+import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { createGroupRoutes } from "./group-routes.ts";
 import { Store, type BotRecord } from "./store.ts";
 import { scanQuestion } from "../shared/open-question.ts";
 
@@ -95,6 +99,41 @@ describe("close question", () => {
     expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false } });
     expect(h.patchMessage).not.toHaveBeenCalled();
     expect(h.store.activePath(h.bot.threadId)).toEqual(before);
+  });
+});
+
+describe("stale question taps", () => {
+  const call = async (route: (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => Promise<void>, owner: string, id: string, body: unknown) => {
+    const req = Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage;
+    const res = { writeHead: vi.fn(), end: vi.fn() };
+    await route(req, res as unknown as ServerResponse, ["", owner, id] as RegExpMatchArray);
+    return { status: res.writeHead.mock.calls[0][0], body: JSON.parse(res.end.mock.calls[0][0]) };
+  };
+
+  it("refuses a second answer to a closed card, older or docked, and keeps the open one answerable", async () => {
+    const h = harness();
+    const routes = createBotChatRoutes({ store: h.store, clientMessage: (m: unknown) => m } as unknown as Parameters<typeof createBotChatRoutes>[0]);
+    h.ask("Ship it?");
+    h.ask("Which region?");
+    const [older, newer] = h.store.activePath(h.bot.threadId).filter((m) => m.card?.askUser);
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Staging first, then prod." });
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    const stale = await call(routes.patchCard, h.bot.id, older!.id, { answered: "Yes" });
+    expect(stale).toMatchObject({ status: 409, body: { message: { id: older!.id, card: { answered: "Answered in chat" } } } });
+    expect(h.store.activePath(h.bot.threadId).find((m) => m.id === older!.id)?.card?.answered).toBe("Answered in chat");
+    expect(await call(routes.patchCard, h.bot.id, newer!.id, { answered: "No" })).toMatchObject({ status: 200 });
+    expect(await call(routes.patchCard, h.bot.id, newer!.id, { answered: "Yes" })).toMatchObject({ status: 409 });
+  });
+
+  it("refuses a stale tap on a room card", async () => {
+    const h = harness();
+    const room = h.store.createGroup("Review", [h.bot.id]);
+    const routes = createGroupRoutes({ store: h.store, clientMessage: (m: unknown) => m } as unknown as Parameters<typeof createGroupRoutes>[0]);
+    h.ask("Ship it?", false, room.threadId);
+    const card = h.store.activePath(room.threadId).find((m) => m.card?.askUser)!;
+    expect(h.ask("Ship it?", true, room.threadId)).toMatchObject({ body: { closed: true } });
+    expect(await call(routes.patchCard, room.id, card.id, { answered: "Yes" })).toMatchObject({ status: 409 });
+    expect(await call(routes.patchCard, room.id, card.id, { dismissed: true })).toMatchObject({ status: 200 });
   });
 });
 

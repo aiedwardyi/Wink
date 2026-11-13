@@ -364,6 +364,23 @@ describe("update reload during a send", () => {
   });
 
   it.each([
+    { name: "already settled on screen", answered: "Answered in chat", status: 200 },
+    { name: "settled on the server only", answered: undefined, status: 409 },
+  ])("sends nothing for a stale tap on a question $name", async ({ answered, status }) => {
+    const card: OptionCardData = { title: "Q", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, staysOpen: true, ...(answered && { answered }) };
+    const asking: Bot = { ...bot, messages: [{ id: "m-card", at: 1, role: "bot", kind: "options", card }] };
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true }), [asking]);
+    const route = fetch.getMockImplementation()!;
+    const settled: Message = { id: "m-card", at: 1, role: "bot", kind: "options", card: { ...card, answered: "Answered in chat" } };
+    fetch.mockImplementation((url: string, init?: RequestInit) =>
+      init?.method === "PATCH" ? Promise.resolve(Response.json({ error: "question already settled", message: settled }, { status })) : route(url, init));
+    await act(async () => store.dispatch({ type: "answerCard", botId: bot.id, messageId: "m-card", answer: "Yes" }));
+    await act(async () => {});
+    expect(fetch.mock.calls.some(([url, init]) => url === "/api/bots/b1/messages" && init?.method === "POST")).toBe(false);
+    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
+  });
+
+  it.each([
     { name: "bot", action: { type: "dismissCard", botId: bot.id, messageId: "m-card" }, path: "/api/bots/b1/cards/m-card" },
     { name: "room", action: { type: "dismissGroupCard", groupId: group.id, messageId: "m-card" }, path: "/api/groups/g1/cards/m-card" },
   ] as const)("holds the reload until a dismissed $name card is saved", async ({ action, path }) => {

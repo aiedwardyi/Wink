@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { askStates, scanQuestion } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, askStates, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, type TaskAsk } from "./task-asks.ts";
@@ -84,7 +84,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
       if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
-      closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: "Answered in chat" } })) || closed;
+      closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: ANSWERED_IN_CHAT } })) || closed;
     }
     return { status: 200, body: { closed } };
   }
@@ -110,11 +110,22 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 const isAskUserCard = (message: Message) => message.kind === "options" && Boolean(message.card?.askUser) && !message.card?.requestId;
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
 
-/** The bot's note when the person's message closed its older ask_user card unanswered. No `closerId`: a steer not yet in `messages`. */
+/** A question already answered, dismissed or closed takes no second answer, such as a tap from a screen that missed the close. */
+export function askSettled(messages: readonly Message[], messageId: string): boolean {
+  for (const [message, state] of askStates(messages)) if (message.id === messageId) return state.state !== "waiting";
+  return false;
+}
+
+/** The bot's notes on the person's message: an older ask_user card it closed unanswered, or every card still open when two or more wait. No `closerId`: a steer not yet in `messages`. */
 export function closedAskNotes(messages: readonly Message[], text: string, closerId?: string, botId?: string): string[] {
   const end = closerId === undefined ? messages.length : messages.findIndex((message) => message.id === closerId);
   if (end < 0 || (closerId !== undefined && !sentByPerson(messages[end]!))) return [];
-  for (let i = end - 1; i >= 0; i--) {
+  const before = messages.slice(0, end);
+  return [...closedNote(before, text, botId), ...openAsksNote(before, text, botId)];
+}
+
+function closedNote(messages: readonly Message[], text: string, botId?: string): string[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (sentByPerson(message)) return [];
     if (!isAskUserCard(message)) continue;
@@ -125,6 +136,16 @@ export function closedAskNotes(messages: readonly Message[], text: string, close
     return [`[Your question card ("${replyExcerpt(card.subtitle, CLOSED_QUESTION_CHARS)}") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]`];
   }
   return [];
+}
+
+// full questions, not excerpts: closing one needs its exact text
+function openAsksNote(messages: readonly Message[], text: string, botId?: string): string[] {
+  const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
+  const states = [...askStates([...messages, typed])];
+  if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];
+  const open = states.filter(([card, state]) => state.state === "waiting" && (!botId || card.from?.botId === botId)).map(([card]) => `"${card.card!.subtitle.trim()}"`);
+  if (open.length < 2) return [];
+  return [`[${open.length} of your question cards are still open: ${open.join("; ")}. If their latest message answers one in their own words, close that card with ask_user close:true and its exact question text.]`];
 }
 
 /** A room member's note, until it first speaks after the message that closed its card. */

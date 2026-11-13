@@ -5,7 +5,7 @@ import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
-import { closedAskNotes } from "./ask-user.ts";
+import { askSettled, closedAskNotes } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -273,6 +273,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const existing = store.messagesFor(bot.threadId).find((msg) => msg.id === m![2]);
       if (!existing?.card) return json(res, 404, { error: "no such card" });
       const body = await readBody(req);
+      if (body.answered !== undefined && askSettled(store.activePath(bot.threadId), existing.id)) {
+        return json(res, 409, { error: "question already settled", message: clientMessage(existing) });
+      }
       const patched = store.patchMessage(bot.threadId, m[2], {
         card: {
           ...existing.card,

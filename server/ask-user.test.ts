@@ -118,6 +118,7 @@ const askCard = (id: string, question: string, extra: Partial<Message> = {}, car
   card: { title: "Your bot has a question", subtitle: question, options: ["Yes", "No"], askUser: true, ...card },
 });
 const said = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, at: 2, role: "user", kind: "text", text, ...extra });
+const OPEN = '[2 of your question cards are still open: "Ship it?"; "Which region?". If their latest message answers one in their own words, close that card with ask_user close:true and its exact question text.]';
 const CLOSED = '[Your question card ("Ship it?") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]';
 
 describe("closed ask_user card note", () => {
@@ -169,6 +170,24 @@ describe("closed ask_user card note", () => {
     expect(closedAskNotes([askCard("c1", "Ship it?")], "hm")).toEqual([CLOSED]);
     const [line] = closedAskNotes([askCard("c1", "q".repeat(ASK_USER_QUESTION_MAX))], "hm");
     expect(line).toContain(`("${"q".repeat(199)}…")`);
+  });
+
+  it("lists every open card when they type while two or more wait", () => {
+    const open = [askCard("c1", "Ship it?", {}, { staysOpen: true }), askCard("c2", "Which region?", {}, { staysOpen: true })];
+    expect(closedAskNotes([...open, said("u1", "staging first")], "staging first", "u1")).toEqual([OPEN]);
+    expect(closedAskNotes(open, "staging first")).toEqual([OPEN]);
+    expect(closedAskNotes([...open, said("u1", "Yes")], "Yes", "u1")).toEqual([]);
+    expect(closedAskNotes([open[0]!, said("u1", "hm")], "hm", "u1")).toEqual([]);
+    const ada = { botId: "bot-a", name: "Ada", color: "teal" as const };
+    const grace = { botId: "bot-g", name: "Grace", color: "teal" as const };
+    const room = [
+      askCard("c1", "Ship it?", { from: ada }, { staysOpen: true }),
+      askCard("c2", "Which region?", { from: ada }, { staysOpen: true }),
+      askCard("c3", "Lunch?", { from: grace }, { staysOpen: true }),
+      said("u1", "hm"),
+    ];
+    expect(memberClosedAskNotes(room, "bot-a")).toEqual([OPEN]);
+    expect(memberClosedAskNotes(room, "bot-g")).toEqual([]);
   });
 
   it("tells only the asking room member, until it next speaks", () => {
