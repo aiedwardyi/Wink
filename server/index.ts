@@ -9084,16 +9084,16 @@ startupTiming.afterPaint("probes", async () => {
     .then((instances) => {
       rememberAutomaticAvailability(instances);
       broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(instances))) });
-      return defaultSelection();
+      return defaultSelection().then((sel) => ({ sel, instances }));
     })
-    .then((sel) => {
+    .then(({ sel, instances }) => {
       bootSelection = sel;
-      void registry.describeCached().then((rows) => warmEngines({
-        rows,
+      void warmEngines({
+        rows: instances,
         wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
         instance: (id) => registry.get(id),
         busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
-      })).catch(() => {});
+      }).catch(() => {});
     })
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);

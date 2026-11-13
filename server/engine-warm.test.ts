@@ -57,7 +57,7 @@ describe("warmEngines", () => {
       instance: (id) => ({ enabled: true, prepare: id === "muse" ? async () => { throw new Error("spawn failed"); } : good }),
       busy: () => false,
     });
-    expect(warmed).toEqual(["muse", "grok"]);
+    expect(warmed).toEqual(["grok"]);
     expect(good).toHaveBeenCalledOnce();
   });
 });

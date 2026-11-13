@@ -20,8 +20,7 @@ export async function warmEngines(input: {
     while (input.busy()) await wait(IDLE_POLL_MS);
     const instance = input.instance(row.instanceId);
     if (!instance?.enabled || !instance.prepare) continue;
-    await instance.prepare().catch(() => {});
-    warmed.push(row.instanceId);
+    if (await instance.prepare().then(() => true, () => false)) warmed.push(row.instanceId);
   }
   return warmed;
 }
