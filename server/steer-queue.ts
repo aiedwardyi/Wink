@@ -300,6 +300,12 @@ export function queueRoomParticipation(
   return { id };
 }
 
+export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
+  return [...queues.values()]
+    .filter((entry) => entry.threadId === threadId && entry.items.some((item) => item.kind === "room" && item.groupId === groupId))
+    .map((entry) => entry.botId);
+}
+
 // a queued quick handoff's ask row, or a requeued call row, already shows this line
 const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
 

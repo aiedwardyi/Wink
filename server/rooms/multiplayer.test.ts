@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { DATA_DIR } from "../config.ts";
-import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
+import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
 import { askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
@@ -197,15 +197,19 @@ describe("a teammate's line in a shared bot group", () => {
 describe("the answer", () => {
   /** The real busy path: runGroupMemberTurn sees a working bot and parks the ask on its queue. */
   async function queuedBehindBusyBot(ask: RoomAsk): Promise<RoomDrain> {
-    const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation });
+    const broadcast = vi.fn();
+    const publicGroupState = (value: HostedGroup) => ({ ...value, waitingBotIds: queuedRoomBotIds(value.id, value.threadId) });
+    const queueBusyRoomMember = load("queueBusyRoomMember", { queueRoomParticipation, store, broadcast, publicGroupState });
     const run = load("runGroupMemberTurn", {
       store, cfg: { profile: {} }, hostedTurnRefused, botHasActiveTurn: () => true, tryClaimTurnStart: vi.fn(), queueBusyRoomMember,
       runClaimedGroupMemberTurn: vi.fn(), takeStartingHold: vi.fn(), turnStartClaims: new Map(), continueQueuedDrainIfIdle: vi.fn(), drainQueuedSends: vi.fn(), paneWake: {},
     });
     expect(await run(group.id, group.threadId, wink, 0, new Set(), undefined, vi.fn(), () => false, undefined, undefined, null, ask.id)).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith({ kind: "group", group: expect.objectContaining({ waitingBotIds: [wink] }) });
     const drained: RoomDrain[] = [];
     drainSteeredMessages({ bot: (id: string) => store.bot(id), messagesFor: () => [], appendMessage: vi.fn(), patchMessage: vi.fn() } as never, (_bot, _thread, _prompt, _user, _ex, room) => { drained.push(room!); });
     expect(drained).toHaveLength(1);
+    expect(queuedRoomBotIds(group.id, group.threadId)).toEqual([]);
     return drained[0]!;
   }
 

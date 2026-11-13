@@ -1051,6 +1051,11 @@ export function Composer({
             first, so a long list of them shrinks instead of pushing the send
             row (below, shrink-0) off the screen. */}
         <div className="min-h-0 shrink overflow-y-auto">
+        {group?.waitingBotIds?.map((id) => (
+          <p key={id} data-room-bot-wait role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
+          </p>
+        ))}
         {catchingUp && (
           <p data-catching-up role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
             {t("composer.catchingUp")}

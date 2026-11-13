@@ -202,6 +202,7 @@ import {
   markSendRunning,
   queueMark,
   queueRoomParticipation,
+  queuedRoomBotIds,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
 import "./send-deliver.ts";
@@ -1906,6 +1907,7 @@ function publicGroupState(group: GroupRecord) {
     ...group,
     ...groupClears(group),
     working: groupIsWorking(group),
+    waitingBotIds: group.hosted ? queuedRoomBotIds(group.id, group.threadId) : [],
     taskState: store.taskPacket(group.threadId) ?? undefined,
     ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
   };
@@ -4492,6 +4494,7 @@ function drainQueuedSends() {
       rerunIfIdle();
     });
   }, (botId) => botHasActiveTurn(botId) || taskResumes.blocksQueuedSend(botId));
+  myRoomBotTurns.drain();
 }
 
 // ── live screen: poll the bot's computer while it works ───────────────
@@ -6286,6 +6289,8 @@ function queueBusyRoomMember(
     instructionId,
     askId,
   });
+  const group = store.group(groupId);
+  if (group?.hosted) broadcast({ kind: "group", group: publicGroupState(group) });
   return true;
 }
 
@@ -6400,6 +6405,7 @@ sweepRoomFiles(store.groups);
 const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
   client: { botSend: (...args) => guestClient.botSend(...args), file: (...args) => guestClient.file(...args) },
   bot: (botId) => store.bot(botId),
+  busy: (botId) => botHasActiveTurn(botId) || hasQueuedSends(botId),
   hasTask: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
   createTask: (botId, title) => {
     const task = store.createTask(botId, title, false);
@@ -6407,7 +6413,7 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed) => startTurn(botId, prompt, { threadId, transcriptText: typed }),
+  startTurn: (botId, threadId, prompt, typed, failed) => startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed }),
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
 });

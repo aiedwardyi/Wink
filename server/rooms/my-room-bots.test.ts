@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import type { Message } from "../store.ts";
-import { addJoinedEntries, closeJoinedDb, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
 
 const ROOM = "room1";
@@ -38,6 +38,7 @@ beforeEach(() => {
   deps = {
     client: { botSend: vi.fn(async () => ({ ok: true, value: { seq: 99 } })), file: vi.fn(async () => ({ ok: true, value: { path: "C:\\cache\\q3.pdf" } })) },
     bot: (botId: string) => (botId === "local-pete" ? { id: botId, name: "Pete" } : null),
+    busy: () => false,
     hasTask: () => false,
     createTask: vi.fn(() => ({ threadId: "task-1" })),
     startTurn: vi.fn(async (_botId: string, _threadId: string, _prompt: string, typed: string) => {
@@ -51,6 +52,95 @@ beforeEach(() => {
 afterEach(() => closeJoinedDb());
 
 describe("this PC's bot in a joined room", () => {
+  it("answers a busy-room mention after an unrelated 1:1 settles without another send", async () => {
+    deps.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "BOT_BUSY" }));
+    const turns = new MyRoomBotTurns(deps);
+    const ask = line(peter, "@Pete-Coder check the board");
+    turns.sent(ROOM, ask);
+    await settle();
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).toHaveBeenCalledTimes(2);
+    thread.push({ id: "answer", at: 1, role: "bot", kind: "text", text: "Two cards left." });
+    await turns.settled("task-1", true);
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Two cards left.", ask.id);
+  });
+
+  it("keeps rapid mentions in order and ignores a replay of the same entry", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    const first = line(peter, "@Pete-Coder first");
+    const second = line(peter, "@Pete-Coder second");
+    turns.sent(ROOM, first);
+    turns.sent(ROOM, second);
+    turns.sent(ROOM, first);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
+    busy = false;
+    await turns.settled("private-task", false);
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([first.text]);
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    thread.push({ id: "a1", at: 1, role: "bot", kind: "text", text: "First answer." });
+    await turns.settled("task-1", true);
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([first.text, second.text]);
+    thread.push({ id: "a2", at: 2, role: "bot", kind: "text", text: "Second answer." });
+    await turns.settled("task-1", true);
+    expect(deps.client.botSend.mock.calls.map((call) => [call[2], call[3]])).toEqual([["First answer.", first.id], ["Second answer.", second.id]]);
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+  });
+
+  it("reads the room plan at dispatch after waiting for another task", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    line({ kind: "host", id: "host", name: "Edward" }, "Plan: finish login, then export.");
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder follow the plan"));
+    await settle();
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn.mock.calls[0]![2]).toContain("Edward: Plan: finish login, then export.");
+  });
+
+  it("drops a waiting ask when its owner leaves the room", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
+    await settle();
+    endJoined(ROOM, "left");
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+  });
+
+  it("starts the next queued ask when the room turn fails before producing an answer", async () => {
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder first"));
+    await settle();
+    const next = line(peter, "@Pete-Coder second");
+    turns.sent(ROOM, next);
+    const failed = deps.startTurn.mock.calls[0]![4] as () => void;
+    failed();
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual(["@Pete-Coder first", next.text]);
+    expect(deps.client.botSend).not.toHaveBeenCalled();
+    failed();
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
+    thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Recovered." });
+    await turns.settled("task-1", true);
+    expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Recovered.", next.id);
+  });
+
   it("answers its owner's @ with the room since its last turn, then posts under its room name", async () => {
     line({ kind: "host", id: "host", name: "Edward" }, "Q3 is attached", { files: [FILE] });
     const ask = line(peter, "@Pete-Coder chart this", { replyToId: "e1" });
@@ -87,13 +177,13 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.startTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("shows busy on this PC only and posts nothing", async () => {
+  it("keeps a busy rejection waiting on this PC without posting a failure", async () => {
     deps.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "BOT_BUSY" }));
     const turns = new MyRoomBotTurns(deps);
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
     await settle();
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ error: "busy" });
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
     expect(deps.client.botSend).not.toHaveBeenCalled();
   });
 
@@ -113,7 +203,7 @@ describe("this PC's bot in a joined room", () => {
     turns.sent(ROOM, ask);
     await settle();
     await settle();
-    expect(turns.turn(ROOM, PETE.id)).toEqual({ error: "busy" });
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ working: true });
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's done." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "Chart's done.", ask.id);

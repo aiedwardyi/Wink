@@ -123,7 +123,7 @@ export interface JoinedView {
   /** The host's stream sent reactions, so it takes reactions and notices. */
   canReact: boolean;
   /** This PC's own bots the room still lists, by the host's id. */
-  myBots: Array<{ id: string; botId: string; working?: boolean; error?: string }>;
+  myBots: Array<{ id: string; botId: string; working?: boolean; waiting?: boolean; error?: string }>;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: true;
 }
@@ -142,7 +142,7 @@ export interface GuestClientDeps {
   /** A line this PC sent, as the host stored it. */
   onSent?(roomId: string, entry: JoinedEntry): void;
   /** What this PC's bots in the room are doing now. */
-  botTurn?(roomId: string, id: string): { working?: boolean; error?: string } | undefined;
+  botTurn?(roomId: string, id: string): { working?: boolean; waiting?: boolean; error?: string } | undefined;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */

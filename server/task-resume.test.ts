@@ -200,6 +200,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     },
   });
   drainQueuedSends = load("drainQueuedSends", {
+    myRoomBotTurns: { drain: noop },
     taskResumes, store, drainPeerUserReplies, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
     startQueuedTurn, writeChatError, terminalBridgeAccess: null, isSendCancelled: () => false,
     markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
