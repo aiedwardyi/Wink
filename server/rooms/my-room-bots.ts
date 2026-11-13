@@ -22,7 +22,7 @@ export interface MyRoomBotDeps {
   changed(roomId: string): void;
 }
 
-type Waiting = { roomId: string; id: string; botId: string; entry: JoinedEntry };
+type Waiting = { roomId: string; id: string; botId: string; after: number; entry: JoinedEntry };
 type Running = Waiting & { since: number };
 
 const lineOf = (entry: JoinedEntry) => `${entry.author.name}: ${entry.text}`;
@@ -72,7 +72,7 @@ export class MyRoomBotTurns {
     const hit = roomResponder(entry.text, [...state.bots, ...own], [state.host, ...state.people.map((person) => person.name), ...others], quote?.author.kind === "bot" ? quote.author.id : undefined, false);
     const bot = hit && mine.get(hit.id);
     if (!bot || entry.seq <= bot.seenSeq || this.waiting.some((row) => row.roomId === roomId && row.entry.id === entry.id) || [...this.active.values()].some((row) => row.roomId === roomId && row.entry.id === entry.id)) return;
-    this.waiting.push({ roomId, id: bot.id, botId: bot.botId, entry });
+    this.waiting.push({ roomId, id: bot.id, botId: bot.botId, after: bot.seenSeq, entry });
     this.drain();
   }
 
@@ -122,7 +122,7 @@ export class MyRoomBotTurns {
         setMyRoomBotTurn(roomId, bot.id, threadId, 0);
       }
       const files = await this.files(roomId, [...(entry.files ?? []), ...(quote?.files ?? [])]);
-      const window = since(roomId, bot.seenSeq, entry.seq);
+      const window = since(roomId, row.after, entry.seq);
       const prompt = [
         `(You are in the team room ${JSON.stringify(room.state.roomName)} on ${JSON.stringify(room.state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. Only ${JSON.stringify(room.me.name)}, who runs you, can ask you.)`,
         ...(window.length ? ["Room lines since your last answer:", ...window.map(lineOf)] : []),

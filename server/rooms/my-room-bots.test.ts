@@ -121,6 +121,34 @@ describe("this PC's bot in a joined room", () => {
     expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
   });
 
+  it("keeps instructions posted during an earlier room turn for the queued mention", async () => {
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder first"));
+    await settle();
+    line({ kind: "host", id: "host", name: "Edward" }, "Export plan: include the totals column.");
+    turns.sent(ROOM, line(peter, "@Pete-Coder follow Edward's export plan"));
+    thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "First answer." });
+    await turns.settled("task-1", true);
+    await settle();
+    expect(deps.startTurn.mock.calls[1]![2]).toContain("Edward: Export plan: include the totals column.");
+  });
+
+  it("continues draining after a bot disappears between the drain and run checks", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder first"));
+    const next = line(peter, "@Pete-Coder second");
+    turns.sent(ROOM, next);
+    let reads = 0;
+    deps.bot = (id) => ++reads === 2 ? null : { id, name: "Pete" };
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([next.text]);
+  });
+
   it("starts the next queued ask when the room turn fails before producing an answer", async () => {
     deps.hasTask = (_botId, threadId) => threadId === "task-1";
     const turns = new MyRoomBotTurns(deps);

@@ -73,7 +73,7 @@ export interface JoinedView {
   /** False for an older host: no emoji row and no notice pin. */
   canReact?: boolean;
   /** This PC's own bots in the room: the host's id and the local bot's. */
-  myBots?: Array<{ id: string; botId: string; working?: boolean; waiting?: boolean; error?: "busy" | "failed" }>;
+  myBots?: Array<{ id: string; botId: string; working?: boolean; waiting?: boolean; error?: "failed" }>;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: boolean;
 }
