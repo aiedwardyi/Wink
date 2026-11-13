@@ -10,6 +10,7 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
 import { useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ShowPaneButton } from "./ShowPaneButton";
 import { RoomAlertsBell } from "./RoomAlertsBell";
@@ -40,6 +41,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
           </div>
         )}
       </div>
+      <AppErrorBanner />
       <ReconnectingCue />
       <TeamRoomTranscript key={base} lines={lines} mine={(line) => line.author.kind === "host"} base={base} label={t("chat.roomAria", { name: group.name })} hasMore={group.hasMore} loadOlder={loadOlder} people={roomPeople(group)} hostName={state.config?.profile?.name} onReply={selectReply}
         reactionNames={names}

@@ -12,6 +12,7 @@ import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
 import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomMessage, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
+import { AppErrorBanner } from "./AppErrorBanner";
 import { BotAvatar } from "./Avatar";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
@@ -96,6 +97,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
         <RoomTitle name={name} picture={<RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />} disabled={!room?.state} />
         {room && joined && <RoomAlertsBell chat={joinedSelection(roomId)} />}
       </div>
+      <AppErrorBanner />
       <TeamRoomTranscript
         key={base}
         lines={lines}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { applyLocale } from "./i18n";
 import { replyAuthor, replySnippet } from "./replies";
 import type { Message } from "@/state/store";
 
@@ -12,6 +13,14 @@ describe("reply display", () => {
     expect(replyAuthor({ ...base, from: { botId: "b", name: "Scout", color: "green" } })).toBe("Scout");
     expect(replyAuthor(base, "Mochi")).toBe("Mochi");
     expect(replyAuthor({ ...base, role: "user", author: { kind: "person", id: "mina", name: "Mina Park" } })).toBe("Mina Park");
+  });
+
+  it("says you and an unnamed bot in the app's language", () => {
+    applyLocale("ko");
+    expect(replyAuthor({ ...base, role: "user" })).toBe("나");
+    expect(replyAuthor(base)).toBe("봇");
+    applyLocale("en");
+    expect(replyAuthor(base)).toBe("A bot");
   });
 
   it("turns saved images into a readable bounded snippet", () => {

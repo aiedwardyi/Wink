@@ -25,6 +25,20 @@ import { localeTag, useI18n } from "@/lib/i18n";
  * bury the conversation; bots get full markdown. */
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
+export const USER_FOLD_CLASS = "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]";
+
+export function userTextFolds(text: string): boolean {
+  return text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES;
+}
+
+export function FoldToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  const { t } = useI18n();
+  return (
+    <button onClick={onToggle} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+      {t(expanded ? "chat.showLess" : "chat.showFullMessage")}
+    </button>
+  );
+}
 
 /** Hover/focus-revealed copy control shared by user + bot bubbles. */
 export function CopyButton({ text, className }: { text: string; className?: string }) {
@@ -301,8 +315,7 @@ const Bubble = memo(function Bubble({
   const webhookView = user ? webhookMessageView(text) : null;
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
-  const collapsible =
-    user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
+  const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
 
   if (user && editing && !webhookView) {
     return (
@@ -466,9 +479,7 @@ const Bubble = memo(function Bubble({
               {attachedImages && attachedImages.images.length > 0 && (
                 <AttachedImageGallery paths={attachedImages.images} />
               )}
-              <div
-                className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
-              >
+              <div className={cn(collapsible && USER_FOLD_CLASS)}>
                 <LinkedText text={visibleText} />
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(visibleText && "mt-2")} />}
@@ -477,16 +488,7 @@ const Bubble = memo(function Bubble({
                   {t("chat.sentMidTurn")}
                 </div>
               )}
-              {collapsible && (
-                <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showFullMessage")}
-                </button>
-              )}
-              {expanded && (
-                <button onClick={() => setExpanded(false)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showLess")}
-                </button>
-              )}
+              {(collapsible || expanded) && <FoldToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />}
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
