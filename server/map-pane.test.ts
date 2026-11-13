@@ -142,6 +142,12 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   const diff = await fetch(`${url}/file?worker=pane-a&path=file.ts`).then(res => res.json());
   expect(diff).toMatchObject({ lines: expect.arrayContaining([expect.objectContaining({ text: "const realEdit = 7;" })]) });
   expect((await fetch(`${url}/file?worker=pane-a&path=../outside`)).status).toBe(404);
+  writeFileSync(join(root, ".git", "info", "exclude"), "ignored.log\n");
+  writeFileSync(join(root, "ignored.log"), "noise\n");
+  const listed = await fetch(`${url}/repo?worker=pane-a`).then(res => res.json() as Promise<{ name: string; paths: string[] }>);
+  expect(listed.paths).toEqual(["file.ts"]);
+  expect(listed.name).toMatch(/^wink-map-test-/);
+  expect((await fetch(`${url}/repo?worker=pane-b`)).status).toBe(404);
   abort.abort();
   await vi.waitFor(() => expect(unsub).toHaveBeenCalledOnce());
   const count = read.mock.calls.length;

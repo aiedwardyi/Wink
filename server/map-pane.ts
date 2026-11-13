@@ -1,9 +1,9 @@
 import { watch, type FSWatcher } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
-import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead } from "./map-git.ts";
+import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead, mapRepoFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
@@ -143,6 +143,11 @@ export function createMapPane(deps: MapPaneDeps) {
     const sessionId = url.searchParams.get("worker") ?? "";
     const path = url.searchParams.get("path") ?? "";
     const record = [...(readers.get(botId) ?? [])].map(panes => panes.get(sessionId)).find(Boolean);
+    if (route === "repo") {
+      if (!record?.base) return json(res, 404, { error: "No such worker" });
+      try { return json(res, 200, { name: basename(record.root), paths: await mapRepoFiles(record.root) }); }
+      catch { return json(res, 503, { error: "Could not list the files" }); }
+    }
     const file = record?.worker.files.find(file => file.path === path);
     if (!record?.base || !file) return json(res, 404, { error: "No such changed file" });
     const inside = relative(record.root, resolve(record.root, path));

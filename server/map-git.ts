@@ -79,6 +79,10 @@ export async function mapFiles(cwd: string, base: string): Promise<MapFile[]> {
   return files;
 }
 
+export async function mapRepoFiles(cwd: string): Promise<string[]> {
+  return [...new Set((await mapGit(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean))];
+}
+
 interface MapLatest { path?: string; at: number }
 
 export async function latestMapFile(cwd: string, files: readonly MapFile[]): Promise<MapLatest> {

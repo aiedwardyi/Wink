@@ -33,3 +33,8 @@ export interface MapDiff {
   binary?: boolean;
   capped?: boolean;
 }
+
+export interface MapRepo {
+  name: string;
+  paths: string[];
+}
