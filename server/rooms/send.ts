@@ -32,8 +32,8 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   // Teammates' bots answer only on their owners' PCs, so their names and lines wake none here.
   const roomBots = teamBots(roomId);
   const quotesRoomBot = roomBots.some((roomBot) => roomBot.id === quote?.author.id) || Boolean(quote?.author.owner);
-  const nonWaking = [hostName(), ...people.map((candidate) => candidate.name), ...roomBots.map((roomBot) => roomBot.name)];
-  let bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot);
+  const nonWaking = [hostName(), ...people.map((candidate) => candidate.name)];
+  let bot = !person || peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, nonWaking, quote?.author.kind === "bot" ? quote.author.id : undefined, !quotesRoomBot, roomBots.map((roomBot) => roomBot.name));
   if (person) {
     let refusal = sendRefusal(roomId, person.id, bot ? "work" : null);
     const solo = Boolean(refusal && bot && bots.length === 1);

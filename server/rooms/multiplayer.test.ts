@@ -13,8 +13,9 @@ import { Store } from "../store.ts";
 import { askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
-import { askNote, publishTurnAnswer } from "./multiplayer.ts";
+import { askNote, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
 import { hostedSend } from "./send.ts";
+import { addTeamBot, removeTeamBot } from "./team-bots.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -70,6 +71,52 @@ afterEach(() => {
   configureRoomAsks(null);
   closeAsksDb();
   closeRoomsDb();
+});
+
+describe("the host bot's room prompt", () => {
+  function prompt(teammates = teammatesLine, room: { hosted?: { roomId: string } } = group): string {
+    const run = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn") as ts.FunctionDeclaration;
+    const find = (node: ts.Node): ts.VariableStatement | undefined => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "system") ? node : ts.forEachChild(node, find);
+    const system = find(run)!;
+    const deps = {
+      bot: store.bot(wink), group: { ...group, hosted: room.hosted }, roster: "@Wink", userName: "Edward", teammatesLine: teammates,
+      detailedRepliesEnabled: () => false, cfg: {}, reactionSystemGuidance: () => "", coordinationPrompt: "", canMessage: false, integrations: {},
+    };
+    return new Function(...Object.keys(deps), `${js(system.getText(index))}\nreturn system;`)(...Object.values(deps));
+  }
+
+  it("tells the host bot who owns a team bot and how to hand work to it", () => {
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", ["Wink", "Sora"]);
+    expect(prompt()).toContain("Room members: @Wink, and Edward (the human).");
+    expect(prompt()).toContain("Teammates in this room: Sora.");
+    expect(prompt()).toContain('Team bots (owner): "Sora-Code" ("Sora").');
+    expect(prompt()).toContain("Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first.");
+    expect(prompt()).toContain("Unlisted @names reach no one.");
+    expect(Buffer.byteLength(prompt()) - Buffer.byteLength(prompt(() => "Teammates in this room: Sora."))).toBeLessThan(250);
+  });
+
+  it("keeps rooms without team bots byte-for-byte unchanged", () => {
+    expect(Buffer.from(prompt())).toEqual(Buffer.from(prompt(() => "Teammates in this room: Sora.")));
+    const bot = addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", ["Wink", "Sora"]);
+    removeTeamBot(group.hosted.roomId, bot.id);
+    expect(Buffer.from(prompt())).toEqual(Buffer.from(prompt(() => "Teammates in this room: Sora.")));
+    expect(Buffer.from(prompt(teammatesLine, {}))).toEqual(Buffer.from(prompt(() => "", {})));
+    const empty = { hosted: { roomId: createRoom("Empty").id } };
+    expect(Buffer.from(prompt(teammatesLine, empty))).toEqual(Buffer.from(prompt(() => "", empty)));
+  });
+
+  it("lists room bots by owner, excluding absent owners and other rooms", () => {
+    const mina = addPerson(group.hosted.roomId, "미나", "chat", ["Wink"]);
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", []);
+    addTeamBot(group.hosted.roomId, sora.id, "Sora-Review", "blue", []);
+    addTeamBot(group.hosted.roomId, mina.id, '검토 "봇"', "blue", []);
+    addTeamBot(group.hosted.roomId, "departed-owner", "Absent", "blue", []);
+    addTeamBot(createRoom("Elsewhere").id, sora.id, "Other", "blue", []);
+    expect(prompt()).toContain(`Team bots (owner): "Sora-Code" ("Sora"), "Sora-Review" ("Sora"), ${JSON.stringify('검토 "봇"')} ("미나").`);
+    expect(prompt()).not.toContain('"Other"');
+    expect(prompt()).not.toContain("Absent");
+    expect(prompt()).not.toContain("departed-owner");
+  });
 });
 
 describe("a teammate's line in a shared bot group", () => {
