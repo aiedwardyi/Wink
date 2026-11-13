@@ -20,6 +20,14 @@ describe("wink guide", () => {
     expect(guide).toContain("- Coding fallback as engines run low:");
   });
 
+  it("covers rooms, calls, side pane and to-do list in a short read", () => {
+    const guide = readFileSync(PACKAGED_FILES.winkGuide, "utf8");
+    for (const heading of ["## Groups and team rooms", "## Calls", "## Side pane", "## Bot details and to-do list", "## Skills"]) {
+      expect(guide).toContain(`\n${heading}\n`);
+    }
+    expect(guide.trimEnd().split("\n").length).toBeLessThanOrEqual(150);
+  });
+
   it("warns on and skips the pointer when the guide is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const file = join("missing", "wink-guide.md");
