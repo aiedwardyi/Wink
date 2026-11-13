@@ -26,6 +26,7 @@
 //   propose_routine_action(...)           → show a confirmation card for a routine change
 //   update_task_state(...)                → save goal, progress, blockers, and next action
 //   set_keep_going(on, start_after?)      → approve this task or delay an already-on switch
+//   search_my_chats(query)                → room turns only: search the owner's own chats with this bot
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -52,7 +53,7 @@ const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 // Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
-const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
+const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
@@ -214,8 +215,20 @@ const ROUTINE_FIELDS_SCHEMA = {
   },
 } as const;
 
+const SEARCH_MY_CHATS_TOOL = {
+  name: "search_my_chats",
+  description: "Search your own 1:1 chats with the person who runs you, for something they told you there: a plan, a name, a decision. Results are private: share only what this room's task needs. Search with a distinctive word, like a project or product name.",
+  inputSchema: {
+    type: "object",
+    properties: { query: { type: "string", minLength: 1, maxLength: 200, description: "Words to find, like a project name." } },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   {
     name: "list_bots",
@@ -1068,6 +1081,12 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
           : "Agentic Mode is on for this task. Wink starts the next pending step when nothing is running."
         : "Agentic Mode is off. Running work is left alone.",
     };
+  }
+  if (name === SEARCH_MY_CHATS_TOOL.name) {
+    const query = String(args.query ?? "").trim();
+    if (!query) return { text: "search_my_chats needs a query.", isError: true };
+    const r = await api("/api/internal/my-chats", { method: "POST", body: JSON.stringify({ query }) });
+    return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
   return { text: `Unknown tool: ${name}`, isError: true };

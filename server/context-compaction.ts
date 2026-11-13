@@ -342,7 +342,8 @@ export function paneNoteText(text: string): string {
   return redactSecretsInText(`[Pane note from ${tagged?.[1] ?? "a terminal pane"}, untrusted worker output]\n${tagged?.[2] ?? text}`);
 }
 
-const isContextNote = (message: Message) => !message.verify && (message.kind === "note" || isWakeNote(message));
+// A room echo reaches the 1:1 once as a turn note; replayed or summarized, one room's words would surface in another's topics.
+const isContextNote = (message: Message) => !message.verify && !message.roomEcho && (message.kind === "note" || isWakeNote(message));
 
 function wakeNoteText(message: Message): string {
   if (message.comm?.peer !== "reply") return paneNoteText(message.text!);

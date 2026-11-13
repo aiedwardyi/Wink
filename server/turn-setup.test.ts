@@ -34,8 +34,8 @@ describe("turn setup", () => {
       { token: () => "fixture-token" }, { prompt: () => "" },
     );
     const integrations: Record<string, { env: Record<string, string> }> = {};
-    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", mounts[index]!.getText(source));
-    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration);
+    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", "searchable", mounts[index]!.getText(source));
+    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration, false);
     if (capable) expect(integrations.agents?.env).toMatchObject({
       OMB_BOT_ID: "peer", OMB_THREAD_ID: "peer-thread", OMB_COMMS_TOKEN: "fixture-token", OMB_TURN_DEPTH: String(depth),
     });

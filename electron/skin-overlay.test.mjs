@@ -306,4 +306,11 @@ describe("skin overlay chrome", () => {
     expect(skinChrome("catppuccin-mocha")).toEqual(SKIN_CHROME["catppuccin-frappe"]);
     expect(skinThemeSource("catppuccin-mocha")).toBe("dark");
   });
+
+  it("migrates a stored Moss preference to Merlot", () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "skin-preference.json"), JSON.stringify({ skin: "moss" }), "utf8");
+    expect(readPersistedSkin(dir)).toBe("merlot");
+    expect(skinChrome("moss")).toEqual(SKIN_CHROME.merlot);
+  });
 });

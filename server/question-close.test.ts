@@ -106,7 +106,7 @@ describe("default report and question rules", () => {
     const prompt = runInNewContext(`${constants}\n${name}`) as string;
     expect(prompt).toContain("every finished deliverable and every item waiting on the user");
     expect(prompt).toContain("picture or clickable link");
-    expect(prompt).toContain("skipped or failed");
+    expect(prompt).toContain("skipped, cut, left for them to do by hand, or failed");
     expect(prompt).toContain("If the user answers an open card in their own words, close the card.");
   });
 });
