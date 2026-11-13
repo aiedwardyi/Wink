@@ -2,6 +2,44 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.261] - 2026-11-13
+
+### Added
+- The model picker has a Chart style beside Dial and List: each model is a cost and intelligence line with effort stops.
+- Merlot replaces the Moss theme: black cherry backgrounds, a wine accent and brighter text. A saved Moss theme switches to Merlot.
+- Room bots can search their owner's 1:1 chat with them. Only the owner sees the "Searched your 1:1" note.
+- New call voices: Jenn and Eddie sound new, and Adele joins with a British accent.
+- Every group gets the same header: picture, name, bell and side pane, with Ctrl+F search.
+- A Map tab in the side pane shows which files a worker changed, as squares and a list, with the live diff.
+
+### Changed
+- The call button lives in the message box: Call when idle, Send while typing, Stop while busy, and End with Mute beside it during a call. The header no longer has a call button.
+- Picture and file menus work the same everywhere, and menus, pickers and close buttons share one hover style. On phones, Copy appears for Wink pictures and readable outside pictures.
+- In team rooms, host bots name each team bot and its owner and hand off through the owner; an @name that matches no one reaches no one.
+- The call voice says each reply once, stops re-offering the same change, and sticks to what the chat shows.
+- Asking a bot that is already answering in the room now waits and answers automatically, in order, once it is free.
+- A bot busy in a 1:1 now answers in groups right away.
+- Calls, question cards and Settings open faster the first time.
+- Bots know more about Wink: groups and team rooms, calls, the side pane, the To Do list and skills.
+- Bot replies put gaps first, say who did or checked each thing, and quote numbers only from a source they opened.
+- Bot replies are warm without flattery: they celebrate real wins and acknowledge frustration briefly.
+- Worker bots follow clearer playbook rules, and their cards quote your latest words.
+- The side pane button shows an arrow, like the bot list button.
+- Chat menus fade out when they close, and file links in chat open the file menu: Open, Show in folder, Save as, Copy path. Hovers, focus rings and motion match across chat cards, panels and tooltips.
+
+### Fixed
+- Linked HTML pages render in Show, and HTML files open in your default app.
+- Teammates see the room's Bots again after upgrading.
+- The phone Memory page shows its map with a Retry when the memory read hangs, instead of only Auto Notes and Memory File.
+- Pictures teammates post in a group now reach the bots.
+- Bot replies in another language are translated in team rooms.
+- The Memory card scrollbar stays inside its rounded corners.
+- Claude bots show Load Skills & Plugins in Bot details again.
+- The Max effort rainbow is bright again on light skins.
+- Web addresses like starzum.com link without https://, while file names like README.md stay plain.
+- In team rooms, picking a name from the @ list completes the mention.
+- Passwords and room invite codes are masked in private room memory.
+
 ## [1.0.259] - 2026-11-13
 
 ### Added
