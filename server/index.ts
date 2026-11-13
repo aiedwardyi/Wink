@@ -2141,7 +2141,15 @@ const threadSyncPoll = createThreadSyncPoll(() => {
 });
 
 let threadSyncV2: ReturnType<typeof createThreadSyncV2Store> = null;
-const roomThreads = createRoomThreads({ store, botMap: () => profileSyncSettings.botMap, syncId: syncBotId });
+const roomThreads = createRoomThreads({
+  store, botMap: () => profileSyncSettings.botMap, syncId: syncBotId,
+  deleted: (groupId) => {
+    // a waiting room tombstone needs the next profile pass
+    profileSyncSeen.invalid = true;
+    const group = store.group(groupId);
+    if (group) broadcast({ kind: "group", group: groupWithThread(group) });
+  },
+});
 
 function initializeThreadSyncV2() {
   threadSyncV2 ??= createThreadSyncV2Store({

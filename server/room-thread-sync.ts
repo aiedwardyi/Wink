@@ -15,6 +15,8 @@ export interface RoomThreadsHost {
   botMap(): Record<string, string>;
   /** Mints one for a live bot that has none yet. */
   syncId(botId: string): string;
+  /** A peer's delete landed: the room may show another task, and its tombstone can go now. */
+  deleted?(groupId: string): void;
 }
 
 export type RoomThreads = ReturnType<typeof createRoomThreads>;
@@ -27,6 +29,9 @@ function mapRow(message: Message, map: (botId: string) => string | undefined): M
   if (from) next.from = { ...message.from!, botId: from };
   const withBot = message.comm && map(message.comm.withBotId);
   if (withBot) next.comm = { ...message.comm!, withBotId: withBot };
+  const request = message.card?.routineRequest;
+  const requestBot = request && map(request.botId);
+  if (requestBot) next.card = { ...message.card!, routineRequest: { ...request!, botId: requestBot } };
   if (message.reactions) next.reactions = message.reactions.map((reaction) => ({ ...reaction, by: reaction.by === "user" ? "user" : map(reaction.by) ?? reaction.by }));
   return next;
 }
@@ -59,6 +64,7 @@ export function createRoomThreads(host: RoomThreadsHost) {
         // the last thread empties here; the room goes with its tombstone
         if (!group.dm && group.tasks!.length > 1) store.deleteGroupTask(groupId, threadId);
         else store.deleteThreadRecord(threadId);
+        host.deleted?.(groupId);
         return;
       }
       let record = group.dm ? undefined : store.groupTaskByThread(groupId, threadId);

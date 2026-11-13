@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { createGroupRoutes } from "./group-routes.ts";
+import { createRoomThreads } from "./room-thread-sync.ts";
 import { Store } from "./store.ts";
 import { syncHold } from "./sync-hold.ts";
 
@@ -60,5 +61,41 @@ describe("room sends and chat sync", () => {
     const res = { writeHead: vi.fn(), end: vi.fn() };
     await routes.postMessage(Readable.from([JSON.stringify({ text: "hi" })]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
     expect(startGroupTurn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("room chats from another PC", () => {
+  it("tells the server when a peer's delete removes the active task", () => {
+    const store = new Store(() => ({ instanceId: "fake", model: "m" }));
+    const group = store.createGroup("Plans", []);
+    const ideas = store.createGroupTask(group.id, "Ideas")!;
+    const deleted = vi.fn();
+    const rooms = createRoomThreads({ store, botMap: () => ({}), syncId: (botId) => botId, deleted });
+    rooms.apply(group.id, ideas.threadId, [{ cursor: 1, kind: "delete", rowId: "", value: null, conflict: false }]);
+    expect(store.group(group.id)!.threadId).toBe(group.threadId);
+    expect(deleted).toHaveBeenCalledWith(group.id);
+  });
+
+  it("sends a task rename through chat sync", () => {
+    const store = new Store(() => ({ instanceId: "fake", model: "m" }));
+    const group = store.createGroup("Plans", []);
+    const task = store.groupTaskByThread(group.id, group.threadId)!;
+    const writes: unknown[] = [];
+    store.setSyncWriter((threadId, mutations, write) => {
+      writes.push([threadId, mutations]);
+      write();
+    });
+    store.renameGroupTask(group.id, group.threadId, "Launch");
+    expect(writes).toEqual([[group.threadId, [{ kind: "metadata", value: { title: "Launch", createdAt: task.createdAt } }]]]);
+  });
+
+  it("maps the bot on a routine request card", () => {
+    const store = new Store(() => ({ instanceId: "fake", model: "m" }));
+    const atlas = store.createBot({ name: "Atlas" }, { seedMessages: false });
+    const rooms = createRoomThreads({ store, botMap: () => ({ [atlas.id]: "sync-atlas" }), syncId: () => "sync-atlas" });
+    const card = { routineRequest: { version: 1, requestId: "r1", botId: atlas.id, threadId: "t1", createdAt: 1 } };
+    const message = { id: "m1", role: "bot", kind: "text", text: "", createdAt: 1, card } as unknown as Parameters<typeof rooms.outgoing>[0];
+    expect(rooms.outgoing(message).card?.routineRequest?.botId).toBe("sync-atlas");
+    expect(rooms.incoming(rooms.outgoing(message)).card?.routineRequest?.botId).toBe(atlas.id);
   });
 });
