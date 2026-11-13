@@ -323,7 +323,11 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
   const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
-    api(`/api/bots/${botId}/memory`, signal && { signal });
+    api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
+      // a body cut off by the timeout, or a proxy's page, parses as {}
+      if (typeof result?.text !== "string" || !Array.isArray(result.topics)) throw new Error("no memory in the reply");
+      return result;
+    });
   const landed = useRef(false);
 
   const load = async () => {
@@ -332,6 +336,8 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     try {
       // a phone's map waits on this read, and a socket that died while the phone slept never answers
       const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
+      // a refresh that landed first is as new, and an edit may have saved since
+      if (landed.current) return;
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);

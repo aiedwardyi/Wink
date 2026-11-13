@@ -403,6 +403,35 @@ describe("Memory tab on a phone whose memory read never answers", () => {
     expect(map()!.querySelector(".mm-failed")!.textContent).toContain("Couldn't load memory.");
     expect(map()!.textContent).toContain("Ship the phone fix");
   });
+
+  it("keeps an edit made before the slow first read lands", async () => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    let late: (() => void) | undefined;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (init?.method === "PUT" || late) return answer(url, init);
+      return new Promise((done) => { late = () => done(new Response(JSON.stringify({ text: "- Uses Windows", truncated: false, revision: "fixture", topics: [] }))); });
+    });
+    await open();
+    await toMemory();
+    await act(async () => fileRow().click());
+    await act(async () => editFile().click());
+    await write("- Uses Linux");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(puts).toEqual(["- Uses Linux"]);
+    await act(async () => late!());
+    await settle();
+    expect(box()!.value).toBe("- Uses Linux");
+  });
+
+  it("shows Retry when the reply holds no memory", async () => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    // a body cut off by the timeout, or a proxy's page, parses as {}
+    vi.mocked(fetch).mockImplementation((url, init) =>
+      init?.method === "PUT" || String(url).includes("/memory/topics/") ? answer(url, init) : Promise.resolve(new Response("<html></html>")));
+    await open();
+    await toMemory();
+    expect(map()!.querySelector(".mm-failed")!.textContent).toContain("Couldn't load memory.");
+  });
 });
 
 describe("Knowledge and Edit", () => {
