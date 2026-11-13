@@ -1786,8 +1786,7 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
   const instance = botAccounts.instance(bot);
-  const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
-  if (busyGroup) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
+  for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
@@ -3156,7 +3155,9 @@ const watchdog = new TurnWatchdog({
         store.patchGroup(group.id, { busyBotId: null, unread: true });
       }
       const currentBot = store.bot(turn.botId);
-      if (currentBot?.busy && roomLanes.thread(currentBot.id) !== turn.threadId) {
+      const lane = roomLanes.thread(turn.botId) === turn.threadId;
+      roomLanes.settle(turn.botId, turn.threadId);
+      if (currentBot?.busy && !lane) {
         stopScreenPoller(currentBot.id);
         if (activeVpsThreads.get(currentBot.id) === turn.threadId) activeVpsThreads.delete(currentBot.id);
         store.setActivity(currentBot.id, "idle");
@@ -3167,6 +3168,8 @@ const watchdog = new TurnWatchdog({
         paneWake.settled();
         drainConnectorResumes();
         drainSecretResumes();
+      } else if (lane) {
+        drainQueuedSends();
       }
     }, 6_000);
     release.unref?.();
@@ -3961,7 +3964,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "request.resolved": {
       // answered (by whoever): the turn is working again, unless it settled
       const waiting = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
-      if (waiting?.activity === "waiting-on-you") store.setActivity(waiting.id, "working");
+      if (waiting?.activity === "waiting-on-you" && roomLanes.thread(waiting.id) !== event.threadId) store.setActivity(waiting.id, "working");
       const messageId = event.requestId ? askMessageByRequest.get(`${event.threadId}:${event.requestId}`) : null;
       if (messageId) {
         const existing = store.messagesFor(event.threadId).find((m) => m.id === messageId);
@@ -4187,6 +4190,7 @@ bus.subscribe((event: RuntimeEvent) => {
           store.setActivity(speakingBot.id, "idle");
           // Channel replies only affect the channel unread state.
         }
+        roomLanes.settle(speaker.botId, event.threadId);
       }
       // Before the queue drain subscribers append the next send.
       const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
@@ -6886,7 +6890,7 @@ ${text}` : text,
         finish("dispatch_failed");
       });
   });
-  if (lane) roomLanes.release(bot.id, threadId);
+  if (lane) roomLanes.release(bot.id, threadId, outcome === "stalled" || outcome === "timed_out");
   // A timed-out provider still owns the room thread until its interrupt
   // produces turn.completed (or the stall watchdog's grace fallback runs).
   // Do not clear busy or start the next member on that same thread early.

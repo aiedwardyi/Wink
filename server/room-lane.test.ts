@@ -26,6 +26,17 @@ describe("room lanes", () => {
     expect(lanes.free("a")).toBe(true);
   });
 
+  it("keeps a stopped lane until its thread's terminal event is handled", () => {
+    const lanes = createRoomLanes(() => false);
+    lanes.claim("a", "room-1");
+    lanes.release("a", "room-1", true);
+    expect(lanes.thread("a")).toBe("room-1");
+    lanes.settle("a", "room-2");
+    expect(lanes.thread("a")).toBe("room-1");
+    lanes.settle("a", "room-1");
+    expect(lanes.thread("a")).toBeUndefined();
+  });
+
   it("keys a lane apart from its bot", () => {
     expect(laneKey("a")).not.toBe("a");
   });

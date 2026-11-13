@@ -95,9 +95,9 @@ describe("deleteBotFully", () => {
 
   it("interrupts a room turn the bot is running before the store forgets the room claim", () => {
     const stop = fn("stopBotWork");
-    const lookup = stop.indexOf("store.groups.find((g) => g.busyBotId === bot.id)");
+    const lookup = stop.indexOf("store.groups.filter((g) => g.busyBotId === bot.id)");
     expect(lookup).toBeGreaterThan(-1);
-    expect(stop.indexOf("interruptTurn(busyGroup.threadId)")).toBeGreaterThan(lookup);
+    expect(stop.indexOf("interruptTurn(group.threadId)")).toBeGreaterThan(lookup);
     const body = fn("deleteBotFully");
     const stopped = body.indexOf("await stopBotWork(bot);");
     expect(stopped).toBeGreaterThan(-1);

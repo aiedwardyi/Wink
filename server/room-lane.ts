@@ -8,12 +8,12 @@ export const MAX_ROOM_LANES = 2;
 export const laneKey = (botId: string) => `${botId}\0room`;
 
 export function createRoomLanes(threadLive: (threadId: string) => boolean, max = MAX_ROOM_LANES) {
-  const lanes = new Map<string, { threadId: string; running: boolean }>();
+  const lanes = new Map<string, { threadId: string; running: boolean; ending: boolean }>();
   // held until the driver lets go too: a timed-out turn still owns its thread
   const busy = (botId: string) => {
     const lane = lanes.get(botId);
     if (!lane) return false;
-    if (lane.running || threadLive(lane.threadId)) return true;
+    if (lane.running || lane.ending || threadLive(lane.threadId)) return true;
     lanes.delete(botId);
     return false;
   };
@@ -24,12 +24,18 @@ export function createRoomLanes(threadLive: (threadId: string) => boolean, max =
     free: (botId: string) => !busy(botId) && !full(),
     claim(botId: string, threadId: string): boolean {
       if (busy(botId) || full()) return false;
-      lanes.set(botId, { threadId, running: true });
+      lanes.set(botId, { threadId, running: true, ending: false });
       return true;
     },
-    release(botId: string, threadId: string) {
+    /** ending: a stopped turn whose terminal event is still to come. */
+    release(botId: string, threadId: string, ending = false) {
       const lane = lanes.get(botId);
-      if (lane?.threadId === threadId) lane.running = false;
+      if (lane?.threadId === threadId) Object.assign(lane, { running: false, ending: lane.ending || ending });
+    },
+    /** The thread's terminal event has been handled. */
+    settle(botId: string, threadId: string) {
+      const lane = lanes.get(botId);
+      if (lane?.threadId === threadId) lane.ending = false;
     },
   };
 }
