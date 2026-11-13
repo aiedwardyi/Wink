@@ -6,7 +6,7 @@ import { AccountConnections, AccountHead, ConnectionRow, SignInRow } from "./Acc
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { groupAccounts } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
-import { installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
+import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
@@ -54,7 +54,8 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
   const name = <span className="min-w-0 break-words text-[14px] font-semibold text-ink">{current.displayName}</span>;
   return (
     <div data-engine-row={current.instanceId} className="min-w-0">
-      {current.snapshot.state !== "available" ? (
+      {engineChecking(current) ? <ConnectionRow mark={mark} label={name} actions={<span aria-live="polite">{t("engines.checking")}</span>} />
+      : current.snapshot.state !== "available" ? (
         <ConnectionRow mark={mark} label={name} actions={
           <div className="flex flex-wrap items-center justify-end gap-x-3">
             <span aria-live="polite">{installStatus === "opened" || installStatus === "running" ? t("engine.terminalOpened")
@@ -127,8 +128,8 @@ export function EnginesSettings() {
     };
   }, [refreshInstances]);
   const rows = orderFriendsEngines(groups.map((accounts) => accounts[0]!).filter(isFriendsCliEngine));
-  const installed = rows.filter((row) => row.snapshot.state === "available");
-  const missing = rows.filter((row) => row.snapshot.state !== "available");
+  const installed = rows.filter((row) => row.snapshot.state !== "unavailable");
+  const missing = rows.filter((row) => row.snapshot.state === "unavailable");
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {/* No instances yet means the first scan has not answered, not that nothing is installed. */}
@@ -137,7 +138,7 @@ export function EnginesSettings() {
         : rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
       {installed.map((instance) => {
         const accounts = groups.find((group) => group[0] === instance)!;
-        return ["claudeAgent", "codex"].includes(instance.driverKind) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
+        return ["claudeAgent", "codex"].includes(instance.driverKind) && !engineChecking(instance) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
           : <EngineRow key={instance.instanceId} instance={instance} />;
       })}
       {missing.length > 0 && <>

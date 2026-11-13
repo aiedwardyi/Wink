@@ -10,7 +10,7 @@ import { PHONE_QUERY, hapticTick, reducedMotion } from "@/lib/phone-swipe";
 import { useDialTouch } from "@/lib/use-dial-touch";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
-import { needsCli, needsSignIn } from "./EngineSetup";
+import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import "./ModelDial.css";
 
 const DIAL_QUERY = "(pointer: fine)";
@@ -169,7 +169,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const level = efforts.findIndex((option) => option.model ? option.model === draft.model : option.effort === draft.effort);
   const effort = efforts[level];
   const max = effort?.label === "max";
-  const locked = (row: PickerRow) => needsCli(row.instance) || needsSignIn(row.instance);
+  const locked = (row: PickerRow) => !engineChecking(row.instance) && (needsCli(row.instance) || needsSignIn(row.instance));
   const labLocked = rows[lab] ? locked(rows[lab]!) : false;
   const pickable = canCommit(draft);
   const accent = modelFamilyAccent(item?.instance.driverKind);

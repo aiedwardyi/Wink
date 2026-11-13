@@ -613,6 +613,22 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it("keeps a checking engine in its place with no Install or Sign In until its check lands", () => {
+    const saved = mockInstances.map((row) => row.snapshot);
+    mockInstances.find((row) => row.instanceId === "claude")!.snapshot = { state: "checking" };
+    mockInstances.find((row) => row.instanceId === "muse")!.snapshot = { state: "checking" };
+    try {
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
+      expect(html.match(/>Checking\.\.\.</g)).toHaveLength(2);
+      expect(html.indexOf("Claude")).toBeLessThan(html.indexOf("Codex"));
+      expect(html).not.toContain("More Engines");
+      expect(html).not.toContain("Not Installed");
+      expect(html.match(/>Connected</g)).toHaveLength(3);
+    } finally {
+      mockInstances.forEach((row, index) => { row.snapshot = saved[index]!; });
+    }
+  });
+
   it("shows installed engines once with no path or Details controls", () => {
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {

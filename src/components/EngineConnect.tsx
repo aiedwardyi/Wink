@@ -6,7 +6,7 @@ import { baseInstances } from "@/lib/cross-model-picker";
 import { usageAccount } from "@/lib/accounts";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
-import { EngineSetup, EngineSignIn, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
+import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
@@ -63,12 +63,13 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const row = (instance: InstanceInfo, recommended = false) => {
     const installed = instance.snapshot.state === "available";
     const ready = installed && instance.snapshot.authenticated !== false;
-    const featured = recommended && !ready;
+    const checking = engineChecking(instance);
+    const featured = recommended && !ready && !checking;
     const attempt = attempts[instance.instanceId];
     const working = !installed && attempt && !attempt.failed;
     const failed = !installed && attempt?.failed;
     const paste = working && opened[instance.instanceId];
-    const label = ready ? t("engineConnect.ready", { name: instance.displayName })
+    const label = checking ? t("engines.checking") : ready ? t("engineConnect.ready", { name: instance.displayName })
       : installed ? t("engineConnect.signIn", { name: instance.displayName })
         : paste ? t("engine.terminalOpened")
           : working ? t("engineConnect.installing", { name: instance.displayName })
@@ -78,9 +79,9 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
     const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={label} buttonClassName={buttonClassName}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
-      : <button type="button" disabled={Boolean(ready || working || busy[instance.instanceId])}
+      : <button type="button" disabled={Boolean(ready || checking || working || busy[instance.instanceId])}
       onClick={() => void install(instance)} className={buttonClassName}>
-      {ready || paste ? <Check size={14} /> : working ? <Loader2 size={14} className="animate-spin" /> : recommended ? <Download size={14} /> : null}
+      {ready || paste ? <Check size={14} /> : working ? <Loader2 size={14} className="animate-spin" /> : recommended && !checking ? <Download size={14} /> : null}
       {label}
     </button>;
     return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
@@ -108,7 +109,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       <div>{others.map((instance) => row(instance))}</div>
       <Fold open={commands}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
-          {engines.map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
+          {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
         </div>
       </Fold>
     </div>

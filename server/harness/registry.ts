@@ -51,6 +51,8 @@ interface Probe {
   models?: ModelCatalog;
 }
 
+const CHECKING: Probe = { snapshot: { state: "checking" }, cliCandidates: [] };
+
 const savedProbeSchema = z.object({
   key: z.string(),
   snapshot: z.object({
@@ -109,6 +111,7 @@ export class ProviderRegistry {
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
   private probed = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
+  private probedListeners = new Set<(instanceId: InstanceId) => void>();
   private helperWork = new Map<InstanceId, number>();
   private tracked = new WeakSet<ProviderInstance>();
   private driversByKind: Map<string, AnyProviderDriver>;
@@ -480,6 +483,20 @@ export class ProviderRegistry {
       ? this.prepareProbes(read) : read();
   }
 
+  /** describeCached() rows that never wait on a first check: such an instance reads "checking". */
+  async describeKnown() {
+    await this.refreshLogins();
+    const rows = this.entries().map((entry) => this.row(entry, this.probed.get(entry.instanceId) ?? CHECKING));
+    this.saveProbes();
+    return this.currentAccountRows(rows);
+  }
+
+  /** Runs after each completed probe, kept or not. */
+  onProbed(listener: (instanceId: InstanceId) => void) {
+    this.probedListeners.add(listener);
+    return () => { this.probedListeners.delete(listener); };
+  }
+
   /** describe() rows for instances with a saved probe; probes nothing. */
   describeSaved() {
     return this.entries().flatMap((entry) => {
@@ -575,6 +592,7 @@ export class ProviderRegistry {
       return probe;
     });
     this.probing.set(id, pending);
+    void pending.then(() => { for (const listener of this.probedListeners) listener(id); });
     return pending;
   }
 

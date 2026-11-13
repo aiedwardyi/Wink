@@ -31,6 +31,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     let active = true;
     let pending: Promise<void> | undefined;
+    let recheck: ReturnType<typeof setTimeout> | undefined;
     const refresh = (probe: boolean) => {
       if (pending) return pending;
       setInstancesError(null);
@@ -56,6 +57,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           if (!active) return;
           setSignedOut(!data);
           if (data) setInstances(data.instances ?? []);
+          // Setup reads no instances frames; ask again until every first check lands.
+          if ((data?.instances as InstanceInfo[] | undefined)?.some((row) => row.snapshot.state === "checking")) recheck = setTimeout(() => void refresh(false), 500);
         })
         .catch(() => {
           if (active) {
@@ -71,6 +74,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     window.addEventListener("focus", onFocus);
     return () => {
       active = false;
+      clearTimeout(recheck);
       window.removeEventListener("focus", onFocus);
     };
   }, []);

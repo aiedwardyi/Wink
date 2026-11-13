@@ -13,7 +13,7 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { noReplySource, switchFromNoReply } from "@/lib/no-reply-switch";
 import type { AcceptedSend } from "@/lib/send-accept";
 import { ProviderMark } from "./ProviderIcons";
-import { EngineSetup, needsCli, needsSignIn } from "./EngineSetup";
+import { EngineSetup, engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
@@ -323,7 +323,7 @@ export function ModelPickerControl({
   );
 
   const setup = <>
-    {blocked && instance && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} />}
+    {blocked && instance && !engineChecking(instance) && <EngineSetup instance={instance} intent={isCustom ? "inject" : "cloud"} />}
     {custom.length > 0 && <button type="button" className="text-xs text-ink-secondary hover:text-ink" aria-expanded={customOpen} onClick={() => setCustomOpen(!customOpen)}>{t("model.useLocalCount", { count: custom.length })}</button>}
     {customOpen && instance && <div className="model-cross-custom">
       <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("model.searchLocal")} placeholder={t("model.searchLocal")} className="w-full rounded-lg bg-inset px-3 py-2 text-base sm:text-sm text-ink" />
@@ -489,8 +489,8 @@ export function ModelPickerControl({
             {price && <span data-model-price className="shrink-0 whitespace-nowrap" title={t("model.priceUnits")}>{price} {t("model.pricePerMillion")}</span>}
             {runCost != null && <span data-model-run-cost className="shrink-0 whitespace-nowrap">{formatCost(runCost)}{t("model.dial.perTask")}</span>}
             {!instance && <span>{t("model.offList")}</span>}
-            {instance && <span className={cn("rounded-full px-2 py-0.5", blocked ? "bg-warning/10 text-warning" : "bg-success/10 text-success")}>
-              {engineBadgeText(instance.snapshot, needsCli(instance) ? "not-installed" : needsSignIn(instance) ? "sign-in" : "ready", t)}
+            {instance && <span className={cn("rounded-full px-2 py-0.5", engineChecking(instance) ? "bg-control text-ink-secondary" : blocked ? "bg-warning/10 text-warning" : "bg-success/10 text-success")}>
+              {engineBadgeText(instance.snapshot, engineChecking(instance) ? "checking" : needsCli(instance) ? "not-installed" : needsSignIn(instance) ? "sign-in" : "ready", t)}
             </span>}
           </div>
           {setup}

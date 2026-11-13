@@ -124,6 +124,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
@@ -808,6 +809,7 @@ const providerSnapshots = new Map<string, Awaited<ReturnType<typeof registry.des
 
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
   for (const entry of entries) {
+    if (entry.snapshot.state === "checking") continue;
     automaticAvailability.set(entry.instanceId, entry.snapshot.state === "available");
     providerSnapshots.set(entry.instanceId, entry.snapshot);
   }
@@ -3083,6 +3085,7 @@ const accountUpdates = createAccountUpdates({
   usage: createAccountUsage({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
+const instanceChecks = createInstanceChecks(registry, (rows) => broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(rows))) }));
 
 function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
   rememberAutomaticAvailability(instances);
@@ -8725,7 +8728,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Windows never pushes PATH changes into a live process, so without
       // this a re-probe answers from the boot PATH.
       if (probe !== "cached") resetPathCache();
-      const instances = withRateLimits(await describeInstances(probe));
+      const instances = withRateLimits(await (probe === "cached" ? instanceChecks.describe() : describeInstances(probe)));
       rememberAutomaticAvailability(instances);
       return json(res, 200, { instances: botAccounts.pickerInstances(botAccounts.accountInstances(instances)) });
     }
