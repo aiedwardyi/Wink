@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
-import { BOT_PANE_LIMIT } from "./terminal-host.mjs";
+import { BOT_PANE_TOTAL } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
 import { streamMapPanes } from "./map-events.mjs";
 
@@ -79,7 +79,7 @@ export function paneCountBody(labels) {
   const panes = {};
   if (!plainRecord(labels)) return { counts, panes };
   for (const [botId, names] of Object.entries(labels)) {
-    if (!BOT_ID_RE.test(botId) || !Array.isArray(names) || names.length < 1 || names.length > BOT_PANE_LIMIT) continue;
+    if (!BOT_ID_RE.test(botId) || !Array.isArray(names) || names.length < 1 || names.length > BOT_PANE_TOTAL) continue;
     const list = [];
     for (const name of names) {
       if (Object.prototype.toString.call(name) !== "[object String]") continue;

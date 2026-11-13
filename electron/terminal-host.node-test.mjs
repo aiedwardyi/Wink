@@ -6,7 +6,7 @@ import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { BOT_PANE_LIMIT, createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { BOT_PANE_LIMIT, BOT_PANE_TOTAL, createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
 import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
@@ -4793,7 +4793,7 @@ test("the compact hook signals only a confirmed compact SessionStart",{ skip: pr
 
 describe("remote panes", () => {
   const GB = 1024 ** 3;
-  const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
+  const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, far: { ssh: "far", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
 
   function remoteFixture(t, { free = 8 * GB, ...options } = {}) {
     const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-remote-pwsh-"));
@@ -4862,6 +4862,16 @@ describe("remote panes", () => {
     await assert.rejects(f.host.openForBot("bot-3", { host: "work", command: "claude" }), /Too many terminals on work \(limit 64\)/);
     f.children[0].exit({ exitCode: 0 });
     await f.host.openForBot("bot-3", { host: "work", command: "claude" });
+  });
+
+  test("caps a bot's home and remote panes together at what pane counts accept", async (t) => {
+    const f = remoteFixture(t, { free: 1000 * GB });
+    for (let index = 0; index < BOT_PANE_LIMIT; index += 1) await f.host.openForBot("bot-1", { command: "claude" });
+    for (let index = 0; index < 64; index += 1) await f.host.openForBot("bot-1", { host: "work", command: "claude" });
+    await assert.rejects(f.host.openForBot("bot-1", { host: "far", command: "claude" }), /Too many bot terminals \(limit 80\)/);
+    assert.equal(BOT_PANE_TOTAL, 80);
+    f.children[0].exit({ exitCode: 0 });
+    await f.host.openForBot("bot-1", { host: "far", command: "claude" });
   });
 
   test("rejects unknown hosts and other launches before spawning a pane", async (t) => {

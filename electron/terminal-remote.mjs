@@ -9,6 +9,8 @@ const RESERVE = 1.5 * GB;
 const PANE_MEMORY = 0.6 * GB;
 // A new claude's memory reaches the probe only after it has loaded.
 const STARTING_MS = 60_000;
+// Probe and push share this, so even with a 15 s shell start an open beats the proxy's 30 s spawn deadline.
+const OPEN_MS = 12_000;
 const FIRST_PORT = 40_000;
 const PORT_COUNT = 9_000;
 // UTF-16 base64 grows the bootstrap 2.7x and Windows caps a command line at 32K.
@@ -19,7 +21,8 @@ const BIN_HASH = "orbit-bin.hash";
 const SSH_RE = /^\w[\w.@-]{0,63}$/;
 const ROOT_RE = /^[A-Za-z]:(?:[\\/][\w.-]+)+$/;
 const CLAUDE_RE = /^\s*&?\s*["']?(?:[^\s"';&|]*[\\/])?claude(?:\.(?:exe|cmd|ps1))?["']?(?=\s|$)/i;
-const WORKER_SETTINGS_RE = /\s--settings\s+(?:"[^"]*claude-worker\.json"|'[^']*claude-worker\.json'|[^\s"']*claude-worker\.json)(?=\s|$)/gi;
+// Quoted text matches first and is kept, so only a top-level flag is dropped.
+const WORKER_SETTINGS_RE = /("[^"]*"|'[^']*')|\s--settings\s+(?:"[^"]*claude-worker\.json"|'[^']*claude-worker\.json'|[^\s"']*claude-worker\.json)(?=\s|$)/gi;
 
 const gb = (bytes) => (bytes / GB).toFixed(1);
 
@@ -40,7 +43,7 @@ export function remoteHost(name, hosts) {
 export function remoteArgs(command) {
   const match = CLAUDE_RE.exec(command ?? "");
   if (!match || /[\r\n]/.test(command)) throw new Error("Remote terminals run a one-line claude command");
-  return command.slice(match[0].length).replace(WORKER_SETTINGS_RE, "");
+  return command.slice(match[0].length).replace(WORKER_SETTINGS_RE, (_, quoted) => quoted ?? "");
 }
 
 /** Picks a free tunnel port on the host and counts its panes still starting; `panes` are its live and opening ones. */
@@ -84,9 +87,9 @@ export function sshFailure(target, error, stderr) {
 }
 
 /** Runs a PowerShell script on the host over ssh with `input` on its stdin. */
-export function runSsh(target, script, input = "") {
+export function runSsh(target, script, input = "", timeout = OPEN_MS) {
   return new Promise((resolve, reject) => {
-    const child = execFile("ssh", remoteSshArgs(target, script), { windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile("ssh", remoteSshArgs(target, script), { windowsHide: true, timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(sshFailure(target, error, stderr));
       else resolve(stdout);
     });
@@ -115,20 +118,22 @@ const pushScript = (host) => [
   "foreach ($file in $files) { [IO.File]::WriteAllBytes((Join-Path $bin $file.name), [Convert]::FromBase64String($file.data)) }",
 ].join("\n");
 
-export function createRemoteHosts({ hosts, ssh = runSsh }) {
+export function createRemoteHosts({ hosts, ssh = runSsh, now = Date.now }) {
   return {
     /** Probes the host, refuses another account or too little memory, refreshes its bin and returns the typed launch line. */
     async open({ name, command, cwd, slot }) {
       const args = remoteArgs(command);
       const host = remoteHost(name, await hosts());
       const dir = remoteCwd(cwd, host);
-      const probe = JSON.parse(await ssh(host.ssh, probeScript(host)));
+      const deadline = now() + OPEN_MS;
+      const probe = JSON.parse(await ssh(host.ssh, probeScript(host), "", OPEN_MS));
       if (String(probe.account).toLowerCase() !== host.account) throw new Error(`claude on ${name} is signed in to another account.`);
       const needed = RESERVE + PANE_MEMORY * (1 + slot.starting);
       if (!(probe.free >= needed)) throw new Error(`Not enough free memory on ${name} (${gb(probe.free)} GB free, ${gb(needed)} GB needed). Close a finished pane there or use another host.`);
       const files = orbitBinFiles(`${host.root}\\bin`).map(([file, content]) => ({ name: file, data: Buffer.from(content).toString("base64") }));
       const hash = createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 16);
-      if (probe.hash !== hash) await ssh(host.ssh, pushScript(host), JSON.stringify([...files, { name: BIN_HASH, data: Buffer.from(hash).toString("base64") }]));
+      // The hash goes last, so an interrupted push is redone on the next open.
+      if (probe.hash !== hash) await ssh(host.ssh, pushScript(host), JSON.stringify([...files, { name: BIN_HASH, data: Buffer.from(hash).toString("base64") }]), Math.max(1, deadline - now()));
       return remoteLaunchLine({ host, port: slot.port, cwd: dir, args });
     },
   };

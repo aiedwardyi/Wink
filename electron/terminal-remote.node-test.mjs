@@ -36,6 +36,8 @@ test("keeps the bot's claude args and drops its home worker settings", () => {
   assert.equal(remoteArgs("claude --model opus --settings C:\\Users\\me\\.orbit\\bin\\claude-worker.json \"Read card.md\""), " --model opus \"Read card.md\"");
   assert.equal(remoteArgs("& \"claude.exe\" --settings 'C:/Users/me x/.orbit/bin/claude-worker.json' -p hi"), " -p hi");
   assert.equal(remoteArgs("claude --settings D:/mine.json"), " --settings D:/mine.json");
+  assert.equal(remoteArgs("claude 'Review --settings C:/x/claude-worker.json handling'"), " 'Review --settings C:/x/claude-worker.json handling'");
+  assert.equal(remoteArgs("claude --settings 'C:/h/claude-worker.json' \"keep --settings C:/y/claude-worker.json here\""), " \"keep --settings C:/y/claude-worker.json here\"");
   assert.equal(remoteArgs("claude"), "");
   for (const command of ["codex 'Read card.md'", "$env:A='1'; claude", "claude 'a'\r\nclaude 'b'", "claudex", "", undefined]) {
     assert.throws(() => remoteArgs(command), /one-line claude command/);
@@ -120,6 +122,18 @@ test("open probes the host, pushes changed bin files and returns the launch line
   const moved = await createRemoteHosts({ hosts: async () => HOSTS, ssh: again.ssh }).open({ name: "work", command: "claude", cwd: "D:/wink-remote/wt/x", slot: { port: 40124, starting: 0 } });
   assert.equal(again.calls.length, 1);
   assert.match(bootstrap(moved), /Set-Location -LiteralPath 'D:\\wink-remote\\wt\\x'/);
+});
+
+test("open gives the probe and push 12 s together", async () => {
+  let clock = 0;
+  const timeouts = [];
+  const ssh = async (target, script, input, timeout) => {
+    timeouts.push(timeout);
+    clock += 5_000;
+    return script.includes("FreePhysicalMemory") ? JSON.stringify({ free: 4 * GB, hash: "", account: "me@example.com" }) : "";
+  };
+  await createRemoteHosts({ hosts: async () => HOSTS, ssh, now: () => clock }).open({ name: "work", command: "claude", slot: { port: 40123, starting: 0 } });
+  assert.deepEqual(timeouts, [12_000, 7_000]);
 });
 
 test("open refuses another account, a host short of memory, or a bad folder", async () => {

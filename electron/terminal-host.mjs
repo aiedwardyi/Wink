@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
-import { remoteSlot } from "./terminal-remote.mjs";
+import { REMOTE_PANE_CEILING, remoteSlot } from "./terminal-remote.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
@@ -68,6 +68,8 @@ const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.te
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 export const BOT_PANE_LIMIT = 16;
+// Pane-count readers (terminal-bridge, server/terminal-snapshot.ts, src/lib/terminal-panes.ts) accept up to this many per bot.
+export const BOT_PANE_TOTAL = BOT_PANE_LIMIT + REMOTE_PANE_CEILING;
 // Exited panes stay readable until this many terminals are open.
 const SESSION_LIMIT = 32;
 const MB = 1024 ** 2;
@@ -1782,6 +1784,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const slot = input.host === undefined ? null : remoteSlot(input.host, remotePanes(), now());
       // A remote pane counts toward its host's cap; at home it is only a shell running ssh.
       if (!slot && botSessions(botId).filter((session) => session.botPane && !session.remote && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
+      if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_TOTAL) throw new Error(`Too many bot terminals (limit ${BOT_PANE_TOTAL})`);
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
       const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
