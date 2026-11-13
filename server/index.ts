@@ -3067,7 +3067,7 @@ const accountRuntime = createAccountRuntime({
     usageBoard.touch(); void accountUpdates(id);
   },
   rateLimits: rateLimitsByInstance, saveRateLimits: () => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.touch(); }, usage: refreshUsage, availability: automaticAvailability,
-  invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
+  invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
   onMainChanged: (change) => { accountNotices.mainChanged(change); usageBoard.recordMain(change); },
 });
@@ -7786,7 +7786,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if ("skipped" in note) return json(res, 200, { skipped: true });
         return json(res, 201, { messageId: note.messageId });
       }
-      // terminal_spawn, before the pane opens: the engine's usage left, or a hold on a nearly empty window.
+      // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
@@ -7794,7 +7794,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const hold = playbookGate.hold(playbookSession(from.id), String(body.command ?? ""));
         if (hold) return json(res, 200, { hold });
         if (accounts.snapshot.length) return json(res, 200, {});
-        return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
+        return json(res, 200, await spawnUsage(String(body.command ?? "")));
       }
       // terminal_playbook: the on-demand part, once per provider session.
       if (method === "POST" && path === "/api/internal/worker-playbook") {

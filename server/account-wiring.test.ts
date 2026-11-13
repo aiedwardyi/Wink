@@ -256,7 +256,7 @@ it("renders one name on every surface", async () => {
     const note = notices.forTurn("atlas");
     note.commit();
     notices.forget("atlas");
-    const spawn = await spawnUsage("atlas", "ATLAS-2", "claude", { id: "acct_studio", name: "Claude", generation: 3 });
+    const spawn = await spawnUsage("claude", { id: "acct_studio", name: "Claude", generation: 3 });
     const board = (await s.usageBoard.read()).engines[0].accounts.find((account: { id: string }) => account.id === "acct_studio");
     return { spawn: spawn.line, panes: panes.split("\n").find((line) => line.includes("ATLAS-2")), note: note.text, board: board.name };
   };

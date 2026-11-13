@@ -79,7 +79,7 @@ async function fixture(empty = false, of = "claude") {
   vi.stubGlobal("fetch", panes);
   const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()), changed: vi.fn(),
     rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(),
-    invalidateHolds: vi.fn(), invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
+    invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
   const controller = createAccountRuntime(deps);
   controllers.push(controller);
@@ -414,7 +414,6 @@ describe("account removal drain", () => {
     expect(commit).toHaveBeenCalledOnce();
     expect(invalidate).not.toHaveBeenCalled();
     expect(clear).not.toHaveBeenCalled();
-    expect(f.deps.invalidateHolds).not.toHaveBeenCalled();
     expect(f.deps.changed).toHaveBeenCalled();
     expect(f.deps.changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
     expect(f.bot.resumeCursors[main.id]).toBe("cursor-1");
