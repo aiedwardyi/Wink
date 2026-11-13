@@ -194,10 +194,6 @@
   padding-bottom: 0.875rem;
 }
 
-[data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
-  padding-bottom: 0;
-}
-
 /* Nested skin previews keep their own geometry. */
 @scope (:root[data-shape="boxy"]) to ([data-skin]) {
   [class*="rounded"], button, input, textarea, select {
