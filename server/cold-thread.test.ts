@@ -157,4 +157,21 @@ describe("warm chats", () => {
     await vi.waitFor(() => expect(bots.every((bot) => store.loaded(bot.threadId))).toBe(true));
     expect(read.mock.calls.map(([threadId]) => threadId)).toEqual([bots[2]!.threadId, bots[0]!.threadId, bots[1]!.threadId]);
   });
+
+  it("keeps warming past a thread that fails to load", async () => {
+    const setup = fresh();
+    const bots = [setup.createBot({}, { seedMessages: false }), setup.createBot({}, { seedMessages: false })];
+    const store = fresh();
+    const real = store.messagesFor.bind(store);
+    const read = vi.spyOn(store, "messagesFor").mockImplementation((threadId) => {
+      if (threadId === bots[0]!.threadId) throw new Error("corrupt");
+      return real(threadId);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let start!: () => Promise<void>;
+    warmChats(store, () => bots, (begin) => (start = begin));
+    await start();
+    await vi.waitFor(() => expect(store.loaded(bots[1]!.threadId)).toBe(true));
+    expect(read.mock.calls.filter(([threadId]) => threadId === bots[0]!.threadId)).toHaveLength(1);
+  });
 });

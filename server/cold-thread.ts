@@ -60,17 +60,24 @@ export function warmChats(
   afterPaint: (start: () => Promise<void>) => void,
 ): (open: string) => void {
   let first: string | undefined;
+  const failed = new Set<string>();
   const next = () => {
-    const cold = chats().filter((chat) => !store.loaded(chat.threadId));
+    const cold = chats().filter((chat) => !store.loaded(chat.threadId) && !failed.has(chat.threadId));
     return cold.find((chat) => chat.id === first) ?? cold[0];
   };
   const warm = async () => {
     for (let chat = next(); chat; chat = next()) {
       await new Promise((resolve) => setImmediate(resolve));
-      if (!store.loaded(chat.threadId)) store.messagesFor(chat.threadId);
+      try {
+        if (!store.loaded(chat.threadId)) store.messagesFor(chat.threadId);
+      } catch (error) {
+        // a failed thread stays cold, and loads (or fails) on its own request
+        failed.add(chat.threadId);
+        console.error("warm chats failed", chat.threadId, error);
+      }
     }
   };
   // not awaited: the warm stays out of the startup line's checks time
-  afterPaint(async () => void warm().catch((error) => console.error("warm chats failed", error)));
+  afterPaint(async () => void warm());
   return (open) => { first ??= open; };
 }
