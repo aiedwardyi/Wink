@@ -34,6 +34,7 @@ type BotRouteDeps = {
   defaultSelection: () => Promise<ModelSelection>;
   botJobSchema: z.ZodString;
   checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
+  restoreWait?: (of?: string) => Promise<unknown> | undefined;
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -265,6 +266,10 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      // A plain model switch waits only for its engine's account; any other edit keeps the whole startup wait.
+      const target = (body.modelSelection as { instanceId?: unknown } | null | undefined)?.instanceId;
+      const switchOnly = Object.keys(body).every((key) => ["modelSelection", "holdForSwitch", "requireAvailableModel"].includes(key));
+      await deps.restoreWait?.(switchOnly && typeof target === "string" ? target.trim() : undefined);
       const existingBot = store.bot(m[1]);
       if (body.requireAvailableModel !== undefined && typeof body.requireAvailableModel !== "boolean") {
         return json(res, 400, { error: "requireAvailableModel must be true or false" });
