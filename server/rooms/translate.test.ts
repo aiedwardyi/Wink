@@ -148,6 +148,23 @@ describe("room translation", () => {
     expect(await call(hostPath())).toEqual({ status: 200, body: { text: "The launch is ready." } });
   });
 
+  it.each([false, true])("translates host and teammate bot entries locally: joined=%s", async (joined) => {
+    roomId = createRoom("Shared group").id;
+    groups.push({ hosted: { roomId }, memberIds: ["bot-1"] });
+    if (joined) saveJoined(roomId, "unreachable.example", { id: "me", name: "Viewer" }, "private-guest-key");
+    for (const owner of [undefined, "me", "p1"]) {
+      const entry = appendRoomEntry(roomId, { author: { kind: "bot", id: "bot-1", name: "Rando", ...(owner ? { owner } : {}) }, text: "출시 준비를 모두 마쳤어요. (For Eddie: ready)" });
+      entryId = entry.id;
+      if (joined) addJoinedEntries(roomId, [entry]);
+      const path = joined ? joinedPath() : hostPath();
+      expect(await call(path)).toEqual({ status: 200, body: { text: "The launch is ready." } });
+      closeRoomsDb();
+      closeJoinedDb();
+      expect((await call(path)).status).toBe(200);
+    }
+    expect(generateText).toHaveBeenCalledTimes(3);
+  });
+
   it("sends only the selected line and uses an isolated text call", async () => {
     appendRoomEntry(roomId, { author: { kind: "person", id: "p2", name: "Another name" }, text: "Another private line" });
     expect((await call(hostPath())).status).toBe(200);

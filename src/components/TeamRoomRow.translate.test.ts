@@ -23,7 +23,7 @@ let host: HTMLDivElement;
 let root: Root;
 let available = true;
 let generate: () => Promise<Response>;
-const fetch = vi.fn((path: string) => path.endsWith("/entries/e1/translate") || path.endsWith("/entries/e2/translate")
+const fetch = vi.fn((path: string) => path.includes("/entries/") && path.endsWith("/translate")
   ? generate() : Promise.resolve(new Response(JSON.stringify({ available }))));
 
 beforeEach(() => {
@@ -44,13 +44,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render() {
-  await act(async () => root.render(createElement(TeamRoomTranscript, { onReply: () => {}, lines, mine: (line) => line.author.kind === "host", base: "/api/rooms/r1", label: "Launch week" })));
+async function render(shown = lines, base = "/api/rooms/r1") {
+  await act(async () => root.render(createElement(TeamRoomTranscript, { onReply: () => {}, lines: shown, mine: (line) => line.author.kind === "host", base, label: "Launch week" })));
 }
 
 const button = () => host.querySelector<HTMLButtonElement>('button[data-room-translate]');
 
 describe("teammate translation", () => {
+  it.each([undefined, "me", "mina"])("translates a bot with owner %s on the joined side", async (owner) => {
+    const bot: RoomLine = { id: "mirror-bot", entryId: "bot-entry", at: 1, author: { kind: "bot", id: "b1", name: "Rando", ...(owner ? { owner } : {}) }, text: "출시 준비를 모두 마쳤어요. (For Eddie: ready)", files: [] };
+    await render([bot, { ...bot, id: "english", entryId: "english-entry", text: "The checklist is ready." }], "/api/joined/rooms/r1");
+    expect(host.querySelectorAll("[data-room-translate]")).toHaveLength(1);
+    await act(async () => button()!.click());
+    expect(host.querySelector("[data-room-translation]")?.textContent).toContain("The materials are ready.");
+    expect(fetch).toHaveBeenCalledWith("/api/joined/rooms/r1/entries/bot-entry/translate", expect.objectContaining({ body: '{"lang":"en"}' }));
+    expect(host.textContent).toContain(bot.text);
+  });
+
   it.each(["instances", "config"] as const)("refreshes availability after %s changes without focus", async (field) => {
     available = false;
     await render();

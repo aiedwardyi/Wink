@@ -103,7 +103,7 @@ export async function translateRoute(
   if (!entryId) { json(res, 200, { available: generate !== null }); return true; }
   const entry = () => joined ? joinedEntry(roomId, entryId) : roomEntry(roomId, entryId);
   const line = entry();
-  const own = joined ? line?.author.kind === "person" && line.author.id === joinedRoom(roomId)?.me.id : line?.author.kind !== "person";
+  const own = joined ? line?.author.kind === "person" && line.author.id === joinedRoom(roomId)?.me.id : line?.author.kind === "host";
   if (!line?.text || own) { json(res, 404, { error: "not found" }); return true; }
   try {
     const body = await readBody(req);
