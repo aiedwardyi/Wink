@@ -386,6 +386,7 @@ import {
   syncAvatarMatches,
   saveProfileSyncSettings,
   syncOperationsSignature,
+  syncOperationsStatus,
   unsyncedChanges,
   validateSyncFolder,
   writeSyncAvatarAsset,
@@ -1521,17 +1522,17 @@ function profileSyncStatus() {
     };
   }
   ensureProfileSyncWorkspace(folder);
-  const remote = readSyncOperations(folder);
+  const remote = syncOperationsStatus(folder);
   const status = remote.invalidFiles.length > 0
     ? "needs-review"
-    : remote.operations.length > 0
+    : remote.operations > 0
       ? "up-to-date"
       : "waiting";
   return {
     configured: true,
     folder,
     status: status as "needs-review" | "up-to-date" | "waiting",
-    operations: remote.operations.length,
+    operations: remote.operations,
     invalidFiles: remote.invalidFiles,
     lastSyncAt: profileSyncLastSyncAt,
     syncChats: profileSyncSettings.syncChats,
