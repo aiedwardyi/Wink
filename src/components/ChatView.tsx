@@ -1,5 +1,6 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
+import { AppErrorBanner } from "./AppErrorBanner";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { DaySeparator } from "./DaySeparator";
@@ -275,12 +276,12 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot: Bot }) {
+export const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot?: Bot }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
-  if (tool.name === "memory.save") return <MemoryCleanSave message={message} bot={bot} />;
+  if (tool.name === "memory.save" && bot) return <MemoryCleanSave message={message} bot={bot} />;
   if (message.comm) return <CommChip message={message} comm={message.comm} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
@@ -364,7 +365,7 @@ function NoteReport({ note }: { note: PaneNote }) {
   );
 }
 
-const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
+export const NoteMessage = memo(function NoteMessage({ message }: { message: Message }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
@@ -1601,15 +1602,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         />
       )}
 
-      {/* Error banner */}
-      {state.error && (
-        <div className="w-full px-5">
-          <div className="mb-2 flex items-start gap-2 rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
-            <span className="min-w-0 break-words">{state.error}</span>
-          </div>
-        </div>
-      )}
+      <AppErrorBanner />
 
       <ReconnectingCue />
 

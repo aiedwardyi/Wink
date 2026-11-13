@@ -10,6 +10,7 @@ import type { Message } from "@/state/store";
 const here = dirname(fileURLToPath(import.meta.url));
 const chatView = readFileSync(join(here, "../components/ChatView.tsx"), "utf8");
 const groupView = readFileSync(join(here, "../components/GroupView.tsx"), "utf8");
+const roomTurn = readFileSync(join(here, "room-turn.ts"), "utf8");
 
 const activity = (name: string, extra: Partial<NonNullable<Message["tool"]>> = {}): Message => ({
   id: "activity",
@@ -67,9 +68,8 @@ describe("liveActivityLabel", () => {
   });
 
   it("passes activity visibility into ChatView and GroupView presence labels", () => {
-    for (const view of [chatView, groupView]) {
-      expect(view).toContain("const showActivities = showToolCalls || terminal;");
-      expect(view).toMatch(/liveActivityLabel\([^,]+,\s*showActivities\)/);
-    }
+    for (const view of [chatView, groupView]) expect(view).toContain("const showActivities = showToolCalls || terminal;");
+    for (const view of [chatView, roomTurn]) expect(view).toMatch(/liveActivityLabel\([^,]+,\s*showActivities\)/);
+    expect(groupView).toMatch(/useRoomTurnStage\([^)]*showActivities/);
   });
 });

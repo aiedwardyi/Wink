@@ -1,4 +1,5 @@
 import { attachedFilePreview } from "@/lib/composer-attachments";
+import { t } from "@/lib/i18n";
 import type { Message } from "@/state/store";
 
 export function replySnippet(text: string, limit = 160): string {
@@ -9,6 +10,6 @@ export function replySnippet(text: string, limit = 160): string {
   if (clean.length <= limit) return clean;
   return `${clean.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
-export function replyAuthor(message: Message, fallback = "Assistant"): string {
-  return message.author?.name ?? message.from?.name ?? (message.role === "user" ? "You" : fallback);
+export function replyAuthor(message: Message, fallback = t("chrome.aBot")): string {
+  return message.author?.name ?? message.from?.name ?? (message.role === "user" ? t("chat.you") : fallback);
 }
