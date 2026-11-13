@@ -4,6 +4,7 @@ import type { Message, Store } from "../store.ts";
 import { askById, settleAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, committedRoomText, roomEntry, roomPeople } from "./db.ts";
 import { broadcastDoorEntry } from "./door-streams.ts";
+import { teamBots } from "./team-bots.ts";
 
 /** The turn's last line to the bot: the teammates and words it answers, in order, so a delayed turn never answers the host's task instead. */
 export function askNote(askId: string | undefined, botName: string, riders: readonly RoomAsk[] = []): string {
@@ -17,8 +18,11 @@ export function askNote(askId: string | undefined, botName: string, riders: read
 export function teammatesLine(group: { hosted?: { roomId: string } }): string {
   if (!group.hosted) return "";
   try {
-    const names = roomPeople(group.hosted.roomId).map((person) => person.name);
-    return names.length ? `Teammates in this room: ${names.join(", ")}.` : "";
+    const people = roomPeople(group.hosted.roomId);
+    const names = people.map((person) => person.name);
+    const line = names.length ? `Teammates in this room: ${names.join(", ")}.` : "";
+    const bots = teamBots(group.hosted.roomId).map((bot) => `${JSON.stringify(bot.name)} (${JSON.stringify(people.find((person) => person.id === bot.owner)?.name ?? bot.owner)})`);
+    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first. Other @names reach no one.`].filter(Boolean).join("\n");
   } catch {
     return "";
   }

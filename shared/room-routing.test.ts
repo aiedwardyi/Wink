@@ -34,6 +34,20 @@ describe("roomResponder", () => {
     expect(roomResponder("thanks", bots, [])).toBeNull();
   });
 
+  it("never falls back to a host reply target when a teammate's bot is tagged", () => {
+    expect(roomResponder("@스타줌 이거해.", [wink], [], wink.id, true, ["스타줌"])).toBeNull();
+    expect(roomResponder("@스타줌".normalize("NFD") + "아 이거해.", bots, [], wink.id, true, ["스타줌"])).toBeNull();
+    expect(roomResponder("@스타줌 이거해. @위키 review", bots, [], wink.id, true, ["스타줌"])).toBe(helper);
+    expect(roomResponder("@스타줌 Kim hi", bots, ["스타줌 Kim"], wink.id, true, ["스타줌"])).toBe(wink);
+  });
+
+  it("keeps reply fallback for people tags, everyone and untagged lines", () => {
+    expect(roomResponder("@Mina can you look", bots, ["Mina"], wink.id)).toBe(wink);
+    expect(roomResponder("@everyone hello", bots, [], wink.id)).toBe(wink);
+    expect(roomResponder("thanks", [wink], [], wink.id, true, ["스타줌"])).toBe(wink);
+    expect(roomResponder("thanks", [wink], [], undefined, true, ["스타줌"])).toBe(wink);
+  });
+
   it("ignores an address glued to a word", () => {
     expect(roomResponder("mail me at user@Wink", bots, [])).toBeNull();
   });
