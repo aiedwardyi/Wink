@@ -108,7 +108,7 @@ export function ownerTopics(messages: readonly Message[], owner: string): string
     .filter((line) => line && line !== "SUMMARY" && !/^\[.*\]$/.test(line)))];
   if (!lines.length) return "";
   const topics = lines.slice(-TOPICS).map((line) => `- ${clip(line, TOPIC_CHARS)}`);
-  return [`[Private: recent topics from your 1:1 with ${owner}. ${SEARCH_TOOL} finds the details. Share only what this task needs.]`, ...topics].join("\n");
+  return redactSecretsInText([`[Private: recent topics from your 1:1 with ${owner}. ${SEARCH_TOOL} finds the details. Share only what this task needs.]`, ...topics].join("\n"));
 }
 
 /** One hidden row in the bot's active 1:1 for a settled room turn; none when it said nothing. */
