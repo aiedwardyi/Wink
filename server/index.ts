@@ -1788,7 +1788,7 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
   const instance = botAccounts.instance(bot);
-  for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await instance?.adapter.interruptTurn(group.threadId).catch(() => {});
+  for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
@@ -3129,6 +3129,8 @@ const watchdog = new TurnWatchdog({
         turnsAtWrite: store.taskByThread(turn.botId, turn.threadId)?.usage?.turns ?? 0,
       }));
     }
+    // read now: the stalled turn's own terminal event can settle the lane before the grace ends
+    const lane = roomLanes.thread(turn.botId) === turn.threadId;
     const instance = bot ? botAccounts.instance(bot, turn.threadId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
@@ -3159,7 +3161,6 @@ const watchdog = new TurnWatchdog({
         store.patchGroup(group.id, { busyBotId: null, unread: true });
       }
       const currentBot = store.bot(turn.botId);
-      const lane = roomLanes.thread(turn.botId) === turn.threadId;
       roomLanes.settle(turn.threadId);
       if (currentBot?.busy && !lane) {
         stopScreenPoller(currentBot.id);
@@ -6714,7 +6715,8 @@ async function runClaimedGroupMemberTurn(
   const readyBot = store.bot(bot.id);
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
-  if (lane ? threadHasLiveTurn(threadId) : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
+  // automatic routing can resolve to an engine that cannot run read-only
+  if (lane ? threadHasLiveTurn(threadId) || instance.adapter.capabilities.readOnlyTurns !== true : readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId, authority);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
