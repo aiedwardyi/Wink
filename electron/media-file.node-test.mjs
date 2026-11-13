@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,7 +7,7 @@ import test from "node:test";
 import { localMediaFile } from "./media-file.mjs";
 
 test("resolves existing pictures, attachments and hosted room files", async () => {
-  const dataDir = await mkdtemp(path.join(tmpdir(), "wink-media-file-"));
+  const dataDir = await realpath(await mkdtemp(path.join(tmpdir(), "wink-media-file-")));
   const id = "aB0_-cD1".repeat(3);
   const picture = path.join(dataDir, "chart.png");
   const attachment = path.join(dataDir, "attachments", "photo.png");
