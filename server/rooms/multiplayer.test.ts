@@ -91,7 +91,7 @@ describe("the host bot's room prompt", () => {
     expect(prompt()).toContain("Teammates in this room: Sora.");
     expect(prompt()).toContain('Team bots (owner): "Sora-Code" ("Sora").');
     expect(prompt()).toContain("Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first.");
-    expect(prompt()).toContain("Other @names reach no one.");
+    expect(prompt()).toContain("Unlisted @names reach no one.");
     expect(Buffer.byteLength(prompt()) - Buffer.byteLength(prompt(() => "Teammates in this room: Sora."))).toBeLessThan(250);
   });
 
@@ -105,14 +105,17 @@ describe("the host bot's room prompt", () => {
     expect(Buffer.from(prompt(teammatesLine, empty))).toEqual(Buffer.from(prompt(() => "", empty)));
   });
 
-  it("lists every room bot with its owner, without bots from other rooms", () => {
+  it("lists room bots by owner, excluding absent owners and other rooms", () => {
     const mina = addPerson(group.hosted.roomId, "미나", "chat", ["Wink"]);
     addTeamBot(group.hosted.roomId, sora.id, "Sora-Code", "teal", []);
     addTeamBot(group.hosted.roomId, sora.id, "Sora-Review", "blue", []);
     addTeamBot(group.hosted.roomId, mina.id, '검토 "봇"', "blue", []);
+    addTeamBot(group.hosted.roomId, "departed-owner", "Absent", "blue", []);
     addTeamBot(createRoom("Elsewhere").id, sora.id, "Other", "blue", []);
     expect(prompt()).toContain(`Team bots (owner): "Sora-Code" ("Sora"), "Sora-Review" ("Sora"), ${JSON.stringify('검토 "봇"')} ("미나").`);
     expect(prompt()).not.toContain('"Other"');
+    expect(prompt()).not.toContain("Absent");
+    expect(prompt()).not.toContain("departed-owner");
   });
 });
 

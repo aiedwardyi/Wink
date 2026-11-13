@@ -21,8 +21,11 @@ export function teammatesLine(group: { hosted?: { roomId: string } }): string {
     const people = roomPeople(group.hosted.roomId);
     const names = people.map((person) => person.name);
     const line = names.length ? `Teammates in this room: ${names.join(", ")}.` : "";
-    const bots = teamBots(group.hosted.roomId).map((bot) => `${JSON.stringify(bot.name)} (${JSON.stringify(people.find((person) => person.id === bot.owner)?.name ?? bot.owner)})`);
-    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first. Other @names reach no one.`].filter(Boolean).join("\n");
+    const bots = teamBots(group.hosted.roomId).flatMap((bot) => {
+      const owner = people.find((person) => person.id === bot.owner);
+      return owner ? [`${JSON.stringify(bot.name)} (${JSON.stringify(owner.name)})`] : [];
+    });
+    return [line, bots.length && `Team bots (owner): ${bots.join(", ")}. Only their owner can ask them. Post a handoff plan here; ask its owner to @ it; never wait for it to join or reply first. Unlisted @names reach no one.`].filter(Boolean).join("\n");
   } catch {
     return "";
   }
