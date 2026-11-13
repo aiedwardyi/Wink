@@ -63,7 +63,7 @@ export interface WarmPoolOptions {
 const GiB = 1024 ** 3;
 const TOTAL_CAP = 3;
 const ENGINE_CAP = 2;
-const IDLE_TTL_MS = 10 * 60_000;
+export const IDLE_TTL_MS = 10 * 60_000;
 const SWEEP_MS = 60_000;
 const SLEEP_GAP_MS = 150_000;
 const PENDING_TTL_MS = 120_000;
