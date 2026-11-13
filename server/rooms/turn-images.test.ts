@@ -47,6 +47,14 @@ it("keeps image-only messages in the model transcript", async () => {
   expect(imagePath((await roomTurnMessages(roomId, [await message("")]))[0]!)).toBeDefined();
 });
 
+it("repairs a truncated cached image on the next turn", async () => {
+  const row = await message();
+  const cached = imagePath((await roomTurnMessages(roomId, [row]))[0]!)!;
+  writeFileSync(cached, "partial");
+  expect(imagePath((await roomTurnMessages(roomId, [row]))[0]!)).toBe(cached);
+  expect(readFileSync(cached)).toEqual(png);
+});
+
 it("does not attach deleted, missing or cross-room images, even after caching", async () => {
   const row = await message();
   expect(imagePath((await roomTurnMessages(roomId, [row]))[0]!)).toBeDefined();

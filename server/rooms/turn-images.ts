@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { constants, copyFile, realpath, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { constants, copyFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { ATTACHMENTS_DIR, ensureAttachmentsDir, extensionForMime } from "../attachments.ts";
@@ -16,7 +16,8 @@ export async function roomTurnMessages(roomId: string | undefined, messages: Mes
     return messages;
   }
   try {
-    const folder = join(roomFilesRoot(), roomId);
+    const folder = await realpath(join(roomFilesRoot(), roomId)).catch(() => null);
+    if (!folder) return messages;
     const out: Message[] = [];
     for (const message of messages) {
       const tags: string[] = [];
@@ -27,14 +28,22 @@ export async function roomTurnMessages(roomId: string | undefined, messages: Mes
           const ext = file && extensionForMime(file.type);
           if (!file || !ext) continue;
           const source = await realpath(join(folder, file.id));
-          if (dirname(source) !== await realpath(folder) || (await stat(source)).size !== file.bytes) continue;
+          if (dirname(source) !== folder || (await stat(source)).size !== file.bytes) continue;
           const key = createHash("sha256").update(`${roomId}\n${file.id}\n${file.sha256}`).digest("hex");
           const target = join(ATTACHMENTS_DIR, `room-${key}${ext}`);
           // Native image blocks accept only files inside the attachment store.
           ensureAttachmentsDir();
-          await copyFile(source, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== "EEXIST") throw error;
-          });
+          const cached = await stat(target).catch(() => null);
+          if (cached?.size !== file.bytes) {
+            const temp = join(ATTACHMENTS_DIR, `${randomUUID()}.tmp`);
+            try {
+              await copyFile(source, temp, constants.COPYFILE_EXCL);
+              if ((await stat(temp)).size !== file.bytes) continue;
+              await rename(temp, target);
+            } finally {
+              await rm(temp, { force: true }).catch(() => {});
+            }
+          }
           if ((await stat(target)).size !== file.bytes) continue;
           const path = target.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
           tags.push(`<attached-image path="${path}" />`);
