@@ -11,6 +11,7 @@ import { useDialTouch } from "@/lib/use-dial-touch";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
 import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
+import { altKeyLabel } from "./PickerStyleStrip";
 import "./ModelDial.css";
 
 const DIAL_QUERY = "(pointer: fine)";
@@ -620,6 +621,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
             <span><kbd>←</kbd><kbd>→</kbd>{t("model.modelAxis")}</span>
             <span><kbd>Enter</kbd>{t("settings.profile.save")}</span>
             <span><kbd>Esc</kbd>{t("createBot.cancel")}</span>
+            <span><kbd>{altKeyLabel()}</kbd><kbd>S</kbd>{t("model.style")}</span>
+            <span><kbd>{altKeyLabel()}</kbd><kbd>Shift</kbd><kbd>S</kbd>{t("model.style.next")}</span>
           </span>
           <span>{item?.label.toUpperCase()} · <b>{names[index]?.name.toUpperCase()}</b> · {String(index + 1).padStart(2, "0")}/{String(count).padStart(2, "0")}</span>
         </footer>

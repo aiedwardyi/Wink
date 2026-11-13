@@ -418,6 +418,18 @@ describe("message menu in 1:1 chats", () => {
     expect(selectionMenu()).toBeNull();
   });
 
+  it("leaves a file card to its own menu", async () => {
+    window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
+    try {
+      const host = await mountChat(bot([botMsg("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
+      expect(document.querySelector("[data-file-menu]")).not.toBeNull();
+      expect(messageMenu()).toBeNull();
+    } finally {
+      window.ogb = undefined;
+    }
+  });
+
   it("leaves the edit box to the native menu", async () => {
     const host = await mountChat(bot([userMsg("u1", "fix me")]));
     await act(async () => { host.querySelector('[data-mid="u1"] button[aria-label="Edit message"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
@@ -579,6 +591,18 @@ describe("message menu in rooms", () => {
     expect(menu?.querySelector("[data-menu-pin]")?.textContent).toBe("Pin message");
     expect(menu?.querySelector("[data-menu-reply]")?.textContent).toBe("Reply");
     expect(menu?.querySelector("[data-menu-copy]")?.textContent).toBe("Copy");
+  });
+
+  it("leaves a file card to its own menu", async () => {
+    window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
+    try {
+      const host = await mountRoom(members, room([roomBot("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
+      expect(document.querySelector("[data-file-menu]")).not.toBeNull();
+      expect(messageMenu()).toBeNull();
+    } finally {
+      window.ogb = undefined;
+    }
   });
 
   it("pins a room message above Reply", async () => {
