@@ -231,7 +231,7 @@ describe("harness playbook", () => {
     const prompt = loadHarnessPlaybook();
     expect(prompt).toContain("- Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.");
     expect(prompt).toContain("- Before a fan-out, check each engine's usage left; never put several workers on a low engine.");
-    expect(prompt).toContain("10. After a merge, deploy or release, check the live result yourself before you call it done.");
+    expect(prompt).toContain("10. Say merged, deployed or released only once you checked it yourself: `gh pr view` state, the live result.");
     expect(prompt).toContain("- Never stop a worker or others' processes unless the user names it.");
   });
 
