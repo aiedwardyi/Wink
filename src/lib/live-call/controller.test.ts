@@ -2302,6 +2302,7 @@ describe("VOICE-HUSH: be quiet", () => {
 
   it("hushes only when the quiet phrase is the whole line", () => {
     for (const line of ["shut up", "Nova, be quiet please", "please stop talking", "쉿", "조용히 해", "이제 그만 말해", "좀 조용히 해 줘", "닥쳐"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, true]);
+    expect(asksForQuiet("노바야, 조용히 해", "노바")).toBe(true);
     for (const line of ["영어로 말하지 마", "그렇게 길게 말하지 마세요", "거짓말하지 마.", "반말하지 마", "여기 조용해", "Well, stop talking about the tests and fix the build", "Shut up, really? That is great", "Okay, hush money is a thing", "조용히 말해줘", "그건 말하지 마시고 계속해"]) expect([line, asksForQuiet(line, "Nova")]).toEqual([line, false]);
   });
 

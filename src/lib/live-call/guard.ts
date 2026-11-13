@@ -68,7 +68,7 @@ const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hey|(?:can|could|would|will
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
 export function asksForQuiet(heard: string, name = ""): boolean {
   const own = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const lead = `(?:(?:${SOFT}${own && `|${own}`})[\\s,]*)*`;
+  const lead = `(?:(?:${SOFT}${own && `|${own}(?:야|아)?`})[\\s,]*)*`;
   const tail = `(?:[\\s,]+(?:please|now|for now${own && `|${own}`}))*`;
   return new RegExp(`^${lead}(?:${QUIET_EN}${tail}|${QUIET_KO})[\\s~….,!?]*$`, "i").test(heard.trim());
 }
