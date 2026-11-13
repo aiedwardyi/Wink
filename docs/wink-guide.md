@@ -49,7 +49,7 @@
 ## Bot details and to-do list
 
 - Bot Details: click the bot's avatar in the chat header (phone: its name too). It has Settings and Memory tabs.
-- Memory tab: Working Memory (current task, steps done, Next), To Do, Just Learned, Long-Term Memory, Knowledge and Muscle Memory.
+- Memory tab: Working Memory (current task, steps done, Next), To Do, Just Learned, Long-Term Memory, Knowledge and Habits.
 - To Do is the to-do list: what the user asked this bot for. It shows the first 3 open items (Show all for more) and folds the done ones. The bot keeps it through `update_task_state` asks; the user adds or closes items by telling the bot.
 
 ## Skills
