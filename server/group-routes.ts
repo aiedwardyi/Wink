@@ -10,6 +10,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { laneKey } from "./room-lane.ts";
+import { steerRoomSend } from "./room-steer.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
 import { finishEnd, stopRoomAsks } from "./rooms/asks.ts";
 import { createRoom, noticeText, roomEntry, roomPeople } from "./rooms/db.ts";
@@ -39,6 +40,7 @@ type GroupRouteDeps = {
   sendSequencer: SendSequencer;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
   startGroupTurn: (groupId: string, text: string, replyTo?: Message, sendId?: string) => Message;
+  userName: () => string;
   cancelGroupTurnOperations: (groupId: string, threadId: string) => void;
   taskResumes: TaskResumeScheduler;
   bumpTurnEpoch: (botId: string) => number;
@@ -438,7 +440,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               status: 409,
             });
           }
-          const message = startGroupTurn(current.id, text, replyTo, sendId);
+          const message = (await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId))
+            ?? startGroupTurn(current.id, text, replyTo, sendId);
           return { ok: true as const, threadId, message };
         },
       );
