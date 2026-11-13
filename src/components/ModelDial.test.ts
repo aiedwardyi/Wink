@@ -131,6 +131,8 @@ const order = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-lun
 const selected = () => document.querySelector('.dial-card[aria-pressed="true"]')?.getAttribute("data-model-cell");
 const effort = () => document.querySelector(".dial-effort b")?.textContent;
 const saved = () => dispatch.mock.calls.find(([action]) => action.type === "setModel")?.[0].selection;
+const viewButton = (view: string) => document.querySelector<HTMLButtonElement>(`.model-dial-view [data-picker-view="${view}"]`)!;
+const shownView = () => document.querySelector('.model-dial-view [aria-pressed="true"]')?.getAttribute("data-picker-view");
 
 function spoken(node: Node): string {
   if (node instanceof Element && node.getAttribute("aria-hidden") === "true") return "";
@@ -231,7 +233,7 @@ describe("ModelDial", () => {
   it("keeps native Enter activation on List View", async () => {
     media();
     await mount();
-    const button = document.querySelector<HTMLButtonElement>(".model-dial-view")!;
+    const button = viewButton("list");
     button.focus();
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     await act(async () => button.dispatchEvent(event));
@@ -245,9 +247,8 @@ describe("ModelDial", () => {
   it.each([false, true])("commits on Enter after clicking the view toggle (back to dial %s)", async (backToDial) => {
     media();
     await mount();
-    const toggle = () => document.querySelector<HTMLButtonElement>(".model-dial-view")!;
-    for (let i = 0; i < (backToDial ? 2 : 1); i++) {
-      await act(async () => { toggle().focus(); toggle().click(); });
+    for (const view of backToDial ? ["list", "dial"] : ["list"]) {
+      await act(async () => { viewButton(view).focus(); viewButton(view).click(); });
     }
     expect(localStorage.getItem("omb-model-picker-view")).toBe(backToDial ? "dial" : "list");
     await key("Enter");
@@ -322,38 +323,43 @@ describe("ModelDial", () => {
     expect(saved()).toBeUndefined();
   });
 
-  it("switches to the list view and back", async () => {
+  it("switches between dial, list and chart from the top right", async () => {
     media();
     await mount();
-    const toggle = () => document.querySelector<HTMLButtonElement>(".model-dial-view")!;
-    expect(toggle().textContent).toBe("List View");
-    await act(async () => toggle().click());
+    expect([...document.querySelectorAll(".model-dial-view [data-picker-view]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart"]);
+    expect(document.querySelector(".model-dial-view")?.getAttribute("aria-label")).toBe("Model Picker Style");
+    expect(shownView()).toBe("dial");
+    await act(async () => viewButton("list").click());
     expect(document.querySelector(".model-dial")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
-    expect(toggle().textContent).toBe("Dial View");
-    await act(async () => toggle().click());
+    expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["list", "list"]);
+    await act(async () => viewButton("chart").click());
+    expect(document.querySelector(".model-chart")).not.toBeNull();
+    expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["chart", "chart"]);
+    await act(async () => viewButton("dial").click());
     expect(document.querySelector(".model-dial")).not.toBeNull();
+    expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["dial", "dial"]);
+    expect(saved()).toBeUndefined();
   });
 
   it("remembers the view on reopen and a fresh mount", async () => {
     media();
     await mount();
-    const toggle = () => document.querySelector<HTMLButtonElement>(".model-dial-view")!;
     const reopen = async () => {
       await key("Escape");
       await wait(400);
       await act(async () => document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
     };
-    await act(async () => toggle().click());
+    await act(async () => viewButton("list").click());
     expect(localStorage.getItem("omb-model-picker-view")).toBe("list");
     await reopen();
     expect(document.querySelector(".model-dial")).toBeNull();
-    expect(toggle().textContent).toBe("Dial View");
+    expect(shownView()).toBe("list");
     await act(async () => root.unmount());
     await mount();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
-    expect(toggle().textContent).toBe("Dial View");
-    await act(async () => toggle().click());
+    expect(shownView()).toBe("list");
+    await act(async () => viewButton("dial").click());
     await reopen();
     expect(document.querySelector(".model-dial")).not.toBeNull();
     await act(async () => root.unmount());
@@ -400,7 +406,7 @@ describe("ModelDial", () => {
         mouse(width, height);
         await mount();
         expect(vertical()).toBe(true);
-        expect(document.querySelector(".model-dial-view")?.textContent).toBe("List View");
+        expect(shownView()).toBe("dial");
         await act(async () => root.unmount());
         vi.restoreAllMocks();
       }
@@ -488,10 +494,10 @@ describe("ModelDial", () => {
       await resize(1440);
       expect(vertical()).toBe(false);
       expect([selected(), effort()]).toEqual(["claude-sonnet-5-5", "medium"]);
-      await act(async () => document.querySelector<HTMLButtonElement>(".model-dial-view")!.click());
+      await act(async () => viewButton("list").click());
       await resize(700);
       expect(document.querySelector(".model-dial")).toBeNull();
-      expect(document.querySelector(".model-dial-view")?.textContent).toBe("Dial View");
+      expect(shownView()).toBe("list");
     });
   });
 
@@ -893,7 +899,7 @@ describe("ModelDial", () => {
     });
 
     it("keeps one step per wheel event in List View", async () => {
-      await act(async () => document.querySelector<HTMLButtonElement>(".model-dial-view")!.click());
+      await act(async () => viewButton("list").click());
       await act(async () => {
         for (let i = 0; i < 3; i++) document.querySelector(".model-cross-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 4, bubbles: true, cancelable: true }));
       });

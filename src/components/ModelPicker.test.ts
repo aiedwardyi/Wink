@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
 import { modelFamilyAccent } from "@/lib/model-chip";
-import { savePickerLook } from "@/lib/picker-look";
 import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot, InstanceInfo } from "@/state/store";
 
@@ -695,26 +694,17 @@ describe("ModelPicker light skins", () => {
   });
 });
 
-describe("ModelPicker picked look", () => {
+describe("ModelPicker look", () => {
   it.each([
-    ["precision", "light", "wink-day"],
-    ["precision", "atelier", "atelier"],
-    ["precision", "dark", undefined],
-    ["mono-hud", "light", "wink-day"],
-    ["mono-hud", "dark", "precision"],
-    ["notebook", "light", undefined],
-    ["notebook", "dark", undefined],
-    ["notebook", "atelier", "atelier"],
-    ["atelier", "light", "wink-day"],
-    ["atelier", "atelier", undefined],
-    ["atelier", "dark", undefined],
-  ] as const)("on the %s skin draws the %s look", (skin, look, colors) => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null), setItem: () => undefined });
+    ["precision", undefined],
+    ["mono-hud", "precision"],
+    ["wink-day", undefined],
+    ["atelier", undefined],
+  ] as const)("on the %s skin borrows %s colors", (skin, colors) => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => (key === "omb-skin" ? skin : null) });
     try {
-      savePickerLook(look);
       const backdrop = markup(bot.modelSelection, true).match(/<div [^>]*class="model-cross-backdrop[^>]*>/)?.[0] ?? "";
       expect(backdrop.match(/ data-skin="([^"]+)"/)?.[1]).toBe(colors);
-      expect(backdrop.includes(' data-light="true"')).toBe(look !== "dark");
     } finally {
       vi.unstubAllGlobals();
     }

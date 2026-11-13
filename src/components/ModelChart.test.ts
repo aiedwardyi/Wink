@@ -165,17 +165,16 @@ describe("ModelChart", () => {
     expect(saved()).toBeUndefined();
   });
 
-  it("switches to the list view from the chart", async () => {
+  it("switches to the list view from the chart and back", async () => {
     await mount();
-    const toggle = document.querySelector<HTMLButtonElement>(".model-dial-view")!;
-    expect(toggle.textContent).toBe("List View");
-    await act(async () => toggle.click());
+    const button = (view: string) => document.querySelector<HTMLButtonElement>(`.model-dial-view [data-picker-view="${view}"]`)!;
+    expect(button("chart").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button("list").click());
     expect(document.querySelector(".model-chart")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("list");
-    const back = document.querySelector<HTMLButtonElement>(".model-dial-view")!;
-    expect(back.textContent).toBe("Chart View");
-    await act(async () => back.click());
+    expect(button("list").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button("chart").click());
     expect(document.querySelector(".model-chart")).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("chart");
   });
