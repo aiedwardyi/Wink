@@ -93,6 +93,8 @@ function record(host: RoomSyncHost, entry: Pending): void {
   }
   file.pending = file.pending.filter((older) => entry.deleted ? older.groupId !== entry.groupId : older.deleted || Object.keys(older.changes).length);
   file.pending.push(entry);
+  // a responder picked here outranks one still waiting for its bot
+  if ("defaultResponder" in entry.changes) delete file.unresolved[entry.groupId]?.responder;
   save(host, file);
 }
 
@@ -161,7 +163,7 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
   const before = JSON.stringify(file);
   const marked = new Set(file.marked);
   let written = 0;
-  const write = (groupId: string, changes: Record<string, unknown>, at: number, deleted = false) => {
+  const write = (groupId: string, changes: Record<string, unknown>, at: number, deleted = false): boolean => {
     try {
       const operation = createSyncOperation({
         entity: "room", entityId: groupId, ...(deleted ? { deleted: true } : { changes }),
@@ -170,35 +172,40 @@ export function publishRooms(host: RoomSyncHost, folder: string): number {
       writeSyncOperation(folder, operation);
       for (const field of Object.keys(changes)) file.applied[`${groupId}:${field}`] = operation.operationId;
       written++;
+      return true;
     } catch (error) {
       console.warn(`room sync: skipped room ${groupId}`, error);
+      return false;
     }
   };
   const fresh = store.groups.filter((group) => !group.hosted && !marked.has(group.id));
   if (fresh.length) {
     const known = applySyncOperations(emptyProfileSyncState(), readSyncOperations(folder).operations);
     for (const group of fresh) {
-      marked.add(group.id);
-      if (known.rooms[group.id] || known.tombstones[`room:${group.id}`]) continue;
+      if (known.rooms[group.id] || known.tombstones[`room:${group.id}`]) {
+        marked.add(group.id);
+        continue;
+      }
       // an old stamp fills in PCs that lack the room and never beats a real edit made later anywhere
       const { sync, held } = toSync(store, settings.botMap, createChanges(group));
+      if (!write(group.id, sync, group.createdAt)) continue;
+      marked.add(group.id);
       file.pending = file.pending.filter((entry) => entry.groupId !== group.id || entry.deleted);
       if (Object.keys(held).length) file.pending.push({ groupId: group.id, at: group.createdAt, changes: held });
-      write(group.id, sync, group.createdAt);
     }
   }
   const left: Pending[] = [];
   for (const entry of [...file.pending].sort((a, b) => a.at - b.at)) {
     if (entry.deleted) {
-      write(entry.groupId, {}, entry.at, true);
-      forget(file, marked, entry.groupId);
+      if (write(entry.groupId, {}, entry.at, true)) forget(file, marked, entry.groupId);
+      else left.push(entry);
       continue;
     }
     const group = store.group(entry.groupId);
     if (!group || group.hosted) continue;
     const { sync, held } = toSync(store, settings.botMap, entry.changes);
-    if (Object.keys(held).length) left.push({ ...entry, changes: held });
-    if (Object.keys(sync).length) write(entry.groupId, sync, entry.at);
+    if (Object.keys(sync).length && !write(entry.groupId, sync, entry.at)) left.push(entry);
+    else if (Object.keys(held).length) left.push({ ...entry, changes: held });
   }
   file.pending = left;
   file.marked = [...marked];
@@ -260,6 +267,8 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       group = store.addSyncedGroup(syncedRecord(remote));
     }
     marked.add(id);
+    // a roster change waits for the turn, as the roster route does
+    const busy = host.working(group);
     // a field edited here and not sent yet keeps its local value
     const waiting = new Set(mine.flatMap((entry) => Object.keys(toSync(store, botMap, entry.changes).sync)));
     const patch: Partial<GroupRecord> = {};
@@ -269,6 +278,10 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       const version = state.fieldVersions[`room:${id}:${field}`];
       const key = `${id}:${field}`;
       if (field === "id" || !version || file.applied[key] === version.operationId || waiting.has(field)) continue;
+      if (busy && field.startsWith(MEMBER)) {
+        deferred = true;
+        continue;
+      }
       file.applied[key] = version.operationId;
       if (field.startsWith(MEMBER)) {
         const syncId = field.slice(MEMBER.length);
@@ -288,13 +301,16 @@ export function importRooms(host: RoomSyncHost, state: ProfileSyncState, folder:
       }
     }
     // members another PC named before this one had their bots
-    for (const syncId of unresolved.members) {
-      const localId = localIdForSyncId(botMap, syncId);
-      if (localId && !members.includes(localId)) members.push(localId);
+    if (!busy) {
+      for (const syncId of unresolved.members) {
+        const localId = localIdForSyncId(botMap, syncId);
+        if (localId && !members.includes(localId)) members.push(localId);
+      }
+      unresolved.members = unresolved.members.filter((syncId) => !localIdForSyncId(botMap, syncId));
     }
-    unresolved.members = unresolved.members.filter((syncId) => !localIdForSyncId(botMap, syncId));
+    // the store would swap a responder who is not a member yet for another member
     const responderId = unresolved.responder && localIdForSyncId(botMap, unresolved.responder);
-    if (responderId) {
+    if (responderId && members.includes(responderId)) {
       patch.defaultResponder = { kind: "member", botId: responderId };
       delete unresolved.responder;
     }

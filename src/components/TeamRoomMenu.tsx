@@ -301,9 +301,9 @@ export function TeamRoomDialogs() {
     const target = roomTarget;
     if (open !== "delete" || !target || target.hosted) return;
     let live = true;
-    // only chat sync carries a delete to other PCs; a local delete still needs no confirm
+    // only chat sync carries a delete to other PCs; a known local delete needs no confirm
     void api("/api/profile-sync")
-      .then((body) => body?.configured === true && body?.syncChats === true, () => false)
+      .then((body) => body?.configured === true && body?.syncChats === true, () => true)
       .then((reach) => {
         if (!live) return;
         if (reach) return setEveryPc(true);

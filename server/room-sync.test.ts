@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -160,6 +160,52 @@ describe("room records over profile sync", () => {
     expect(store.group("room-1")).toBeTruthy();
     importRooms(host(), state(), folder);
     expect(store.groups.map((group) => group.id)).toEqual([mine.id]);
+  });
+
+  it("keeps a create, an edit and a delete that failed to write", () => {
+    const atlas = bot("Atlas", "sync-atlas");
+    const group = store.createGroup("Plans", [atlas.id]);
+    const changes = join(folder, "changes");
+    const blocked = () => {
+      renameSync(changes, `${changes}-off`);
+      writeFileSync(changes, "");
+      expect(publishRooms(host(), folder)).toBe(0);
+      rmSync(changes);
+      renameSync(`${changes}-off`, changes);
+      return publishRooms(host(), folder);
+    };
+    mkdirSync(changes);
+    expect(blocked()).toBe(1);
+    roomEdited(host(), group, { name: "Plans 2" });
+    expect(blocked()).toBe(1);
+    expect(state().rooms[group.id]!.name).toBe("Plans 2");
+    roomRemoved(host(), group);
+    expect(blocked()).toBe(1);
+    expect(state().tombstones[`room:${group.id}`]).toBeTruthy();
+  });
+
+  it("holds a responder until its bot joins the room", () => {
+    const atlas = bot("Atlas", "sync-atlas");
+    const nova = bot("Nova", "sync-nova");
+    remote("room-1", created("room-1", { "member.sync-atlas": true }), T0);
+    sync();
+    remote("room-1", { defaultResponder: { kind: "member", botId: "sync-nova" } }, T0 + 1_000);
+    sync();
+    remote("room-1", { "member.sync-nova": true }, T0 + 2_000);
+    sync();
+    expect(store.group("room-1")).toMatchObject({ memberIds: [atlas.id, nova.id], defaultResponder: { kind: "member", botId: nova.id } });
+  });
+
+  it("waits for a running turn before changing the roster", () => {
+    const atlas = bot("Atlas", "sync-atlas");
+    const nova = bot("Nova", "sync-nova");
+    remote("room-1", created("room-1", { "member.sync-atlas": true, "member.sync-nova": true }), T0);
+    sync();
+    remote("room-1", { name: "Plans 2", "member.sync-nova": false }, T0 + 1_000);
+    expect(importRooms(host(true), state(), folder)).toEqual({ deferred: true });
+    expect(store.group("room-1")).toMatchObject({ name: "Plans 2", memberIds: [atlas.id, nova.id] });
+    importRooms(host(), state(), folder);
+    expect(store.group("room-1")!.memberIds).toEqual([atlas.id]);
   });
 
   it("keeps team rooms on their host", () => {
