@@ -195,7 +195,7 @@ function MediaVideo({ file, top, left, size }: { file: MediaFile; top: number; l
   return (
     <MediaOpen file={file} style={{ top, left, width: size, height: size }}
       className="absolute flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2 text-ink-secondary focus-visible:outline-2 focus-visible:outline-accent">
-      {file.src ? <MediaClip src={file.src} name={file.name}>{tile}</MediaClip> : tile}
+      {file.src && !file.whole ? <MediaClip src={file.src} name={file.name}>{tile}</MediaClip> : tile}
     </MediaOpen>
   );
 }

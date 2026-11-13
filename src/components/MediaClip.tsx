@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Play } from "lucide-react";
 
 import { useThumb } from "@/lib/media-thumbs";
@@ -39,12 +39,14 @@ export function MediaClip({ src, name, children }: { src: string; name: string; 
 
 function HoverPlay({ src }: { src: string }) {
   const [playing, setPlaying] = useState(false);
-  return <video ref={start} src={src} muted loop playsInline disablePictureInPicture data-loaded={playing || undefined} onPlaying={() => setPlaying(true)}
+  const ref = useCallback((video: HTMLVideoElement) => start(video, src), [src]);
+  return <video ref={ref} muted loop playsInline disablePictureInPicture data-loaded={playing || undefined} onPlaying={() => setPlaying(true)}
     className="absolute inset-0 size-full object-cover" />;
 }
 
 // a removed video keeps its decoder and connection until collected, so let go of both now
-function start(video: HTMLVideoElement) {
+function start(video: HTMLVideoElement, src: string) {
+  video.setAttribute("src", src);
   video.muted = true;
   void video.play().catch(() => {});
   return () => {

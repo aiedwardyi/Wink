@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -529,6 +529,30 @@ it("a video tile reads its frame only once the scroll rests", async () => {
   expect(tile.querySelector("img")).toBeNull();
   await wait(250);
   expect(tile.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+});
+
+it("a hover preview keeps its source when StrictMode runs its ref twice", async () => {
+  frames(true);
+  await act(async () => showMedia("t1"));
+  await act(async () => root.render(createElement(StrictMode, null, createElement(Pane, { source: clipChat("loop.mp4") }))));
+  await settle();
+  const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="loop.mp4"]')!;
+  await hover(tile.firstElementChild!, "pointerover");
+  await wait(300);
+  expect(tile.querySelector("video")!.getAttribute("src")).toBe("/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\loop.mp4"));
+});
+
+it("a room video keeps its play icon and name, since a room sends its files whole", async () => {
+  frames(true);
+  room = { files: [{ id: id(4), name: "walk.mp4", type: "video/mp4", bytes: 10, at: 4, sender: "Mina" }] };
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  const { togglePane } = await import("@/lib/show-pane");
+  await act(async () => togglePane("r-thread"));
+  await click(tab("Media"));
+  await settle();
+  const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="walk.mp4"]')!;
+  expect(tile.querySelector("img")).toBeNull();
+  expect(tile.querySelector(".truncate")!.textContent).toBe("walk.mp4");
 });
 
 it("a video whose frame can't be read keeps its play icon and name", async () => {
