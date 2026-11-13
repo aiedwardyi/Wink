@@ -37,6 +37,7 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     boop() { this.cues.push("boop"); },
     cues: [] as string[],
     heardShare: () => 0.5,
+    micLevel: () => 0,
     onIdle: () => {},
     onStart: () => {},
   };
@@ -241,7 +242,7 @@ describe("LiveCall", () => {
     engine().events.answering();
     await flush();
     expect(posts.some((p) => p.path === "/api/bots/b1/messages")).toBe(true);
-    expect(engine().results).toEqual([{ id: "t1", result: "queued" }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "queued. They already heard you answer: say nothing more." }]);
   });
 
   it("declines on a spoken no and ignores ambiguous words", async () => {
@@ -261,8 +262,9 @@ describe("LiveCall", () => {
     const { call, engine } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "A" } }]);
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "B" } }]);
-    expect(engine().results).toEqual([{ id: "t1", result: "replaced: a newer offer took its place. They did not decline." }]);
+    expect(engine().results).toEqual([]);
     vi.advanceTimersByTime(45_000);
+    expect(engine().frames).toEqual([["t1", "t2"]]);
     expect(engine().results.at(-1)).toEqual({ id: "t2", result: "expired: no answer came in time. They did not decline." });
     engine().events.toolCall([{ id: "t3", name: "propose_work", args: { order: "C" } }]);
     engine().events.toolCancel(["t3"]);
@@ -571,7 +573,7 @@ describe("LiveCall", () => {
     await flush();
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "restart the home PC at 8:15 PM" } }]);
     expect(call.state().pending).toBeUndefined();
-    expect(engine().results).toEqual([{ id: "t1", result: "sent" }, { id: "t2", result: "already sent" }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "sent. They already heard you answer: say nothing more." }, { id: "t2", result: "already sent" }]);
     engine().events.toolCall([{ id: "t3", name: "propose_work", args: { order: "Check the build." } }]);
     engine().events.toolCall([{ id: "t4", name: "propose_work", args: { order: "Check the build" } }]);
     expect(engine().results).toHaveLength(2);
@@ -783,7 +785,7 @@ describe("VOICE-SNAGS", () => {
     vi.useRealTimers();
     expect(engine().results).toEqual([
       { id: "t0", result: "not sent: no order given" },
-      { id: "t1", result: "replaced: a newer offer took its place. They did not decline." },
+      { id: "t1", result: "expired: no answer came in time. They did not decline." },
       { id: "t2", result: "expired: no answer came in time. They did not decline." },
     ]);
   });
@@ -814,7 +816,7 @@ describe("one reply per turn", () => {
     await flush();
     expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Switch to a more natural voice for me."]);
     expect(engine().frames).toEqual([["t1", "t2"]]);
-    expect(engine().results).toEqual([{ id: "t1", result: "sent" }, { id: "t2", result: "sent" }]);
+    expect(engine().results).toEqual([{ id: "t1", result: "sent. They already heard you answer: say nothing more." }, { id: "t2", result: "sent. They already heard you answer: say nothing more." }]);
   });
 
   it("a spoken no the voice is already answering tells it to say nothing more", async () => {
@@ -911,7 +913,7 @@ describe("VOICE-SEND: dropped orders (D1-D7)", () => {
     const { call, engine, posts } = await started();
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "A" } }]);
     engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "B" } }]);
-    expect(engine().results).toEqual([{ id: "t1", result: "replaced: a newer offer took its place. They did not decline." }]);
+    expect(engine().results).toEqual([]);
     call.end();
     await flush();
     expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats.orders).toMatchObject({ proposed: 2, replaced: 1, declined: 0 });
@@ -2168,5 +2170,158 @@ describe("LiveCall back from the background", () => {
     call.hidden(false);
     await flush();
     expect(audio.heal).not.toHaveBeenCalled();
+  });
+});
+
+const HEARD = "They already heard you answer: say nothing more.";
+
+describe("VOICE-HUSH: one line per answer", () => {
+  it("a spoken yes settled before the voice's turn tells it the yes was heard", async () => {
+    const { engine } = await started({ "/messages": ACCEPTED });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Tell Rando to create a group for me." } }]);
+    vi.useFakeTimers();
+    engine().events.heard("Yeah.");
+    vi.advanceTimersByTime(LIVE_VAD.silenceDurationMs);
+    vi.useRealTimers();
+    await flush();
+    expect(engine().results).toEqual([{ id: "t1", result: `sent. ${HEARD}` }]);
+  });
+
+  it("a spoken yes whose send lands before the voice's turn ends tells it the yes was heard", async () => {
+    const { engine } = await started({ "/messages": ACCEPTED });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
+    engine().events.heard("Yeah.");
+    engine().events.answering();
+    await flush();
+    expect(engine().results).toEqual([{ id: "t1", result: `sent. ${HEARD}` }]);
+  });
+
+  it("a spoken no settled before the voice's turn tells it the no was heard", async () => {
+    const { engine } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Look up Baji Kitchen." } }]);
+    vi.useFakeTimers();
+    engine().events.heard("No.");
+    vi.advanceTimersByTime(LIVE_VAD.silenceDurationMs);
+    expect(engine().results).toEqual([{ id: "t1", result: `declined. ${HEARD}` }]);
+  });
+});
+
+describe("VOICE-HUSH: a re-offer is no answer", () => {
+  it("an offer said again after talk that is no yes gets no result of its own", async () => {
+    const { call, engine, posts } = await started();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Remove the dictation feature and move the call button to the bottom right." } }]);
+    turn(engine(), "인터넷은 그거 있어야 돼. 근데 그 돈 나와. 할 때마다 돈 나와.", "I understand, removing dictation avoids those extra costs.");
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Remove the dictation feature to cut costs." } }]);
+    expect(engine().results).toEqual([]);
+    expect(call.state().pending?.order).toBe("Remove the dictation feature to cut costs.");
+    engine().events.heard("No, no, stop.");
+    engine().events.answering();
+    await flush();
+    expect(engine().frames).toEqual([["t1", "t2"]]);
+    expect(engine().results.map((r) => r.result)).toEqual([`declined. ${HEARD}`, `declined. ${HEARD}`]);
+    expect(messagesOf(posts)).toEqual([]);
+  });
+});
+
+describe("VOICE-HUSH: be quiet", () => {
+  const pcm = new Int16Array([500, -500]);
+  function speaker() {
+    const audio = { ...fakeAudio(), played: 0 };
+    audio.play = () => { audio.played += 1; };
+    return audio;
+  }
+  const ROOM = {
+    ko: { hush: "잠깐만, 조용해.", talk: ["네, 지금 이 새로운 방에 인바이트 할게요.", "Baji Kitchen", "네.", "그걸 딱 클릭하면은 아무 변화가 없어.", "Peter는 뭐예요?", "이거 뺄 거예요. 없애 버려.", "응, 그렇게 해서 해도 돼요."], wake: "헤이, 들려?" },
+    en: { hush: "Hold on, be quiet.", talk: ["Yeah, so this is the new room.", "Baji Kitchen", "Yes.", "What is Peter?", "Can you remove the dictation button?", "Okay, do it.", "Sure, sounds good."], wake: "Nova, you there?" },
+  };
+
+  it.each(["ko", "en"] as const)("%s: 60 s of nearby talk after be quiet gets no voice, send or relay until they call it", async (lang) => {
+    const { hush, talk, wake } = ROOM[lang];
+    const audio = speaker();
+    const { call, engine, posts } = await started({ "/messages": ACCEPTED }, audio);
+    const e = engine();
+    e.events.turnDone();
+    const told = e.texts.length;
+    vi.useFakeTimers();
+    e.events.heard(hush);
+    e.events.answering();
+    e.events.audio(pcm);
+    e.events.said(lang === "ko" ? "네, 알겠어요." : "Okay.");
+    e.events.turnDone();
+    call.observe({ busy: false, messages: [cardRow("q1")] });
+    const lines = linesOf(posts).length;
+    for (let t = 0; t < 60; t += 5) {
+      const line = talk[(t / 5) % talk.length]!;
+      e.events.heard(line);
+      e.events.answering();
+      e.events.audio(pcm);
+      e.events.said("Want me to look up Baji Kitchen for you?");
+      e.events.toolCall([{ id: `p${t}`, name: "propose_work", args: { order: "Look up Baji Kitchen." } }]);
+      e.events.toolCall([{ id: `a${t}`, name: "ask", args: { question: line } }]);
+      e.events.turnDone();
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(audio.played).toBe(0);
+    expect(messagesOf(posts)).toEqual([]);
+    expect(call.state().pending).toBeUndefined();
+    expect(e.texts.length).toBe(told);
+    expect(linesOf(posts).slice(lines)).toEqual(talk.concat(talk).slice(0, 12));
+    e.events.heard(wake);
+    e.events.answering();
+    e.events.audio(pcm);
+    expect(audio.played).toBe(1);
+    e.events.said("I'm here.");
+    e.events.turnDone();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(e.texts.slice(told)).toEqual([expect.stringMatching(/^\[Wink\] Nova asks:/)]);
+  });
+
+  it("a tap wakes it, and naming it in the hush line does not", async () => {
+    const audio = speaker();
+    const { call, engine } = await started({}, audio);
+    engine().events.heard("Nova, stop talking.");
+    engine().events.audio(pcm);
+    expect(audio.played).toBe(0);
+    expect(call.state().hushed).toBe(true);
+    call.wake();
+    expect(call.state().hushed).toBeUndefined();
+    engine().events.audio(pcm);
+    expect(audio.played).toBe(1);
+  });
+});
+
+describe("MIC-HINT", () => {
+  async function silentMic() {
+    vi.useFakeTimers();
+    const mic = { level: 0, frame: (_pcm: ArrayBuffer) => {} };
+    const audio = { ...fakeAudio(), micLevel: () => mic.level, async capture(onFrame: (pcm: ArrayBuffer) => void) { mic.frame = onFrame; } };
+    const s = setup({}, audio, () => Date.now());
+    await s.call.start();
+    s.engine().events.ready();
+    const tick = (ms: number) => {
+      for (let t = 0; t < ms; t += 100) {
+        vi.advanceTimersByTime(100);
+        mic.frame(new ArrayBuffer(640));
+      }
+    };
+    return { ...s, mic, tick };
+  }
+
+  it("shows after 5 s of total input silence and clears on the first sound", async () => {
+    const { call, mic, tick } = await silentMic();
+    tick(4_500);
+    expect(call.state().micSilent).toBeUndefined();
+    tick(1_500);
+    expect(call.state().micSilent).toBe(true);
+    mic.level = 0.02;
+    mic.frame(new ArrayBuffer(640));
+    expect(call.state().micSilent).toBeUndefined();
+  });
+
+  it("a quiet room never shows it", async () => {
+    const { call, mic, tick } = await silentMic();
+    mic.level = 0.0005;
+    tick(10_000);
+    expect(call.state().micSilent).toBeUndefined();
   });
 });

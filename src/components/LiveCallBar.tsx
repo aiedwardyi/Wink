@@ -17,7 +17,7 @@ import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -44,6 +44,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     voiceOut: "Out of voice for today. Keep typing, I'm still here.",
     openSettings: "Open settings",
     openCall: "Back to the call with {bot}",
+    hushed: "Quiet · tap to talk",
+    micSilent: "Can't hear your mic. Check your sound input.",
   },
   ko: {
     starting: "연결 중…",
@@ -71,6 +73,8 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     voiceOut: "오늘 음성 통화는 여기까지입니다. 채팅으로 계속 이야기하세요.",
     openSettings: "설정 열기",
     openCall: "{bot} 통화로 돌아가기",
+    hushed: "조용히 하는 중 · 탭해서 말하기",
+    micSilent: "마이크 소리가 안 들려요. 입력 장치를 확인해 주세요.",
   },
 };
 

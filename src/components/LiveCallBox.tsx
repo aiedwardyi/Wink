@@ -88,7 +88,11 @@ function Controls({ bot, live, closing }: { bot: Bot; live: Live; closing: boole
   const icon = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
   return (
     <>
-      {captions && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
+      {snap.micSilent && talking && !snap.muted
+        ? <p data-call-mic-hint role="status" className="pointer-events-none col-span-full row-start-1 self-center px-1 py-1 text-[15px] leading-6 text-ink-secondary">{words.micSilent}</p>
+        : snap.hushed && talking
+          ? <button type="button" data-call-hushed onClick={() => call.wake()} className="col-span-full row-start-1 self-center justify-self-start px-1 py-1 text-left text-[15px] leading-6 font-medium text-accent hover:underline">{words.hushed}</button>
+          : captions && snap.caption && <CaptionLine caption={snap.caption} who={snap.caption.who === "user" ? words.you : bot.name} />}
       <div data-call-box={snap.status} data-leaving={closing || undefined} className="col-start-2 row-start-3 mt-1 flex min-w-0 items-center gap-1">
         <p role="status" className="flex min-w-0 items-center gap-2 px-1 text-[13px] tabular-nums text-ink-secondary">
           {snap.status === "starting"

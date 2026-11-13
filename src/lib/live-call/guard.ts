@@ -59,3 +59,16 @@ const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question
 export function asksToRepeat(heard: string): boolean {
   return AGAIN.test(heard);
 }
+
+const QUIET = /\b(?:be quiet|keep quiet|stay quiet|quiet down|stop talking|shut up|hush|shh+|zip it)\b|조용(?:히|해)|그만 말|말하지\s?마|닥쳐|쉿/i;
+
+/** The person telling the voice to stop talking for now, which is not a no to a job. */
+export function asksForQuiet(heard: string): boolean {
+  return QUIET.test(heard);
+}
+
+/** Talking to the voice again: its name or a "hey". */
+export function callsVoice(heard: string, name: string): boolean {
+  const own = name.trim().toLowerCase();
+  return /\bhey\b|헤이/i.test(heard) || (own !== "" && heard.toLowerCase().includes(own));
+}
