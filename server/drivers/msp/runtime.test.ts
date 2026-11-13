@@ -1099,14 +1099,15 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
   let spawn: MockInstance<typeof procs.spawnCli>;
   const realSpawn = procs.spawnCli;
   const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
+  const start = async () => (instance ??= await MspMuseAgentDriver.create({
+    instanceId: "muse-direct",
+    displayName: "Muse",
+    environment: {},
+    enabled: true,
+    config: { cli: install.cli, fullAuto: true, workspace: dir },
+  }));
   const runTurn = async (threadId: string) => {
-    instance ??= await MspMuseAgentDriver.create({
-      instanceId: "muse-direct",
-      displayName: "Muse",
-      environment: {},
-      enabled: true,
-      config: { cli: install.cli, fullAuto: true, workspace: dir },
-    });
+    const instance = await start();
     const recorder = recordEvents(instance.adapter);
     try {
       await instance.adapter.sendTurn({ threadId, text: "hi" });
@@ -1144,6 +1145,27 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
     });
     // The version probe still runs the launcher, and with it Muse's update check.
     expect(exec.mock.calls.some(([cli, args]) => cli === install.cli && args.includes("--version"))).toBe(true);
+  });
+
+  it("lowers a direct-started handshake host and leaves the launcher at Normal", async () => {
+    // The host inherits the runner's class, which can itself be below Normal.
+    const runner = os.getPriority();
+    os.setPriority(os.constants.priority.PRIORITY_NORMAL);
+    const hostPriority = async () => {
+      await (await start()).prepare!();
+      const index = spawn.mock.calls.findLastIndex((call) => call[1].includes("serve"));
+      return os.getPriority(spawn.mock.results[index].value.pid);
+    };
+    try {
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_BELOW_NORMAL);
+      await instance!.dispose();
+      instance = undefined;
+      mapped.clear();
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_NORMAL);
+      expect(serveCalls().map(([command]) => command)).toEqual([install.exe, install.exe, install.cli]);
+    } finally {
+      os.setPriority(runner);
+    }
   });
 
   it("follows an update that renames the exe", async () => {
