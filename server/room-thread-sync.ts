@@ -23,7 +23,7 @@ export type RoomThreads = ReturnType<typeof createRoomThreads>;
 
 const target = (group: GroupRecord) => ({ botId: group.id, botSyncId: `${ROOM_SCOPE}${group.id}` });
 
-function mapRow(message: Message, map: (botId: string) => string | undefined): Message {
+export function mapRow(message: Message, map: (botId: string) => string | undefined): Message {
   const next = { ...message };
   const from = message.from && map(message.from.botId);
   if (from) next.from = { ...message.from!, botId: from };
@@ -107,6 +107,15 @@ export function createRoomThreads(host: RoomThreadsHost) {
     },
     scopes: () => store.groups.filter((group) => !group.hosted).map(target),
     owns: (groupId: string) => Boolean(room(groupId)),
+    threads: (groupId: string) => {
+      const group = room(groupId);
+      return group ? threadIds(group) : [];
+    },
+    /** Live bots' sync ids for seeding rows written before the room synced; members get one now, as `outgoing` would. */
+    seedIds(groupId: string): Record<string, string> {
+      for (const botId of room(groupId)?.memberIds ?? []) if (store.bot(botId)) host.syncId(botId);
+      return Object.fromEntries(Object.entries(host.botMap()).filter(([botId]) => store.bot(botId)));
+    },
     task,
     apply,
     /** A deleted bot has no sync id to give and keeps its local one. */

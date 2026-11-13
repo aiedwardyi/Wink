@@ -7,7 +7,8 @@ import { z } from "zod";
 import { BotTrash, trashedWorkspaceDir } from "../bot-trash.ts";
 import { createBotTrashActions, trashDaysLeft } from "../bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "../bot-trash-sync.ts";
-import { closeMessageDb } from "../message-db.ts";
+import { closeMessageDb, withMessageTransaction } from "../message-db.ts";
+import { getOrCreateChannel } from "../comms-visibility.ts";
 import { writeDeviceRecord } from "../device-sync.ts";
 import {
   applySyncOperations, bindSyncId, botDeletesToPublish, createSyncOperation, dropSyncedBot, emptyProfileSyncState, loadOrCreateSyncWorkspace,
@@ -32,8 +33,8 @@ export interface Places { bots: PlaceBot[]; trash: PlaceBot[] }
 export interface PlaceRoom { id: string; threadId: string; name: string; members: string[]; dm: boolean; setup: boolean }
 export interface RoomRow { id: string; role: string; text?: string; from?: string; parentId?: string | null }
 export interface RoomChat { active: string; busy: boolean; threads: Array<{ id: string; title: string; rows: RoomRow[] }>; written: string[] }
-export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean; title?: string }
-export type TestResult = ReportBot[] | Places | PlaceRoom[] | RoomChat | Record<string, string> | number | boolean | undefined;
+export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean; skew?: number; old?: boolean; room?: string; members?: string[]; dm?: boolean; hosted?: boolean; title?: string }
+export type TestResult = ReportBot[] | Places | PlaceRoom[] | RoomChat | Record<string, string> | string | number | boolean | undefined;
 
 const { dataDir } = z.object({ dataDir: z.string() }).parse(workerData);
 const DAY = 86_400_000;
@@ -372,7 +373,7 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
       return;
     case "room":
       // index.ts group routes: a create publishes on the next pass, an edit or delete is heard before it lands
-      store.createGroup(args.room!, (args.members ?? []).map((name) => live(name).id), args.dm === true);
+      store.createGroup(args.room!, (args.members ?? []).map((name) => live(name).id), args.dm === true, undefined, undefined, args.hosted ? { roomId: randomUUID() } : undefined);
       return;
     case "roomEdit": {
       const patch = { ...(args.to ? { name: args.to } : {}), ...(args.members ? { memberIds: args.members.map((name) => live(name).id) } : {}) };
@@ -388,14 +389,40 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
     case "rooms":
       return rooms();
     case "roomSay": {
-      // `bot` is a member's name, or any other id to send as a bot this PC lacks
+      // `bot` is a member's name, or any other id to send as a bot this PC lacks; `to` adds a channel chip
       const group = room(args.room!);
       const threadId = args.title ? group.tasks!.find((task) => task.title === args.title)!.threadId : group.threadId;
       const bot = args.bot ? store.bots.find((candidate) => candidate.name === args.bot) : undefined;
       const from = args.bot ? { botId: bot?.id ?? args.bot, name: args.bot, color: "#3366ff" } : undefined;
-      if (from) store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text!, from });
+      if (args.to) {
+        const comm = { groupId: group.id, withBotId: live(args.to).id, withName: args.to, withColor: "#3366ff" };
+        store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text!, from, comm });
+      } else if (from) store.appendMessage(threadId, { role: "bot", kind: "text", text: args.text!, from });
       else store.appendMessage(threadId, { role: "user", kind: "text", text: args.text! });
       return;
+    }
+    case "exchange": {
+      // internal-routes ask_bot: the pair's channel takes the line
+      const [from, to] = [live(args.bot!), live(args.to!)];
+      const channel = getOrCreateChannel(store, from, to);
+      store.appendMessage(channel.threadId, {
+        role: "bot", kind: "text", text: args.text!, from: { botId: from.id, name: from.name, color: from.color },
+        comm: { groupId: channel.id, withBotId: to.id, withName: to.name, withColor: to.color },
+      });
+      return channel.name;
+    }
+    case "reseed": {
+      // forgets which room threads chat sync took, as a lost store would
+      const threadIds = store.groups.filter((group) => !group.hosted).flatMap((group) => [...roomThreadIds(group)]);
+      return withMessageTransaction((db) => threadIds.reduce((n, threadId) => {
+        db.prepare("DELETE FROM sync_v2_migration WHERE thread = ?").run(threadId);
+        db.prepare("DELETE FROM sync_v2_snapshot WHERE thread = ?").run(threadId);
+        return n + Number(db.prepare("DELETE FROM sync_v2_store WHERE threadId = ?").run(threadId).changes);
+      }, 0));
+    }
+    case "packets": {
+      const threadIds = store.groups.flatMap((group) => [...roomThreadIds(group)]);
+      return withMessageTransaction((db) => threadIds.reduce((n, threadId) => n + Number(db.prepare("SELECT COUNT(*) AS n FROM sync_v2_packets WHERE thread = ?").get(threadId)!.n), 0));
     }
     case "roomTask":
       store.createGroupTask(room(args.room!).id, args.title);

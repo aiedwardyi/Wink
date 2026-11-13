@@ -142,11 +142,11 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     return moved;
   }
 
-  /** Null for a room thread that holds rows from while it was not syncing: they wait for a seed that maps their bot ids. */
+  /** Null for a room thread while sync is off; one with earlier rows is seeded like a legacy thread. */
   function register(threadId: string, target: Target, legacy = false): StoredTask | null {
     const task = taskOf(target, threadId);
     const existing = stored(threadId);
-    if (!existing && room(target) && (!host.enabled() || !fresh(threadId))) return null;
+    if (!existing && room(target) && !host.enabled()) return null;
     if (!existing) withMessageTransaction((db) => db.prepare(
       "INSERT OR IGNORE INTO sync_v2_store(threadId, botId, botSyncId, title, createdAt, eligible) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(threadId, target.botId, target.botSyncId, task?.title ?? "New task", task?.createdAt ?? 0, Number(fresh(threadId))));
@@ -581,7 +581,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       if (snapshotOnly && phase !== "snapshot") return;
       if (phase === "recover" || phase === "done") await adopt(task);
       if (host.running(task.threadId)) return;
-      const progress = await transport.migrate(task, undefined, defer);
+      const progress = await transport.migrate(task, undefined, defer, room(task)?.seedIds(task.botId));
       migrationProgress.set(task.threadId, progress);
       if ((progress.localReady || progress.phase === "done") && !task.eligible) {
         markReady(task);
@@ -649,6 +649,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       }
       for (const threadId of await transport.legacyThreads(target.botSyncId)) register(threadId, target, true);
     }
+    if (host.rooms) for (const target of host.rooms.scopes()) for (const threadId of host.rooms.threads(target.botId)) register(threadId, target);
     tasks.push(...withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE eligible = 0").all())));
     for (const task of tasks) await migrate(task, true);
     if (withMessageTransaction((db) => db.prepare("SELECT 1 FROM sync_v2_migration WHERE phase = 'snapshot' AND error IS NULL LIMIT 1").get())) return;
