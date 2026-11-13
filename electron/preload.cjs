@@ -213,6 +213,8 @@ contextBridge.exposeInMainWorld("ogb", {
   showInFolder: (filePath, base) =>
     invoke("desktop:show-file", filePath, base),
   localMediaFile: (file) => invoke("desktop:local-media-file", file),
+  readMediaImage: (src) => invoke("desktop:read-media-image", src),
+  saveMediaImage: (src, name) => invoke("desktop:save-media-image", src, name),
   /** Opens a chat's linked file from the other PC that has it. */
   openPeerFile: (host, threadId, filePath) =>
     invoke("desktop:open-peer-file", host, threadId, filePath),

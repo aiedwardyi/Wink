@@ -172,6 +172,50 @@ it("Copy image writes PNG bytes and closes its menu", async () => {
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
+it("copies an external picture through the desktop image reader", async () => {
+  const src = "https://images.example.test/chart.png";
+  const readMediaImage = vi.fn(async () => ({ bytes: new Uint8Array([137, 80, 78, 71]), type: "image/png" }));
+  window.ogb = { readMediaImage } as unknown as typeof window.ogb;
+  vi.stubGlobal("navigator", { clipboard: { write: vi.fn(async () => {}) } });
+  vi.stubGlobal("ClipboardItem", class {});
+  await open({ threadId: "t1", messages: [{ id: "p1", role: "bot", kind: "text", at: 1, text: `![chart](${src})` }] });
+  rightClick(host.querySelector("[data-media-grid] button")!);
+  await settle();
+  await act(async () => item("Copy image").click());
+  expect(readMediaImage).toHaveBeenCalledWith(src);
+  expect(calls).not.toContain(`GET ${src}`);
+});
+
+it("saves an external picture through the desktop save dialog", async () => {
+  const src = "https://images.example.test/chart.png";
+  const saveMediaImage = vi.fn(async () => true);
+  window.ogb = { saveMediaImage } as unknown as typeof window.ogb;
+  const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  await open({ threadId: "t1", messages: [{ id: "p1", role: "bot", kind: "text", at: 1, text: `![chart](${src})` }] });
+  rightClick(host.querySelector("[data-media-grid] button")!);
+  await settle();
+  await act(async () => item("Save as").click());
+  expect(saveMediaImage).toHaveBeenCalledWith(src, "chart.png");
+  expect(download).not.toHaveBeenCalled();
+});
+
+it("prevents duplicate image save dialogs and leaves a failed save retryable", async () => {
+  let reject!: (reason: Error) => void;
+  const saveMediaImage = vi.fn().mockImplementationOnce(() => new Promise<boolean>((_resolve, fail) => { reject = fail; })).mockResolvedValueOnce(true);
+  window.ogb = { saveMediaImage } as unknown as typeof window.ogb;
+  await open(roomSource);
+  rightClick(host.querySelector("[data-media-grid] button")!);
+  await settle();
+  await act(async () => { item("Save as").click(); item("Save as").click(); });
+  expect(saveMediaImage).toHaveBeenCalledTimes(1);
+  await act(async () => reject(new Error("unavailable")));
+  await settle();
+  expect(document.querySelector('[role="menu"] [role="alert"]')?.textContent).toContain("Couldn't save");
+  await act(async () => item("Save as").click());
+  expect(saveMediaImage).toHaveBeenCalledTimes(2);
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
 it("keeps the menu retryable when clipboard access fails", async () => {
   vi.stubGlobal("navigator", { clipboard: { write: vi.fn(async () => { throw new Error("denied"); }) } });
   vi.stubGlobal("ClipboardItem", class {});

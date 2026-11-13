@@ -32,9 +32,16 @@ function actionsFor(file: MediaFile, roomId?: string, localPath?: string | null,
 }
 
 async function imagePng(src: string): Promise<Blob> {
-  const response = await fetch(src);
-  if (!response.ok) throw new Error("Image unavailable");
-  const blob = await response.blob();
+  let blob: Blob;
+  if (window.ogb?.readMediaImage) {
+    const image = await window.ogb.readMediaImage(src);
+    blob = new Blob([new Uint8Array(image.bytes)], { type: image.type });
+  }
+  else {
+    const response = await fetch(src);
+    if (!response.ok) throw new Error("Image unavailable");
+    blob = await response.blob();
+  }
   if (blob.type === "image/png") return blob;
   const image = await createImageBitmap(blob);
   try {
@@ -59,10 +66,11 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [localPath, setLocalPath] = useState<string | null>(null);
-  const [copyFailed, setCopyFailed] = useState<MediaFile | null>(null);
+  const [imageFailed, setImageFailed] = useState<{ file: MediaFile; action: "copy" | "save" } | null>(null);
   const shown = useRef(files);
   shown.current = files;
   const box = useRef<HTMLDivElement>(null);
+  const saving = useRef(false);
   const actions = menu ? actionsFor(menu.file, roomId, localPath, readOnly) : [];
   useBackLayer(actions.length > 0, () => setMenu(null));
 
@@ -76,7 +84,7 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
       const file = list && fileAt(el, list, target);
       if (!file) return false;
       setLocalPath(null);
-      setCopyFailed(null);
+      setImageFailed(null);
       setMenu({ file, x, y });
       return true;
     };
@@ -155,16 +163,23 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
     if (!menu || !box.current) return;
     const { offsetWidth: width, offsetHeight: height } = box.current;
     setPlace({ top: Math.max(EDGE, Math.min(menu.y, window.innerHeight - height - EDGE)), left: Math.max(EDGE, Math.min(menu.x, window.innerWidth - width - EDGE)) });
-  }, [menu, localPath, copyFailed, readOnly]);
+  }, [menu, localPath, imageFailed, readOnly]);
 
   const run = (action: Action, file: MediaFile) => {
     if (action === "copy") {
-      setCopyFailed(null);
+      setImageFailed(null);
       const png = imagePng(file.src!);
       void png.catch(() => {});
       try {
-        void navigator.clipboard.write([new ClipboardItem({ "image/png": png })]).then(() => setMenu((current) => current === menu ? null : current), () => setCopyFailed(file));
-      } catch { setCopyFailed(file); }
+        void navigator.clipboard.write([new ClipboardItem({ "image/png": png })]).then(() => setMenu((current) => current === menu ? null : current), () => setImageFailed({ file, action: "copy" }));
+      } catch { setImageFailed({ file, action: "copy" }); }
+      return;
+    }
+    if (action === "save" && file.image && file.src && window.ogb?.saveMediaImage) {
+      if (saving.current) return;
+      saving.current = true;
+      setImageFailed(null);
+      void window.ogb.saveMediaImage(file.src, file.name).then(() => setMenu((current) => current === menu ? null : current), () => setImageFailed({ file, action: "save" })).finally(() => { saving.current = false; });
       return;
     }
     setMenu(null);
@@ -203,7 +218,7 @@ export function MediaMenu({ frame, files, roomId, readOnly }: { frame: RefObject
             </Fragment>
           );
         })}
-        {copyFailed === menu.file && <p role="alert" className="max-w-56 px-3.5 py-2 text-[12px] text-danger">{t("show.copyImageFailed")}</p>}
+        {imageFailed?.file === menu.file && <p role="alert" className="max-w-56 px-3.5 py-2 text-[12px] text-danger">{t(imageFailed.action === "copy" ? "show.copyImageFailed" : "show.saveImageFailed")}</p>}
       </div>, document.body)}
     <Presence open={deleting !== null}>
       {(leaving) => <ConfirmDialog closing={leaving} title={t("teamRoom.deleteFileTitle")} body={deleting?.name} confirmLabel={t("teamRoom.deleteFile")} confirmDisabled={busy} onConfirm={() => void remove()} onCancel={() => setDeleting(null)}>

@@ -1,7 +1,32 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { resolveOpenTarget } from "./open-file.mjs";
+import { imageBytes, imageFetchFor, resolveOpenTarget, saveImageCopy } from "./open-file.mjs";
+
+export function registerMediaImageIpc(ipcMain, { trusted, optionsFor }) {
+  const source = (event, raw) => {
+    if (!trusted(event)) throw new Error("Untrusted image caller");
+    if (typeof raw !== "string" || !raw) throw new Error("That image URL is invalid");
+    const options = optionsFor(event);
+    const url = new URL(raw, options.origin);
+    if (!["http:", "https:"].includes(url.protocol) && !(url.protocol === "data:" && raw.startsWith("data:image/"))) throw new Error("That image URL is invalid");
+    return { src: url.href, options, fetchImpl: imageFetchFor(url.href, options) };
+  };
+  ipcMain.handle("desktop:read-media-image", async (event, raw) => {
+    const { src, fetchImpl } = source(event, raw);
+    let type = src.startsWith("data:") ? src.slice(5).split(/[;,]/, 1)[0] : "";
+    const bytes = await imageBytes(src, async (url, init) => {
+      const response = await fetchImpl(url, init);
+      type = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
+      return response;
+    });
+    return { bytes, type };
+  });
+  ipcMain.handle("desktop:save-media-image", async (event, raw, name) => {
+    const { src, options, fetchImpl } = source(event, raw);
+    return saveImageCopy(src, { ...options, name, fetchImpl });
+  });
+}
 
 export async function localMediaFile(file, { dataDir, fsp = fs, platform = process.platform }) {
   try {

@@ -123,9 +123,9 @@ export function imageFetchFor(srcURL, { origin, token, fetchImpl = fetch } = {})
 
 // The save dialog confirms before overwriting. Cancel writes nothing; a
 // fetch failure rejects for the caller's error box.
-export async function saveImageCopy(srcURL, { dialog, downloads, window, fetchImpl = fetch, fsp = fs.promises }) {
+export async function saveImageCopy(srcURL, { dialog, downloads, window, name, fetchImpl = fetch, fsp = fs.promises }) {
   const { canceled, filePath } = await dialog.showSaveDialog(window, {
-    defaultPath: path.join(downloads, imageSaveName(srcURL)),
+    defaultPath: path.join(downloads, typeof name === "string" && name && name !== "." && name !== ".." ? path.basename(name) : imageSaveName(srcURL)),
   });
   if (canceled || !filePath) return false;
   await fsp.writeFile(filePath, await imageBytes(srcURL, fetchImpl));
