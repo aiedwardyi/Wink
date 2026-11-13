@@ -76,7 +76,7 @@ describe("delegated ask-back", () => {
     const notes = (threadId: string) => paneNotesForTurn(store.activePath(threadId), new Set(), store.taskByThread(sender.id, threadId)?.paneNotesDeliveredId ?? undefined, false, false, 128_000);
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const enabled = source.match(/const paneWake = new PaneWakeScheduler\(\{\s+enabled: (.+),/)![1];
-    const admit = source.match(/\n  admit: (.+),\n/)![1];
+    const admit = source.match(/new PaneWakeScheduler\(\{[\s\S]+?\n  admit: (.+),\n/)![1];
     const pending = source.match(/\nfunction paneNotesPending\([\s\S]+?\n}\n/)![0];
     const javascript = ts.transpileModule(`${pending}\nconst enabled = ${enabled};\nconst admit = ${admit};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const scope = { ...paneWake, ...mail, paneNotesSinceLastUserTurn, store, commsBus: bus };
