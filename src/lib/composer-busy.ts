@@ -3,11 +3,12 @@
 //
 // Rooms hold client-side lines while a member speaks and flush them FIFO
 // on settle. A second Enter used to no-op after the first hold, so
-// only the first line survived. Every busy send now enqueues (or POSTs
-// for 1:1). 1:1 already POSTs mid-turn (steer-queue); lecturing the empty
-// box about "the turn" made forever-chat feel like supervising an agent.
-// Keep the queue; drop the gate-y chrome.
-import { t, type MessageKey, type Translate } from "./i18n";
+// only the first line survived. A room's plain Enter now steers like a 1:1
+// send when the working member can take it; the rest still enqueue.
+// Lecturing the empty box about "the turn" made forever-chat feel like
+// supervising an agent. Keep the queue; drop the gate-y chrome.
+import { roomRespondersForComposer } from "./group-routing";
+import type { MessageKey } from "./i18n";
 
 export type ComposerBusySendAction = "block" | "dispatch" | "enqueue";
 
@@ -17,11 +18,25 @@ export function composerBusySendAction(input: {
   locked: boolean;
   isRoom: boolean;
   busy: boolean;
+  /** The working member takes this line into its running turn. */
+  canSteer?: boolean;
+  after?: boolean;
   heldCount?: number;
 }): ComposerBusySendAction {
   if (input.locked) return "block";
-  if (input.isRoom && input.busy) return "enqueue";
+  if (input.isRoom && input.busy && (input.after || !input.canSteer)) return "enqueue";
   return "dispatch";
+}
+
+/** A line for the working member alone; an @ to anyone else keeps the room's routing. */
+export function roomLineSteers<T extends { id: string; name: string; hidden?: boolean }>(
+  text: string,
+  members: T[],
+  busyBotId: string | null | undefined,
+): boolean {
+  if (!busyBotId) return false;
+  const responders = roomRespondersForComposer(text, members, { defaultResponder: { kind: "member", botId: busyBotId } });
+  return responders.length === 1 && responders[0]!.id === busyBotId;
 }
 
 /** The model a 1:1 send runs on: a send that queues for the next turn runs on the held pick. */
@@ -58,9 +73,7 @@ export function rearmRoomFlushHold<T>(remaining: readonly T[]): T[] {
 
 export interface ComposerBusyInput {
   busy: boolean;
-  isRoom: boolean;
   canSteer: boolean;
-  name: string;
   idlePlaceholder: string;
   /** Touch has no Ctrl+Enter; a hold on Send does the same. */
   touch?: boolean;
@@ -68,36 +81,21 @@ export interface ComposerBusyInput {
 
 export interface ComposerBusyChrome {
   placeholder: string;
-  /** Clock + muted send — rooms only, where Enter queues instead of interrupting. */
-  sendLooksQueued: boolean;
   sendAriaKey: MessageKey;
   sendTitleKey: MessageKey;
 }
 
-export function composerBusyChrome(
-  input: ComposerBusyInput,
-  translate: Translate = t,
-): ComposerBusyChrome {
+export function composerBusyChrome(input: ComposerBusyInput): ComposerBusyChrome {
   if (!input.busy) {
     return {
       placeholder: input.idlePlaceholder,
-      sendLooksQueued: false,
       sendAriaKey: "composer.sendMessage",
       sendTitleKey: "composer.send",
-    };
-  }
-  if (input.isRoom) {
-    return {
-      placeholder: translate("composer.queueHint", { name: input.name }),
-      sendLooksQueued: true,
-      sendAriaKey: "composer.queueMessage",
-      sendTitleKey: "composer.sendsWhenFinished",
     };
   }
   const steerKey = input.touch ? "composer.sendIntoTurnTouch" : "composer.sendIntoTurn";
   return {
     placeholder: input.idlePlaceholder,
-    sendLooksQueued: false,
     sendAriaKey: input.canSteer ? steerKey : "composer.sendMessage",
     sendTitleKey: input.canSteer ? steerKey : "composer.send",
   };

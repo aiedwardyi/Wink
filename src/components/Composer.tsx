@@ -67,6 +67,7 @@ import {
   modelForNextSend,
   peelNextBusyRoomSend,
   rearmRoomFlushHold,
+  roomLineSteers,
 } from "@/lib/composer-busy";
 import { composerIsBusy } from "@/lib/send-accept";
 import { composerEnterIntent, isComposerEnterKey } from "@/lib/composer-enter";
@@ -236,8 +237,12 @@ export function Composer({
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
   const stoppable = busy || Boolean(room?.onStop);
+  // a room steers into its working member's turn
+  const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
-    !group && Boolean(bot) && state.instances.find((i) => i.instanceId === bot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+    Boolean(steerBot) && state.instances.find((i) => i.instanceId === steerBot!.modelSelection.instanceId)?.capabilities?.queueing === true;
+  // only a line that member alone would answer joins its turn
+  const roomSteers = (message: string) => Boolean(group && canSteer && roomLineSteers(message, members ?? [], group.busyBotId));
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
@@ -256,9 +261,6 @@ export function Composer({
     ? members?.find((member) => member.id === approval?.message.from?.botId) ??
       members?.find((member) => member.id === group.busyBotId)
     : bot;
-  const busyName = group
-    ? (members?.find((b) => b.id === group.busyBotId)?.name ?? t("chrome.aBot"))
-    : (bot?.name ?? t("chrome.aBot"));
   // Per-thread draft: switching bots unmounts this component, so both the
   // text and its attachment chips have to outlive it (see lib/drafts).
   const draftId = room
@@ -506,7 +508,7 @@ export function Composer({
   const imageTargetsSupport = (message: string, after = false) => {
     if (room) return "supported";
     const responders = group
-      ? roomRespondersForComposer(message, members ?? [], group)
+      ? busy && !after && steerBot && roomSteers(message) ? [steerBot] : roomRespondersForComposer(message, members ?? [], group)
       : bot
         ? [{ modelSelection: modelForNextSend(bot, { busy, canSteer: canSteer && !after }) }]
         : [];
@@ -621,7 +623,23 @@ export function Composer({
       target: {
         threadId, message: { id: entry.draft.sendId, role: "user", kind: "text", text: entry.text, at: 0 },
         copyText: entry.text, user: true, pinned: false, canPin: false,
-        queued: { cancel: () => dropQueued(entry.draft.sendId) },
+        queued: {
+          cancel: () => dropQueued(entry.draft.sendId),
+          sendNow: group && roomSteers(entry.text) ? () => {
+            // the hold may have flushed while its menu was open
+            if (!queuedRef.current.some((held) => held.draft.sendId === entry.draft.sendId)) return;
+            dropQueued(entry.draft.sendId);
+            dispatch({
+              type: "sendGroup",
+              groupId: group.id,
+              text: entry.text,
+              sendId: entry.draft.sendId,
+              replyToId: entry.replyToId,
+              threadId: entry.draft.threadId,
+              onError: () => restoreDraft(entry.draft),
+            });
+          } : undefined,
+        },
       },
     });
   };
@@ -660,10 +678,7 @@ export function Composer({
     : group
     ? groupComposerHint(group, members ?? [], t)
     : t("composer.placeholder", { name: bot?.name ?? "" });
-  const busyChrome = composerBusyChrome(
-    { busy, isRoom: Boolean(group), canSteer, name: busyName, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches },
-    t,
-  );
+  const busyChrome = composerBusyChrome({ busy, canSteer: group ? roomSteers(text) : canSteer, idlePlaceholder, touch: window.matchMedia?.("(pointer: coarse)").matches });
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const uploading = room
     ? roomSending || attachments.some((attachment) => attachment.kind === "upload" && !roomFile(attachment.id))
@@ -734,6 +749,8 @@ export function Composer({
       locked: sendBlocked,
       isRoom: Boolean(group),
       busy,
+      canSteer: roomSteers(composerSendSourceText(inputRef.current?.value, text)),
+      after,
       heldCount: queuedRef.current.length,
     });
     if (action === "block" || uploading || room?.offline) return;
@@ -1405,14 +1422,9 @@ export function Composer({
             disabled={uploading || room?.offline}
             aria-label={t(busyChrome.sendAriaKey)}
             title={uploading ? t("composer.uploadWaiting") : t(busyChrome.sendTitleKey)}
-            className={cn(
-              "flex size-8 shrink-0 select-none items-center justify-center rounded-full text-accent-ink [-webkit-touch-callout:none] disabled:opacity-40",
-              busyChrome.sendLooksQueued
-                ? "bg-raised text-ink-secondary hover:bg-raised-hover"
-                : "bg-accent hover:brightness-110",
-            )}
+            className="flex size-8 shrink-0 select-none items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 [-webkit-touch-callout:none] disabled:opacity-40"
           >
-            {busyChrome.sendLooksQueued ? <Clock size={15} /> : <ArrowUp size={17} />}
+            <ArrowUp size={17} />
           </button>
           </>
           )}

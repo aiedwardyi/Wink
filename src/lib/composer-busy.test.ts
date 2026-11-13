@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   composerBusyChrome,
@@ -10,17 +10,14 @@ import {
   modelForNextSend,
   peelNextBusyRoomSend,
   rearmRoomFlushHold,
+  roomLineSteers,
 } from "./composer-busy";
 import { imageSupportForTargets } from "./composer-attachments";
-import { applyLocale, translate } from "./i18n";
+import { translate } from "./i18n";
 import { en, ko } from "./i18n-catalog";
 
 const enT = (key: Parameters<typeof translate>[1], vars?: Parameters<typeof translate>[2]) =>
   translate("en", key, vars);
-
-afterEach(() => {
-  applyLocale("en");
-});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
@@ -34,13 +31,10 @@ describe("composerBusyChrome", () => {
   it("keeps the 1:1 box a chat field while a turn is in flight", () => {
     const chrome = composerBusyChrome({
       busy: true,
-      isRoom: false,
       canSteer: false,
-      name: "Scout",
       idlePlaceholder: idle,
-    }, enT);
+    });
     expect(chrome.placeholder).toBe(idle);
-    expect(chrome.sendLooksQueued).toBe(false);
     expect(chrome.sendAriaKey).toBe("composer.sendMessage");
     expect(chrome.sendTitleKey).toBe("composer.send");
     expect(chrome.placeholder).not.toMatch(/working|turn finishes/i);
@@ -49,13 +43,10 @@ describe("composerBusyChrome", () => {
   it("lets steer stay a send, not a queue lecture", () => {
     const chrome = composerBusyChrome({
       busy: true,
-      isRoom: false,
       canSteer: true,
-      name: "Scout",
       idlePlaceholder: idle,
-    }, enT);
+    });
     expect(chrome.placeholder).toBe(idle);
-    expect(chrome.sendLooksQueued).toBe(false);
     expect(chrome.sendAriaKey).toBe("composer.sendIntoTurn");
     expect(enT(chrome.sendTitleKey)).toBe("Send now. Ctrl+Enter sends after this turn");
   });
@@ -63,65 +54,34 @@ describe("composerBusyChrome", () => {
   it("names the hold on touch instead of Ctrl+Enter", () => {
     const chrome = composerBusyChrome({
       busy: true,
-      isRoom: false,
       canSteer: true,
-      name: "Scout",
       idlePlaceholder: idle,
       touch: true,
-    }, enT);
+    });
     expect(chrome.sendAriaKey).toBe("composer.sendIntoTurnTouch");
     expect(enT(chrome.sendTitleKey)).toBe("Tap to send now. Hold to send after this turn");
   });
 
-  it("uses the supplied English translator even when Korean is active", () => {
-    applyLocale("ko");
-    const chrome = composerBusyChrome({
-      busy: true,
-      isRoom: true,
-      canSteer: false,
-      name: "Scout",
-      idlePlaceholder: "Message Launch",
-    }, enT);
-    expect(chrome.placeholder).toBe("Scout is working — Enter queues your message");
-  });
-
-  it("keeps room busy-queue chrome so Enter is visibly a queue, not a stop", () => {
-    const chrome = composerBusyChrome({
-      busy: true,
-      isRoom: true,
-      canSteer: false,
-      name: "Scout",
-      idlePlaceholder: "Message Launch",
-    }, enT);
-    expect(chrome.placeholder).toBe("Scout is working — Enter queues your message");
-    expect(chrome.sendLooksQueued).toBe(true);
-    expect(chrome.sendAriaKey).toBe("composer.queueMessage");
-    expect(chrome.sendTitleKey).toBe("composer.sendsWhenFinished");
-  });
-
-  it("keeps room queue chrome even if a member could steer a 1:1 turn", () => {
-    const chrome = composerBusyChrome({
-      busy: true,
-      isRoom: true,
-      canSteer: true,
-      name: "Scout",
-      idlePlaceholder: "Message Launch",
-    }, enT);
-    expect(chrome.sendLooksQueued).toBe(true);
-    expect(chrome.placeholder).toBe("Scout is working — Enter queues your message");
+  it("gives a busy room the 1:1 chrome instead of a queue lecture", () => {
+    const steer = composerBusyChrome({ busy: true, canSteer: true, idlePlaceholder: "Message Launch" });
+    expect(steer).toEqual({
+      placeholder: "Message Launch",
+      sendAriaKey: "composer.sendIntoTurn",
+      sendTitleKey: "composer.sendIntoTurn",
+    });
+    const waits = composerBusyChrome({ busy: true, canSteer: false, idlePlaceholder: "Message Launch" });
+    expect(waits.placeholder).toBe("Message Launch");
+    expect(waits.sendTitleKey).toBe("composer.send");
   });
 
   it("is idle chrome when nobody is working", () => {
     const chrome = composerBusyChrome({
       busy: false,
-      isRoom: false,
       canSteer: false,
-      name: "Scout",
       idlePlaceholder: idle,
-    }, enT);
+    });
     expect(chrome).toEqual({
       placeholder: idle,
-      sendLooksQueued: false,
       sendAriaKey: "composer.sendMessage",
       sendTitleKey: "composer.send",
     });
@@ -203,6 +163,14 @@ describe("busy Enter-spam", () => {
     expect(busyEnterBurst(spamLines, { isRoom: true, busy: true })).toEqual(spamLines);
   });
 
+  it("sends a busy room's plain Enter into a steering member's turn and holds Ctrl+Enter", () => {
+    const busyRoom = { locked: false, isRoom: true, busy: true };
+    expect(composerBusySendAction({ ...busyRoom, canSteer: true })).toBe("dispatch");
+    expect(composerBusySendAction({ ...busyRoom, canSteer: true, after: true })).toBe("enqueue");
+    expect(composerBusySendAction({ ...busyRoom, canSteer: false })).toBe("enqueue");
+    expect(composerBusySendAction({ locked: false, isRoom: false, busy: true, after: true })).toBe("dispatch");
+  });
+
   it("does not treat an already-held room send as a hard stop", () => {
     expect(
       composerBusySendAction({ locked: false, isRoom: true, busy: true, heldCount: 1 }),
@@ -245,6 +213,19 @@ describe("busy Enter-spam", () => {
       queue = peeled.rest;
     }
     expect(texts).toEqual(spamLines);
+  });
+});
+
+describe("roomLineSteers", () => {
+  const members = [{ id: "scout", name: "Scout" }, { id: "pixel", name: "Pixel" }];
+
+  it("joins the busy member's turn only when that member alone would answer", () => {
+    expect(roomLineSteers("also check the tests", members, "scout")).toBe(true);
+    expect(roomLineSteers("@Scout also the tests", members, "scout")).toBe(true);
+    expect(roomLineSteers("@Pixel take a look", members, "scout")).toBe(false);
+    expect(roomLineSteers("@Scout @Pixel both of you", members, "scout")).toBe(false);
+    expect(roomLineSteers("@everyone stop", members, "scout")).toBe(false);
+    expect(roomLineSteers("hi", members, null)).toBe(false);
   });
 });
 

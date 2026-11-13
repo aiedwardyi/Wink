@@ -7476,6 +7476,7 @@ const groupRoutes = createGroupRoutes({
   sendSequencer,
   resolveReplyTarget,
   startGroupTurn,
+  userName: () => cfg.profile?.name?.trim() || "User",
   cancelGroupTurnOperations,
   taskResumes,
   bumpTurnEpoch,
