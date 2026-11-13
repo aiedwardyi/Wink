@@ -1,7 +1,7 @@
 // Unsent composer input, kept per task. Switching tasks unmounts the Composer
 // and its local state. Drafts live in localStorage, so coming back to a task — in this
 // session or after a restart — finds what you were typing still there.
-import { useCallback, useEffect, useState, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { isAttachment, restoredAttachment, type Attachment } from "./composer-attachments.js";
 
 const KEY = "omb-drafts";
@@ -17,6 +17,8 @@ const draftRevisions = new Map<string, number>();
 // so task navigation and a rejected send can resolve the original message
 // without duplicating message contents in storage.
 const replyDrafts = new Map<string, string>();
+// A failed send's restore can come from a view that unmounted; the open one hears it here.
+const replyRestoreListeners = new Map<string, Set<() => void>>();
 type DraftRestore = { text: string; attachments: Attachment[] };
 type DraftRestoreListener = (draft: DraftRestore) => void;
 const restoreListeners = new Map<string, Set<DraftRestoreListener>>();
@@ -202,6 +204,20 @@ export function useReplyDraft<T extends { id: string }>(
     });
   }, [messages, threadId]);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  useEffect(() => {
+    const listeners = replyRestoreListeners.get(threadId) ?? new Set<() => void>();
+    const listener = () => setReplyState((current) =>
+      current.threadId === threadId && current.message ? current : { threadId, message: resolveReplyMessage(threadId, messagesRef.current) });
+    listeners.add(listener);
+    replyRestoreListeners.set(threadId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) replyRestoreListeners.delete(threadId);
+    };
+  }, [threadId]);
+
   const selectReply = useCallback((message: T) => {
     selectReplyDraft(draftId, threadId, message.id);
     setReplyState({ threadId, message });
@@ -223,6 +239,7 @@ export function useReplyDraft<T extends { id: string }>(
     // Persist before touching React state: this callback can belong to a task
     // view that unmounted while its request was still in flight.
     rememberReplyDraft(targetThreadId, message.id);
+    for (const listener of replyRestoreListeners.get(targetThreadId) ?? []) listener();
     if (threadId === targetThreadId) {
       setReplyState((current) =>
         current.threadId === targetThreadId && current.message

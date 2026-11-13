@@ -745,6 +745,20 @@ describe("room reply target", () => {
     expect(chip()).not.toBeNull();
   });
 
+  it("puts the chip back in a view reopened before the send failed", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));
+    await render("joined");
+    await pick();
+    await type("answer");
+    await send();
+    await act(async () => root.render(createElement("div", null, "Bot chat")));
+    await render("joined");
+    expect(chip()).toBeNull();
+    await act(async () => answer(reply({ error: "offline" }, 500)));
+    expect(chip()).not.toBeNull();
+  });
+
   it("drops the chip at send so a view opened mid-send does not reply again", async () => {
     let answer!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => (answer = resolve))));

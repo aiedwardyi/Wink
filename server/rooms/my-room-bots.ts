@@ -108,10 +108,10 @@ export class MyRoomBotTurns {
     for (const row of this.active.values()) {
       if (row.roomId === roomId && ![...this.running.values()].some((run) => run.botId === row.botId)) this.cancelled.add(row);
     }
-    for (const [threadId, run] of this.running) {
-      if (run.roomId !== roomId) continue;
-      this.stopped.add(threadId);
-      await this.deps.interrupt(run.botId, threadId);
+    const runs = [...this.running].filter(([, run]) => run.roomId === roomId);
+    for (const [threadId] of runs) this.stopped.add(threadId);
+    for (const [threadId, run] of runs) {
+      if (this.running.get(threadId) === run) await this.deps.interrupt(run.botId, threadId);
     }
   }
 
@@ -204,6 +204,8 @@ export class MyRoomBotTurns {
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
       });
+      // a Stop before dispatch cancels the turn without a turn.completed
+      if (this.stopped.has(threadId) && this.running.get(threadId) === mine && !this.deps.busy(local.id)) void this.settled(threadId, false);
     } catch (error) {
       if (this.active.get(bot.botId) !== row) return;
       for (const [threadId, run] of this.running) if (run === mine) this.running.delete(threadId);

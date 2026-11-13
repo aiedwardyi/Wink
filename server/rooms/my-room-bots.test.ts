@@ -339,6 +339,36 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.client.botSend).not.toHaveBeenCalled();
   });
 
+  it("settles a turn Stop cancelled before dispatch", async () => {
+    deps.interrupt = vi.fn(async () => {});
+    let started!: () => void;
+    deps.startTurn.mockImplementation(() => new Promise<void>((resolve) => (started = resolve)));
+    const turns = new MyRoomBotTurns(deps);
+    turns.sent(ROOM, line(peter, "@Pete-Coder long job"));
+    await settle();
+    await turns.stopMine(ROOM);
+    started();
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+    expect(deps.client.botSend).not.toHaveBeenCalled();
+  });
+
+  it("leaves an ask sent during Stop running", async () => {
+    deps.hasTask = (_botId, threadId) => threadId === "task-1";
+    const turns = new MyRoomBotTurns(deps);
+    deps.interrupt = vi.fn(async () => {
+      await turns.settled("task-1", true);
+      turns.sent(ROOM, line(peter, "@Pete-Coder again"));
+      await settle();
+    });
+    turns.sent(ROOM, line(peter, "@Pete-Coder long job"));
+    await settle();
+    await turns.stopMine(ROOM);
+    expect(deps.interrupt).toHaveBeenCalledTimes(1);
+    expect(deps.startTurn).toHaveBeenCalledTimes(2);
+    expect(turns.turn(ROOM, PETE.id)).toMatchObject({ working: true });
+  });
+
   it("cancels a turn still downloading its files on the owner's Stop", async () => {
     deps.interrupt = vi.fn(async () => {});
     let fetched!: (value: unknown) => void;

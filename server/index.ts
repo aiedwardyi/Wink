@@ -6437,6 +6437,8 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   interrupt: async (botId, threadId) => {
     const bot = store.bot(botId);
+    // a turn still preparing has no session to interrupt yet
+    if (bot) markThreadInterrupted(threadId, bot.id, bumpTurnEpoch(bot.id) - 1);
     await (bot && botAccounts.instance(bot, threadId))?.adapter.interruptTurn(threadId).catch(() => {});
     closeOpenApprovals(threadId);
   },
