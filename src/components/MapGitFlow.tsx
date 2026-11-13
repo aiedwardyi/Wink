@@ -4,7 +4,7 @@ import { mapFlowStages, type MapFlow, type MapPr, type MapReview, type MapStage 
 import type { MapWorker } from "../../shared/map-pane";
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
-import { mapWorkerColor, mapWorkerSlots } from "@/lib/map-worker-colors";
+import { mapWorkerColor } from "@/lib/map-worker-colors";
 import "./MapGitFlow.css";
 
 const copy = {
@@ -153,11 +153,9 @@ function rowTone(flow: MapFlow): string | undefined {
   return pr.state === "open" ? stages.find(stage => stage.key === "review")?.tone === "bad" ? "bad" : stages.find(stage => stage.key === "checks")?.tone ?? "open" : pr.state;
 }
 
-export function MapGitFlow({ base, workers, worker, all, active }: { base?: string; workers: MapWorker[]; worker: string; all: boolean; active: boolean }) {
+export function MapGitFlow({ base, workers, slots, worker, all, active }: { base?: string; workers: MapWorker[]; slots: ReadonlyMap<string, number>; worker: string; all: boolean; active: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
-  const slots = useRef<ReadonlyMap<string, number>>(new Map());
-  slots.current = mapWorkerSlots(slots.current, workers.map(item => item.id));
   const shown = (all ? workers : workers.filter(item => item.id === worker)).filter(item => item.git);
   const flows = useFlows(base, shown.map(item => item.id).join("\0"), active);
   const [tip, setTip] = useState<Tip | null>(null);
@@ -225,7 +223,7 @@ export function MapGitFlow({ base, workers, worker, all, active }: { base?: stri
       const tone = rowTone(flow);
       const lines = stages.flatMap(stage => stage.key === "checks" || stage.key === "review" || stage.key === "commit" && !pr ? text(stage, flow, c).tip : []);
       const key = `${item.id}:row`;
-      const color = mapWorkerColor(slots.current.get(item.id) ?? 99);
+      const color = mapWorkerColor(slots.get(item.id) ?? 99);
       const Icon = pr && PR_ICON[pr.state];
       return <a key={item.id} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`} {...link(pr?.url ?? stages.findLast(stage => stage.url)?.url)} {...hover(key, lines)}>
         <i /><b>{item.nick}</b>

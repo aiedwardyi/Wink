@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MapFlow, MapPr } from "../../shared/map-flow";
 import type { MapWorker } from "../../shared/map-pane";
 import { applyLocale } from "@/lib/i18n";
+import { mapWorkerSlots } from "@/lib/map-worker-colors";
 import { MapGitFlow } from "./MapGitFlow";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -15,7 +16,7 @@ const pr = (over: Partial<MapPr> = {}): MapPr => ({ number: 1529, url: "https://
 const flow = (over: Partial<MapFlow> = {}): MapFlow => ({ branch: "feat/map-keys", commits: [{ sha: "1404479aa", subject: "fix: arrow points at its square" }, { sha: "1137b98bb", subject: "fix: fold" }], total: 2, pushed: 2, web: "https://github.com/o/r", pr: pr(), ...over });
 let flows: Record<string, MapFlow>;
 const calls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
-const render = (props: Partial<Parameters<typeof MapGitFlow>[0]> = {}) => act(async () => root.render(createElement(MapGitFlow, { base: "/api/bots/bot/map", workers: [worker("a", "ALPHA")], worker: "a", all: false, active: true, ...props })));
+const render = (props: Partial<Parameters<typeof MapGitFlow>[0]> = {}) => act(async () => root.render(createElement(MapGitFlow, { base: "/api/bots/bot/map", workers: [worker("a", "ALPHA")], slots: mapWorkerSlots(new Map(), (props.workers ?? [worker("a", "ALPHA")]).map(item => item.id)), worker: "a", all: false, active: true, ...props })));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 
 beforeEach(() => {
