@@ -37,6 +37,7 @@ import {
 } from "@/lib/sidebar-layout";
 import {
   api,
+  shownProfile,
   useStore,
   type Bot,
   type Group,
@@ -626,6 +627,7 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
+  const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
   const importReturnRef = useRef<HTMLButtonElement>(null);
@@ -1883,10 +1885,10 @@ export function Sidebar({
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
           >
-            <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={state.config?.profile?.avatarUrl} size={28} pending={!state.config} />
-            {state.config ? (
+            <InitialsAvatar initials={profileInitials(profile?.profile)} imageUrl={profile?.profile?.avatarUrl} size={28} pending={!profile} />
+            {profile ? (
               <span className={cn("truncate text-[14px] text-ink", density === "icons" && "hidden")}>
-                {state.config.profile?.name?.trim() || state.config.profile?.email?.trim() || t("chrome.you")}
+                {profile.profile?.name?.trim() || profile.profile?.email?.trim() || t("chrome.you")}
               </span>
             ) : (
               <span aria-hidden="true" className={cn("h-3 w-20 animate-pulse rounded-full bg-raised motion-reduce:animate-none", density === "icons" && "hidden")} />

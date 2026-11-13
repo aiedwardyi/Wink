@@ -85,7 +85,7 @@ import type { OptionCardData, Message, Group, Bot, InstanceInfo, AppState, StopH
 export type { MausColor } from "@/lib/mascot";
 export type { RoutineRunCardData } from "../../shared/routine-run";
 export type { OptionCardData, ConnectorCardData, SecretRequestCardData, Message, GroupDefaultResponder, Group, GroupTask, ModelSelection, Task, TaskResumePacket, TaskUsage, Bot, TerminalAttention, TerminalAttentionMap, ConfigStatus, ConfigStatusFrame, EngineInstall, RateLimitReport, InstanceInfo, AppSettingsSection, AppState, BotAnnouncement, Action, PeripheralSnapshotLoad } from "./store-types";
-export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread } from "./store-transforms";
+export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread, shownProfile } from "./store-transforms";
 
 /** The visible conversation: walk parentId links from the active leaf back
  * to the root. Falls back to the flat list for pre-branching payloads. */
@@ -968,13 +968,16 @@ function saveSnapshotCache(state: AppState): void {
     selectedId: state.selectedId,
     // preserveRateLimits would keep a stale usage window past the live fetch.
     instances: state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance),
+    profile: state.config ? state.config.profile : state.cachedProfile,
   });
 }
 
 function withCachedSnapshot(state: AppState): AppState {
   const cached = readSnapshotCache();
   noteCacheLoaded(cached !== null);
-  return cached ? { ...state, ...cached } : state;
+  if (!cached) return state;
+  const { profile, ...snapshot } = cached;
+  return { ...state, ...snapshot, cachedProfile: profile };
 }
 
 export const initialState: AppState = {
