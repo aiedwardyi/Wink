@@ -64,8 +64,8 @@ async function mount(members: Bot[], groups: Group[], view: ReturnType<typeof cr
 }
 
 describe("plain user links", () => {
-  it.each(["chat", "group"])("links domains and URLs in a %s user's bubble", async (kind) => {
-    const text = "**plain** starzum.com www.x.io x.co.kr https://example.com file.ts v1.0.259 e.g. person@example.com";
+  it.each(["chat", "group"])("links www text and URLs in a %s user's bubble", async (kind) => {
+    const text = "**plain** starzum.com www.x.io x.co.kr https://example.com file.ts README.md deploy.sh notes.ai v1.0.259 e.g. person@example.com";
     const current = bot([{ id: "user-link", at: Date.now(), role: "user", kind: "text", text }]);
     const group = { id: "links", threadId: "links-thread", name: "Links", memberIds: [current.id], messages: current.messages, setupCompletedAt: Date.now(), defaultResponder: { kind: "mentions" } } as Group;
     const host = await mount([current], kind === "group" ? [group] : [], kind === "group"
@@ -73,7 +73,7 @@ describe("plain user links", () => {
     const row = host.querySelector('[data-mid="user-link"]')!;
     expect(row.textContent).toContain("**plain**");
     expect([...row.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
-      "https://starzum.com", "https://www.x.io", "https://x.co.kr", "https://example.com",
+      "https://www.x.io", "https://example.com",
     ]);
   });
 });

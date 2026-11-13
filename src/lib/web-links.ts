@@ -1,6 +1,4 @@
-import { topLevelDomains } from "./top-level-domains";
-
-const WEB_LINK = /https?:\/\/[^\s<>"`]+|(?<![\p{L}\p{N}_@./\\-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#][^\s<>"`]+)?/giu;
+const WEB_LINK = /https?:\/\/[^\s<>"`]+|(?<![\p{L}\p{N}_@./\\-])www\.[^\s<>"`]+/giu;
 
 function trimLink(value: string): string {
   let text = value.replace(/[.,;:!?']+$/, "");
@@ -22,11 +20,9 @@ export function webLinks(text: string): Array<{ start: number; text: string; hre
   for (const match of text.matchAll(WEB_LINK)) {
     const value = trimLink(match[0]);
     const explicit = /^https?:\/\//i.test(value);
-    if (!explicit && /^(?:[\p{L}\p{N}_@-]|\.[\p{L}\p{N}_-])/u.test(text.slice(match.index + match[0].length))) continue;
     const href = explicit ? value : `https://${value}`;
     try {
-      const host = new URL(href).hostname;
-      if (!explicit && !topLevelDomains.has(host.split(".").at(-1)!)) continue;
+      new URL(href);
     } catch {
       continue;
     }
@@ -35,27 +31,3 @@ export function webLinks(text: string): Array<{ start: number; text: string; hre
   return links;
 }
 
-type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
-
-export function remarkWebLinks() {
-  const walk = (node: MdNode): void => {
-    if (!node.children || ["link", "linkReference", "image", "imageReference"].includes(node.type)) return;
-    node.children = node.children.flatMap((child) => {
-      if (child.type !== "text" || !child.value) {
-        walk(child);
-        return [child];
-      }
-      const parts: MdNode[] = [];
-      let from = 0;
-      for (const link of webLinks(child.value)) {
-        parts.push({ type: "text", value: child.value.slice(from, link.start) });
-        parts.push({ type: "link", url: link.href, children: [{ type: "text", value: link.text }] });
-        from = link.start + link.text.length;
-      }
-      if (!parts.length) return [child];
-      parts.push({ type: "text", value: child.value.slice(from) });
-      return parts;
-    });
-  };
-  return walk;
-}

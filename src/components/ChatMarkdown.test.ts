@@ -19,11 +19,20 @@ vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code
 beforeEach(() => localStorage.setItem("omb-reply-style", "live"));
 afterEach(() => { localStorage.removeItem("omb-reply-style"); act(() => closeShow()); });
 
-describe("bare domain links", () => {
+describe("web links", () => {
+  it.each(["README.md", "deploy.sh", "notes.ai", "starzum.com", "x.co.kr", "starzum.com/path", "example.technology", "한글.kr"])("keeps %s plain in user and bot text", (text) => {
+    for (const Component of [LinkedText, ChatMarkdown]) {
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(createElement(Component, { text }));
+      expect(host.querySelector("a")).toBeNull();
+      expect(host.textContent).toBe(text);
+    }
+  });
+
   it.each([
     ["https://example.com/Edward's-notes", "https://example.com/Edward's-notes"],
-    ["starzum.com/Edward's-notes", "https://starzum.com/Edward's-notes"],
-    ["'starzum.com/notes'", "https://starzum.com/notes"],
+    ["www.starzum.com/Edward's-notes", "https://www.starzum.com/Edward's-notes"],
+    ["'www.starzum.com/notes'", "https://www.starzum.com/notes"],
   ])("keeps apostrophes inside %s and surrounding quotes outside", (text, href) => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(createElement(LinkedText, { text }));
@@ -31,7 +40,7 @@ describe("bare domain links", () => {
     expect(host.textContent).toBe(text);
   });
 
-  it.each(["starzum.com", "www.x.io", "x.co.kr", "https://starzum.com", "http://x.io/a", "STARZUM.COM", "example.technology", "한글.kr"])("links %s in a bot reply", (text) => {
+  it.each(["https://starzum.com", "www.x.io", "http://x.co.kr", "https://notes.ai", "http://x.io/a", "https://STARZUM.COM", "https://example.technology", "https://한글.kr"])("links %s in a bot reply", (text) => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
     const link = host.querySelector("a");
@@ -50,7 +59,7 @@ describe("bare domain links", () => {
 
   it("leaves explicit markdown labels and paths intact and trims sentence punctuation", () => {
     const host = document.createElement("div");
-    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(starzum.com/a(b)). [starzum.com](https://example.org) ./starzum.com wrong.invalidtld file.ts" }));
+    host.innerHTML = renderToStaticMarkup(createElement(ChatMarkdown, { text: "(https://starzum.com/a(b)). [starzum.com](https://example.org) ./starzum.com wrong.invalidtld file.ts" }));
     expect([...host.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["https://starzum.com/a(b)", "https://example.org"]);
   });
 });

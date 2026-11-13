@@ -24,7 +24,6 @@ import { splitReplyBlocks } from "@/lib/turn-stage";
 import { cardFile } from "../../shared/file-cards";
 import { unwrapUserTags } from "../../shared/user-tags";
 import { windowsPathLinks } from "../../shared/windows-path-links";
-import { remarkWebLinks } from "@/lib/web-links";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed and capped. Streamed partials may land here
@@ -267,7 +266,7 @@ export function streamBlocks(text: string): string[] {
 const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: string; components: Components }) {
   return (
     <MarkdownTextContext.Provider value={text}>
-      <Markdown remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkCardParens, remarkWebLinks]} components={components} urlTransform={urlTransform}>
+      <Markdown remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkCardParens]} components={components} urlTransform={urlTransform}>
         {text}
       </Markdown>
     </MarkdownTextContext.Provider>
