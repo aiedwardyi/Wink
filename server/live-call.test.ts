@@ -54,11 +54,11 @@ describe("call token", () => {
   });
 
   it("sends the saved voice and language in the Live setup", async () => {
-    const h = harness({ liveCall: { voice: "Achird", language: "ko" } });
+    const h = harness({ liveCall: { voice: "Alnilam", language: "ko" } });
     const { data } = await h.post("token", { locale: "en" });
-    expect(data.voice).toBe("Achird");
+    expect(data.voice).toBe("Alnilam");
     const setup = h.sent().bidiGenerateContentSetup;
-    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Achird");
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
     expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
     expect(setup.systemInstruction.parts[0].text).toContain("Greet once in Korean in");
@@ -74,14 +74,24 @@ describe("call token", () => {
     expect(brief).not.toContain("Switch only when");
   });
 
+  it("gives Adele a British accent in English, and no one else", async () => {
+    const h = harness({ liveCall: { voice: "Erinome" } });
+    await h.post("token");
+    h.cfg.liveCall = { voice: "Aoede" };
+    await h.post("token");
+    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief(0)).toContain("When you speak English, use a natural British accent.");
+    expect(brief(1)).not.toContain("British");
+  });
+
   it("a voice picked mid-call waits for the next call", async () => {
     const h = harness();
     const first = await h.post("token");
-    h.cfg.liveCall = { voice: "Achird" };
+    h.cfg.liveCall = { voice: "Alnilam" };
     await h.post("token", { callId: first.data.callId, resume: true });
     await h.post("token");
     const voice = (call: number) => h.sent(call).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName;
-    expect([voice(1), voice(2)]).toEqual(["Aoede", "Achird"]);
+    expect([voice(1), voice(2)]).toEqual(["Aoede", "Alnilam"]);
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
