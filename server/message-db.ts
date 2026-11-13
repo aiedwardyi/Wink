@@ -113,6 +113,34 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows {
   return importLegacy(threadId, legacyFile);
 }
 
+/** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here. */
+export function storedHead(threadId: string): string | null | undefined {
+  // SAFETY: Each subquery selects one TEXT column, or NULL when it finds no row.
+  const row = db().prepare(
+    "SELECT (SELECT active_leaf_id FROM thread_state WHERE thread_id = ?1) AS leaf, " +
+      "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
+  ).get(threadId) as { leaf: string | null; last: string | null };
+  return row.last === null ? undefined : row.leaf || row.last;
+}
+
+/** The newest `count` rows in insertion order, the options rows before them, and the stored head. */
+export function readThreadTail(threadId: string, count: number): ThreadRows & { options: Message[] } {
+  // SAFETY: This projection selects SQLite's rowid and the stored message JSON.
+  const rows = db()
+    .prepare("SELECT rowid AS cursor, json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?")
+    .all(threadId, count) as Array<{ cursor: number; json: string }>;
+  const oldest = rows.at(-1)?.cursor ?? 0;
+  // SAFETY: This projection selects the stored message JSON.
+  const options = db()
+    .prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' AND rowid < ? ORDER BY rowid")
+    .all(threadId, oldest) as Array<{ json: string }>;
+  // SAFETY: thread_state.active_leaf_id is a nullable TEXT column.
+  const state = db()
+    .prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?")
+    .get(threadId) as { active_leaf_id: string | null } | undefined;
+  return { messages: rows.reverse().map(rowToMessage), options: options.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+}
+
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
   let messages: Message[] = [];
   let activeLeafId: string | null = null;

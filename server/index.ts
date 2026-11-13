@@ -165,6 +165,7 @@ import {
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { warmEngines } from "./engine-warm.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
+import { chatListPage, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -8164,11 +8165,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
-      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) =>
-        limit === undefined || typeof open !== "string" || chat.id === open ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId));
+      const offscreen = (chat: { id: string }) => typeof open === "string" && chat.id !== open;
+      const page = (chat: { id: string; threadId: string; unread?: boolean; readAt?: number }) => {
+        const tail = limit === undefined ? null : chatListPage(store, chat.threadId, limit, offscreen(chat) ? chat : undefined);
+        if (tail) return { messages: tail.messages.map(slimMessage), hasMore: tail.hasMore };
+        return messagePage(chat.threadId, limit === undefined || !offscreen(chat) ? limit : offscreenLimit(store.messagesFor(chat.threadId), limit, chat, store.activeLeaf(chat.threadId)));
+      };
+      if (typeof open === "string") warmFirst(open);
       return json(res, 200, {
-        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...messagePage(bot.threadId, page(bot)) })),
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, page(g)) })),
+        bots: store.bots.map((bot) => ({ ...publicBotRecord(bot), ...page(bot) })),
+        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...page(g) })),
         computerControl: Object.fromEntries(
           store.bots.map((bot) => {
             const snapshot = computerControl.snapshot(bot.id);
@@ -9077,6 +9083,7 @@ googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
 startupTiming.measure("quick asks", () => recoverQuickAsks(store));
+const warmFirst = warmChats(store, () => [...store.bots, ...store.groups], (start) => startupTiming.afterPaint("warm chats", start));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 const backups = startBackups({ dataDir: DATA_DIR, syncFolders: () => [...(profileSyncSettings.folder ? [profileSyncSettings.folder] : []), ...uploadCloudRoots], idle: () => !store.bots.some((bot) => bot.busy), log: (line) => console.warn(line) });
