@@ -16,6 +16,7 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import { createHash } from "node:crypto";
+import os from "node:os";
 import { realpathSync, statSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { basename, isAbsolute, join } from "node:path";
@@ -59,6 +60,12 @@ export function spawnCli(
   // logged.
   child.stdin?.on("error", () => {});
   return child;
+}
+
+/** Windows only: POSIX cannot raise a lowered nice again, and a turn may adopt the host. */
+export function setCliPriority(child: Pick<ChildProcess, "pid">, priority: "low" | "normal"): void {
+  if (process.platform !== "win32" || !child.pid) return;
+  try { os.setPriority(child.pid, priority === "low" ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL); } catch {}
 }
 
 const versionByBinary = new Map<string, string>();

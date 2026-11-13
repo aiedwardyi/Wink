@@ -163,7 +163,7 @@ import {
   type PushTarget,
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
-import { warmEngines } from "./engine-warm.ts";
+import { createRequestQuiet, createSignInWarm, warmEngines } from "./engine-warm.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -806,11 +806,20 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
 const automaticAvailability = new Map<string, boolean>();
 const providerSnapshots = new Map<string, Awaited<ReturnType<typeof registry.describe>>[number]["snapshot"]>();
 
+const requestQuiet = createRequestQuiet();
+const warmBusy = () => !requestQuiet.quiet() || turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id));
+const signInWarm = createSignInWarm({
+  wanted: async () => new Set([(await defaultSelection()).instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
+  instance: (id) => registry.get(id),
+  busy: warmBusy,
+});
+
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
   for (const entry of entries) {
     automaticAvailability.set(entry.instanceId, entry.snapshot.state === "available");
     providerSnapshots.set(entry.instanceId, entry.snapshot);
   }
+  void signInWarm.observe(entries);
 }
 
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
@@ -7663,6 +7672,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
     // and Origin and a phone session, and never reaches local-only routes.
@@ -9125,11 +9135,12 @@ startupTiming.afterPaint("probes", async () => {
     })
     .then(({ sel, instances }) => {
       bootSelection = sel;
+      signInWarm.arm(instances);
       void warmEngines({
         rows: instances,
         wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
         instance: (id) => registry.get(id),
-        busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
+        busy: warmBusy,
       }).catch(() => {});
     })
     .catch((error) => {

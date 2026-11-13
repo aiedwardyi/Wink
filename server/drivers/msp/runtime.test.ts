@@ -978,6 +978,17 @@ describe("MSP prewarm (fake host)", () => {
     expect(methods).toContain("turn/start");
   });
 
+  it("runs the handshake host at low priority until a turn adopts it", async () => {
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const priority = vi.spyOn(procs, "setCliPriority");
+    await create();
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value;
+    expect(priority.mock.calls).toEqual([[child, "low"]]);
+    expect(await runTurn("t-prewarm")).toMatchObject({ ok: true });
+    expect(priority.mock.calls).toEqual([[child, "low"], [child, "normal"]]);
+  });
+
   it("drops a Stop during the warm handshake without starting the turn", async () => {
     process.env.FAKE_MSP_INIT_DELAY_MS = "30000";
     const spawn = vi.spyOn(procs, "spawnCli");

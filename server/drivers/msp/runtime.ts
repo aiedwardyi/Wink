@@ -26,7 +26,7 @@ import { newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
-import { execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
@@ -535,6 +535,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           let host: Host;
           try {
             host = spawnHost(cwd, childEnv());
+            if (lease.key.threadId === HANDSHAKE) setCliPriority(host.child, "low");
           } catch {
             lease.release("spawn failed");
             return false;
@@ -751,6 +752,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const reused = !!host && !raced;
         const turnHost = host ?? spawnHost(cwd, env);
         turnHost.inUse = true;
+        setCliPriority(turnHost.child, "normal");
         // The turn owns its lease and offers it back; an adopted handshake
         // lease is released without killing the host it hands over.
         let lease = turnHost.lease === claimed && claimed ? claimed : undefined;
