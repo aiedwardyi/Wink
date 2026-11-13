@@ -77,6 +77,7 @@ import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } 
 import { filesProblem, isRoomPicture, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
+import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { useI18n } from "@/lib/i18n";
 import { pinnedQuestion } from "@/lib/open-question";
@@ -1450,6 +1451,8 @@ export function Composer({
             <button
               type="button"
               onClick={onCall}
+              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+              onFocus={warmCallAudio}
               aria-label={t("composer.call", { name: bot.name })}
               title={t("composer.call", { name: bot.name })}
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"

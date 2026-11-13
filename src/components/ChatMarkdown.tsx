@@ -263,10 +263,17 @@ export function streamBlocks(text: string): string[] {
   return blocks;
 }
 
+const REMARK = [remarkGfm, remarkWindowsPaths, remarkCardParens];
+
+/** Parses a scrap at idle, so the first reply doesn't pay the parser's compile. */
+export function warmMarkdown() {
+  Markdown({ children: "**a** `b`\n\n- c", remarkPlugins: REMARK, urlTransform });
+}
+
 const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: string; components: Components }) {
   return (
     <MarkdownTextContext.Provider value={text}>
-      <Markdown remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkCardParens]} components={components} urlTransform={urlTransform}>
+      <Markdown remarkPlugins={REMARK} components={components} urlTransform={urlTransform}>
         {text}
       </Markdown>
     </MarkdownTextContext.Provider>
