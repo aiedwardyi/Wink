@@ -94,22 +94,27 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
   const [loads, setLoads] = useState(0);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [pageSrc, setPageSrc] = useState<string>();
 
-  // A missing page would load the server's JSON error into the frame.
+  // Resolve the page's grant in the app; the opaque frame cannot authenticate itself.
   useEffect(() => {
     if (item.kind !== "page") return;
     let alive = true;
     fetch(src, { headers: { Range: "bytes=0-0" } })
-      .then((res) => { if (alive && !res.ok && res.status !== 416) setFailed(true); }, () => { if (alive) setFailed(true); });
+      .then((res) => {
+        if (!alive) return;
+        if (!res.ok && res.status !== 416) setFailed(true);
+        else setPageSrc(res.url);
+      }, () => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, [item.kind, src]);
+  }, [item.kind, src, loads]);
 
   const open = () => {
     const openFile = item.src ? undefined : window.ogb?.openFile;
     if (openFile) void openFile(item.path).catch(() => {});
     else window.open(src, "_blank", "noopener,noreferrer");
   };
-  const reload = () => { setReady(false); setLoads(loads + 1); };
+  const reload = () => { setReady(false); setFailed(false); setPageSrc(undefined); setLoads(loads + 1); };
 
   return (
     <div className="verify-watch-frame show-frame" data-kind={item.kind} data-maximized={maximized || undefined}>
@@ -127,7 +132,7 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
             ? <img src={src} alt={name} onLoad={() => setReady(true)} onError={() => setFailed(true)} />
             : item.kind === "pdf"
               ? <Suspense fallback={null}><ShowPdf src={src} onReady={() => setReady(true)} onFail={() => setFailed(true)} /></Suspense>
-              : <iframe key={loads} src={src} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
+              : pageSrc && <iframe key={loads} src={pageSrc} sandbox="allow-scripts" title={name} onLoad={() => setReady(true)} />}
       </div>
     </div>
   );

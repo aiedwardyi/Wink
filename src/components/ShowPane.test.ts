@@ -36,7 +36,11 @@ let host: HTMLElement;
 
 beforeEach(() => {
   pdf.pages = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(null, { status: url.includes("linked-file") ? 206 : 404 })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const response = new Response(null, { status: url.includes("linked-file") ? 206 : 404 });
+    Object.defineProperty(response, "url", { value: url });
+    return response;
+  }));
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -80,6 +84,40 @@ it("shows a web page sandboxed, and Reload loads it again", async () => {
   expect(frame.getAttribute("src")).toBe(src("C:\\w\\sync-flow.html"));
   await act(async () => button("Reload")!.click());
   expect(host.querySelector("iframe")).not.toBe(frame);
+});
+
+it("loads the page grant resolved by the authenticated app, without giving its frame a token", async () => {
+  const granted = "http://localhost:8799/api/threads/t1/linked-file/page/grant/";
+  const response = new Response(null, { status: 206 });
+  Object.defineProperty(response, "url", { value: granted });
+  vi.mocked(fetch).mockResolvedValue(response);
+  await render({ item: item("C:\\w\\diffmap.html", "page"), hidden: false });
+  expect(fetch).toHaveBeenCalledWith(src("C:\\w\\diffmap.html"), { headers: { Range: "bytes=0-0" } });
+  expect(host.querySelector("iframe")?.getAttribute("src")).toBe(granted);
+  expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+});
+
+it("waits for a page grant before navigating the sandboxed frame", async () => {
+  vi.mocked(fetch).mockReturnValue(new Promise(() => {}));
+  await render({ item: item("C:\\w\\diffmap.html", "page"), hidden: false });
+  expect(host.querySelector("iframe")).toBeNull();
+});
+
+it("renews the page grant on Reload", async () => {
+  const response = (url: string) => Object.defineProperty(new Response(null, { status: 200 }), "url", { value: url });
+  vi.mocked(fetch).mockResolvedValueOnce(response("/api/threads/t1/linked-file/page/first/"));
+  await render({ item: item("C:\\w\\diffmap.html", "page"), hidden: false });
+  vi.mocked(fetch).mockResolvedValueOnce(response("/api/threads/t1/linked-file/page/renewed/"));
+  await act(async () => button("Reload")!.click());
+  expect(host.querySelector("iframe")?.getAttribute("src")).toBe("/api/threads/t1/linked-file/page/renewed/");
+});
+
+it.each(["missing", "offline"])("offers Open instead of navigating a %s page", async (failure) => {
+  if (failure === "missing") vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 404 }));
+  else vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+  await render({ item: item("C:\\w\\diffmap.html", "page"), hidden: false });
+  expect(host.querySelector("iframe")).toBeNull();
+  expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
 });
 
 it("hosts the checker with its Maximize and Close in the pane header", async () => {
