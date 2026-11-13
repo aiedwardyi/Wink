@@ -59,3 +59,8 @@ it("builds a 2,600-file map quickly", () => {
   expect(performance.now() - started).toBeLessThan(50);
   expect(map.total).toBe(2_600);
 });
+
+it("sizes squares so small and large repos both read as a map", () => {
+  const repoOf = (count: number) => Array.from({ length: count }, (_, index) => `src/f${index}.ts`);
+  expect([12, 40, 337, 900, 2600, 20000].map(count => mapSquares(repoOf(count), []).size)).toEqual([8, 8, 7, 5, 4, 4]);
+});

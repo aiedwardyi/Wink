@@ -136,3 +136,28 @@ it("moves the arrow to the row just edited and shows the path when the worker le
   expect(host.querySelector(".map-step p")).toBeNull();
   expect(host.querySelector(".map-step time")?.getAttribute("datetime")).toBe("2026-11-13T01:16:07.000Z");
 });
+
+it("keeps the step title, breadcrumb and diff on one file through every hop", async () => {
+  const waiting: (() => void)[] = [];
+  vi.mocked(fetch).mockImplementation(url => {
+    const path = new URL(String(url), "http://test").searchParams.get("path");
+    if (!path) return Promise.resolve(Response.json(repo));
+    return new Promise(resolve => waiting.push(() => resolve(Response.json({ lines: [{ kind: "add", text: `edit in ${path}`, line: 1 }] }))));
+  });
+  const settle = () => act(async () => { for (const done of waiting.splice(0)) done(); });
+  const view = () => [".map-path b", ".map-step h3", ".map-step p", ".map-code"].map(selector => host.querySelector(selector)?.textContent);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await settle();
+  const first = ["a.ts", "Keep the live edit in view", "src/a.ts", "1+edit in src/a.ts"];
+  expect(view()).toEqual(first);
+  await emit([{ ...workers[0], editedAt: 2, path: "src/manual.ts", reason: "Add the manual" }]);
+  expect(view()).toEqual(first);
+  await settle();
+  expect(view()).toEqual(["manual.ts", "Add the manual", "src/manual.ts", "1+edit in src/manual.ts"]);
+  await click('[data-map-file="src/a.ts"]');
+  await settle();
+  await emit([{ ...workers[0], editedAt: 3, path: "src/manual.ts", reason: "Wire the manual" }]);
+  await settle();
+  expect(view()).toEqual(["a.ts", "src/a.ts", undefined, "1+edit in src/a.ts"]);
+});

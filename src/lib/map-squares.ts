@@ -11,6 +11,7 @@ export interface SquareGroup {
 
 export interface SquareMap {
   total: number;
+  size: number;
   near: SquareGroup[];
   far: SquareGroup[];
 }
@@ -63,7 +64,7 @@ export function mapSquares(paths: readonly string[], changedPaths: readonly stri
   const far = cold.slice(0, FAR).map(([key, cells]) => group(key, key, cells, changed));
   const rest = cold.slice(FAR);
   if (rest.length) far.push({ ...group("*", "", rest.flatMap(([, cells]) => cells), changed), more: rest.length });
-  return { total: all.length, near: hot.map(([key, cells]) => nearGroup(key, cells, changed)), far };
+  return { total: all.length, size: Math.min(8, Math.max(4, Math.round(28 / all.length ** 0.25))), near: hot.map(([key, cells]) => nearGroup(key, cells, changed)), far };
 }
 
 export function squareTarget(map: SquareMap, path: string | undefined): { group: string; index: number } | null {
