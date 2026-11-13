@@ -378,7 +378,7 @@ describe("send path wiring", () => {
     const scope = {
       opts, memoryLookup: { take }, instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: { i1: "c1" } }, instanceId: "i1", rewound: false, fresh: false, recycled: false, text: "typed words",
-      threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
+      threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
     };
     return { prompt: run(scope), take };
@@ -413,7 +413,7 @@ describe("send path wiring", () => {
     expect(run({
       opts: undefined, memoryLookup: { take }, instance: { driverKind: "codex", instanceId: "i1" }, supportsWorkspaceFiles: () => true,
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: {} }, instanceId: "i1", rewound: false, fresh: true, recycled: false, text: "typed words",
-      threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
+      threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
     })).toBe("hello");
     expect(take).toHaveBeenCalledWith("b1", "t1", undefined, "typed words");

@@ -63,7 +63,7 @@ import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
-import { joinedRooms, myRoomBotThreads } from "./rooms/joined.ts";
+import { joinedRooms, myRoomBotThreads, roomTaskThreads } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
@@ -341,6 +341,7 @@ import { refuseVpsJoin, requestCredentials, roomDoorPath } from "./phone-auth.ts
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
+import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRelayBase, teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
@@ -647,7 +648,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -659,6 +660,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
+      ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
     },
   };
 }
@@ -2008,6 +2010,8 @@ function routineThreadIds(): Set<string> {
 function sideThreadIds(): Set<string> {
   return new Set([...routineThreadIds(), ...myRoomBotThreads()]);
 }
+
+const notOwnerChats = () => new Set([...routineThreadIds(), ...roomTaskThreads()]);
 
 const pendingSyncFollows = new Set<string>();
 
@@ -3500,6 +3504,7 @@ bus.subscribe((event: RuntimeEvent) => {
   event = stripStrayUserTags(event);
   quietEnd(event);
   quickAnswersTaken(store, event);
+  roomEchoesTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   // the settle below writes to disk; the reply's last frame must not wait behind it
@@ -3646,6 +3651,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // ask_bot's raw tool chip is redundant — the internal endpoint
         // appends a richer "Messaged @X" chip linking to the channel
         if (event.title?.endsWith("__ask_bot")) break;
+        // the internal endpoint leaves the "Searched your 1:1" chip; the raw one would hold private results
+        if (event.title?.includes(SEARCH_TOOL)) break;
         const name = event.title ?? "tool";
         // narration is folded in here, once, so call mode can read the
         // chip aloud without re-deriving it — and so the phrase a user
@@ -5254,6 +5261,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId, threadId);
+  const roomEchoes = roomEchoesSinceLastUserTurn(activeMessages, skipTranscript, turnOpts.userName, threadId);
   const callLines = replaysTranscript ? [] : callLinesSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
@@ -5263,7 +5271,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5798,7 +5806,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -6647,8 +6655,10 @@ async function runClaimedGroupMemberTurn(
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
+  const owned = group.dm ? [] : ownerChats(bot, notOwnerChats());
+  const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   if (instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop);
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable);
   }
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
@@ -6743,6 +6753,8 @@ async function runClaimedGroupMemberTurn(
     .filter(Boolean)
     .join("\n");
 
+  // turn text, not system: the cached room system stays byte-stable while the 1:1 moves
+  const topics = searchable ? ownerTopics(store.activePath(bot.threadId), userName) : "";
   const riders = authority ? askRiders(authority) : [];
   const text = `${roomContext}\n\n${askNote(authority, bot.name, riders)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
@@ -6829,9 +6841,7 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,
-        text: accountNote.text ? `${accountNote.text}
-
-${text}` : text,
+        text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
         // A teammate's request never waits on the host's approval card.
         approval: authority || bot.autoApprove ? "auto" : "ask",
@@ -6878,6 +6888,7 @@ ${text}` : text,
   if (outcome === "stalled" && authority) void endAsk(authority, "failed");
   if (outcome === "stalled" || outcome === "timed_out") return false;
   if (outcome === "settled" && group.hosted) publishTurnAnswer(store, group as HostedGroup, threadId, bot, messagesAtStart, authority);
+  if (outcome === "settled" && !group.dm) writeRoomEcho(store, store.bot(bot.id) ?? bot, group, threadId, messagesAtStart, userName, dispatchedInstructionId);
   // turn.completed normally performs this cleanup. Only use the fallback
   // when this invocation still owns the room; otherwise it would emit a
   // duplicate group frame or clear a newer speaker's state.
@@ -7736,6 +7747,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "POST" && path === "/api/internal/ask-bot") {
         return await internalRoutes.askBot(req, res);
+      }
+      if (method === "POST" && path === "/api/internal/my-chats") {
+        return await myChatsRoute(req, res, { store, caller: (header) => commsCallers.resolve(header), sideThreads: notOwnerChats, owner: () => cfg.profile?.name?.trim() || "User" });
       }
       // The react tool: a bot leaving an emoji on the user's message, the
       // way the user already can on the bot's. Always targets the latest

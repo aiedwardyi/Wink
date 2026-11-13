@@ -14,6 +14,7 @@ const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const HOOK = join(SERVER_DIR, "testing", "golden-hook.ts");
 const GOLDEN = join(SERVER_DIR, "testing", "golden", "turns-no-rooms.json");
+const ECHO_GOLDEN = join(SERVER_DIR, "testing", "golden", "turn-one-echo.json");
 const FIRST_PORT = 18800 + Math.floor(Math.random() * 10_000);
 // Argv and socket paths differ per OS; Wink ships on Windows and CI runs there.
 const windowsOnly = describe.skipIf(process.platform !== "win32");
@@ -205,17 +206,24 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
       return !g.working && g.messages.some((m: any) => m.role === "bot" && m.kind === "text");
     }, "the room reply");
     mark("end");
+    await say(member, "what did you say in the room?", 1);
+    mark("echo end");
 
-    const lines = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const all = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const end = all.findIndex((line) => line.kind === "fixture" && line.name === "end") + 1;
+    const lines = all.slice(0, end);
     const actual = `${JSON.stringify(normalize(lines, home, PORT), null, 2)}\n`;
+    const echo = `${JSON.stringify(normalize(all.slice(end), home, PORT), null, 2)}\n`;
     captured.set(world, actual);
     if (world === "a plain room") return;
     if (hosted) return expect(actual).toBe(captured.get("a plain room"));
-    if (process.env.GOLDEN_UPDATE === "1" || !existsSync(GOLDEN)) {
-      mkdirSync(dirname(GOLDEN), { recursive: true });
-      writeFileSync(GOLDEN, actual);
+    for (const [file, text] of [[GOLDEN, actual], [ECHO_GOLDEN, echo]] as const) {
+      if (process.env.GOLDEN_UPDATE === "1" || !existsSync(file)) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, text);
+      }
+      // Windows checkouts may turn the file's LF into CRLF.
+      expect(text).toBe(readFileSync(file, "utf8").replace(/\r\n/g, "\n"));
     }
-    // Windows checkouts may turn the file's LF into CRLF.
-    expect(actual).toBe(readFileSync(GOLDEN, "utf8").replace(/\r\n/g, "\n"));
   }, 120_000);
 });
