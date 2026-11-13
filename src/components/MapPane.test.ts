@@ -99,11 +99,11 @@ it("waits for the renewed snapshot before requesting an unchanged selected file"
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();
   const read = vi.mocked(fetch);
-  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.filter(([url]) => !String(url).includes("/flow?"))).toHaveLength(2);
   await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
   read.mockRejectedValueOnce(new Error("snapshot not ready"));
   await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
-  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.filter(([url]) => !String(url).includes("/flow?"))).toHaveLength(2);
   read.mockReset().mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "renewed diff", line: 1 }] }));
   await emit();
   expect(reads()).toHaveLength(1);

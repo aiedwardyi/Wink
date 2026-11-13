@@ -8435,7 +8435,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
       return json(res, counts.status, counts.body);
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo|flow)$/);
     if (m) {
       if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });

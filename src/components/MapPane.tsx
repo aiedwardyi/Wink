@@ -5,6 +5,7 @@ import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
 import { mapSquares, squareTarget, type SquareGroup, type SquareMap } from "@/lib/map-squares";
+import { MapGitFlow } from "./MapGitFlow";
 import "./MapPane.css";
 
 const copy = {
@@ -240,6 +241,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
             {pin && <span className="map-pin" aria-hidden="true" style={{ transform: `translate(${pin.x}px, ${pin.y}px)` }}><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>}
           </div>}
         </div>
+        <MapGitFlow base={base || undefined} workers={snapshot.workers} worker={worker.id} all={!chosen.pinned && snapshot.workers.length > 1} active={active} />
         {files.length > 0 && <>
           <div className="map-crumbs">
             <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
