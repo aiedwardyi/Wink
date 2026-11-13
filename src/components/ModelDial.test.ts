@@ -131,8 +131,16 @@ const order = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-lun
 const selected = () => document.querySelector('.dial-card[aria-pressed="true"]')?.getAttribute("data-model-cell");
 const effort = () => document.querySelector(".dial-effort b")?.textContent;
 const saved = () => dispatch.mock.calls.find(([action]) => action.type === "setModel")?.[0].selection;
-const viewButton = (view: string) => document.querySelector<HTMLButtonElement>(`.model-dial-view [data-picker-view="${view}"]`)!;
-const shownView = () => document.querySelector('.model-dial-view [aria-pressed="true"]')?.getAttribute("data-picker-view");
+const styleButton = () => document.querySelector<HTMLButtonElement>("[data-picker-style-button]")!;
+const shownView = () => document.querySelector("[data-picker-style-button]")?.getAttribute("data-picker-view");
+const viewButton = (view: string) => document.querySelector<HTMLButtonElement>(`[data-picker-style="${view}"]`)!;
+async function openStrip() {
+  if (!document.querySelector("[data-picker-style-strip]:not([data-closing])")) await act(async () => styleButton().click());
+}
+async function pickView(view: string) {
+  await openStrip();
+  await act(async () => viewButton(view).click());
+}
 
 function spoken(node: Node): string {
   if (node instanceof Element && node.getAttribute("aria-hidden") === "true") return "";
@@ -233,6 +241,7 @@ describe("ModelDial", () => {
   it("keeps native Enter activation on List View", async () => {
     media();
     await mount();
+    await openStrip();
     const button = viewButton("list");
     button.focus();
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
@@ -247,10 +256,13 @@ describe("ModelDial", () => {
   it.each([false, true])("commits on Enter after clicking the view toggle (back to dial %s)", async (backToDial) => {
     media();
     await mount();
+    await openStrip();
     for (const view of backToDial ? ["list", "dial"] : ["list"]) {
       await act(async () => { viewButton(view).focus(); viewButton(view).click(); });
     }
     expect(localStorage.getItem("omb-model-picker-view")).toBe(backToDial ? "dial" : "list");
+    await key("Escape");
+    expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
     await key("Enter");
     expect(saved()).toEqual({ instanceId: "claude", model: "claude-opus-5-5", effort: "high", mode: "pinned" });
     await wait(200);
@@ -323,12 +335,13 @@ describe("ModelDial", () => {
     expect(saved()).toBeUndefined();
   });
 
-  it("switches between dial, list and chart from the top right", async () => {
+  it("switches between dial, list, chart and machine from the Style strip", async () => {
     media();
     await mount();
-    expect([...document.querySelectorAll(".model-dial-view [data-picker-view]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart"]);
-    expect(document.querySelector(".model-dial-view")?.getAttribute("aria-label")).toBe("Model Picker Style");
     expect(shownView()).toBe("dial");
+    await openStrip();
+    expect([...document.querySelectorAll("[data-picker-style]")].map((button) => button.textContent)).toEqual(["Dial", "List", "Chart", "Machine"]);
+    expect(document.querySelector("[data-picker-style-strip]")?.getAttribute("aria-label")).toBe("Style");
     await act(async () => viewButton("list").click());
     expect(document.querySelector(".model-dial")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
@@ -350,7 +363,7 @@ describe("ModelDial", () => {
       await wait(400);
       await act(async () => document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
     };
-    await act(async () => viewButton("list").click());
+    await pickView("list");
     expect(localStorage.getItem("omb-model-picker-view")).toBe("list");
     await reopen();
     expect(document.querySelector(".model-dial")).toBeNull();
@@ -359,7 +372,7 @@ describe("ModelDial", () => {
     await mount();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
     expect(shownView()).toBe("list");
-    await act(async () => viewButton("dial").click());
+    await pickView("dial");
     await reopen();
     expect(document.querySelector(".model-dial")).not.toBeNull();
     await act(async () => root.unmount());
@@ -494,7 +507,7 @@ describe("ModelDial", () => {
       await resize(1440);
       expect(vertical()).toBe(false);
       expect([selected(), effort()]).toEqual(["claude-sonnet-5-5", "medium"]);
-      await act(async () => viewButton("list").click());
+      await pickView("list");
       await resize(700);
       expect(document.querySelector(".model-dial")).toBeNull();
       expect(shownView()).toBe("list");
@@ -899,7 +912,7 @@ describe("ModelDial", () => {
     });
 
     it("keeps one step per wheel event in List View", async () => {
-      await act(async () => viewButton("list").click());
+      await pickView("list");
       await act(async () => {
         for (let i = 0; i < 3; i++) document.querySelector(".model-cross-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 4, bubbles: true, cancelable: true }));
       });
