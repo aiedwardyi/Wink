@@ -51,7 +51,10 @@ export function createSignInWarm(input: Omit<Parameters<typeof warmEngines>[0], 
         else ready.delete(row.instanceId);
       }
       if (!flipped.length) return;
-      const run = queue.then(async () => warmEngines({ ...input, rows: flipped, wanted: await input.wanted() })).catch(() => []);
+      const run = queue.then(async () => warmEngines({ ...input, rows: flipped, wanted: await input.wanted() })).catch((error: unknown) => {
+        console.error(`[warm] sign-in warm failed: ${error instanceof Error ? error.message : String(error)}`);
+        return [];
+      });
       queue = run;
       return run;
     },

@@ -814,7 +814,8 @@ const warmGates = {
   settled: requestQuiet.settled,
   admit: (driverKind: string) => warmPool.idleWarmAllowed(driverKind),
 };
-const warmWanted = (fallback: string) => oneEngine(store.bots.map((bot) => ({ instanceId: bot.modelSelection.instanceId, at: lastMessageAt(bot.threadId) })), fallback);
+const warmRouted = (id: string) => botAccounts.routedAccount(id) ?? id;
+const warmWanted = (fallback: string) => oneEngine(store.bots.map((bot) => ({ instanceId: warmRouted(bot.modelSelection.instanceId), at: lastMessageAt(bot.threadId) })), warmRouted(fallback));
 const signInWarm = createSignInWarm({ ...warmGates, wanted: async () => warmWanted((await defaultSelection()).instanceId) });
 
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
