@@ -256,6 +256,17 @@ const FILE_LABELS = { open: ["show.open", ExternalLink], show: ["show.showInFold
 
 export type FileMenuAt = { x: number; y: number; opener: HTMLElement };
 
+// String check on the resolved path; a symlinked base fails safe and only hides Save as.
+function insideBase(base: string, file: string) {
+  const norm = (value: string) => {
+    const slashed = value.replace(/\\/g, "/").replace(/\/+$/, "");
+    return window.ogb?.platform === "win32" ? slashed.toLowerCase() : slashed;
+  };
+  const root = norm(base);
+  const target = norm(file);
+  return target === root || target.startsWith(`${root}/`);
+}
+
 /** A chat file link's right-click menu, the Show pane's look with the native file menu's actions. */
 export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: FileMenuAt | null; path: string; base?: string; onOpen: () => void; onError?: (reason: string) => void; onClose: () => void }) {
   const { t } = useI18n();
@@ -263,6 +274,8 @@ export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: Fil
   const [place, setPlace] = useState({ top: 0, left: 0 });
   const [localPath, setLocalPath] = useState<string | null>(null);
   const { value: shown, closing } = usePresence(at);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!at) return;
@@ -275,25 +288,26 @@ export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: Fil
 
   useEffect(() => {
     if (!at) return;
+    const close = () => onCloseRef.current();
     const inside = (event: Event) => event.target instanceof Node && Boolean(box.current?.contains(event.target));
-    const outside = (event: Event) => { if (!inside(event)) onClose(); };
+    const outside = (event: Event) => { if (!inside(event)) close(); };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      onClose();
+      close();
       at.opener.focus({ preventScroll: true });
     };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     document.addEventListener("scroll", outside, true);
-    window.addEventListener("blur", onClose);
+    window.addEventListener("blur", close);
     return () => {
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
       document.removeEventListener("scroll", outside, true);
-      window.removeEventListener("blur", onClose);
+      window.removeEventListener("blur", close);
     };
-  }, [at, onClose]);
+  }, [at]);
 
   useLayoutEffect(() => {
     if (!at || !box.current) return;
@@ -302,17 +316,18 @@ export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: Fil
   }, [at, localPath]);
 
   if (!shown) return null;
+  const resolved = localPath && (!base || insideBase(base, localPath)) ? localPath : null;
   const actions: FileAction[] = ["open"];
   if (window.ogb?.showInFolder) actions.push("show");
-  if (localPath && window.ogb?.saveFile) actions.push("save");
+  if (resolved && window.ogb?.saveFile) actions.push("save");
   actions.push("copyPath");
   const run = (action: FileAction) => {
     onClose();
     shown.opener.focus({ preventScroll: true });
     if (action === "open") onOpen();
     else if (action === "show") void window.ogb?.showInFolder?.(path, base).catch((error) => onError?.(error instanceof Error ? error.message : "That file could not be opened"));
-    else if (action === "save") void window.ogb?.saveFile?.(localPath!).catch(() => {});
-    else void navigator.clipboard?.writeText(localPath ?? path).catch(() => {});
+    else if (action === "save") void window.ogb?.saveFile?.(resolved!).catch(() => {});
+    else void navigator.clipboard?.writeText(resolved ?? path).catch(() => {});
   };
   return createPortal(
     <div key={`${shown.x},${shown.y}`} ref={box} role="menu" aria-label={showName(path)} data-file-menu="" data-closing={closing || undefined} inert={closing} style={place} className={cn(MENU_CLASS, "z-[60] min-w-44")} onKeyDown={(event) => menuKeyDown(box, event)}>

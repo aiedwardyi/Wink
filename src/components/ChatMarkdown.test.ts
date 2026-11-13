@@ -652,7 +652,7 @@ describe("relative file links", () => {
       const openFile = vi.fn().mockResolvedValue(undefined);
       const showInFolder = vi.fn().mockResolvedValue(undefined);
       const saveFile = vi.fn().mockResolvedValue(undefined);
-      const localMediaFile = vi.fn().mockResolvedValue("/real/clip.mp4");
+      const localMediaFile = vi.fn().mockResolvedValue("/p/real/clip.mp4");
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
       const result = await rightClick({ fileMenu, openFile, showInFolder, saveFile, localMediaFile }, "[1080p](clip.mp4)", "/p", async () => {
@@ -662,10 +662,10 @@ describe("relative file links", () => {
         expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
         await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
         await act(async () => item("Save as").click());
-        expect(saveFile).toHaveBeenCalledWith("/real/clip.mp4");
+        expect(saveFile).toHaveBeenCalledWith("/p/real/clip.mp4");
         await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 1 })));
         await act(async () => item("Copy path").click());
-        expect(writeText).toHaveBeenCalledWith("/real/clip.mp4");
+        expect(writeText).toHaveBeenCalledWith("/p/real/clip.mp4");
         await act(async () => void document.querySelector<HTMLElement>("[data-file-link]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 2 })));
         await act(async () => item("Open").click());
         expect(openFile).toHaveBeenCalledWith("/p/clip.mp4", "/p");
@@ -674,6 +674,17 @@ describe("relative file links", () => {
       expect(result.items).toEqual(["Open", "Show in folder", "Save as", "Copy path"]);
       expect(fileMenu).not.toHaveBeenCalled();
       expect(result.prevented).toBe(true);
+    });
+
+    it("offers no Save as and copies the link's own path when it resolves outside the bot's folder", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const result = await rightClick({ openFile: vi.fn(), showInFolder: vi.fn(), saveFile: vi.fn(), localMediaFile: vi.fn().mockResolvedValue("/elsewhere/secret.py") }, "[report](report.py)", "/p", async () => {
+        await act(async () => item("Copy path").click());
+      });
+      vi.unstubAllGlobals();
+      expect(result.items).toEqual(["Open", "Show in folder", "Copy path"]);
+      expect(writeText).toHaveBeenCalledWith("/p/report.py");
     });
 
     it("leaves the default menu alone without the bridge", async () => {
