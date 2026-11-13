@@ -1136,6 +1136,13 @@ export class Store {
     return group;
   }
 
+  /** Room thread imports write their rows outside the store. */
+  syncedGroupThread(groupId: string, threadId: string): void {
+    this.threads.delete(threadId);
+    this.saveGroups();
+    this.emit({ type: "group", groupId });
+  }
+
   /** The bot⇄bot channel for a pair, if it exists (order-insensitive). */
   dmGroup(a: string, b: string): GroupRecord | undefined {
     return this.groups.find(

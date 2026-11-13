@@ -51,6 +51,8 @@ type GroupRouteDeps = {
     edited: (before: GroupRecord, patch: Partial<GroupRecord>) => void;
     removed: (group: GroupRecord) => void;
   };
+  /** A send waits here while chat sync is fetching this thread's newer rows. */
+  syncSettled?: (threadId: string) => Promise<void>;
 };
 
 /** Rooms from before setup existed carry neither stamp and stay usable. */
@@ -449,6 +451,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               return { ok: true as const, threadId, message: accepted.message };
             }
           }
+          await deps.syncSettled?.(threadId);
           const current = store.group(group.id);
           if (!current) throw Object.assign(new Error("no such group"), { status: 404 });
           if (current.threadId !== threadId) {
