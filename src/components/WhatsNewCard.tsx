@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
+import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
+import { reducedMotion } from "@/lib/phone-swipe";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
 import { sceneOf, type SceneId } from "./ChatScene";
@@ -69,6 +70,19 @@ function Still({ src }: { src: string }) {
   return <canvas ref={canvas} />;
 }
 
+function ThemeMiniature({ skin, visible }: { skin: SkinId; visible: boolean }) {
+  const [preview, setPreview] = useState<"waiting" | "playing" | "still">(() => reducedMotion() ? "still" : "waiting");
+  useEffect(() => {
+    if (visible && preview === "waiting") setPreview("playing");
+  }, [visible, preview]);
+  useEffect(() => {
+    if (preview !== "playing") return;
+    const timer = setTimeout(() => setPreview("still"), 3000);
+    return () => clearTimeout(timer);
+  }, [preview]);
+  return <Miniature skin={skin} still={preview !== "playing" || !visible} />;
+}
+
 function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; onShow: () => void }) {
   const { t } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
@@ -114,9 +128,8 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
         <div className="whats-new-head">
           {theme && (
             <div className="whats-new-mini">
-              {/* Still: its scene running at this size costs about 15% of a core for as long as the row stays up. */}
               {/* The variant that was picked; the theme's own once the pick has moved on and the row is closing. */}
-              <Miniature skin={sceneOf(skin) === theme ? skin : theme} still />
+              <ThemeMiniature key={theme} skin={sceneOf(skin) === theme ? skin : theme} visible={visible} />
             </div>
           )}
           {theme ? <p>{title}</p> : <h2>{title}</h2>}

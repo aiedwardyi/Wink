@@ -25,6 +25,7 @@ function MiniScene({ scene }: { scene: SceneId }) {
     if (reducedMotion()) return;
     let live = true;
     let host: SceneHost | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const start = () =>
       void loadScene(scene)
         .then((module) => {
@@ -38,10 +39,11 @@ function MiniScene({ scene }: { scene: SceneId }) {
         // A scene that cannot start (no canvas, a stale chunk) leaves the still tile.
         .catch(() => host?.stop());
     // After the first paint: a first shader compile must not hold up opening Themes.
-    const frame = requestAnimationFrame(() => setTimeout(start, 0));
+    const frame = requestAnimationFrame(() => { timer = setTimeout(start, 0); });
     return () => {
       live = false;
       cancelAnimationFrame(frame);
+      clearTimeout(timer);
       host?.stop();
     };
   }, [scene]);
