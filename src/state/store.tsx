@@ -2178,7 +2178,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message": {
-          const launchFrom = frame.message?.kind === "launch" ? lastMessageIdFor(frame.threadId) : undefined;
+          const needsRetarget = frame.message?.kind === "launch" || (frame.message?.role === "user" && frame.message.steered);
+          const launchFrom = needsRetarget ? lastMessageIdFor(frame.threadId) : undefined;
           viewedReplies.current.note(stateRef.current, frame.threadId, frame.message, document.visibilityState === "visible" && document.hasFocus());
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           noteStreamTail(frame.threadId, frame.message?.id);

@@ -178,6 +178,58 @@ describe("launch rows while streaming", () => {
     expect(stream.streaming.t1).toBe("Opening worker worker worker ");
   });
 
+  it("keeps streamed text whole when the user steers mid-turn", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frame = callback; return 1; }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // SAFETY: the probe bot is a full Bot fixture; only the opening user message is set.
+    const bot = {
+      id: "b1", threadId: "t1", name: "Bot", busy: true, unread: false,
+      modelSelection: { instanceId: "inst", model: "m" },
+      messages: [{ id: "u1", at: 1, role: "user", kind: "text", text: "Make a test.txt on my Desktop" }],
+    } as Bot;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
+      ? Response.json({ bots: [bot], groups: [], computerControl: {} })
+      : Response.json({}, { status: 404 })));
+    function Probe() {
+      store = useStore();
+      stream = useStreaming();
+      return null;
+    }
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    unmount = async () => {
+      await act(async () => root.unmount());
+      host.remove();
+    };
+    await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe))));
+    await emit({ kind: "hello", resumed: false, cursor: "c1" });
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const typed = async (text: string) => {
+      await delta(text);
+      clock += 1_000;
+      await act(async () => frame?.(clock));
+    };
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1" } });
+    await typed("I'll change your Desktop ");
+    await emit({ kind: "message", threadId: "t1", message: {
+      id: "s1", parentId: "u1", at: 2, role: "user", kind: "text", text: "edit it and write test 2", steered: true,
+    } });
+    expect(buffersForTurn(stream, "t1", "s1").streaming).toBe("I'll change your Desktop ");
+    await typed("test.txt to test 2.");
+    expect(buffersForTurn(stream, "t1", "s1").streaming).toBe("I'll change your Desktop test.txt to test 2.");
+    await emit({ kind: "message", threadId: "t1", message: {
+      id: "r1", parentId: "s1", at: 3, role: "bot", kind: "text", text: "I'll change your Desktop test.txt to test 2.",
+    } });
+    await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn-1" } });
+    expect(store.state.bots[0]!.messages.map((message) => message.id)).toEqual(["u1", "s1", "r1"]);
+  });
+
   it("keeps a mid-turn resume in transcript order with the reply after it", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("EventSource", FakeEventSource);
