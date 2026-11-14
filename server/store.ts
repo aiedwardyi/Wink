@@ -879,7 +879,8 @@ export class Store {
         g.notice.text = noticeText(g.notice.text);
         groupsMigrated = true;
       }
-      const normalized = normalizeGroupDefaultResponder({ kind: "everyone" }, g.memberIds, Boolean(g.dm));
+      // a room saved before it had a pick answers as everyone
+      const normalized = normalizeGroupDefaultResponder(g.defaultResponder ?? { kind: "everyone" }, g.memberIds, Boolean(g.dm));
       if (JSON.stringify(normalized) !== JSON.stringify(g.defaultResponder)) groupsMigrated = true;
       g.defaultResponder = normalized;
       // Bot-to-bot channels intentionally remain one canonical thread.
