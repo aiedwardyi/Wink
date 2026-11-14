@@ -40,20 +40,20 @@ macOS example:
 {
   "mcpServers": {
     "openmausbot": {
-      "command": "/Applications/OpenMausBot.app/Contents/MacOS/OpenMausBot",
-      "args": ["/Applications/OpenMausBot.app/Contents/Resources/server/mcp-server.js"],
+      "command": "/Applications/Wink.app/Contents/MacOS/Wink",
+      "args": ["/Applications/Wink.app/Contents/Resources/server/mcp-server.js"],
       "env": { "ELECTRON_RUN_AS_NODE": "1" }
     }
   }
 }
 ```
 
-On Windows, use the installed `OpenMausBot.exe` as `command`, the adjacent
+On Windows, use the installed `Orbit.exe` as `command`, the adjacent
 `resources\\server\\mcp-server.js` as the argument, and the same `ELECTRON_RUN_AS_NODE=1` environment value.
 The usual per-user install is under `%LOCALAPPDATA%\\Programs\\OpenMausBot`.
 
-On Ubuntu `.deb` installs, the executable is normally `/opt/OpenMausBot/openmausbot` and the script is
-`/opt/OpenMausBot/resources/server/mcp-server.js`. Use the same environment value.
+On Ubuntu `.deb` installs, the executable is normally `/opt/Wink/orbit` and the script is
+`/opt/Wink/resources/server/mcp-server.js`. Use the same environment value.
 
 ## Connection discovery
 
