@@ -2,6 +2,15 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.268] - 2026-11-15
+
+### Changed
+- Wink with lots of chat history opens to typing about twice as fast by reading only each chat's newest messages at launch.
+
+### Fixed
+- After a restart, workers resuming together wait for memory instead of some giving up.
+- The chat box ring in Settings > Themes reaches the bar's right edge.
+
 ## [1.0.267] - 2026-11-15
 
 ### Changed
