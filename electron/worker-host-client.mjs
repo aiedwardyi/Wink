@@ -86,11 +86,11 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
     let finished = false;
     let timer = null;
     let settle;
-    let started;
-    let failed;
+    let resolveReady;
+    let rejectReady;
     let leave;
     const settled = new Promise((resolve) => { settle = resolve; });
-    const ready = new Promise((resolve, reject) => { started = resolve; failed = reject; });
+    const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
     const exited = new Promise((resolve) => { leave = resolve; });
     ready.catch(() => {});
     const finish = (exitCode, error) => {
@@ -115,10 +115,10 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
         inner.onData((text) => fire(listeners.data, text));
         inner.onExit((event) => { finished = true; fire(listeners.exit, event); });
         inner.onError?.((error) => fire(listeners.error, error));
-        Promise.resolve(inner.ready).then(() => { handle.pid = inner.pid; started(); }, failed);
+        Promise.resolve(inner.ready).then(() => { handle.pid = inner.pid; resolveReady(); }, rejectReady);
         void Promise.resolve(inner.exited).then(leave);
       } catch (error) {
-        failed(error);
+        rejectReady(error);
         finish(1, error.message);
         leave();
       }
@@ -159,7 +159,7 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
         replaying = false;
         clearTimeout(timer);
         handle.pid = pid;
-        started();
+        resolveReady();
         settle();
       },
       ended: (exitCode, error) => mode ? finish(exitCode, error) : fall("failed to start a pane", error ?? `exit ${exitCode}`),
@@ -168,7 +168,7 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       fall,
       failed(error) {
         handles.delete(id);
-        failed(error);
+        rejectReady(error);
         finish(1, error.message);
         leave();
         settle();
