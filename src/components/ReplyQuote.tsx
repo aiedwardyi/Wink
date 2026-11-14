@@ -32,11 +32,13 @@ export function ReplyQuote({
   );
 }
 
-/** The quote row over the composer: an icon, a label over one truncated line, and an x. */
+/** The quote row over the composer: an icon, a label over one truncated line, and an x. `lead` and `trail` sit outside the jump button, before and after it. */
 export function QuoteRow({
   icon,
   label,
   text,
+  lead,
+  trail,
   jump,
   onClear,
   clearLabel,
@@ -46,6 +48,8 @@ export function QuoteRow({
   icon: ReactNode;
   label: ReactNode;
   text: ReactNode;
+  lead?: ReactNode;
+  trail?: ReactNode;
   jump?: ComponentProps<"button">;
   onClear?: () => void;
   clearLabel?: string;
@@ -61,13 +65,15 @@ export function QuoteRow({
   );
   return (
     <div {...props} className={cn("flex min-w-0 items-center gap-2 rounded-lg border-l-2 border-accent/60 bg-inset/70 px-2.5 py-1.5", className)}>
+      {lead}
       {jump ? (
-        <button type="button" {...jump} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <button type="button" {...jump} className={cn("flex min-w-0 flex-1 items-center gap-2 text-left", jump.className)}>
           {body}
         </button>
       ) : (
         <div className="flex min-w-0 flex-1 items-center gap-2">{body}</div>
       )}
+      {trail}
       {onClear && (
         <button
           type="button"

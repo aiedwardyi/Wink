@@ -11,13 +11,13 @@ export { isAskUserCard, isSentByPerson };
 export interface NeedsYou {
   /** The chat's newest open ask_user card, if any. */
   question: Message | null;
-  /** How many ask_user cards still wait. */
-  questions: number;
+  /** Every ask_user card still waiting, oldest first. */
+  questions: readonly Message[];
   /** An approval or engine question card is still open. */
   request: boolean;
 }
 
-const NONE: NeedsYou = { question: null, questions: 0, request: false };
+const NONE: NeedsYou = { question: null, questions: [], request: false };
 const cache = new WeakMap<readonly Message[], NeedsYou>();
 
 /** What in this chat is waiting on the person, memoized per message array. */
@@ -25,13 +25,8 @@ export function needsYou(messages: readonly Message[]): NeedsYou {
   if (!messages.length) return NONE;
   const cached = cache.get(messages);
   if (cached) return cached;
-  let question: Message | null = null;
-  let questions = 0;
-  for (const [card, status] of askStates(messages)) {
-    if (status.state !== "waiting") continue;
-    question = card;
-    questions += 1;
-  }
+  const questions = [...askStates(messages)].flatMap(([card, status]) => (status.state === "waiting" ? [card] : []));
+  const question = questions.at(-1) ?? null;
   const request = messages.some(isOpenRequest);
   const result = question || request ? { question, questions, request } : NONE;
   cache.set(messages, result);
@@ -42,7 +37,7 @@ export function openQuestion(messages: readonly Message[]): Message | null {
   return needsYou(messages).question;
 }
 
-export function openQuestionCount(messages: readonly Message[]): number {
+export function openQuestions(messages: readonly Message[]): readonly Message[] {
   return needsYou(messages).questions;
 }
 

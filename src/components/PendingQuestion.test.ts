@@ -78,6 +78,7 @@ describe("question folding", () => {
     await render("fold-kept");
     await fold();
     await render("fold-other");
+    await settle();
     expect(pill()).toBeNull();
     await act(async () => root!.unmount());
     host.remove();

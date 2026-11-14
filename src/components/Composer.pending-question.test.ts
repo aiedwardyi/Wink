@@ -131,7 +131,8 @@ const attach = (file: File) => act(async () => {
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
-const emit = (frame: unknown) => act(async () => FakeEventSource.current!.onmessage?.({ data: JSON.stringify(frame), lastEventId: "" }));
+// the chat view hands the composer its bot again as messages land
+const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
 const expand = async () => {
   await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
   await settle();
@@ -185,7 +186,8 @@ describe("pinned ask_user question", () => {
   });
 
   it("shrinks to its row when a file is attached", async () => {
-    await mount({ bot: bot([question]) });
+    // its own thread, so the uploading file stays out of the next test's draft
+    await mount({ bot: { ...bot([question]), threadId: "attach-thread" } });
     expect(row()).toBeNull();
     await attach(new File(["x".repeat(16)], "notes.zip", { type: "application/zip" }));
     expect(host!.textContent).toContain("notes.zip");
@@ -195,7 +197,7 @@ describe("pinned ask_user question", () => {
   it("shrinks to its row when a new message lands after it", async () => {
     await mount({ bot: bot([question]) });
     expect(row()).toBeNull();
-    await emit({ kind: "message", threadId: "asker-thread", message: { id: "b2", at: 5, role: "bot", kind: "text", text: "Still checking the logs." } });
+    await rerender({ bot: bot([question, { id: "b2", role: "bot", kind: "text", at: 5, text: "Still checking the logs." }]) });
     expect(row()).not.toBeNull();
     expect(row()!.textContent).toContain("Ship to prod or staging?");
   });
@@ -288,6 +290,7 @@ describe("pinned ask_user question", () => {
     expect(rowButton("Previous question").disabled).toBe(true);
     await act(async () => rowButton("Seoul").click());
     expect(sent("PATCH", `/api/bots/asker/cards/${first.id}`).map((call) => call.body)).toEqual([{ answered: "Seoul" }]);
+    await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second]) });
     expect(row()!.textContent).toContain("Which plan?");
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
