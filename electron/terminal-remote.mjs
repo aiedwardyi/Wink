@@ -8,7 +8,7 @@ const GB = 1024 ** 3;
 const RESERVE = 1.5 * GB;
 const PANE_MEMORY = 0.6 * GB;
 // A new claude's memory reaches the probe only after it has loaded.
-const STARTING_MS = 60_000;
+export const STARTING_MS = 60_000;
 // Probe and push share this, so even with a 15 s shell start an open beats the proxy's 30 s spawn deadline.
 const OPEN_MS = 12_000;
 const FIRST_PORT = 40_000;

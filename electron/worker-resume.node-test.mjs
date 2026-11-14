@@ -411,37 +411,50 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
   assert.equal(children.length, 1);
 });
 
-test("recovered workers the memory gate refuses are tried 3 times, then listed to their bot", async (t) => {
-  assert.ok(recovery);
-  const rows = Array.from({ length: 16 }, (_, index) => record("claude", { label: `W${index + 1}` }));
+function gatedRecovery(t, count, freeMemory) {
+  const rows = Array.from({ length: count }, (_, index) => record("claude", { label: `W${index + 1}` }));
   const f = fixture(t, rows);
-  const children = [];
+  const g = { ...f, rows, children: [], clock: 0, opens: 0 };
   const owner = { id: 1, isDestroyed: () => false, send() {} };
-  let clock = 0;
-  let opens = 0;
-  // The reading lags: no resumed worker has loaded yet, so it stays at 6 GB.
-  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, now: () => clock,
-    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 6 * 1024 ** 3, setPriority() {},
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, now: () => g.clock,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => freeMemory(g), setPriority() {},
     mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
     workerLaunch: async (input) => ({ kind: "managed", executable: "claude", args: ["-r", input.resume.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
       session: { engine: "claude", nativeId: input.resume.nativeId, launchGeneration: randomUUID(), template: input.resume.template } }),
     loadPty: () => ({ spawn() {
       const child = { onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write() {}, resize() {}, kill() {} };
-      children.push(child);
+      g.children.push(child);
       return child;
     } }),
   });
   t.after(() => host.dispose());
-  await recovery.recoverWorkers({ ...f.options, wait: async (ms) => { f.waits.push(ms); clock += ms; },
-    host: { openForBot: (...args) => { opens += 1; return host.openForBot(...args); }, workerResumeStatus: () => "resumed", closeForBot: (...args) => host.closeForBot(...args) } });
-  assert.equal(children.length, 10);
-  assert.equal(opens, 10 + 6 * 3);
-  assert.equal(f.waits.filter((ms) => ms === 2000).length, opens - 1);
-  assert.equal(f.notes.length, 1);
-  const [resumed, ...restarted] = f.notes[0].text.split("\n");
-  assert.equal(resumed, `RESUMED: ${rows.slice(0, 10).map((row) => `${row.label} (claude)`).join(", ")}.`);
-  assert.match(restarted[0], /^RESTARTED: Wink restarted, so these panes you spawned closed mid-run:$/);
-  assert.deepEqual(restarted.slice(1, 7).map((line) => line.split(" [pane ")[0]), rows.slice(10).map((row) => `- ${row.label} (resume failed)`));
-  assert.match(restarted.at(-1), /Spawn a FRESH worker to continue, or tell the user\.$/);
-  assert.equal(f.runs.restarted().size, 0);
+  g.options = { ...f.options, wait: async (ms) => { f.waits.push(ms); g.clock += ms; },
+    host: { openForBot: (...args) => { g.opens += 1; return host.openForBot(...args); }, workerResumeStatus: () => "resumed", closeForBot: (...args) => host.closeForBot(...args) } };
+  return g;
+}
+
+test("recovered workers refused only while earlier ones load wait for them, and all 16 resume", async (t) => {
+  assert.ok(recovery);
+  // The reading lags: no resumed worker has loaded yet, so it stays at 6 GB.
+  const g = gatedRecovery(t, 16, () => 6 * 1024 ** 3);
+  await recovery.recoverWorkers(g.options);
+  assert.equal(g.children.length, 16);
+  assert.equal(g.opens, 16 + 20);
+  assert.equal(g.clock, 70_000);
+  assert.equal(g.notes.length, 1);
+  assert.equal(g.notes[0].text, `RESUMED: ${g.rows.map((row) => `${row.label} (claude)`).join(", ")}.`);
+});
+
+test("a recovered worker that still does not fit once the others have loaded is listed with the memory reason", async (t) => {
+  assert.ok(recovery);
+  const g = gatedRecovery(t, 3, (run) => (1.5 - run.children.length * 0.6) * 1024 ** 3);
+  await recovery.recoverWorkers(g.options);
+  assert.equal(g.children.length, 2);
+  assert.equal(g.clock, 124_000);
+  const [resumed, heading, listed, guidance] = g.notes[0].text.split("\n");
+  assert.equal(resumed, "RESUMED: W1 (claude), W2 (claude).");
+  assert.match(heading, /^RESTARTED: /);
+  assert.match(listed, /^- W3 \(resume failed: not enough free memory\) \[pane /);
+  assert.match(guidance, /Spawn a FRESH worker to continue, or tell the user\.$/);
+  assert.equal(g.runs.restarted().size, 0);
 });
