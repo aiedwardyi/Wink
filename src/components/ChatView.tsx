@@ -1780,7 +1780,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onCall={onLiveCall}
             hidden={hidden}
           />
-          {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} />}
+          {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} thread={bot.threadId} />}
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button
