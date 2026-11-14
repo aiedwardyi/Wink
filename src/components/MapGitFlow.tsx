@@ -132,10 +132,10 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
   const shared = useMemo(() => {
     const nick = new Map(workers.map(item => [item.id, item.nick]));
     const by = new Map<string, { paths: Set<string>; who: Set<string> }>();
-    for (const clash of mapClashes(workers)) for (const [id, other] of [[clash.a, clash.b], [clash.b, clash.a]]) {
+    for (const clash of mapClashes(workers)) for (const id of clash.ids) {
       const entry = by.get(id) ?? { paths: new Set(), who: new Set() };
       entry.paths.add(clash.path);
-      entry.who.add(nick.get(other) ?? other);
+      for (const other of clash.ids) if (other !== id) entry.who.add(nick.get(other) ?? other);
       by.set(id, entry);
     }
     return by;
