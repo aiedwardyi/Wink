@@ -2,13 +2,11 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, Pencil } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { invalidateUsageBoard } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { MENU_CLASS } from "./MessageMenu";
-import { Tile } from "./UsageDesk";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 
 const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
@@ -36,12 +34,11 @@ export function EditableAccountName({ account, revision, editable }: { account: 
 
 /** Passive inspection: finds an account by name and number only, and never changes Main. */
 export function AccountPicker({ accounts, viewedId, select }: {
-  accounts: { id: string; name: string; number: number; nickname?: string | null; main?: boolean }[];
+  accounts: { id: string; name: string; main?: boolean }[];
   viewedId: string;
   select: (id: string) => void;
 }) {
   const { t } = useI18n();
-  const terminal = isTerminalSkin(useSkin());
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -102,7 +99,6 @@ export function AccountPicker({ accounts, viewedId, select }: {
           }}
           className={cn("flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-normal text-ink hover:bg-raised/70 [@media(pointer:coarse)]:min-h-11",
             item.id === viewed.id && "bg-raised/50")}>
-          {!item.nickname && <Tile number={item.number} terminal={terminal} />}
           <span className="min-w-0 flex-1 truncate">{item.name}</span>
           {item.main && <span className="shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
         </button>)}
