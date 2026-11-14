@@ -21,7 +21,7 @@ const MODELS = new Map<string, string[]>(Object.entries({
   museAgent: ["muse-spark-1.3", "muse-spark-1.3-contributor"],
 }));
 const GEMINI_VERSIONS = ["3.8"];
-const GEMINI_4 = [["gemini-4-argon", "Gemini 4 Argon"], ["gemini-4-hydrogen", "Gemini 4 Hydrogen"]] as const;
+const GEMINI_4 = [["gemini-4-carbon", "Gemini 4 Carbon"], ["gemini-4-argon", "Gemini 4 Argon"], ["gemini-4-hydrogen", "Gemini 4 Hydrogen"]] as const;
 
 /** Every model the picker grid offers; Gemini ids drop their -high/-medium/-low suffix. */
 export const PICKER_MODEL_IDS: readonly string[] = [

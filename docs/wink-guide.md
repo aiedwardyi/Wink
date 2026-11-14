@@ -5,6 +5,7 @@
 - Local bots and workers use CLI sign-ins: Claude Code, Codex, Grok, Antigravity (Gemini, `agy`) and Meta Muse. They need no API key.
 - The user picks each bot's engine, model and effort in the model picker (Alt+M, or the model chip in the chat header). Switching keeps the chat: the new engine gets the conversation so far.
 - Picker views: List (models up/down, effort left/right, Enter saves) for everyone. Team members also get Dial and Chart (smarter up, pricier right, 1-5 jumps to a lab). Switch with Settings > Themes > Model Picker Style (Dial, List, Chart) or the List View / Dial View button in the picker. Touch tablets always get List.
+- Gemini 4 Carbon is the strongest Gemini, for hard reasoning and complex software work.
 - Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.
 - Gemini 4 Hydrogen is the fast Gemini for everyday agentic work, like quick multi-step tasks where Argon would be overkill.
 - Coding fallback as engines run low: Opus 5.5, GPT-6.1 Sol, Sonnet 5.5, GPT-6.1 Terra, then Grok 4.7 extra high or GPT-6 Luna max. Grok also suits writing, X news.
