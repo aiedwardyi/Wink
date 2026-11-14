@@ -164,7 +164,8 @@ import {
   type PushTarget,
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
-import { warmEngines } from "./engine-warm.ts";
+import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
+import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -179,7 +180,7 @@ import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.t
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
-import "./message-db.ts";
+import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
@@ -807,12 +808,24 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
 const automaticAvailability = new Map<string, boolean>();
 const providerSnapshots = new Map<string, Awaited<ReturnType<typeof registry.describe>>[number]["snapshot"]>();
 
+const requestQuiet = createRequestQuiet();
+const warmGates = {
+  instance: (id: string) => registry.get(id),
+  busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
+  settled: requestQuiet.settled,
+  admit: (driverKind: string) => warmPool.idleWarmAllowed(driverKind),
+};
+const warmRouted = (id: string) => botAccounts.routedAccount(id) ?? id;
+const warmWanted = (fallback: string) => oneEngine(store.bots.map((bot) => ({ instanceId: warmRouted(bot.modelSelection.instanceId), at: lastMessageAt(bot.threadId) })), warmRouted(fallback));
+const signInWarm = createSignInWarm({ ...warmGates, wanted: async () => warmWanted((await defaultSelection()).instanceId) });
+
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
   for (const entry of entries) {
     if (entry.snapshot.state === "checking") continue;
     automaticAvailability.set(entry.instanceId, entry.snapshot.state === "available");
     providerSnapshots.set(entry.instanceId, entry.snapshot);
   }
+  void signInWarm.observe(entries);
 }
 
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
@@ -7674,6 +7687,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
     // and Origin and a phone session, and never reaches local-only routes.
@@ -9136,12 +9150,8 @@ startupTiming.afterPaint("probes", async () => {
     })
     .then(({ sel, instances }) => {
       bootSelection = sel;
-      void warmEngines({
-        rows: instances,
-        wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
-        instance: (id) => registry.get(id),
-        busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
-      }).catch(() => {});
+      signInWarm.arm(instances);
+      void warmEngines({ ...warmGates, rows: instances, wanted: warmWanted(sel.instanceId) }).catch(() => {});
     })
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);

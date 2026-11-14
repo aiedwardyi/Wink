@@ -26,7 +26,7 @@ import { newEventId, newId } from "../../contracts.ts";
 import { applyCredentialAllowlist } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
-import { execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
@@ -36,7 +36,7 @@ import { finishNative } from "../native.ts";
 import { experimentalAgents } from "../tool-catalog.ts";
 import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
-import { IDLE_TTL_MS, warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
+import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
 
 const INIT_TIMEOUT = 20_000;
@@ -552,6 +552,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           let host: Host;
           try {
             host = spawnHost(cwd, childEnv());
+            if (lease.key.threadId === HANDSHAKE) setCliPriority(host.child, "low");
           } catch {
             lease.release("spawn failed");
             return false;
@@ -585,7 +586,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         if (host && !host.inUse && !host.ttl && !lease.signal.aborted) {
           host.ttl = setTimeout(() => {
             if (!host.inUse) lease.release("idle");
-          }, IDLE_TTL_MS);
+          }, pool.handshakeIdleMs());
           host.ttl.unref?.();
         }
       };
@@ -768,6 +769,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const reused = !!host && !raced;
         const turnHost = host ?? spawnHost(cwd, env);
         turnHost.inUse = true;
+        setCliPriority(turnHost.child, "normal");
         // The turn owns its lease and offers it back; an adopted handshake
         // lease is released without killing the host it hands over.
         let lease = turnHost.lease === claimed && claimed ? claimed : undefined;
