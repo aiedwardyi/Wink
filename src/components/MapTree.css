@@ -3,6 +3,7 @@
 .map-tree-lines path { fill: none; stroke: var(--color-hairline); stroke-width: 1; }
 .map-tree-lines .map-tree-hot { stroke: var(--color-accent); stroke-width: 1.5; }
 .map-tree-n { position: absolute; left: 0; top: 0; }
+.map-tree-file:focus-visible, .map-tree-sq:focus-visible { outline: none; }
 .map-tree-box { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 26px; padding: 0 9px; border: 1px solid var(--color-hairline); background: var(--color-panel); white-space: nowrap; }
 .map-tree-box b { font: 500 11.5px/1 var(--font-sans, sans-serif); color: var(--color-ink); }
 .map-tree-box b i { font-style: normal; color: var(--color-ink-secondary); }
@@ -24,13 +25,12 @@ button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: p
 .map-tree-file[data-state="changed"] { color: var(--color-ink); cursor: pointer; }
 .map-tree-file[data-state="changed"] i { border-color: var(--c, var(--color-accent)); background: var(--c, var(--color-accent)); }
 .map-tree-file[data-now] span { font-weight: 600; }
-.map-tree-file[aria-current="true"] { background: var(--color-raised); }
+.map-tree-file[data-lit] i { box-shadow: 0 0 0 1px color-mix(in oklab, var(--c, var(--color-accent)) 45%, transparent), 0 0 9px color-mix(in oklab, var(--c, var(--color-accent)) 70%, transparent); }
 .map-tree-file .map-tree-x { margin-left: auto; }
 .map-tree-hidden { position: absolute; left: 14px; height: 15px; font: 10px/15px var(--font-sans, sans-serif); color: var(--color-ink-secondary); opacity: .8; white-space: nowrap; }
 .map-tree-sqs { position: absolute; left: 14px; top: 2px; display: flex; flex-wrap: wrap; gap: 2px; }
 .map-tree-sq { position: relative; width: 7px; height: 7px; background: var(--c); }
 .map-tree-sq::after { content: ""; position: absolute; inset: -1px; }
-.map-tree-sq[aria-current="true"] { outline: 1px solid var(--color-ink); outline-offset: 1px; }
 .map-tree-pin { position: absolute; left: 0; top: 0; z-index: 3; width: 13px; height: 14px; opacity: 0; pointer-events: none; }
 .map-tree-pin svg { display: block; width: 13px; height: 14px; fill: var(--color-accent); stroke: var(--color-panel); stroke-width: 1.2; }
 .map-tree-team { display: flex; flex-direction: column; gap: 2px; }

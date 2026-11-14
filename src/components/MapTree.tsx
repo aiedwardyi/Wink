@@ -23,12 +23,41 @@ interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y:
 
 // The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
 const TIP = { x: 1.4, y: 0.7 };
+// It rests 1px off the bottom-right corner of the row's 7px square, so its halo clears the square.
+const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
 const CLASHES = 4;
 export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const ease = (k: number) => k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
 const half = (n: number) => Math.round(n) + 0.5;
+const top = (it: TreeItem, at: Point) => ({ x: at.x + (it.kind === "stack" ? 7 : it.bw / 2), y: at.y });
+
+// A file whose branch just folded has no row: the arrow climbs from where it sat up through the box that now holds the file, along the buses, and down into the opening branch.
+function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: string, at: (it: TreeItem) => Point): Point[] | null {
+  const down = treeClimb(items, to, at);
+  if (!down) return null;
+  const dir = from.slice(0, Math.max(0, from.lastIndexOf("/")));
+  const holds = (it: TreeItem) => it.kind === "root" || (it.kind === "stack" ? it.dir!.path === dir
+    : it.dir ? from.startsWith(it.dir.path + "/") : it.filesOf === dir || !!it.folds?.some(path => from.startsWith(path + "/")));
+  // Items run row by row, so the last holder is the deepest.
+  let node = items.findLast(holds);
+  if (!node) return null;
+  const cut = (id: string, key: "bus" | "busOf") => down.slice(0, down.findIndex(point => point[key] === id) + 1).reverse();
+  const g = at(node);
+  const points: Point[] = node.kind === "stack" ? [start] : [start, { x: top(node, g).x, y: g.y + TREE.BOX }];
+  if (down.some(point => point.busOf === node!.id)) return [...points, ...cut(node.id, "busOf")];
+  for (; node.parent; node = node.parent) {
+    const parent: TreeItem = node.parent;
+    const head = top(node, at(node));
+    const bus = at(parent.kids?.[0] ?? node).y - TREE.VGAP / 2;
+    points.push(head, { x: head.x, y: bus });
+    if (down.some(point => point.bus === parent.id)) return [...points, ...cut(parent.id, "bus")];
+    const pg = at(parent);
+    points.push({ x: top(parent, pg).x, y: bus }, { x: top(parent, pg).x, y: pg.y + TREE.BOX });
+  }
+  return null;
+}
 // SAFETY: CSSProperties has no custom properties; this sets only --c.
 const tint = (color?: string) => color ? { "--c": color } as CSSProperties : undefined;
 
@@ -64,7 +93,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const nodes = useRef(new Map<string, HTMLElement>());
   const motion = useRef(new Map<string, Motion>());
   const rows = useRef(new Set<string>());
-  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number }>({ t0: 0 });
+  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number; start?: Point; line?: Point }>({ t0: 0 });
+  const spot = useRef<Point>(undefined);
+  const held = useRef(false);
+  const edit = useRef<MapTreeProps["current"]>(undefined);
   const frame = useRef(0);
   const [width, setWidth] = useState(0);
   const W = width || 560;
@@ -108,6 +140,14 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     return () => observer.disconnect();
   }, []);
 
+  // A held Up or Down jumps the arrow so fast scrolling stays fast.
+  useLayoutEffect(() => {
+    const key = (event: KeyboardEvent) => { held.current = event.type === "keydown" && event.repeat; };
+    document.addEventListener("keydown", key, true);
+    document.addEventListener("keyup", key, true);
+    return () => { document.removeEventListener("keydown", key, true); document.removeEventListener("keyup", key, true); };
+  }, []);
+
   useLayoutEffect(() => {
     const now = performance.now();
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -125,13 +165,21 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     for (const [path, row] of found) if (!rows.current.has(path) && nodes.current.has(row.closest<HTMLElement>(".map-tree-n")?.dataset.node ?? "")) fade(row);
     rows.current = new Set(found.keys());
     let scroll = false;
-    if (current && (current.path !== hop.current.to || current.at !== hop.current.at)) {
-      hop.current = { from: fresh ? undefined : hop.current.to, to: current.path, at: current.at, t0: fresh || still ? 0 : now + 50 };
-      const row = found.get(current.path);
-      if (!fresh && !still) row?.animate?.([{ backgroundColor: "transparent" }, { backgroundColor: "color-mix(in oklab, var(--c, var(--color-accent)) 22%, transparent)", offset: 0.3 }, { backgroundColor: "transparent" }], { duration: 1600, easing: "ease-out" });
+    if (current && (current.path !== edit.current?.path || current.at !== edit.current.at)) {
+      edit.current = current;
+      if (!fresh && !still) found.get(current.path)?.animate?.([{ backgroundColor: "transparent" }, { backgroundColor: "color-mix(in oklab, var(--c, var(--color-accent)) 22%, transparent)", offset: 0.3 }, { backgroundColor: "transparent" }], { duration: 1600, easing: "ease-out" });
+    }
+    const stamp = focus === current?.path ? current?.at : 0;
+    const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
+    if (focus && (focus !== hop.current.to || stamp !== hop.current.at)) {
+      const from = fresh ? undefined : hop.current.to;
+      const start = from && from !== focus && spot.current && !treeClimb(layout.items, from, at) ? spot.current : undefined;
+      // A picked file draws the arrow straight from where it sits; a worker's edit walks the tree lines.
+      const line = from && from !== focus && !follow && focus === selected ? spot.current : undefined;
+      // The target square lights at once and the arrow sets off a beat later, so it reads as heading there.
+      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : now + 135, start, line };
       scroll = follow;
     }
-    const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
     const tick = () => {
       frame.current = 0;
       const t = performance.now();
@@ -146,19 +194,23 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
         if (node) node.style.transform = `translate(${move.x.toFixed(1)}px, ${move.y.toFixed(1)}px)`;
       }
       lines.current?.setAttribute("d", treeEdges(layout.items, at));
-      const { from, to, t0 } = hop.current;
+      const { from, to, t0, start, line } = hop.current;
       const climb = to ? treeClimb(layout.items, to, at) : null;
       const shown = Math.min(1, Math.max(0, (t - t0 - 350) / 400));
       if (shown < 1) moving = true;
       hot.current?.setAttribute("d", climb ? "M" + climb.map(point => `${half(point.x)} ${half(point.y)}`).join("L") : "");
       hot.current?.style.setProperty("opacity", String(1 - (1 - shown) ** 3));
       if (pin.current) {
-        const k = ease((t - t0) / 750);
-        const route = climb && from && from !== to && k < 1 ? treeRoute(layout.items, from, to!, at) : null;
-        const point = route ? treeAlong(route, k) : climb?.[0];
+        const k = start ? 1 - (1 - Math.min(1, Math.max(0, (t - t0) / 450))) ** 3 : ease((t - t0) / 750);
+        // Aimed at where the square ends up, so a sliding tree does not bend the line.
+        const goal = line && k < 1 ? treeClimb(layout.items, to!, it => it) : null;
+        const trail = !line && climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
+        const route = goal ? [line!, corner(goal[0])] : trail && [...start ? [] : [corner(trail[0])], ...trail, corner(trail.at(-1)!)];
+        const point = route ? treeAlong(route, k) : climb ? corner(climb[0]) : undefined;
         if (route) moving = true;
+        spot.current = point;
         pin.current.style.opacity = point ? "1" : "0";
-        if (point) pin.current.style.transform = `translate(${(point.x - 2 - TIP.x).toFixed(1)}px, ${(point.y - 3 - TIP.y).toFixed(1)}px)`;
+        if (point) pin.current.style.transform = `translate(${(point.x - TIP.x).toFixed(1)}px, ${(point.y - TIP.y).toFixed(1)}px)`;
       }
       if (moving && !document.hidden) frame.current = requestAnimationFrame(tick);
       else if (scroll) { scroll = false; found.get(to ?? "")?.scrollIntoView?.({ block: "nearest" }); }
@@ -166,12 +218,12 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     cancelAnimationFrame(frame.current);
     tick();
     return () => cancelAnimationFrame(frame.current);
-  }, [layout, current, follow]);
+  }, [layout, current, follow, focus]);
 
   const row = (it: TreeItem, path: string, index: number) => {
     const changed = layout.changed.has(path);
     const clash = clashBy.get(path);
-    const props = { className: "map-tree-file", "data-tree-row": path, "data-now": path === current?.path || undefined, title: path,
+    const props = { className: "map-tree-file", "data-tree-row": path, "data-now": path === current?.path || undefined, "data-lit": path === focus || undefined, title: path,
       style: { top: 2 + (it.squaresHeight ?? 0) + index * TREE.LINE, ...tint(team ? fill(path) : undefined) } };
     const body = <><i /><span>{name(path)}</span>{clash && <Clash same={clash.same} />}</>;
     return changed
@@ -218,7 +270,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
           {it.hidden ? <span className="map-tree-hidden" style={{ top: 2 + it.files.length * TREE.LINE }}>{labels.files(it.hidden)}</span> : null}
         </div>}
       </div>)}
-      {!team && <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>}
+      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>
     </div>
   </>;
 });

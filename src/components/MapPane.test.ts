@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -24,6 +27,11 @@ const repo = { name: "wink", paths: ["README.md", "b.ts", "src/a.ts", "src/manua
 const reads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/file?"));
 const emit = (items = workers) => act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: items }) }); });
 const click = (selector: string) => act(async () => { host.querySelector<HTMLButtonElement>(selector)!.click(); });
+type Spot = { x: number; y: number };
+const offLine = (points: Spot[], a: Spot, b: Spot) => Math.max(...points.map(p => {
+  const k = Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / ((b.x - a.x) ** 2 + (b.y - a.y) ** 2)));
+  return Math.hypot(p.x - a.x - k * (b.x - a.x), p.y - a.y - k * (b.y - a.y));
+}));
 
 beforeEach(() => {
   close.mockReset();
@@ -181,29 +189,127 @@ it("opens a folded branch's changed file from its box on a narrow pane", async (
   expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
 });
 
-it("hops the pointer to the file just edited without covering its name, and shows the path when the worker left no note", async () => {
+it("rests the pointer's tip on the bottom-right corner of the edited file's square without covering it or the name, and shows the path when the worker left no note", async () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapTree.css"), "utf8");
+  expect(css).toMatch(/\.map-tree-file \{ position: absolute; left: 14px; [^}]*align-items: center; gap: 6px; height: 17px;/);
+  expect(css).toMatch(/\.map-tree-file i \{ flex: none; width: 7px; height: 7px;/);
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
   const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
-  const near = (path: string) => {
-    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
-    const [x, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
-    const top = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
-    const [px, py] = numbers(host.querySelector<HTMLElement>(".map-tree-pin")!);
-    return { tip: px + 1.4, name: x + 14 + 13, gap: Math.abs(py + 0.7 - top) };
-  };
   for (const path of ["b.ts", "src/a.ts"]) {
     if (path !== "b.ts") await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 17), path, files: [...workers[1].files, { path, added: 2, removed: 0 }] }]);
     await vi.waitFor(() => {
-      const { tip, name, gap } = near(path);
-      expect(tip).toBeLessThan(name - 4);
-      expect(gap).toBeLessThan(4);
+      const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+      const [x, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+      const mid = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
+      const [px, py] = numbers(host.querySelector<HTMLElement>(".map-tree-pin")!);
+      const tip = { x: px + 1.4, y: py + 0.7 };
+      const square = { left: x + 14, right: x + 21, top: mid - 3.5, bottom: mid + 3.5 };
+      const gap = Math.hypot(Math.max(square.left - tip.x, 0, tip.x - square.right), Math.max(square.top - tip.y, 0, tip.y - square.bottom));
+      expect(row.firstElementChild?.tagName).toBe("I");
+      expect(gap).toBeGreaterThan(0);
+      expect(gap).toBeLessThanOrEqual(2);
+      expect(tip.x).toBeGreaterThanOrEqual(square.right);
+      expect(tip.y).toBeGreaterThanOrEqual(square.bottom);
+      expect(tip.x).toBeLessThan(x + 14 + 13);
     });
   }
   await emit([{ ...workers[1], editedAt: Date.UTC(2026, 10, 13, 1, 16, 7) }]);
   expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
   expect(host.querySelector(".map-step p")).toBeNull();
   expect(host.querySelector(".map-step time")?.getAttribute("datetime")).toBe("2026-11-13T01:16:07.000Z");
+});
+
+it("moves the one arrow to the file picked with Up, Down or a click, keeps it there off Follow, and draws no box", async () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapTree.css"), "utf8");
+  expect(css).not.toMatch(/\.map-tree-(file|sq)\[aria-current/);
+  expect(css).toMatch(/\.map-tree-file:focus-visible, \.map-tree-sq:focus-visible \{ outline: none; \}/);
+  const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const pointsAt = (path: string) => vi.waitFor(() => {
+    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+    const [, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+    const top = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
+    expect(Math.abs(numbers(host.querySelector<HTMLElement>(".map-tree-pin")!)[1] + 0.7 - top - 4.5)).toBeLessThan(1);
+  }, { timeout: 3000 });
+  const key = (path: string, k: string) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+  const edits = [{ path: "README.md", added: 1, removed: 0 }, ...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }];
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: edits }]);
+  await pointsAt("src/a.ts");
+  await key("src/a.ts", "ArrowDown");
+  await pointsAt("src/manual.ts");
+  await key("src/manual.ts", "ArrowDown");
+  await pointsAt("src/z.ts");
+  expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/z.ts");
+  await click('[data-map-file="README.md"]');
+  await pointsAt("README.md");
+  await emit([{ ...workers[0], files: edits, editedAt: 5, path: "src/manual.ts" }]);
+  await act(() => new Promise(done => setTimeout(done, 900)));
+  await pointsAt("README.md");
+  await click(".map-follow");
+  await pointsAt("src/manual.ts");
+  await emit([{ ...workers[0], editedAt: 6 }, workers[1]]);
+  expect(host.querySelectorAll(".map-tree-pin")).toHaveLength(1);
+  await pointsAt("src/a.ts");
+  await click('[data-map-file="b.ts"]');
+  await pointsAt("b.ts");
+});
+
+it("lights the picked file's square at once and sends the arrow a beat behind, straight there on a held key", async () => {
+  let clock = 1000;
+  let id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  vi.stubGlobal("requestAnimationFrame", (done: FrameRequestCallback) => { frames.set(++id, done); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (at: number) => frames.delete(at));
+  const step = (ms: number) => { clock += ms; const due = [...frames.values()]; frames.clear(); for (const done of due) done(clock); };
+  const pin = () => host.querySelector<HTMLElement>(".map-tree-pin")!.style.transform;
+  const lit = () => [...host.querySelectorAll(".map-tree-file[data-lit]")].map(row => row.getAttribute("title"));
+  const key = (path: string, repeat: boolean) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", repeat, bubbles: true, cancelable: true })); });
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: [...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }] }]);
+  for (let i = 0; i < 10; i++) step(200);
+  expect(lit()).toEqual(["src/a.ts"]);
+  const rest = pin();
+  await key("src/a.ts", false);
+  expect(lit()).toEqual(["src/manual.ts"]);
+  step(100);
+  expect(pin()).toBe(rest);
+  step(300);
+  expect(pin()).not.toBe(rest);
+  for (let i = 0; i < 10; i++) step(200);
+  const next = pin();
+  await key("src/manual.ts", true);
+  expect(lit()).toEqual(["src/z.ts"]);
+  const jumped = pin();
+  expect(jumped).not.toBe(next);
+  step(200);
+  expect(pin()).toBe(jumped);
+});
+
+it("walks a worker's edit along the tree lines but sends a clicked file's arrow straight there", async () => {
+  let clock = 1000;
+  let id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  vi.stubGlobal("requestAnimationFrame", (done: FrameRequestCallback) => { frames.set(++id, done); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (at: number) => frames.delete(at));
+  const step = (ms: number) => { clock += ms; const due = [...frames.values()]; frames.clear(); for (const done of due) done(clock); };
+  const tip = () => { const [x, y] = host.querySelector<HTMLElement>(".map-tree-pin")!.style.transform.match(/-?[\d.]+/g)!.map(Number); return { x: x + 1.4, y: y + 0.7 }; };
+  const travel = () => { const trail = [tip()]; for (let ms = 0; ms < 1000; ms += 16) { step(16); trail.push(tip()); } return trail; };
+  const edit = { path: "src/a.ts", added: 2, removed: 0 };
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[1]]);
+  for (let i = 0; i < 10; i++) step(200);
+  const home = tip();
+  await emit([{ ...workers[1], editedAt: 3, path: edit.path, files: [...workers[1].files, edit] }]);
+  const walked = travel();
+  expect(offLine(walked, home, walked.at(-1)!)).toBeGreaterThan(3);
+  await click('[data-map-file="b.ts"]');
+  const picked = travel();
+  expect(new Set(picked.map(at => `${at.x} ${at.y}`)).size).toBeGreaterThan(5);
+  expect(picked.at(-1)).toEqual(home);
+  expect(offLine(picked, walked.at(-1)!, home)).toBeLessThan(0.5);
 });
 
 it("keeps the step title, breadcrumb and diff on one file through every hop", async () => {
@@ -255,6 +361,52 @@ it("moves focus with Up and Down onto a file that sat in a folded box", async ()
   await act(async () => { row.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); });
   expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
   expect(document.activeElement?.getAttribute("data-map-file")).toBe("server/f2.ts");
+});
+
+it("sends a picked file's arrow in one straight line into a branch that opens as another folds, and jumps on a held key", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
+  const paths = ["src", "server", "docs"].flatMap(dir => Array.from({ length: 20 }, (_, i) => `${dir}/f${i}.ts`));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  let clock = 1000;
+  let id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  vi.stubGlobal("requestAnimationFrame", (done: FrameRequestCallback) => { frames.set(++id, done); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (at: number) => frames.delete(at));
+  const step = (ms: number) => { clock += ms; const due = [...frames.values()]; frames.clear(); for (const done of due) done(clock); };
+  const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const tip = () => { const [x, y] = numbers(host.querySelector<HTMLElement>(".map-tree-pin")!); return { x: x + 1.4, y: y + 0.7 }; };
+  const off = (path: string) => {
+    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+    const [x, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+    const at = tip();
+    return Math.hypot(at.x - x - 14 - 8, at.y - y - parseFloat(row.parentElement!.style.top) - parseFloat(row.style.top) - 17 / 2 - 4.5);
+  };
+  const key = (path: string, repeat: boolean) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: repeat ? "ArrowDown" : "ArrowUp", repeat, bubbles: true, cancelable: true })); });
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path: "src/f1.ts", files: [{ path: "src/f1.ts", added: 1, removed: 0 }, { path: "server/f2.ts", added: 1, removed: 0 }] }]);
+  for (let i = 0; i < 10; i++) step(200);
+  expect(off("src/f1.ts")).toBeLessThan(1);
+  const before = tip();
+  await key("src/f1.ts", false);
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
+  expect(tip()).toEqual(before);
+  expect(off("server/f2.ts")).toBeGreaterThan(20);
+  step(115);
+  expect(tip()).toEqual(before);
+  step(35);
+  const first = tip();
+  expect(Math.hypot(first.x - before.x, first.y - before.y)).toBeGreaterThan(1);
+  const trail = [first];
+  for (let ms = 16; ms < 440; ms += 16) { step(16); trail.push(tip()); }
+  step(16);
+  expect(off("server/f2.ts")).toBeLessThan(1);
+  expect(new Set(trail.map(at => `${at.x} ${at.y}`)).size).toBeGreaterThan(5);
+  expect(offLine(trail, before, tip())).toBeLessThan(0.5);
+  for (let i = 0; i < 5; i++) step(200);
+  await key("server/f2.ts", true);
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/f1.ts");
+  expect(off("src/f1.ts")).toBeLessThan(1);
 });
 
 it("keeps the changed files on the tree with a Retry when the repo's files fail to load", async () => {
