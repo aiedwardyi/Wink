@@ -7,7 +7,7 @@ const BRIEF_ASKS = 5;
 const QUESTIONS_KEPT = 10;
 
 export const TASK_ASKS_PROMPT =
-  "Add each ask the user makes to update_task_state asks in the same turn, and close it as done or declined as soon as it settles; never drop one. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them.";
+  "Reply first, then add each user ask to update_task_state asks before the turn ends; close it as done or declined once it settles; never skip or drop one. Build any summary, status or release from the asks list, not memory. Never leave work awaiting the user's review without showing it to them.";
 
 export const taskAskSchema = z.object({
   id: z.string().regex(/^A\d{1,6}$/),
