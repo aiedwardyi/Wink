@@ -32,6 +32,7 @@ files:
   - shared/update-error.mjs
   - "!electron/**/*.test.*"
   - "!electron/terminal-*.node-test.mjs"
+  - "!electron/worker-host*.node-test.mjs"
   - "!electron/resources/speech-helper"
   - "!electron/resources/speech-helper.swift"
   - "!electron/resources/speech-helper-Info.plist"
