@@ -51,9 +51,9 @@ it("labels root and folder counts in both languages", async () => {
   await emit([workers[0]]);
   const counts = () => [...host.querySelectorAll<HTMLElement>(".map-tree-box:not(.map-tree-more) > span")];
   const check = (titles: string[]) => {
-    expect(counts().map(count => count.textContent)).toEqual(["1,103", "1,102", "1"]);
+    expect(counts().map(count => count.querySelector('[aria-hidden="true"]')?.textContent)).toEqual(["1,103", "1,102", "1"]);
     expect(counts().map(count => count.getAttribute("title"))).toEqual(titles);
-    expect(counts().map(count => count.getAttribute("aria-label"))).toEqual(titles);
+    expect(counts().map(count => count.querySelector(".sr-only")?.textContent)).toEqual(titles);
     expect(counts().every(count => !count.hasAttribute("tabindex"))).toBe(true);
   };
   check(["1,103 files", "1,102 files", "1 file"]);
@@ -364,7 +364,7 @@ it("opens only a file from the folders a folded folders box holds, never one und
   vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([{ ...workers[0], path: "src/f1.ts", files: ["src/f1.ts", "big/f2.ts", "zeta-folder-long/f1.ts"].map(path => ({ path, added: 1, removed: 0 })) }]);
-  expect([...host.querySelectorAll("button.map-tree-box")].map(box => box.textContent)).toContain("big/20");
+  expect([...host.querySelectorAll("button.map-tree-box > b")].map(box => box.textContent)).toContain("big/");
   await act(async () => host.querySelector<HTMLButtonElement>("button.map-tree-more")!.click());
   expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("zeta-folder-long/f1.ts");
 });

@@ -255,7 +255,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const count = fmt(dir.total);
     const countLabel = labels.count(dir.total, count);
     return <Box type={target ? "button" : undefined} className="map-tree-box" data-changed={(it.kind === "root" ? layout.changed.size > 0 : layout.lit.has(dir.path)) || undefined} style={{ width: it.bw }} onClick={target ? () => onOpen(target) : undefined}>
-      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span title={countLabel} aria-label={countLabel}>{count}</span>
+      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span title={countLabel}><span aria-hidden="true">{count}</span><span className="sr-only">{countLabel}</span></span>
       {ids.length > 0 && <s className="map-tree-ticks" style={{ background: `linear-gradient(90deg, ${ids.map((id, i) => `${color(id)} ${(i * 100 / ids.length).toFixed(2)}% ${((i + 1) * 100 / ids.length).toFixed(2)}%`).join(", ")})` }} />}
     </Box>;
   };
