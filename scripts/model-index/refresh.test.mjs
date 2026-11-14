@@ -276,6 +276,16 @@ describe("list price parsers", () => {
     expect(prices["muse-wonder-1.0"]).toEqual({ input: 4, cachedInput: 0.2, output: 20 });
   });
 
+  it("reads a Meta model priced by input length", () => {
+    const html = "<p>Models: muse-spark-1.3 in Standard mode.</p><p>Usage Standard mode (per 1M tokens) Contributor mode (per 1M tokens) Cached input $0.15 Not available Input $1.25 Not available Output $4.25 Not available</p>"
+      + "<p>Model: muse-ember-1.0 , in Standard mode only.</p><p>A request with up to 200K input tokens is billed at the rates in the first column.</p><p>Usage Up to 200K input tokens (per 1M tokens) Over 200K input tokens (per 1M tokens) Cached input $0.004 $0.012 Input $0.10 $0.30 Output $0.50 $1.50</p>";
+    expect(listPrices.parseMeta(html, ["muse-spark-1.3", "muse-ember-1.0"])).toEqual({
+      "muse-spark-1.3": { input: 1.25, cachedInput: 0.15, output: 4.25 },
+      "muse-ember-1.0": { input: 0.1, cachedInput: 0.004, output: 0.5, upToTokens: 200000, above: { input: 0.3, cachedInput: 0.012, output: 1.5 } },
+    });
+    expect(() => listPrices.parseMeta(html.replace("Over 200K", "Past 200K"), ["muse-ember-1.0"])).toThrow(/muse-ember-1.0: row shape changed/);
+  });
+
   it("fails when Meta's price table changes", () => {
     expect(() => listPrices.parseMeta(fixture("meta-pricing.html").replaceAll("Usage", "Use"), ["muse-spark-1.3"])).toThrow(Unverifiable);
   });

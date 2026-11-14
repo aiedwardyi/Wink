@@ -1,3 +1,33 @@
+# Model Index fill, 2026-11-14
+
+61 published values added and 71 changed, read 2026-11-14 UTC. 9 Terminal-Bench costs were removed because AA no longer publishes them. No chart version moved.
+
+- AA retired its `/api/v2/data/llms/models` endpoint on 2026-11-04 (it returns 410 Gone). The weekly run now reads the paginated [free language models API](https://artificialanalysis.ai/api/v2/language/models/free), which gives the Intelligence Index rounded to one decimal. A row whose model page value rounds to the API value keeps the model page value and its cost.
+- The free API has no Terminal-Bench field, so Terminal-Bench 4.0 joins GDPval-AA and FrontierCode as a hand check from the public model pages.
+- Gemini 4 Hydrogen (low, medium, high, xhigh) and Gemini 4 Carbon (low, medium, high): Intelligence Index 5.0.1 with cost, Terminal-Bench 4.0 with cost and FrontierCode 2.0 from the [public model pages](https://artificialanalysis.ai/models/gemini-4-hydrogen). Carbon (high) GDPval-AA 2.1 is 1732.68 Elo at $2.12, the rendered Cost per Task bar. AA publishes no GDPval-AA score for Hydrogen.
+- Gemini 4 Argon gained its medium effort on all four AA charts; its GDPval-AA medium row has no cost because the Cost per Task view does not show it. Argon (high) Intelligence Index cost moved from $9.95 to $4.97 on AA.
+- GPT-6.1 Terra gained Terminal-Bench costs at all 5 efforts.
+- Changed: 59 GDPval-AA Elos, 11 Terminal-Bench costs (Claude Fable 5.1, Gemini 3.8 Flash, Grok 4.7, Muse Spark 1.3 max) and the Argon cost above. Removed: Terminal-Bench costs for Claude Fable 5 max, Grok 4.6 low/medium/high, Muse Spark 1.3 xhigh and GPT-5.6 Terra low/medium/high/xhigh, because their model pages no longer carry an Intelligence Index cost breakdown.
+- GDPval-AA costs come from the Cost per Task view on the [gdpval-aa page](https://artificialanalysis.ai/evaluations/gdpval-aa), which shows one effort per model. Every Wink cost in that view was unchanged. Costs for efforts outside it keep their earlier reading.
+- Muse Ember (`muse-ember-1.0`) is mapped, with AA rows at xhigh and max, a [Vals Legal Research](https://www.vals.ai/benchmarks/legal_research) score of 49.038 at $0.056581 per test, and its [Meta list price](https://dev.meta.ai/docs/pricing-rate-limits). Meta prices Ember by input length ($0.10 input, $0.004 cached, $0.50 output per 1M tokens up to 200K input tokens; $0.30, $0.012 and $1.50 above), which the parser now reads. Ember is not in the picker, so it is not charted yet.
+- Rams Index, CyberBench and the other list prices were re-read with no change.
+
+Picker model/chart gaps went from 24 to 17. Counts use the 17 picker models and active charts only.
+
+| Chart | Missing before | Missing after | Filled | Still missing |
+| --- | ---: | ---: | --- | --- |
+| Intelligence Index 5.0.1 | 3 | 1 | Gemini 4 Hydrogen, Gemini 4 Carbon | Muse Spark 1.3 Contributor |
+| FrontierCode 2.0 | 3 | 1 | Gemini 4 Hydrogen, Gemini 4 Carbon | Muse Spark 1.3 Contributor |
+| Terminal-Bench 4.0 | 3 | 1 | Gemini 4 Hydrogen, Gemini 4 Carbon | Muse Spark 1.3 Contributor |
+| GDPval-AA 2.1 | 3 | 2 | Gemini 4 Carbon | Muse Spark 1.3 Contributor, Gemini 4 Hydrogen |
+| Rams Index 0.6.1 | 6 | 6 | - | Claude Fable 5.2, Grok 4.6, Muse Spark 1.3, Muse Spark 1.3 Contributor, Gemini 4 Carbon, Gemini 4 Hydrogen |
+| CyberBench 1.1 | 5 | 5 | - | Claude Fable 5.2, GPT-6.1 Terra, Muse Spark 1.3 Contributor, Gemini 4 Carbon, Gemini 4 Hydrogen |
+| Legal Research Bench 1 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| List prices | 0 | 0 | - | - |
+| Total model/chart gaps | 24 | 17 | | |
+
+Rams Index (board 2026-10-29) and CyberBench (board 2026-11-05) have not published a newer board. Gemini 4 Hydrogen now shows on 4 of 7 score charts and Gemini 4 Carbon on 5 of 7.
+
 # Claude Fable 5.2, 2026-11-10
 
 40 published values added for Fable 5.2, read 2026-11-09 UTC. No other value changed.

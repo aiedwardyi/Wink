@@ -63,7 +63,8 @@ describe("model index data", () => {
   });
 
   it("charts only models from the picker", () => {
-    const retired = ["gpt-5.6-terra"];
+    // Muse Ember has sourced rows ahead of joining the picker
+    const retired = ["gpt-5.6-terra", "muse-ember-1.0"];
     for (const entry of MODEL_INDEX_ENTRIES) {
       expect([...CHARTED, ...retired], entry.model).toContain(entry.model);
     }
@@ -255,9 +256,13 @@ describe("sourced data", () => {
   it("charts Argon on the four AA indexes, Rams Index and the two Vals benchmarks", () => {
     const scored = MODEL_INDEX_ENTRIES.filter((e) => e.model === "gemini-4-argon" && e.index !== "cost");
     expect(scored.map((e) => [e.index, e.benchmark, e.effort, e.score, e.cost])).toEqual([
+      ["coding", "aa-frontiercode", "medium", 25.0184848484849, undefined],
       ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
-      ["general", "aa-gdpval", "high", 1630.66, 3.64],
-      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
+      ["general", "aa-gdpval", "medium", 1578.39, undefined],
+      ["general", "aa-gdpval", "high", 1633.51, 3.64],
+      ["intelligence", "aa-intelligence-index", "medium", 47.6040598289046, 4.314621569087732],
+      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 4.973304355775267],
+      ["agentic", "aa-terminal-bench", "medium", 55.050505050505, 6.424922769986513],
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
       ["design", "rams-index", "default", 20.7, 0.149],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],

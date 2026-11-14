@@ -321,6 +321,24 @@
       ]
     }
   },
+  "muse-ember-1.0": {
+    "provider": "meta",
+    "label": "Muse Ember",
+    "sources": {
+      "vals": [
+        "meta/muse-ember"
+      ],
+      "lmarena": [
+        "Muse Ember"
+      ],
+      "list-prices": [
+        "muse-ember-1.0"
+      ],
+      "aa": [
+        "muse-ember"
+      ]
+    }
+  },
   "gpt-6.1-terra": {
     "provider": "openai",
     "label": "GPT-6.1 Terra",
