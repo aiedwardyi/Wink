@@ -427,7 +427,7 @@ describe("EnginesSettings friends Connections list", () => {
 
   it.each([false, true])("gives a single-account email the Claude and Codex card row (phone=%s)", async (phone) => {
     vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
-    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
+    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "person@example.test" }, install: { logout: ["logout"] } });
     const { root, row } = await renderList();
     try {
       const email = row("grok").querySelector("[data-account-email]")!;
