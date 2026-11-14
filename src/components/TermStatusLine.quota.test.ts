@@ -232,6 +232,11 @@ describe("terminal status line quota ticker", () => {
     expect(q("[data-term-account]")).toBeNull();
   });
 
+  it("keeps the account name on a phone, where the age reading is hidden", async () => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture), { skin: "multiplexer", phone: true });
+    expect(text(q("[data-term-account]"))).toBe("Claude 1");
+  });
+
   it("keeps the Multiplexer bot tab and only the tightest window on a phone", async () => {
     await mount(botOn("claude"), instancesFor(usageBoardFixture), { skin: "multiplexer", phone: true });
     const status = q("[data-term-status]");
