@@ -1782,7 +1782,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
               }
               if (typeof settledThread === "string") {
-                rawDispatch({ type: "sendSettled", threadId: settledThread, sendId });
+                rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.idle === true });
               }
             })
             .catch(async (error) => {

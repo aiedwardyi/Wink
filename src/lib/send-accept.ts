@@ -112,7 +112,8 @@ export function forgetAcceptedSend(
 }
 
 /** POST confirms a queue chip. Thinking stays until SSE busy or reject/Stop,
- * unless the server queued it: the chip then paints this send already. */
+ * unless the server queued it (the chip then paints this send already) or
+ * started no turn for it. */
 export function settleAcceptedSend(
   accepted: AcceptedSends,
   threadId: string,
@@ -164,6 +165,8 @@ export type SendPostReceipt = {
   queued?: boolean;
   queueId?: string;
   error?: string;
+  /** A group line nobody was asked to answer: no turn will start. */
+  idle?: boolean;
 };
 
 export function receiptRejectsAcceptedSend(

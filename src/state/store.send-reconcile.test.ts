@@ -60,10 +60,11 @@ async function mount(
     throw new TypeError("Load failed");
   },
   bots: Bot[] = [bot],
+  groups: Group[] = [group],
 ) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
-    if (path === "/api/bots?messages=200") return Response.json({ bots, groups: [group], computerControl: {} });
+    if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {} });
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
     if (page) return threadPage(page[1]!, init);
@@ -223,6 +224,43 @@ describe("send reject after the server accepted", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a group line nobody answers", () => {
+  const idle = { ...group, busyBotId: undefined } as Group;
+  const line = (sendId: string): Message => ({ ...accepted(idle.threadId), id: `m-${sendId}`, sendId, text: "hi" });
+  const receipt = (body: object) => async (init?: RequestInit) =>
+    Response.json({ ok: true, threadId: idle.threadId, message: line(JSON.parse(String(init?.body)).sendId), ...body });
+  const sendHi = (sendId: string) =>
+    act(async () => store.dispatch({ type: "sendGroup", groupId: idle.id, text: "hi", sendId, threadId: idle.threadId }));
+
+  it("keeps Thinking while a turn is coming", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }), receipt({ idle: false }), [bot], [idle]);
+    await sendHi("s1");
+    await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
+    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ sendId: "s1", kind: "thinking" })]);
+  });
+
+  it("drops Thinking when the server starts no turn", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }), receipt({ idle: true }), [bot], [idle]);
+    await sendHi("s1");
+    await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
+    expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+  });
+
+  it("drops Thinking for a line sent after Stop", async () => {
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), receipt({ idle: true }), [bot], [idle]);
+    const route = fetch.getMockImplementation()!;
+    fetch.mockImplementation((url: string, init?: RequestInit) =>
+      String(url).endsWith("/interrupt") ? Promise.resolve(Response.json({ ok: true })) : route(url, init));
+    await sendHi("s1");
+    await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
+    await act(async () => store.dispatch({ type: "interruptGroup", groupId: idle.id }));
+    await sendHi("s2");
+    await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1"), line("s2")]));
+    expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+    expect(store.state.error).toBeNull();
   });
 });
 

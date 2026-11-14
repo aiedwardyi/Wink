@@ -7105,7 +7105,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     const spoken = new Set<string>();
     for (const responder of responders) {
       if (operation.cancelled) break;
-      if (spoken.has(responder.id)) continue;
+      if (spoken.has(responder.id) || !roomTurnStillAssigned(groupId, threadId, responder.id)) continue;
       if (!(await runGroupMemberTurn(
         groupId,
         threadId,
