@@ -22,6 +22,7 @@ import { readTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
 import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
 import { workspaceDir } from "./workspace.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
+import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
@@ -1091,6 +1092,27 @@ describe("Store", () => {
     expect(reloaded.taskByThread(bot.id, bot.threadId)?.lastModel).toBe(to);
     expect(reloaded.bot(droid.id)?.modelSelection.model).toBe(from);
     expect(reloaded.taskByThread(droid.id, droid.threadId)?.lastModel).toBe(from);
+  });
+
+  it("moves a bot saved on a retired Gemini Flash id to 3.8 Flash at the same effort", () => {
+    const store = new Store(selection);
+    const bots = RETIRED_GEMINI_FLASH_IDS.map(([from]) => {
+      const bot = store.createBot({ modelSelection: { instanceId: "antigravity", model: from } });
+      store.markTaskDispatched(bot.id, bot.threadId, "antigravity", from);
+      return { bot, from };
+    });
+    const other = store.createBot({ modelSelection: { instanceId: "droid", model: "gemini-3.7-flash-high" } });
+
+    for (const [from, to] of RETIRED_GEMINI_FLASH_IDS) store.renameModel(["antigravity"], from, to);
+
+    const reloaded = new Store(selection);
+    expect(bots).toHaveLength(9);
+    for (const { bot, from } of bots) {
+      const effort = from.split("-").pop();
+      expect(reloaded.bot(bot.id)?.modelSelection.model).toBe(`gemini-3.8-flash-${effort}`);
+      expect(reloaded.taskByThread(bot.id, bot.threadId)?.lastModel).toBe(`gemini-3.8-flash-${effort}`);
+    }
+    expect(reloaded.bot(other.id)?.modelSelection.model).toBe("gemini-3.7-flash-high");
   });
 
   it("renameModel resets migrated Codex sessions and keeps Claude sessions", () => {

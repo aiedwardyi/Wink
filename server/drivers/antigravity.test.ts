@@ -55,7 +55,7 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of older Flash entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of the legacy entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
       { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
@@ -77,18 +77,11 @@ describe("readAntigravityModelCatalog", () => {
     }
     // agy has no bare gemini-3.8-flash: a tier-less id is a bad request
     expect(ids).not.toContain("gemini-3.8-flash");
-    expect(ids).toEqual(expect.arrayContaining([
-      "gemini-3.7-flash-high",
-      "gemini-3.7-flash-medium",
-      "gemini-3.7-flash-low",
-      "gemini-3.6-flash-high",
-      "gemini-3.6-flash-medium",
-      "gemini-3.6-flash-low",
-    ]));
+    expect(ids.some((id) => /^gemini-3\.[567]-flash-/.test(id))).toBe(false);
     expect(ids.some((id) => /^gemini-3\.8-pro/.test(id))).toBe(false);
     expect(STATIC_ANTIGRAVITY_MODELS.options.filter((option) => option.id.startsWith("gemini-4-hydrogen-")).map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(ids.indexOf("gemini-4-argon-high")).toBeLessThan(ids.indexOf("gemini-3.8-flash-high"));
-    expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("gemini-3.7-flash-high"));
+    expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
   });
 
   // Ids taken verbatim from `agy models` on a real 1.3.5 install (MODEL-AG-STALE).
@@ -109,12 +102,6 @@ describe("readAntigravityModelCatalog", () => {
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",
-    "gemini-3.7-flash-high",
-    "gemini-3.7-flash-medium",
-    "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low",
     "gemini-3.1-pro-low",
     "gemini-3.1-pro-high",
   ];
@@ -123,11 +110,7 @@ describe("readAntigravityModelCatalog", () => {
   // absent from a current `agy models` run. Not proven fake, not reverified —
   // tracked explicitly so the catalog can't grow a new unverified id by
   // silently joining this list. Needs its own ticket to confirm or remove.
-  // 3.5 Flash tiers were listed by agy 1.1.27 but are gone from the 1.3.5 output.
   const ANTIGRAVITY_UNVERIFIED_LEGACY_IDS = [
-    "gemini-3.5-flash-high",
-    "gemini-3.5-flash-medium",
-    "gemini-3.5-flash-low",
     "claude-sonnet-4-6",
     "claude-opus-4-6-thinking",
     "gpt-oss-120b-medium",
@@ -141,8 +124,7 @@ describe("readAntigravityModelCatalog", () => {
     expect(verified.slice().sort()).toEqual(AGY_MODELS_OUTPUT_1_3_5.slice().sort());
     expect(unverified.slice().sort()).toEqual(ANTIGRAVITY_UNVERIFIED_LEGACY_IDS.slice().sort());
     // the sort above ignores position, so newest-tier-first ordering needs its own check
-    expect(ids.indexOf("gemini-3.6-flash-high")).toBeLessThan(ids.indexOf("gemini-3.5-flash-high"));
-    expect(ids.indexOf("gemini-3.5-flash-low")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
+    expect(ids.indexOf("gemini-3.1-pro-low")).toBeLessThan(ids.indexOf("claude-sonnet-4-6"));
   });
 
   it("returns the official list when settings are missing", () => {
@@ -323,7 +305,7 @@ describe("Antigravity turns (fake CLI)", () => {
     process.env.FAKE_AGY_USAGE = JSON.stringify({ input_tokens: 3741, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 7595, total_tokens: 3742 });
     try {
       await create();
-      await instance.adapter.sendTurn({ threadId: "t-cached", text: "hi", model: "gemini-3.6-flash-low" });
+      await instance.adapter.sendTurn({ threadId: "t-cached", text: "hi", model: "gemini-3.8-flash-low" });
       await recorder.until((e) => e.type === "turn.completed");
 
       const usage = recorder.events.filter((e) => e.type === "thread.token-usage.updated");
@@ -1769,7 +1751,7 @@ describe("Antigravity Windows long-prompt transport", () => {
       const invocation = JSON.parse(readFileSync(dump, "utf8"));
       expect(invocation.prompt).toBe(prompt);
       expect(invocation.argv).toEqual(
-        expect.arrayContaining(["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.6-flash-low"]),
+        expect.arrayContaining(["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"]),
       );
       expect(invocation.argv).not.toContain("--dangerously-skip-permissions");
       expect(invocation.argv.some((arg: string) => arg.includes("SUMMARIZE:"))).toBe(false);
