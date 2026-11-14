@@ -2289,14 +2289,18 @@ describe("Sidebar hold menu", () => {
       }
     });
 
-    it("keeps release guarded when scrolling closes a held menu", async () => {
+    it.each(["list", "page"])("keeps scrolling and release guarded when the %s closes a held menu", async (target) => {
       const view = await mount(kind);
       const selected = view.selected();
       try {
         await view.hold();
         expect(view.menu()).not.toBeNull();
-        await act(async () => view.row().closest(".overflow-y-auto")!.dispatchEvent(new Event("scroll")));
+        await act(async () => (target === "page" ? window : view.row().closest(".overflow-y-auto")!)
+          .dispatchEvent(new Event("scroll")));
         expect(view.menu()).toBeNull();
+        const move = touch(view.row(), "touchmove", 100, 100 + LONG_PRESS_SLOP + 1);
+        expect(move.defaultPrevented).toBe(false);
+        expect(view.host.querySelector("[data-touch-lifted]")).toBeNull();
         let end: Event;
         await act(async () => { end = touch(view.row(), "touchend"); });
         expect(end!.defaultPrevented).toBe(true);
@@ -2416,6 +2420,46 @@ describe("Sidebar hold menu", () => {
         expect(click).toHaveBeenCalledTimes(1);
       } finally {
         await view.unmount();
+      }
+    });
+
+    it.each(["touch", "mouse"])("lets the next physical %s input work after unmount during outside dismissal", async (input) => {
+      const view = await mount(kind);
+      const button = document.body.appendChild(document.createElement("button"));
+      const click = vi.fn();
+      button.addEventListener("click", click);
+      const pointer = (type: string, pointerType = "touch") => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "pointerType", { value: pointerType });
+        button.dispatchEvent(event);
+      };
+      let unmounted = false;
+      try {
+        await view.hold();
+        await act(async () => void touch(view.row(), "touchend"));
+        await act(async () => {
+          pointer("pointerdown");
+          touch(button, "touchstart");
+        });
+        expect(view.menu()).toBeNull();
+        await view.unmount();
+        unmounted = true;
+        pointer("pointerup");
+        touch(button, "touchend");
+        button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        button.click();
+        expect(click).not.toHaveBeenCalled();
+        pointer("pointerdown", input);
+        if (input === "touch") {
+          touch(button, "touchstart");
+          touch(button, "touchend");
+        } else button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+        pointer("pointerup", input);
+        button.click();
+        expect(click).toHaveBeenCalledTimes(1);
+      } finally {
+        if (!unmounted) await view.unmount();
+        button.remove();
       }
     });
 

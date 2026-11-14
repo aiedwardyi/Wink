@@ -91,6 +91,7 @@ type Press = {
   travel: Travel;
   moved: boolean;
   menu: boolean;
+  menuDismissed: boolean;
   dirty: boolean;
   styled: HTMLElement;
   marked: [HTMLElement, TouchDropMark] | null;
@@ -177,6 +178,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       if (!done) return null;
       press = null;
       clearTimeout(done.timer);
+      if (done.menu) list.ownerDocument.defaultView?.removeEventListener("scroll", onScroll, true);
       cancelAnimationFrame(done.frame);
       done.unbind();
       observer.disconnect();
@@ -233,6 +235,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       if (!press) return;
       if (latest.current.holdMenu?.open(press.pressed, press.x, press.y)) {
         press.menu = true;
+        list.ownerDocument.defaultView?.addEventListener("scroll", onScroll, { capture: true, passive: true });
         hapticTick();
       } else lift();
     };
@@ -260,6 +263,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         travel: [-Infinity, Infinity],
         moved: false,
         menu: false,
+        menuDismissed: false,
         dirty: false,
         styled,
         marked: null,
@@ -291,6 +295,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
           if (far) release();
           return;
         }
+        if (press.menuDismissed) return;
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
         if (!far) return;
@@ -333,7 +338,10 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
     };
     const onScroll = () => {
       if (press?.menu && !press.lifted) {
-        latest.current.holdMenu?.close();
+        if (!press.menuDismissed) {
+          press.menuDismissed = true;
+          latest.current.holdMenu?.close();
+        }
         return;
       }
       if (press && !press.lifted) release();
