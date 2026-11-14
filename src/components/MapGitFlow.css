@@ -11,18 +11,26 @@
 .map-flow-stage[data-tone="bad"] > small, .map-flow-stage[data-tone="closed"] > small { color: var(--color-danger); }
 .map-flow-stage[data-tone="run"] > small { color: var(--color-warning); }
 .map-flow-stage[data-tone="merged"] > small { color: var(--flow-merged); }
+/* the branch fills in GitHub's color for the PR: green open, red failing or closed, purple merged */
+:is(.map-flow, .map-flow-row):is([data-tone="open"], [data-tone="ok"], [data-tone="run"]) { --flow-fill: var(--flow-open); }
+:is(.map-flow, .map-flow-row):is([data-tone="bad"], [data-tone="closed"]) { --flow-fill: var(--color-danger); }
+:is(.map-flow, .map-flow-row)[data-tone="merged"] { --flow-fill: var(--flow-merged); }
+:is(.map-flow, .map-flow-row)[data-tone="draft"] { --flow-fill: var(--color-ink-secondary); }
 
 /* main runs under every stage; the branch rides above it and joins back on merge */
-.map-flow-lane { position: relative; display: block; height: 32px; }
+.map-flow-lane { position: relative; display: block; height: 32px; background: repeating-linear-gradient(90deg, var(--color-hairline) 0 4px, transparent 4px 7px) 0 8px / 100% 2px no-repeat; }
 .map-flow-lane > * { z-index: 1; }
 .map-flow-lane::before { content: ""; position: absolute; left: 0; right: 0; top: 25px; height: 1px; background: var(--color-hairline); }
-.map-flow-lane::after { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--flow-line); }
-.map-flow-stage:not([data-reach]) .map-flow-lane::after { background: repeating-linear-gradient(90deg, var(--color-hairline) 0 4px, transparent 4px 7px); }
-.map-flow-stage[data-k="commit"] .map-flow-lane::after { left: 14px; }
-.map-flow-stage[data-end] .map-flow-lane::after { right: auto; width: 8px; }
-.map-flow-stage[data-k="commit"][data-end] .map-flow-lane::after { width: 0; }
-.map-flow-stage[data-tone="merged"] .map-flow-lane::after, .map-flow-stage[data-tone="closed"] .map-flow-lane::after { right: auto; width: 6px; }
-.map-flow-rise, .map-flow-join { position: absolute; left: 0; top: 0; width: 16px; height: 30px; overflow: visible; fill: none; stroke: var(--flow-line); stroke-width: 2; }
+.map-flow-lane::after { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--flow-fill, var(--flow-line)); transform: scaleX(var(--fill)); transform-origin: left; transition: transform 480ms cubic-bezier(.25,.1,.25,1), right 480ms cubic-bezier(.25,.1,.25,1), background-color 240ms cubic-bezier(.2,0,.38,.9); }
+.map-flow-stage[data-k="commit"] .map-flow-lane { background-position-x: 16px; }
+.map-flow-stage[data-k="commit"] .map-flow-lane::after { left: 16px; }
+.map-flow-stage[data-end] .map-flow-lane::after { right: calc(100% - 8px); }
+.map-flow-stage[data-k="commit"][data-end] .map-flow-lane::after { right: calc(100% - 16px); }
+.map-flow-stage[data-k="merge"]:is([data-tone="merged"], [data-tone="closed"]) .map-flow-lane::after { right: calc(100% - 6px); }
+/* a stage that shows up after the first paint sweeps in from the left */
+@starting-style { .map-flow[data-live] .map-flow-lane::after { transform: scaleX(0); } }
+.map-flow-stage[data-end] .map-flow-lane, .map-flow-stage[data-k="merge"][data-on] .map-flow-lane { background: none; }
+.map-flow-rise, .map-flow-join { position: absolute; left: 0; top: 0; width: 16px; height: 30px; overflow: visible; fill: none; stroke: var(--flow-fill, var(--flow-line)); stroke-width: 2; stroke-linecap: round; transition: stroke 240ms cubic-bezier(.2,0,.38,.9); }
 .map-flow-stage:not([data-on]) .map-flow-rise { stroke: var(--color-hairline); stroke-dasharray: 4 3; }
 .map-flow-join { left: 4px; width: 24px; stroke: var(--flow-merged); }
 .map-flow-join[data-join] path { stroke-dasharray: 1; animation: map-flow-draw 600ms cubic-bezier(.4,0,.2,1) both; }
@@ -67,11 +75,12 @@
 .map-flow-row > small[data-tone="run"] { color: var(--color-warning); }
 .map-flow-row > small[data-tone="merged"] { color: var(--flow-merged); }
 .map-flow-row > .map-flow-tip { top: calc(100% - 2px); left: 16px; }
-.map-flow-mini { position: relative; display: flex; align-items: flex-start; min-width: 0; height: 18px; overflow: hidden; }
+.map-flow-mini { position: relative; display: flex; align-items: flex-start; min-width: 0; height: 18px; overflow: hidden; background: repeating-linear-gradient(90deg, var(--color-hairline) 0 4px, transparent 4px 7px) 12px 5px / calc(100% - 12px) 2px no-repeat; }
+.map-flow-row[data-tone="merged"] .map-flow-mini { background-size: calc(100% - 28px) 2px; }
 .map-flow-mini::before { content: ""; position: absolute; left: 0; right: 0; top: 15px; height: 1px; background: var(--color-hairline); }
 .map-flow-mini .map-flow-rise { position: relative; flex: none; width: 12px; height: 18px; }
 .map-flow-mini .map-flow-join { position: relative; flex: none; left: 0; width: 16px; height: 18px; }
-.map-flow-thread { position: relative; display: flex; align-items: center; gap: 3px; min-width: 0; height: 12px; padding: 0 6px 0 2px; background: linear-gradient(var(--flow-line), var(--flow-line)) 0 50% / 100% 2px no-repeat; }
+.map-flow-thread { position: relative; display: flex; flex: var(--fill) 1 auto; align-items: center; gap: 3px; min-width: 0; height: 2px; margin-top: 5px; padding: 0 6px 0 2px; background: var(--flow-fill, var(--flow-line)); transition: flex-grow 480ms cubic-bezier(.25,.1,.25,1), background-color 240ms cubic-bezier(.2,0,.38,.9); }
 .map-flow-thread[data-end] { padding-right: 0; }
 .map-flow-thread i { flex: none; width: 8px; height: 8px; border: 2px solid var(--flow-line); border-radius: 50%; background: var(--color-panel); }
 .map-flow-thread i:last-of-type { background: var(--flow-line); }
@@ -83,4 +92,4 @@
 @media (hover: hover) { .map-flow-row:hover, a.map-flow-stage:hover > b { color: var(--color-accent-text); } }
 @container map-pane (max-width: 460px) { .map-flow-stage > b { font-size: 10.5px; } .map-flow-stage > small { font-size: 10px; } .map-flow-dots { gap: 2px; } .map-flow-dots i { width: 9px; height: 9px; } }
 @container map-pane (max-width: 380px) { .map-flow, .map-flow-rows { padding-left: 10px; padding-right: 10px; } .map-flow-stage > b > span { display: none; } .map-flow-row { column-gap: 6px; } }
-@media (prefers-reduced-motion: reduce) { .map-flow-dots i[data-new], .map-flow-thread i[data-new], .map-flow-join[data-join] path, .map-flow-join[data-join] + .map-flow-node, .map-flow-join[data-join] + .map-flow-node::after, .map-flow-row .map-flow-join[data-join], .map-flow-tip { animation: none; } .map-flow-checks i, .map-flow-thread u { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .map-flow-dots i[data-new], .map-flow-thread i[data-new], .map-flow-join[data-join] path, .map-flow-join[data-join] + .map-flow-node, .map-flow-join[data-join] + .map-flow-node::after, .map-flow-row .map-flow-join[data-join], .map-flow-tip { animation: none; } .map-flow-checks i, .map-flow-thread u, .map-flow-lane::after, .map-flow-rise, .map-flow-join, .map-flow-thread { transition: none; } }

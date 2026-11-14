@@ -101,6 +101,26 @@ it("polls every 30 s only while the tab is open and the PR is open", async () =>
   expect(fetch).toHaveBeenCalledTimes(5);
 });
 
+it("slants the branch off main and back on straight lines and fills it as the PR moves along", async () => {
+  const fills = (selector: string) => [...host.querySelectorAll<HTMLElement>(selector)].map(item => Number(item.style.getPropertyValue("--fill")));
+  const slants = () => [...host.querySelectorAll(".map-flow-rise path, .map-flow-join path")].map(path => path.getAttribute("d"));
+  flows.a = flow({ pr: null, pushed: 1 });
+  await render();
+  expect(fills(".map-flow-stage")).toEqual([1, .5]);
+  flows.a = flow({ pr: pr({ reviews: [], threads: 0 }) });
+  await tick(30_000);
+  expect(fills(".map-flow-stage")).toEqual([1, 1, 1, .5, 0, 0]);
+  flows.a = flow({ pr: pr({ state: "merged", checks: [{ name: "typecheck", state: "pass" }] }) });
+  await tick(30_000);
+  expect(fills(".map-flow-stage")).toEqual([1, 1, 1, 1, 1, 1]);
+  expect(slants()).toHaveLength(2);
+  flows = { a: flows.a, b: flow({ pr: pr({ number: 1531, checks: [{ name: "lint", state: "fail" }, { name: "vitest", state: "pending" }] }) }), c: flow({ pr: null, pushed: 1 }) };
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA"), worker("c", "GAMMA")], all: true });
+  expect(fills(".map-flow-thread")).toEqual([5 / 6, 1, .25]);
+  expect(slants()).toHaveLength(4);
+  expect(slants().join(" ")).not.toMatch(/[CQSATcqsat]/);
+});
+
 it("puts one row per worker in its color, failing CI first, in Korean too", async () => {
   applyLocale("ko");
   flows = {

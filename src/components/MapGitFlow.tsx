@@ -34,7 +34,7 @@ const EVERY = 30_000;
 const PRESS = 450;
 const DOTS = 6;
 const FACES = 3;
-type Seen = { flow: MapFlow; added: ReadonlySet<string>; join: boolean };
+type Seen = { flow: MapFlow; added: ReadonlySet<string>; join: boolean; live: boolean };
 type Tip = { id: string; lines: string[]; left?: number; right?: number };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
 const time = (at?: number) => at ? new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
@@ -44,9 +44,9 @@ const person = (login: string) => BOTS[login] ?? login;
 const PR_ICON = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed };
 
 function seen(was: Seen | undefined, flow: MapFlow): Seen {
-  if (!was) return { flow, added: new Set(), join: false };
+  if (!was) return { flow, added: new Set(), join: false, live: false };
   const old = new Set(was.flow.commits.map(commit => commit.sha));
-  return { flow, added: new Set(flow.commits.filter(commit => !old.has(commit.sha)).map(commit => commit.sha)), join: was.join || flow.pr?.state === "merged" && was.flow.pr?.state !== "merged" };
+  return { flow, added: new Set(flow.commits.filter(commit => !old.has(commit.sha)).map(commit => commit.sha)), join: was.join || flow.pr?.state === "merged" && was.flow.pr?.state !== "merged", live: true };
 }
 
 function useFlows(base: string | undefined, key: string, active: boolean) {
@@ -106,7 +106,7 @@ function lane(stage: MapStage, { flow, added, join }: Seen): ReactNode {
   const pr = flow.pr;
   switch (stage.key) {
     case "commit": return <>
-      <svg className="map-flow-rise" viewBox="0 0 16 30"><path d="M0 25.5C9 25.5 6 9 15 9" /></svg>
+      <svg className="map-flow-rise" viewBox="0 0 16 30"><path d="M0 25.5L16.5 9H18" /></svg>
       {flow.commits.length > 0 && <span className="map-flow-dots">{flow.commits.slice(0, DOTS).toReversed().map(commit => <i key={commit.sha} data-new={added.has(commit.sha) || undefined} />)}</span>}
     </>;
     case "push": return <span className="map-flow-node"><ArrowUp size={10} strokeWidth={2.75} /></span>;
@@ -120,7 +120,7 @@ function lane(stage: MapStage, { flow, added, join }: Seen): ReactNode {
       {pr!.reviews.length > FACES && <i>+{pr!.reviews.length - FACES}</i>}
     </span>;
     case "merge": return stage.tone === "merged" ? <>
-      <svg className="map-flow-join" viewBox="0 0 24 30" data-join={join || undefined}><path d="M0 9H3C13 9 9 25.5 21 25.5" pathLength={1} /></svg>
+      <svg className="map-flow-join" viewBox="0 0 24 30" data-join={join || undefined}><path d="M0 9H4.5L21 25.5" pathLength={1} /></svg>
       <span className="map-flow-node" data-tone="merged"><GitMerge size={10} strokeWidth={2.75} /></span>
     </> : stage.tone === "closed" ? <span className="map-flow-node" data-tone="closed"><GitPullRequestClosed size={10} strokeWidth={2.75} /></span>
       : <span className="map-flow-node" data-hollow />;
@@ -141,6 +141,14 @@ function summary(flow: MapFlow, c: Copy) {
   if (review.tone === "ok") return `${head} · ${c.approved}`;
   if (pr.threads) return `${head} · ${c.open(pr.threads)}`;
   return `${head} ${c.state.open}`;
+}
+
+// Done stages fill whole; a push or checks still running fill part way.
+function fills(flow: MapFlow, stages: MapStage[]) {
+  const reach = stages.findLastIndex(stage => stage.on);
+  return stages.map((stage, index) => index < reach ? 1 : index > reach + 1 ? 0
+    : stage.key === "push" && flow.pushed < flow.total ? flow.pushed / flow.total
+    : stage.key === "checks" && stage.total ? (stage.pass! + stage.fail!) / stage.total : Number(stage.on));
 }
 
 const failing = (flow: MapFlow) => mapFlowStages(flow).some(stage => stage.key === "checks" && stage.fail);
@@ -197,14 +205,14 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     const state = flows[item.id];
     if (!state) return null;
     const stages = mapFlowStages(state.flow);
-    const reach = stages.findLastIndex(stage => stage.on);
-    return <section className="map-flow" aria-label={c.git} data-n={stages.length}>
+    const fill = fills(state.flow, stages);
+    return <section className="map-flow" aria-label={c.git} data-n={stages.length} data-tone={rowTone(state.flow)} data-live={state.live || undefined}>
       {stages.map((stage, index) => {
         const { label, number, value, tip: lines } = text(stage, state.flow, c);
         const Tag = stage.url ? "a" : "span";
         const key = `${item.id}:${stage.key}`;
-        return <Tag key={stage.key} className="map-flow-stage" data-k={stage.key} data-on={stage.on || undefined} data-tone={stage.tone} data-reach={index <= reach || undefined} data-end={!state.flow.pr && index === stages.length - 1 || undefined}
-          aria-label={`${label}${number ? ` #${number}` : ""}, ${value}`} {...link(stage.url)} {...hover(key, lines)}>
+        return <Tag key={stage.key} className="map-flow-stage" data-k={stage.key} data-on={stage.on || undefined} data-tone={stage.tone} data-end={!state.flow.pr && index === stages.length - 1 || undefined}
+          style={{ "--fill": fill[index] } as CSSProperties} aria-label={`${label}${number ? ` #${number}` : ""}, ${value}`} {...link(stage.url)} {...hover(key, lines)}>
           <span className="map-flow-lane" aria-hidden="true">{lane(stage, state)}</span>
           <b>{label}{number && <span> #{number}</span>}</b><small>{value}</small>
         </Tag>;
@@ -228,13 +236,13 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
       return <a key={item.id} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`} {...link(pr?.url ?? stages.findLast(stage => stage.url)?.url)} {...hover(key, lines)}>
         <i /><b>{item.nick}</b>
         <span className="map-flow-mini" aria-hidden="true">
-          <svg className="map-flow-rise" viewBox="0 0 12 18"><path d="M0 15.5C7 15.5 4 6 11 6" /></svg>
-          <span className="map-flow-thread" data-end={!pr || undefined}>
+          <svg className="map-flow-rise" viewBox="0 0 12 18"><path d="M1 15.5L10.5 6H12" /></svg>
+          <span className="map-flow-thread" data-end={!pr || undefined} style={{ "--fill": fills(flow, stages).reduce((sum, part) => sum + part, 0) / 6 } as CSSProperties}>
             {flow.commits.slice(0, DOTS).toReversed().map(commit => <i key={commit.sha} data-new={state.added.has(commit.sha) || undefined} />)}
             {Icon && <span className="map-flow-badge" data-tone={pr.state}><Icon size={8} strokeWidth={3} /></span>}
             {pr?.checks.filter(check => check.state !== "skip").map((check, index) => <u key={`${check.name}\0${index}`} data-state={check.state} />)}
           </span>
-          {pr?.state === "merged" && <svg className="map-flow-join" viewBox="0 0 16 18" data-join={state.join || undefined}><path d="M0 6H1C8 6 6 15.5 14 15.5" pathLength={1} /></svg>}
+          {pr?.state === "merged" && <svg className="map-flow-join" viewBox="0 0 16 18" data-join={state.join || undefined}><path d="M0 6H4.5L14 15.5" pathLength={1} /></svg>}
         </span>
         <small data-tone={tone}>{summary(flow, c)}</small>
         {tipFor(key)}
