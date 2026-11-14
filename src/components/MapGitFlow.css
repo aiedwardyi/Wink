@@ -59,8 +59,8 @@
 @media (hover: hover) { .map-flow-row:hover > b { color: var(--color-accent-text); } }
 /* the row gives way from its far end: first the right side keeps only the PR number and the conflict count */
 @container map-pane (max-width: 690px) {
-  .map-flow-end > small, .map-flow-clash { font-size: 0; }
-  .map-flow-end > small::after, .map-flow-clash::after { content: attr(data-short); font-size: 10.5px; }
+  .map-flow-end > small[data-short], .map-flow-clash { font-size: 0; }
+  .map-flow-end > small[data-short]::after, .map-flow-clash::after { content: attr(data-short); font-size: 10.5px; }
 }
 /* narrow panes: the checks word takes the status color */
 @container map-pane (max-width: 560px) {
@@ -79,6 +79,8 @@
   .map-flow-box[data-state="ok"] > b { color: var(--flow-open); }
   .map-flow-end { gap: 5px; }
 }
+/* a worker with no PR keeps its own words until the narrow row has no room for them */
+@container map-pane (max-width: 440px) { .map-flow-end > small:not([data-short]) { font-size: 0; } }
 @container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(36px, 52px) minmax(min-content, 1fr) auto; } }
 @container map-pane (max-width: 372px) { .map-flow-clash { display: none; } }
 @media (prefers-reduced-motion: reduce) { .map-flow-stops, .map-flow-stops > i, .map-flow-stops > span::before, .map-flow-stops > span::after, .map-flow-stops > span > i, .map-flow-box i, .map-flow-tip { transition: none; animation: none; } }

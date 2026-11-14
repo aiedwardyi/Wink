@@ -235,7 +235,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
               </button>
             </div>
             {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-            <div tabIndex={0} data-question-body="" className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">{card.subtitle}</div>
+            <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
             <AskChoices options={card.options} onPick={onPick} />
           </div>
         </div>
@@ -244,18 +244,60 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   );
 });
 
-// all of the card but its choices, in px: border 2 + padding 24 + heading 20 + gaps 16 + one line of the question 22
-const CARD_REST = 84;
+// all of the card but its question text and choices, in px: border 2 + padding 24 + heading 20 + gaps 16
+const CARD_REST = 62;
+const LINE = 22;
+const KEPT_LINES = 3;
 
-/** The card's cap gives way when its choices alone outgrow it, so they always show under a line of the question. */
+/** A cut question fades out at its foot, as a long user message does (USER_FOLD_CLASS), until it is scrolled to its end. */
+function markCut(body: HTMLElement) {
+  body.toggleAttribute("data-cut", body.scrollHeight - body.scrollTop - body.clientHeight > 1);
+}
+
+/** The card's cap gives way so its choices always show under three lines of the question; when the composer has no more room to give, the question goes down to one line, and past that the choices scroll. */
 function fitChoices(card: HTMLDivElement | null) {
+  const body = card?.querySelector<HTMLElement>("[data-question-body]");
   const choices = card?.querySelector<HTMLElement>("[data-term-choices]");
-  if (!card || !choices || typeof ResizeObserver === "undefined") return;
-  const fit = () => { card.style.maxHeight = `max(30dvh, ${choices.offsetHeight + CARD_REST}px)`; };
+  if (!card || !body || typeof ResizeObserver === "undefined") return;
+  let pane = card.parentElement;
+  while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
+  const fit = () => {
+    if (choices) {
+      const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+      // the last fit's min-height would be read back as the text's own height
+      body.style.minHeight = "";
+      const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
+      body.style.minHeight = `${kept}px`;
+      choices.style.maxHeight = choices.style.overflowY = "";
+      const tall = choices.offsetHeight;
+      card.style.maxHeight = `max(30dvh, ${tall + CARD_REST + kept}px)`;
+      const over = pane ? pane.scrollHeight - pane.clientHeight : 0;
+      if (over > 0) {
+        // other content in the pane can overflow it too: the card keeps its heading, a line of the question and a line of choices
+        const room = Math.max(CARD_REST + 2 * line, card.offsetHeight - over);
+        card.style.maxHeight = `${room}px`;
+        // the question gives lines back, down to one, while that keeps every choice in sight
+        if (tall + CARD_REST + line <= room || room - CARD_REST - kept < line) body.style.minHeight = "";
+        if (tall + CARD_REST + line > room) {
+          choices.style.maxHeight = `${Math.max(line, room - CARD_REST - kept)}px`;
+          choices.style.overflowY = "auto";
+        }
+      }
+    }
+    markCut(body);
+  };
   fit();
   const watch = new ResizeObserver(fit);
-  watch.observe(choices);
-  return () => watch.disconnect();
+  watch.observe(body);
+  if (choices) watch.observe(choices);
+  const fold = card.closest("[data-fold]");
+  window.addEventListener("resize", fit);
+  fold?.addEventListener("animationend", fit);
+  return () => {
+    watch.disconnect();
+    window.removeEventListener("resize", fit);
+    fold?.removeEventListener("animationend", fit);
+  };
 }
 
 /** The row's choices on one line: the ones past its width drop out, and a tap on the row still opens them all. */
