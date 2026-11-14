@@ -50,7 +50,7 @@ macOS example:
 
 On Windows, use the installed `Orbit.exe` as `command`, the adjacent
 `resources\\server\\mcp-server.js` as the argument, and the same `ELECTRON_RUN_AS_NODE=1` environment value.
-The usual per-user install is under `%LOCALAPPDATA%\\Programs\\OpenMausBot`.
+The usual per-user install is under `%LOCALAPPDATA%\\Programs\\orbit-desktop`.
 
 On Ubuntu `.deb` installs, the executable is normally `/opt/Wink/orbit` and the script is
 `/opt/Wink/resources/server/mcp-server.js`. Use the same environment value.
