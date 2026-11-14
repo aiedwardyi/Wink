@@ -133,8 +133,8 @@ describe("terminal proxy", () => {
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
-    expect(workerModelsText().length).toBeLessThan(860);
-    expect(description).toContain("Gemini: Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
+    expect(workerModelsText().length).toBeLessThan(900);
+    expect(description).toContain("Gemini: Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 4 Hydrogen = gemini-4-hydrogen-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
       for (const effort of WORKER_GEMINI_EFFORTS) expect(ids).toContain(`${family.id}-${effort}`);

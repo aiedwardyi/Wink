@@ -88,6 +88,10 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
     { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
+    // Hydrogen ids confirmed against `agy models` on agy 1.5.5
+    { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)", contextWindow: 1_048_576 },
+    { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)", contextWindow: 1_048_576 },
+    { id: "gemini-4-hydrogen-low", label: "Gemini 4 Hydrogen (Low)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)", contextWindow: 1_048_576 },
     { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)", contextWindow: 1_048_576 },
     // 3.8 ids confirmed against the agy 1.1.26 binary's own model table;

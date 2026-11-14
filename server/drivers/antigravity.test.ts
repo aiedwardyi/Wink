@@ -81,6 +81,7 @@ describe("readAntigravityModelCatalog", () => {
       "gemini-3.6-flash-low",
     ]));
     expect(ids.some((id) => /^gemini-3\.8-pro/.test(id))).toBe(false);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.filter((option) => option.id.startsWith("gemini-4-hydrogen-")).map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(ids.indexOf("gemini-4-argon-high")).toBeLessThan(ids.indexOf("gemini-3.8-flash-high"));
     expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("gemini-3.7-flash-high"));
   });
@@ -92,6 +93,10 @@ describe("readAntigravityModelCatalog", () => {
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
+    // Hydrogen tiers from `agy models` on 1.5.5.
+    "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-low",
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",

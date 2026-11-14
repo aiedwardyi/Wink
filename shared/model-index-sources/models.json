@@ -125,6 +125,24 @@
       ]
     }
   },
+  "gemini-4-hydrogen": {
+    "provider": "google",
+    "label": "Gemini 4 Hydrogen",
+    "sources": {
+      "vals": [
+        "google/gemini-4-hydrogen"
+      ],
+      "lmarena": [
+        "Gemini 4 Hydrogen"
+      ],
+      "list-prices": [
+        "gemini-4-hydrogen"
+      ],
+      "aa": [
+        "gemini-4-hydrogen"
+      ]
+    }
+  },
   "gemini-3.8-flash": {
     "provider": "google",
     "label": "Gemini 3.8 Flash",
