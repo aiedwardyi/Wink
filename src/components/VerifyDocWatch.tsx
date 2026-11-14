@@ -6,6 +6,7 @@ import { VERIFY_DOC_KINDS, type VerifyDocFinding, type VerifyDocKind } from "../
 import { useI18n } from "@/lib/i18n";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { docCamera, type DocView } from "@/lib/verify-doc-camera";
 import { VerifyDocShow, type DocCursor } from "@/lib/verify-doc-show";
 import { readReplay, type VerifyReplayMark } from "@/lib/verify-replay";
 import { verifyLiveGate } from "@/lib/verify-watch";
@@ -73,12 +74,15 @@ function linesInView(stage: HTMLElement): [number, number] | null {
   const { top, bottom } = stage.getBoundingClientRect();
   const seen = (el: Element) => { const box = el.getBoundingClientRect(); return box.bottom > top && box.top < bottom; };
   const rows = [...stage.querySelectorAll(".verify-doc-sheet")].filter(seen).flatMap(sheet => [...sheet.querySelectorAll<HTMLElement>(".verify-doc-line")].filter(seen));
-  return rows.length ? [Number(rows[0]!.dataset.n), Number(rows.at(-1)!.dataset.n)] : null;
+  // A row cut by an edge would put the names cursor off screen.
+  const whole = rows.filter(row => { const box = row.getBoundingClientRect(); return box.top >= top && box.bottom <= bottom; }), shown = whole.length ? whole : rows;
+  return shown.length ? [Number(shown[0]!.dataset.n), Number(shown.at(-1)!.dataset.n)] : null;
 }
 
-/** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. */
-function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean) {
-  const shown = new Map<string, { el: HTMLElement; x: number; y: number }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+/** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `glide`: a camera moves the view. */
+function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean) {
+  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean; find: boolean }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+  let offset = 0;
   return {
     move(c: DocCursor) {
       const layer = stage.querySelector<HTMLElement>(".verify-doc-cursors"), row = stage.querySelector<HTMLElement>(`[data-n="${c.line}"]`);
@@ -92,8 +96,9 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         range.setEnd(node, Math.min(node.length, at + 1));
       }
       const box = (node && range.getClientRects?.()[0]) ?? row.getBoundingClientRect(), origin = layer.getBoundingClientRect();
-      const x = box.left - origin.left, y = box.top + box.height * 0.6 - origin.top, top = box.top - stage.getBoundingClientRect().top;
-      if (follows(c) && (top < 0 || top > stage.clientHeight * 0.7)) stage.scrollTo({ top: stage.scrollTop + top - stage.clientHeight / 3, behavior: "smooth" });
+      const x = box.left - origin.left, y = box.top + box.height * 0.6 - origin.top, view = stage.getBoundingClientRect().top, top = box.top - view, lead = follows(c);
+      offset = origin.top - view + stage.scrollTop;
+      if (!glide && lead && (top < 0 || top > stage.clientHeight * 0.7)) stage.scrollTo({ top: stage.scrollTop + top - stage.clientHeight / 3, behavior: "smooth" });
       let cursor = shown.get(c.id);
       if (!cursor) {
         const el = document.createElement("div");
@@ -104,7 +109,7 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         el.lastElementChild!.textContent = tag(c.kind);
         layer.append(el);
         el.animate?.([{ opacity: 0 }, { opacity: 1 }], FADE_MS);
-        shown.set(c.id, cursor = { el, x, y });
+        shown.set(c.id, cursor = { el, x, y, from: y, at: 0, ms: 0, band: c.band, lead, find: false });
       }
       const { el, x: fx, y: fy } = cursor, label = el.lastElementChild as HTMLElement;
       const spot = tagSpot({}, { x, y }, label.offsetWidth, [row.parentElement!.getBoundingClientRect().right - origin.left, layer.clientHeight], 1)!;
@@ -112,8 +117,17 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       el.dataset.line = String(c.line);
       el.style.transform = `translate(${x}px,${y}px)`;
       if (c.duration) el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration);
-      cursor.x = x;
-      cursor.y = y;
+      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead, find: c.quote !== undefined });
+    },
+    /** The furthest-down reader of the chunk being read and the names cursor, in the stage's scroll space. */
+    view(now: number): DocView {
+      const seen: DocView = {};
+      for (const c of shown.values()) {
+        const y = offset + c.from + (c.y - c.from) * glideEase(Math.min(1, (now - c.at) / Math.max(1, c.ms)));
+        if (c.band === 0 && !(c.lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
+        else if (c.lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, offset + c.y) };
+      }
+      return seen;
     },
     leave(id: string) {
       const cursor = shown.get(id);
@@ -156,6 +170,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const stageRef = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const leadLine = useRef(0);
+  const cursorsRef = useRef<ReturnType<typeof docCursors>>(null);
   const tags = useRef(d.tags);
   tags.current = d.tags;
   const close = useRef(onClose);
@@ -168,7 +183,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
     if (!runId) { setPhase("expired"); return; }
     const abort = new AbortController(), stage = stageRef.current!;
     const doc = new VerifyDocShow(live, reducedMotion(), () => linesInView(stage));
-    const cursors = docCursors(stage, kind => tags.current[kind], c => follow.current && c.band === leadLine.current && (c.kind !== "numbering" || c.quote !== undefined));
+    const cursors = cursorsRef.current = docCursors(stage, kind => tags.current[kind], c => follow.current && c.band === leadLine.current && (c.kind !== "numbering" || c.quote !== undefined), !live);
     let timer: ReturnType<typeof setTimeout> | undefined, last = performance.now();
     // One timer to the next thing due: a glide starts or a mark lands. Nothing runs per frame.
     const pump = () => {
@@ -235,9 +250,15 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const lead = show.bands.find(band => !band.done);
   leadLine.current = lead?.from ?? 0;
   const target = lead?.from ?? (show.ended ? show.findings[0]?.line : undefined);
+  // A replay's camera follows its cursors every frame until the end; the hops below are for live and reduced motion.
+  const glide = !live && phase === "play" && !show.ended && !reducedMotion();
+  useEffect(() => {
+    if (!glide || !gate) return;
+    return docCamera(stageRef.current!, now => cursorsRef.current?.view(now) ?? {}, () => follow.current, () => { follow.current = false; });
+  }, [glide, gate]);
   useEffect(() => {
     const stage = stageRef.current, row = target === undefined ? null : stage?.querySelector<HTMLElement>(`[data-n="${target}"]`);
-    if (!stage || !row || !follow.current) return;
+    if (!stage || !row || !follow.current || glide) return;
     stage.scrollTo({ top: Math.max(0, row.getBoundingClientRect().top - stage.getBoundingClientRect().top + stage.scrollTop - stage.clientHeight / 3), behavior: reducedMotion() ? "auto" : "smooth" });
   }, [target, show.lines]);
 
