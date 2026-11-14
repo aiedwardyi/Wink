@@ -395,6 +395,11 @@ it("expands the file over the tree and brings the tree back with the same file, 
   await key({ key: "ArrowDown" });
   expect(path()).toBe("src/manual.ts");
   expect(host.querySelector(".map-path b")?.textContent).toBe("manual.ts");
+  await emit([{ ...workers[0], git: false, files: [] }]);
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(false);
+  expect(host.querySelector(".map-tree")).not.toBeNull();
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(true);
   await click(".map-expand");
   expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(false);
   expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/manual.ts");

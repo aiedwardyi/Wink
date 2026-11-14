@@ -139,6 +139,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   const loaded = !failed && diff?.worker === worker?.id ? diff : null;
   const shown = loaded ? loaded.path : chosen.path;
+  const fills = expanded && !!shown && !!worker?.git && files.length > 0;
   useLayoutEffect(() => {
     const code = codeRef.current;
     const key = loaded ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
@@ -185,7 +186,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const codeRow = (line: MapDiffLine, key: React.Key) => <div key={key} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>;
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
-  return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={expanded || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
+  return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
     {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? c.failed : c.empty}</p> : <>
       <header className="map-head">
         <div ref={menuRef} className="map-worker-menu">
@@ -210,7 +211,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
           <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
           <button type="button" className="map-whole" onClick={() => setWhole(!whole)}>{whole ? c.changes : c.whole}</button>
           <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
-          <button type="button" className="verify-watch-icon map-expand" onClick={() => setExpanded(!expanded)} aria-label={expanded ? c.showTree : c.expand} title={expanded ? c.showTree : c.expand}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
+          <button type="button" className="verify-watch-icon map-expand" onClick={() => setExpanded(!fills)} disabled={!shown} aria-label={fills ? c.showTree : c.expand} title={fills ? c.showTree : c.expand}>{fills ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         </div>
         {shown && <div key={`${shown}:${step?.editedAt}`} className="map-step">
           <i />

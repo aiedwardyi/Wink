@@ -9,7 +9,7 @@
 .map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
 .map-top { display: flex; flex-direction: column; gap: 8px; flex: 0 1 auto; min-height: 96px; max-height: 58%; overflow: auto; padding: 10px 12px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); scrollbar-width: thin; }
 .map-top, .map-pane > :is(.map-flow, .map-flow-rows) { transition: max-height var(--motion-moderate) var(--ease-standard), min-height var(--motion-moderate) var(--ease-standard), padding var(--motion-moderate) var(--ease-standard), border-width var(--motion-moderate) var(--ease-standard), visibility var(--motion-moderate); }
-.map-pane > :is(.map-flow, .map-flow-rows) { max-height: 100%; }
+.map-pane > .map-flow { max-height: 100%; }
 .map-pane[data-expanded] > :is(.map-top, .map-flow, .map-flow-rows) { max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; visibility: hidden; }
 .map-where { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
 .map-where b { color: var(--color-ink); font-weight: 600; }
