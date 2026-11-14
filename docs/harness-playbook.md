@@ -103,6 +103,8 @@ The exact shape of its final message, plus one line: what it reused.
   has the context; send it the card path with terminal_send.
 - One card, one branch, one worktree. Keep scope tight; the worker does
   exactly what the card says.
+- A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
+  Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
 - Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the
