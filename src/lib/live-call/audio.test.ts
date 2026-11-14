@@ -89,6 +89,32 @@ describe("CallAudio", () => {
     audio.close();
   });
 
+  it("leaves the mic off when the call ends while the mic is still being granted", async () => {
+    const { audio, ctx, output, getUserMedia, micTrack } = setup();
+    let grant!: () => void;
+    const stream = { getTracks: () => [micTrack], getAudioTracks: () => [micTrack] };
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => { grant = () => resolve(stream); }));
+    const capture = audio.capture(() => {});
+    audio.close();
+    grant();
+    await capture;
+    expect(micTrack.stop).toHaveBeenCalled();
+    expect(ctx.audioWorklet.addModule).not.toHaveBeenCalled();
+    expect(output.play).not.toHaveBeenCalled();
+  });
+
+  it("turns the mic off with the call kept, and opens it again on one worklet", async () => {
+    const { audio, ctx, getUserMedia, micTrack } = setup();
+    await audio.capture(() => {});
+    audio.stopMic();
+    expect(micTrack.stop).toHaveBeenCalledOnce();
+    expect(ctx.close).not.toHaveBeenCalled();
+    await audio.capture(() => {});
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledOnce();
+    audio.close();
+  });
+
   it("releases the media element and both streams on hang-up", async () => {
     const { audio, ctx, output, micTrack, voiceTrack } = setup();
     await audio.capture(() => {});
