@@ -4,9 +4,11 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 
 ## [1.0.265] - 2026-11-14
 
+### Added
+- The model picker's Chart style has one finished look: lab colors on black, in dark and light, on desktop and phone. Every key and click works as before.
+
 ### Changed
 - How many worker tabs a bot can open now depends on free memory, not a fixed 16. A bot on a PC with room to spare can open its 17th tab and well past it.
-- Bots answer you first and save your ask after, so their first words come sooner.
 - Up/Down and clicks glide the Map arrow to the file you picked instead of drawing a box around it. Follow hands the arrow back to the workers.
 
 ### Fixed
@@ -14,7 +16,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Typing while Codex is replying keeps the text it already showed instead of wiping it and starting over.
 - In a group set to answer only when @mentioned, a line that mentions no one no longer holds the message box, and you can add or remove bots while the group is working.
 - The Map opens with all workers at once instead of rebuilding as each one loads.
-- Live Verify waits for a slow page to load before it checks, replays sharp, points only at what it checked, and leaves no card when it checked nothing.
+- Map folder boxes leave the same gap on both sides of their name and count.
 
 ## [1.0.264] - 2026-11-14
 
