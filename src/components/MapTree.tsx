@@ -92,7 +92,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const nodes = useRef(new Map<string, HTMLElement>());
   const motion = useRef(new Map<string, Motion>());
   const rows = useRef(new Set<string>());
-  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number; start?: Point }>({ t0: 0 });
+  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number; start?: Point; line?: Point }>({ t0: 0 });
   const spot = useRef<Point>(undefined);
   const held = useRef(false);
   const edit = useRef<MapTreeProps["current"]>(undefined);
@@ -173,8 +173,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     if (focus && (focus !== hop.current.to || stamp !== hop.current.at)) {
       const from = fresh ? undefined : hop.current.to;
       const start = from && from !== focus && spot.current && !treeClimb(layout.items, from, at) ? spot.current : undefined;
+      // A picked file draws the arrow straight from where it sits; a worker's edit walks the tree lines.
+      const line = from && from !== focus && !follow && focus === selected ? spot.current : undefined;
       // The target square lights at once and the arrow sets off a beat later, so it reads as heading there.
-      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : now + 135, start };
+      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : now + 135, start, line };
       scroll = follow;
     }
     const tick = () => {
@@ -191,7 +193,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
         if (node) node.style.transform = `translate(${move.x.toFixed(1)}px, ${move.y.toFixed(1)}px)`;
       }
       lines.current?.setAttribute("d", treeEdges(layout.items, at));
-      const { from, to, t0, start } = hop.current;
+      const { from, to, t0, start, line } = hop.current;
       const climb = to ? treeClimb(layout.items, to, at) : null;
       const shown = Math.min(1, Math.max(0, (t - t0 - 350) / 400));
       if (shown < 1) moving = true;
@@ -199,8 +201,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       hot.current?.style.setProperty("opacity", String(1 - (1 - shown) ** 3));
       if (pin.current) {
         const k = start ? 1 - (1 - Math.min(1, Math.max(0, (t - t0) / 450))) ** 3 : ease((t - t0) / 750);
-        const trail = climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
-        const route = trail && [...start ? [] : [corner(trail[0])], ...trail, corner(trail.at(-1)!)];
+        // Aimed at where the square ends up, so a sliding tree does not bend the line.
+        const goal = line && k < 1 ? treeClimb(layout.items, to!, it => it) : null;
+        const trail = !line && climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
+        const route = goal ? [line!, corner(goal[0])] : trail && [...start ? [] : [corner(trail[0])], ...trail, corner(trail.at(-1)!)];
         const point = route ? treeAlong(route, k) : climb ? corner(climb[0]) : undefined;
         if (route) moving = true;
         spot.current = point;
