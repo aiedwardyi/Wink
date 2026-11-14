@@ -64,7 +64,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             data-pending-question={message.id}
             data-question-row=""
             data-no-swipe=""
-            className={cn("relative", glowing && "arrival-glow")}
+            className={cn("relative touch-pan-y", glowing && "arrival-glow")}
             onAnimationEnd={(event) => {
               if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
             }}

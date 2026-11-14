@@ -234,6 +234,7 @@ describe("pinned ask_user question", () => {
 
   it("hides on a sideways swipe across the row without dismissing", async () => {
     await mount({ bot: bot([question]) });
+    expect(row()!.className).toContain("touch-pan-y");
     await swipe(row()!, 4, 60);
     expect(row()).not.toBeNull();
     await swipe(row()!, 200);

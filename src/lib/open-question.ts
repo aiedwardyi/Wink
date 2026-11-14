@@ -9,7 +9,7 @@ export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
-  /** The chat's open ask_user card, if any. */
+  /** The chat's newest open ask_user card, if any. */
   question: Message | null;
   /** How many ask_user cards still wait. */
   questions: number;
