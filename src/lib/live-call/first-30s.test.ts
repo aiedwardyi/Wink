@@ -232,7 +232,7 @@ describe("2 a quiet gap", () => {
 
   it("after a real cut the next update waits until he has finished and got an answer", async () => {
     vi.useFakeTimers();
-    const { call, audio, engine } = await started();
+    const { call, engine } = await started();
     engine().events.turnDone();
     call.observe({ busy: false, messages: [...HISTORY, userRow("u1", "Check CI."), botRow("r1", "CI is green."), userRow("u2", "And the build?"), botRow("r2", "The build is still running.")] });
     await flush();
@@ -366,6 +366,7 @@ describe("3 question manners", () => {
   });
 
   it("F6 the question already read out is not handed to the voice again with every status change", async () => {
+    vi.useFakeTimers();
     const { call, engine } = await started();
     engine().events.turnDone();
     const rows = [...HISTORY, shipCard("q1")];
@@ -374,6 +375,7 @@ describe("3 question manners", () => {
     rows.push(paneNote("note", "PICKER"));
     call.observe({ busy: true, messages: [...rows] });
     turn(engine(), "", "");
+    await wait(1_500);
     const fedAgain = [...engine().contexts, ...engine().texts.slice(2)].filter((text) => text.includes("Is it OK to ship"));
     expect(fedAgain).toEqual([]);
     expect(engine().contexts.some((text) => text.includes("PICKER reported DONE"))).toBe(true);

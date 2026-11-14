@@ -6,6 +6,8 @@ export const LIVE_VOICE = "Aoede";
 /** Gemini Live prebuilt voices offered in Settings, shown as Jenn, Eddie and Adele. */
 export const LIVE_VOICES = ["Aoede", "Alnilam", "Erinome"] as const;
 export type LiveVoice = (typeof LIVE_VOICES)[number];
+// Must match the picker labels (callVoice.* in the i18n catalog).
+export const LIVE_VOICE_NAMES: Record<LiveVoice, string> = { Aoede: "Jenn", Alnilam: "Eddie", Erinome: "Adele" };
 // Live has no accent field, so the accent rides the system instruction.
 export const LIVE_ACCENTS: Partial<Record<LiveVoice, string>> = { Erinome: "When you speak English, use a natural British accent." };
 export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
