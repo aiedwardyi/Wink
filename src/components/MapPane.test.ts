@@ -378,3 +378,34 @@ it("scrolls the whole file to its first change and falls back to changes only pa
   expect(rows()).toEqual(["9000 lines unchanged", "late edit", "Large diff folded"]);
   expect(reads().slice(-2).map(([url]) => new URL(String(url), "http://test").searchParams.get("whole"))).toEqual(["1", null]);
 });
+
+it("expands the file over the tree and brings the tree back with the same file, Up and Down still stepping", async () => {
+  const key = (init: KeyboardEventInit) => act(async () => { host.querySelector(".map-expand")!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const path = () => host.querySelector("[data-map-path]")?.getAttribute("data-map-path");
+  const expand = () => host.querySelector(".map-crumbs .map-expand");
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", maximized: true })));
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(false);
+  expect(expand()?.getAttribute("aria-label")).toBe("Expand file");
+  await click(".map-expand");
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(true);
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-maximized")).toBe(true);
+  expect(expand()?.getAttribute("aria-label")).toBe("Show tree");
+  expect(expand()?.getAttribute("title")).toBe("Show tree");
+  await key({ key: "ArrowDown" });
+  expect(path()).toBe("src/manual.ts");
+  expect(host.querySelector(".map-path b")?.textContent).toBe("manual.ts");
+  await click(".map-expand");
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(false);
+  expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/manual.ts");
+  expect(host.querySelector(".map-code [contenteditable], .map-code textarea, .map-code input")).toBeNull();
+  await click(".map-expand");
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-pane")?.hasAttribute("data-expanded")).toBe(false);
+  expect(expand()?.getAttribute("aria-label")).toBe("파일 펼치기");
+  await click(".map-expand");
+  expect(expand()?.getAttribute("aria-label")).toBe("트리 보기");
+});
