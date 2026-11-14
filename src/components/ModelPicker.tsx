@@ -17,7 +17,7 @@ import { EngineSetup, engineChecking, needsCli, needsSignIn } from "./EngineSetu
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
-import { loadModelPickerView, nextPickerStyle, saveModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
+import { loadModelPickerView, saveModelPickerView, type ModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
 import { pickerLookSkin, savePickerLook, shownPickerLook, usePickedLook } from "@/lib/picker-look";
 import { useSkin } from "@/lib/skins";
@@ -391,12 +391,10 @@ export function ModelPickerControl({
             if (machine) dialogRef.current?.focus();
             return;
           }
-          // Option+S types a character in the local-model search; leave inputs alone.
-          if (dial && event.altKey && !event.ctrlKey && !event.metaKey && event.code === "KeyS" && !(event.target instanceof HTMLInputElement)) {
+          if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === "KeyT") {
             event.preventDefault();
             if (event.repeat) return;
-            if (event.shiftKey) chooseStyle(nextPickerStyle(styles, shown));
-            else if (styleOpen) closeStrip();
+            if (styleOpen) closeStrip();
             else setStyleOpen(true);
             return;
           }
@@ -532,8 +530,7 @@ export function ModelPickerControl({
         </div>
         <footer className="model-cross-footer" id={bindingsId}>
           <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>M</kbd>{t("model.close")}</span>
-          {dial && <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>S</kbd>{t("model.style")}</span>}
-          {dial && <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>Shift</kbd><kbd>S</kbd>{t("model.style.next")}</span>}
+          {dial && <span data-picker-key-legend className="model-cross-binding"><kbd>{shortcut}</kbd><kbd>T</kbd>{t("model.style")}</span>}
           <span data-picker-key-legend className="model-cross-binding"><kbd>↑</kbd><kbd>↓</kbd>{t("model.engineAxis")}</span>
           <span data-picker-key-legend className="model-cross-binding"><kbd>←</kbd><kbd>→</kbd>{t("model.modelAxis")}</span>
           <button type="button" disabled={!canSave} className="model-cross-binding" onClick={() => save()}><kbd>Enter</kbd>{t("settings.profile.save")}</button>
@@ -547,7 +544,7 @@ export function ModelPickerControl({
             else { setMachine(false); dialogRef.current?.focus(); }
           }}>{setup}</ModelMachine>
         </Suspense>}
-        {strip.mounted && <PickerStyleStrip closing={strip.closing} shown={shown} styles={styles} picked={picked} skin={skin} onStyle={chooseStyle} onLook={savePickerLook} />}
+        {strip.mounted && <PickerStyleStrip closing={strip.closing} shown={shown} styles={styles} picked={picked} skin={skin} onStyle={chooseStyle} onLook={savePickerLook} onDone={closeStrip} />}
       </div>
     </div>
   );

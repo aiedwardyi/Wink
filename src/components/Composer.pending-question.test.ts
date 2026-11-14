@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
 // The pinned ask_user question over the composer, against the real store:
-// a tap goes out exactly the way a typed answer would, and the x settles it.
+// it arrives as the full card and shrinks to one row once the person types,
+// attaches or the chat moves on; a tap goes out exactly the way a typed answer
+// would, the row's x only hides it, and the open card's x settles it.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 
@@ -19,8 +24,11 @@ class FakeEventSource {
   }
 }
 
-const question: Message = {
-  id: "ask-1",
+// Fold and hide state lives per question id, so every test asks a fresh one.
+let asked = 0;
+let question: Message;
+const ask = (card: Partial<NonNullable<Message["card"]>> = {}): Message => ({
+  id: `ask-${++asked}`,
   role: "bot",
   kind: "options",
   at: 2,
@@ -29,8 +37,9 @@ const question: Message = {
     subtitle: "Ship to prod or staging?\nStaging has last week's data.",
     options: ["Prod", "Staging"],
     askUser: true,
+    ...card,
   },
-};
+});
 const approval: Message = {
   id: "approval-1",
   role: "bot",
@@ -48,6 +57,10 @@ const bot = (messages: Message[]): Bot => ({
 let root: ReturnType<typeof createRoot> | null = null;
 let host: HTMLElement | null = null;
 const calls: Array<{ method: string; path: string; body: unknown }> = [];
+
+beforeEach(() => {
+  question = ask();
+});
 
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
@@ -90,16 +103,196 @@ const pinButton = (name: string) => {
   if (!found) throw new Error(`no ${name} button in the pin`);
   return found;
 };
+const row = () => host!.querySelector<HTMLElement>("[data-question-row]");
+const card = () => host!.querySelector<HTMLElement>('[role="region"][data-pending-question]');
+const rowButton = (name: string) => {
+  const found = [...(row()?.querySelectorAll("button") ?? [])].find(
+    (button) => button.textContent === name || button.getAttribute("aria-label") === name,
+  );
+  if (!found) throw new Error(`no ${name} button on the row`);
+  return found;
+};
+const dot = () => host!.querySelector<HTMLButtonElement>("[data-hidden-question]");
+// the row and the card fold past each other; wait out the closing one
+const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
+const type = (value: string) => act(async () => {
+  const input = textarea()!;
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
+// typing shrinks the card to its row, and clearing the box leaves it there
+const shrink = async () => {
+  await type("S");
+  await type("");
+  await settle();
+};
+const attach = (file: File) => act(async () => {
+  const input = host!.querySelector<HTMLInputElement>('input[type="file"][multiple]')!;
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+});
+// the chat view hands the composer its bot again as messages land
+const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+const expand = async () => {
+  await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+  await settle();
+};
+const swipe = (target: Element, dx: number, dy = 0) => act(async () => {
+  const touch = (type: string, x: number, y: number) => {
+    const event = new Event(type, { bubbles: true });
+    Object.defineProperties(event, { touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] },
+      changedTouches: { value: [{ clientX: x, clientY: y }] } });
+    target.dispatchEvent(event);
+  };
+  touch("touchstart", 100, 100);
+  touch("touchmove", 100 + dx / 2, 100 + dy / 2);
+  touch("touchend", 100 + dx, 100 + dy);
+});
 const sent = (method: string, path: string) => calls.filter((call) => call.method === method && call.path === path);
 
 describe("pinned ask_user question", () => {
-  it("shows who asks, the full question and its choices, and keeps the composer enabled", async () => {
+  it("arrives as the full card with its choices, glowing once", async () => {
     await mount({ bot: bot([question]) });
+    expect(row()).toBeNull();
+    expect(card()?.getAttribute("aria-label")).toBe("Ada asks");
+    expect(card()?.textContent).toContain("Ship to prod or staging?\nStaging has last week's data.");
+    expect(pinButton("Prod")).toBeTruthy();
+    const glow = card()!.closest(".arrival-glow")!;
+    expect(glow).not.toBeNull();
+    await act(async () => glow.dispatchEvent(Object.assign(new Event("animationend", { bubbles: true }), { animationName: "arrival-glow-once" })));
+    expect(card()!.closest(".arrival-glow")).toBeNull();
+    expect(textarea()?.disabled).toBe(false);
+  });
+
+  it("caps the card at a third of the chat and scrolls a long question inside it", async () => {
+    await mount({ bot: bot([ask({ subtitle: Array.from({ length: 40 }, (_, line) => `Line ${line}`).join("\n") })]) });
+    expect(card()!.className).toContain("max-h-[30dvh]");
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).toContain("overflow-y-auto");
+    expect(body.textContent).toContain("Line 39");
+    expect(body.querySelector("[data-term-choices]")).not.toBeNull();
+  });
+
+  it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
+    await mount({ bot: bot([question]) });
+    await type("S");
+    expect(row()).not.toBeNull();
+    await type("");
+    await settle();
+    expect(row()).not.toBeNull();
+    expect(card()).toBeNull();
+    await type("St");
+    expect(row()).not.toBeNull();
+  });
+
+  it("shrinks to its row when a file is attached", async () => {
+    // its own thread, so the uploading file stays out of the next test's draft
+    await mount({ bot: { ...bot([question]), threadId: "attach-thread" } });
+    expect(row()).toBeNull();
+    await attach(new File(["x".repeat(16)], "notes.zip", { type: "application/zip" }));
+    expect(host!.textContent).toContain("notes.zip");
+    expect(row()).not.toBeNull();
+  });
+
+  it("shrinks to its row when a new message lands after it", async () => {
+    await mount({ bot: bot([question]) });
+    expect(row()).toBeNull();
+    await rerender({ bot: bot([question, { id: "b2", role: "bot", kind: "text", at: 5, text: "Still checking the logs." }]) });
+    expect(row()).not.toBeNull();
+    expect(row()!.textContent).toContain("Ship to prod or staging?");
+  });
+
+  it("shrinks to one row: the count, who asks, the question's first line, its choices and an x", async () => {
+    await mount({ bot: bot([question]) });
+    await shrink();
+    expect(row()).not.toBeNull();
+    expect(row()!.textContent).toContain("1");
+    expect(row()!.textContent).toContain("Ada asks");
+    expect(row()!.textContent).toContain("Ship to prod or staging?");
+    expect(row()!.textContent).not.toContain("Staging has last week's data.");
+    expect([...row()!.querySelectorAll(".truncate")].at(-1)?.textContent).toBe("Ship to prod or staging?");
+    expect(host!.querySelector("[data-term-choices]")).toBeNull();
+    expect([...row()!.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+    expect(rowButton("Prod").className).toContain("whitespace-nowrap");
+    expect(pinButton("Hide question")).toBeTruthy();
+    expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
+  });
+
+  it("answers from a chip on the row exactly as a chip on the card", async () => {
+    await mount({ bot: bot([question]) });
+    await shrink();
+    await act(async () => rowButton("Staging").click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Staging", threadId: "asker-thread" }]);
+  });
+
+  it("glows once when it arrives, then never again", async () => {
+    await mount({ bot: bot([question]) });
+    const glow = () => card()!.closest(".arrival-glow");
+    expect(glow()).not.toBeNull();
+    await act(async () => glow()!.dispatchEvent(Object.assign(new Event("animationend", { bubbles: true }), { animationName: "arrival-glow-once" })));
+    expect(glow()).toBeNull();
+    await act(async () => root!.unmount());
+    root = createRoot(host!);
+    await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, { bot: bot([question]) }))));
+    await act(async () => FakeEventSource.current!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "" }));
+    expect(card()!.closest(".arrival-glow")).toBeNull();
+  });
+
+  it("drops a glow cut short, so the question does not pulse again when it comes back", async () => {
+    await mount({ bot: bot([question]) });
+    expect(card()!.closest(".arrival-glow")).not.toBeNull();
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    expect(host!.querySelector(".arrival-glow")).toBeNull();
+    await act(async () => pinButton("Hide question").click());
+    await act(async () => dot()!.click());
+    expect(host!.querySelector(".arrival-glow")).toBeNull();
+    await expand();
+    expect(host!.querySelector(".arrival-glow")).toBeNull();
+  });
+
+  it("plays the arrival glow once at about 1.2s, never looping", async () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
+    expect(css).toMatch(/\.arrival-glow::before \{[^}]*animation: arrival-glow-once 2s ease-in-out 1;/);
+    expect(css).toMatch(/\[data-pending-question\]\.arrival-glow::before \{ animation-duration: 1\.2s; \}/);
+  });
+
+  it("opens to the full card on a tap and folds back to the row", async () => {
+    await mount({ bot: bot([question]) });
+    await shrink();
+    await expand();
+    expect(row()).toBeNull();
     expect(pin()?.getAttribute("aria-label")).toBe("Ada asks");
     expect(pin()?.textContent).toContain("Ship to prod or staging?\nStaging has last week's data.");
     expect(pinButton("Prod")).toBeTruthy();
     expect(pinButton("Staging")).toBeTruthy();
-    expect(textarea()?.disabled).toBe(false);
+    expect(document.activeElement).toBe(pinButton("Fold question"));
+    await act(async () => pinButton("Fold question").click());
+    expect(row()).not.toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(row()!.querySelector("button[aria-expanded]"));
+    expect(host!.querySelector("[data-term-choices]")).toBeNull();
+  });
+
+  it("switches between open questions on the row with its arrows, staying a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    expect(row()!.textContent).toContain("2/2");
+    expect(row()!.textContent).toContain("Which plan?");
+    expect(rowButton("Next question").disabled).toBe(true);
+    await act(async () => rowButton("Previous question").click());
+    expect(row()!.textContent).toContain("1/2");
+    expect(row()!.textContent).toContain("Which region?");
+    expect(card()).toBeNull();
+    expect(rowButton("Previous question").disabled).toBe(true);
+    await act(async () => rowButton("Seoul").click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${first.id}`).map((call) => call.body)).toEqual([{ answered: "Seoul" }]);
+    await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second]) });
+    expect(row()!.textContent).toContain("Which plan?");
+    expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
   it("outlines the choices in secondary ink with a 44px touch height", async () => {
@@ -111,7 +304,7 @@ describe("pinned ask_user question", () => {
     expect(choice).toContain("pointer-coarse:min-h-11");
   });
 
-  it("gives the x a 44px touch target without growing the card", async () => {
+  it("gives the open card's x a 44px touch target without growing the card", async () => {
     await mount({ bot: bot([question]) });
     const dismiss = pinButton("Dismiss question").className;
     expect(dismiss).toContain("p-1 ");
@@ -120,7 +313,7 @@ describe("pinned ask_user question", () => {
   });
 
   it("asks to type the answer while an open question is pinned", async () => {
-    await mount({ bot: bot([{ ...question, card: { ...question.card!, options: [] } }]) });
+    await mount({ bot: bot([ask({ options: [] })]) });
     expect(textarea()?.placeholder).toBe("Type your answer");
   });
 
@@ -132,20 +325,70 @@ describe("pinned ask_user question", () => {
   it("sends a tapped choice as the answer and persists answered, not dismissed", async () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Prod").click());
-    expect(sent("PATCH", "/api/bots/asker/cards/ask-1").map((call) => call.body)).toEqual([{ answered: "Prod" }]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
     expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([{ text: "Prod", threadId: "asker-thread" }]);
   });
 
-  it("dismisses with the x", async () => {
+  it("sends a typed answer from the message box while the row shows", async () => {
+    await mount({ bot: bot([ask({ options: [] })]) });
+    const input = textarea()!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Staging");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(sent("POST", "/api/bots/asker/messages").map((call) => call.body)).toEqual([expect.objectContaining({ text: "Staging", threadId: "asker-thread" })]);
+  });
+
+  it("dismisses with the open card's x", async () => {
     await mount({ bot: bot([question]) });
     await act(async () => pinButton("Dismiss question").click());
-    expect(sent("PATCH", "/api/bots/asker/cards/ask-1").map((call) => call.body)).toEqual([{ dismissed: true }]);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
+  });
+
+  it("hides with the row's x without dismissing, and the composer's dot brings it back", async () => {
+    await mount({ bot: bot([question]) });
+    await shrink();
+    await act(async () => pinButton("Hide question").click());
+    expect(pin()).toBeNull();
+    expect(calls).toEqual([]);
+    expect(dot()?.textContent).toBe("1");
+    expect(dot()?.getAttribute("aria-label")).toBe("Show question");
+    expect(dot()!.closest("[data-orbit-composer-frame]")).not.toBeNull();
+    await act(async () => dot()!.click());
+    expect(row()).not.toBeNull();
+    expect(dot()).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("hides on a sideways swipe across the row without dismissing", async () => {
+    await mount({ bot: bot([question]) });
+    await shrink();
+    expect(row()!.className).toContain("touch-pan-y");
+    await swipe(row()!, 4, 60);
+    expect(row()).not.toBeNull();
+    await swipe(row()!, 200);
+    expect(row()).toBeNull();
+    expect(dot()?.textContent).toBe("1");
+    expect(calls).toEqual([]);
+  });
+
+  it("counts two open questions as 2 on the row and the dot", async () => {
+    const first = ask({ subtitle: "Which region?", staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    expect(row()!.textContent).toContain("2/2");
+    expect(row()!.textContent).toContain("Which plan?");
+    await act(async () => pinButton("Hide question").click());
+    expect(dot()?.textContent).toBe("2");
   });
 
   it("leaves once the person has sent a later message", async () => {
     await mount({ bot: bot([question, { id: "u1", role: "user", kind: "text", at: 4, text: "Staging" }]) });
     expect(pin()).toBeNull();
+    expect(dot()).toBeNull();
   });
 
   it("waits behind a pending approval, which keeps its composer takeover", async () => {
@@ -163,9 +406,12 @@ describe("pinned ask_user question", () => {
       messages: [{ ...question, from: { botId: member.id, name: member.name, color: member.color } }],
     };
     await mount({ group, members: [member] });
-    expect(pin()?.getAttribute("aria-label")).toBe("Ada asks");
+    expect(card()?.getAttribute("aria-label")).toBe("Ada asks");
+    await shrink();
+    expect(row()!.textContent).toContain("Ada asks");
+    await expand();
     await act(async () => pinButton("Staging").click());
-    expect(sent("PATCH", "/api/groups/room/cards/ask-1").map((call) => call.body)).toEqual([{ answered: "Staging" }]);
+    expect(sent("PATCH", `/api/groups/room/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Staging" }]);
     expect(sent("POST", "/api/groups/room/messages").map((call) => call.body)).toEqual([
       expect.objectContaining({ text: "Staging", threadId: "room-thread", sendId: expect.any(String) }),
     ]);

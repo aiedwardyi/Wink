@@ -19,11 +19,20 @@ async function render(id: string) {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   }
-  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id), askerName: "Wink", onPick, onDismiss })));
+  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id), askerName: "Wink", count: 1, onPick, onDismiss })));
 }
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
-const pill = () => host.querySelector<HTMLButtonElement>('[data-question-folded="true"]');
+const pill = () => host.querySelector<HTMLButtonElement>('[data-question-row] button[aria-expanded="false"]');
+const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
+const open = async () => {
+  await act(async () => pill()!.click());
+  await settle();
+};
+const fold = async () => {
+  await act(async () => button("Fold question").click());
+  await settle();
+};
 
 async function swipe(dx: number, dy: number, scrollTop = 0) {
   const target = host.querySelector<HTMLDivElement>('[tabindex="0"]')!;
@@ -47,24 +56,29 @@ afterEach(async () => {
 });
 
 describe("question folding", () => {
-  it("folds to a one-line pill and reopens without answering or dismissing", async () => {
+  it("arrives as the full card, folds to the row and opens again without answering or dismissing", async () => {
     await render("fold-chevron");
+    expect(pill()).toBeNull();
+    expect(host.querySelector("[data-term-choices]")?.textContent).toContain("Analytics");
     await act(async () => button("Fold question").click());
     expect(pill()?.textContent).toContain("Wink asks");
     expect(pill()?.textContent).toContain("Which design");
     expect(pill()?.getAttribute("aria-expanded")).toBe("false");
-    expect(host.textContent).not.toContain("Analytics");
-    await act(async () => pill()!.click());
+    expect(host.querySelector('[data-fold="closing"]')?.textContent).toContain("Analytics");
+    await settle();
+    expect(host.querySelector("[data-term-choices]")).toBeNull();
+    await open();
     expect(pill()).toBeNull();
-    expect(host.textContent).toContain("Analytics");
+    expect(host.querySelector("[data-term-choices]")?.textContent).toContain("Analytics");
     expect(onPick).not.toHaveBeenCalled();
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("keeps each card's fold after switching chats and remounting", async () => {
     await render("fold-kept");
-    await act(async () => button("Fold question").click());
+    await fold();
     await render("fold-other");
+    await settle();
     expect(pill()).toBeNull();
     await act(async () => root!.unmount());
     host.remove();
@@ -94,7 +108,12 @@ describe("question folding", () => {
     applyLocale("ko");
     await render("fold-korean");
     await act(async () => button("질문 접기").click());
+    await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
+    expect(button("질문 숨기기")).not.toBeNull();
+    expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
+    await open();
+    expect(pill()).toBeNull();
   });
 });

@@ -44,7 +44,7 @@ export function isOpenRequest(message: Row): boolean {
   return message.kind === "options" && Boolean(message.card?.requestId) && !message.card?.answered && !message.card?.dismissed;
 }
 
-function answerPrefix(card: Row): string {
+export function answerPrefix(card: Row): string {
   const question = (card.card?.subtitle ?? "").replace(/\s+/g, " ").trim();
   return `Re: “${question.length > QUOTE_CHARS ? `${question.slice(0, QUOTE_CHARS - 1).trimEnd()}…` : question}”\n`;
 }

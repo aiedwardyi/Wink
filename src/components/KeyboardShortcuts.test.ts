@@ -48,18 +48,18 @@ describe("KeyboardShortcuts", () => {
   });
 
   it.each([
-    ["en", "Win32", "Toggle Picker Style (in Model Picker)", "Cycle Picker Style (in Model Picker)", "Alt"],
-    ["ko", "MacIntel", "선택 방식 열기 / 닫기 (모델 선택에서)", "선택 방식 전환 (모델 선택에서)", "Option"],
-  ] as const)("lists the picker style keys only where the picker has styles, in %s on %s", (locale, platform, toggle, cycle, alt) => {
+    ["en", "Win32", "Toggle Picker Style (in Model Picker)", "Alt"],
+    ["ko", "MacIntel", "선택 방식 열기 / 닫기 (모델 선택에서)", "Option"],
+  ] as const)("lists the picker style keys only where the picker has styles, in %s on %s", (locale, platform, toggle, alt) => {
     persistPreference(locale);
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const combos = (pickerStyle: boolean) => {
       const host = document.createElement("div");
       host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(KeyboardShortcuts, { pickerStyle })));
-      return [toggle, cycle].map((label) => [...host.querySelectorAll("dl > div")].find((row) => row.querySelector("dt")?.textContent === label)?.querySelector("dd")?.getAttribute("aria-label"));
+      return [...host.querySelectorAll("dl > div")].find((row) => row.querySelector("dt")?.textContent === toggle)?.querySelector("dd")?.getAttribute("aria-label");
     };
-    expect(combos(true)).toEqual([`${alt} + S`, `${alt} + Shift + S`]);
-    expect(combos(false)).toEqual([undefined, undefined]);
+    expect(combos(true)).toBe(`${alt} + T`);
+    expect(combos(false)).toBeUndefined();
   });
 
   it("lists Toggle Model Index once with Alt+I only", () => {

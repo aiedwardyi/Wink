@@ -213,12 +213,12 @@ describe("Settings Polish", () => {
     }
   });
 
-  it("defaults Reply style to Paragraphs on this device", async () => {
+  it("defaults Reply style to Live Typing on this device", async () => {
     mockState.appSettingsSection = "general";
     localStorage.removeItem("omb-reply-style");
     await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal, { defaultAdvancedOpen: true }))));
     const choice = host.querySelector('[role="radiogroup"][aria-label="Reply Style"] [role="radio"][aria-checked="true"]');
-    expect(choice?.textContent).toBe("Paragraphs");
+    expect(choice?.textContent).toBe("Live Typing");
   });
 
   it("saves Reply style locally and restores it when settings reopen", async () => {

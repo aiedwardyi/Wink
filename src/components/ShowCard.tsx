@@ -1,12 +1,29 @@
-import { useState, type MouseEvent } from "react";
-import { FileText, Globe, PanelRight } from "lucide-react";
+import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
+import { FileText, Globe, PanelRight, Play } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
+import { useThumb } from "@/lib/media-thumbs";
 import { linkedFileSrc, saveFile, showItem, showKind, showName, useShowItem } from "@/lib/show-pane";
 
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
+import { useMediaViewer } from "./MediaViewerProvider";
 
-/** A bot's file in chat; lit while the pane shows it, a tap shows it again. One it can't show saves, or opens via `onOpen`. */
+const VIDEO = /\.(mp4|m4v|mov|webm)$/i;
+
+function useSeen(ref: RefObject<HTMLElement | null>, watch: boolean): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const node = ref.current;
+    if (!watch || seen || !node) return;
+    if (typeof IntersectionObserver === "undefined") return setSeen(true);
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) setSeen(true); });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, watch, seen]);
+  return seen;
+}
+
+/** A bot's file in chat; lit while the pane shows it, a tap shows it again. A clip with a frame plays in the viewer; one it can't show saves, or opens via `onOpen`. */
 export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: string; onOpen?: () => void }) {
   const { t } = useI18n();
   const shown = useShowItem();
@@ -14,6 +31,12 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
   const name = showName(path);
   const lit = shown?.threadId === threadId && shown.path === path;
   const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
+  const viewer = useMediaViewer();
+  const box = useRef<HTMLSpanElement>(null);
+  const clip = VIDEO.test(name) ? linkedFileSrc(threadId, path) : "";
+  const seen = useSeen(box, Boolean(clip));
+  const thumb = useThumb(clip, true, !clip || !seen);
+  const poster = clip && thumb !== clip ? thumb : undefined;
   const menu = (event: MouseEvent<HTMLElement>) => {
     if (!window.ogb?.openFile) return;
     event.preventDefault();
@@ -29,12 +52,24 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
         aria-pressed={kind ? lit : undefined}
         aria-label={t(kind ? "show.card" : "show.openCard", { name })}
         title={path}
-        onClick={onOpen ?? (() => kind ? showItem({ threadId, path, kind }) : saveFile(linkedFileSrc(threadId, path), name, path))}
+        onClick={(event) => {
+          if (poster && viewer) viewer.open({ src: clip, name, video: true }, event.currentTarget);
+          else if (onOpen) onOpen();
+          else if (kind) showItem({ threadId, path, kind });
+          else saveFile(linkedFileSrc(threadId, path), name, path);
+        }}
         onContextMenu={menu}
         className="my-0.5 flex w-full max-w-[320px] min-w-0 items-center gap-2.5 rounded-xl border border-hairline/40 bg-raised/50 p-1.5 pr-2.5 text-left align-middle hover:bg-raised data-showing:border-accent/70 data-showing:bg-raised data-showing:ring-1 data-showing:ring-accent/40"
       >
-        <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-inset text-ink-secondary">
-          {kind === "image" ? <img src={linkedFileSrc(threadId, path)} alt="" loading="lazy" className="size-full object-cover" /> : kind === "page" ? <Globe size={18} /> : <FileText size={18} />}
+        <span ref={box} className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-inset text-ink-secondary">
+          {kind === "image" ? <img src={linkedFileSrc(threadId, path)} alt="" loading="lazy" className="size-full object-cover" />
+            : poster ? <>
+              <img src={poster} alt="" decoding="async" className="size-full object-cover" />
+              <span data-play-badge className="absolute flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+                <Play size={9} aria-hidden="true" className="ml-px fill-current" />
+              </span>
+            </>
+            : kind === "page" ? <Globe size={18} /> : <FileText size={18} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium text-ink">{name}</span>

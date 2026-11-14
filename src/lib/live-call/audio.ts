@@ -37,17 +37,24 @@ export class CallAudio {
   }
 
   async capture(onFrame: (pcm: ArrayBuffer) => void) {
-    this.stream = await navigator.mediaDevices.getUserMedia(MIC);
-    const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
-    try {
-      await this.ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
+    const stream = await navigator.mediaDevices.getUserMedia(MIC);
+    // A keyless try's mic, granted late, must not stay on beside this one.
+    if (this.stream !== stream) for (const track of this.stream?.getTracks() ?? []) track.stop();
+    this.stream = stream;
+    // The mic now opens beside the call token, so a hang-up or a failed token can land first.
+    if (this.closed) return this.stopMic();
+    if (!this.node) {
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
+      try {
+        await this.ctx.audioWorklet.addModule(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      this.node = new AudioWorkletNode(this.ctx, "capture-16k");
+      this.mic = this.ctx.createAnalyser();
+      this.mic.fftSize = this.samples.length;
     }
-    this.node = new AudioWorkletNode(this.ctx, "capture-16k");
     this.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onFrame(event.data);
-    this.mic = this.ctx.createAnalyser();
-    this.mic.fftSize = this.samples.length;
     this.listen(this.stream);
     await this.ctx.resume();
     // Open the speaker stream after capture selects Android's call audio mode.
@@ -61,6 +68,14 @@ export class CallAudio {
     this.source = this.ctx.createMediaStreamSource(stream);
     this.source.connect(this.node!);
     this.source.connect(this.mic!);
+  }
+
+  /** Mic off with the context kept, so a later capture() opens it again. */
+  stopMic() {
+    this.source?.disconnect();
+    this.source = null;
+    for (const track of this.stream?.getTracks() ?? []) track.stop();
+    this.stream = null;
   }
 
   /** Back from the background: true once the mic and the voice run again, false while the phone wants a tap. */

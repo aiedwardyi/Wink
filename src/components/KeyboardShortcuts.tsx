@@ -10,7 +10,7 @@ export function KeyboardShortcuts({ pickerStyle = false }: { pickerStyle?: boole
   const alt = mac ? "Option" : "Alt";
   const terminal: Array<[MessageKey, ...string[][]]> = !window.ogb || window.ogb.terminal ? [["shortcuts.terminal", [mod, "`"]]] : [];
   const workerPane: Array<[MessageKey, ...string[][]]> = terminal.length ? [["shortcuts.workerPane", [alt, "1–9"]]] : [];
-  const styles: Array<[MessageKey, ...string[][]]> = pickerStyle ? [["shortcuts.pickerStyle", [alt, "S"]], ["shortcuts.pickerStyleCycle", [alt, "Shift", "S"]]] : [];
+  const styles: Array<[MessageKey, ...string[][]]> = pickerStyle ? [["shortcuts.pickerStyle", [alt, "T"]]] : [];
   const groups: Array<{ title: MessageKey; rows: Array<[MessageKey, ...string[][]]> }> = [
     { title: "shortcuts.navigation", rows: [
       ["shortcuts.jump", ["Ctrl", "1–9"]],

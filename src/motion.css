@@ -7,7 +7,7 @@
    transform and opacity only: layout snaps once, on the first frame. The few
    playful one-offs that keep their own timing live in src/lib/motion-character.ts. */
 @theme static {
-  /* duration-fast-02: chevron turn, hover, tooltip in, every exit */
+  /* duration-fast-02: chevron turn, tooltip in, every exit */
   --motion-fast: 110ms;
   /* duration-moderate-01: fold open, side panel in, menu and dialog in */
   --motion-moderate: 150ms;

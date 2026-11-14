@@ -2,6 +2,33 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.263] - 2026-11-14
+
+### Added
+- The Map tab shows a tree of folders and files in place of the square map and the changed files list. Only folders with changes open, and Follow all workers puts every worker on one tree in its own color.
+- A Git flow row in the Map shows the worker's commits, push, PR, checks, review and merge, each linked to GitHub.
+- In the Map viewer, Up and Down step through the changed files, and a file opens whole with its changes marked.
+- Gemini 4 Hydrogen and Gemini 4 Carbon are in the model picker, the group wizard and the worker list.
+- Video chips show the clip's first frame with a play badge, and a click plays it in the viewer.
+- A strip with Stop shows while room bots hand work to each other.
+- A What's New card for the Map and Gemini 4.
+
+### Changed
+- The Look strip in the model picker opens with Alt+T. Alt+S and style rotation are gone.
+- Accounts show just their name, without the number tile.
+- Engine rows appear as each engine's first check lands instead of waiting for all of them.
+- The engine warms up right after you sign in, once the app settles.
+- Gemini 3.5, 3.6 and 3.7 Flash are gone. Bots that used them move to Gemini 3.8 Flash.
+- The doc replay view glides along with the checker cursors.
+- With no relay set up, Connect from my devices opens the other ways to connect instead of asking for a setup code.
+- Big pictures send as a smaller copy, with the original kept on disk, and picture chips show a thumbnail.
+
+### Fixed
+- The needs-you glow settles instead of repainting forever, so an open question no longer keeps the CPU busy.
+- Group pictures paint with the sidebar after a restart.
+- A room's Who answers pick survives restarts and can change while a bot is working.
+- Worker test browsers no longer take your typing focus.
+
 ## [1.0.262] - 2026-11-14
 
 ### Added

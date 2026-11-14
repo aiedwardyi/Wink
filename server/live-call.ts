@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, LIVE_VOICE_NAMES, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -43,7 +43,10 @@ type LiveCallDeps = {
   dataDir: string;
   fetch?: typeof fetch;
   now?: () => number;
+  catalog?: ModelCatalogLookup;
 };
+
+type ModelCatalogLookup = (instanceId: string) => { models: { options: readonly { id: string; label: string }[] } } | null | undefined;
 
 const lineSchema = z.object({ who: z.enum(["user", "voice"]), text: z.string(), at: z.number().finite().optional() });
 const linesSchema = z.object({ callId: z.string().regex(CALL_ID), lines: z.array(lineSchema).min(1).max(LINES_MAX) });
@@ -115,15 +118,20 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
   const tongue = `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`;
+  const shown = bot.pendingModelSelection ?? bot.modelSelection;
+  // the chip's label: catalogModelLabel in src/lib/model-chip.ts
+  const model = catalog?.(shown.instanceId)?.models.options.find((option) => option.id === shown.model)?.label ?? shown.model;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return plainNames([
     `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
+    `NAME: On screen your voice is called ${LIVE_VOICE_NAMES[voice].join(" or ")}; that name means you too. Told your voice changed or sounds different: say it glitched and you're still the same assistant.`,
+    "QUIET: \"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.",
     "ANSWER: Answer what they asked, directly, first. Ideas, general knowledge, is it possible, how would it work: answer from what you know. WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic; any steering follows the answer in one short clause, once a call. Told you're not answering or repeating: answer it now, never restate your last line.",
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access; anything they want you to use, change or remember is work too. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A clear instruction gets a short confirm, like \"Opening it, okay?\" Unsure which they mean: ask them one short question (which file? use it now or save it?) instead of guessing, and never flip between readings. Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
     "FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask. Asked what happened: tell it, never offer to show it. Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.",
@@ -131,7 +139,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
-    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id))}\nLocal time ${new Date(now).toString()}.`,
+    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id), false)}\nLocal time ${new Date(now).toString()}.\nYou run on ${model}, whatever chat says.`,
   ].join("\n\n"), bot.name);
 }
 
@@ -213,8 +221,9 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
     const app = locale === "ko" ? "ko" : "en";
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app);
-    const entry = { botId: bot.id, brief, locale: app, voice: cfg.liveCall?.voice ?? LIVE_VOICE, at: now() };
+    const voice = cfg.liveCall?.voice ?? LIVE_VOICE;
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, voice, deps.catalog);
+    const entry = { botId: bot.id, brief, locale: app, voice, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);

@@ -45,7 +45,7 @@ async function renderView(props: object = {}) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, ...props }))));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, onNoRelay: () => {}, ...props }))));
   return { host, root };
 }
 
@@ -73,34 +73,30 @@ describe("PhoneAccessSettings", () => {
   });
 
   it.each([
-    ["en", "Paste the setup code"],
+    ["en", "setup code"],
     ["ko", "설정 코드"],
-  ])("explains the relay code without the removed Phone Link direction in %s", async (locale, copy) => {
+  ])("with no relay, the switch goes to the other ways to connect, never a setup code, in %s", async (locale, copy) => {
     localStorage.setItem("omb-locale", locale);
-    serve({ "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }) });
-    const { host, root } = await renderView();
-    await act(async () => click(host.querySelector('[role="switch"]')!));
-    expect(document.querySelector('[role="dialog"] input')).not.toBeNull();
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(copy);
+    const onNoRelay = vi.fn();
+    const setup = vi.fn();
+    serve({
+      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
+      "GET /api/google-account": () => ({ state: "signed-in", email: "fixture@example.invalid" }),
+      "POST /api/phone-relay/setup": setup,
+    });
+    const { host, root } = await renderView({ onNoRelay });
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    await act(async () => click(toggle));
+    expect(onNoRelay).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector("input")).toBeNull();
+    expect(document.body.textContent?.toLowerCase()).not.toContain(copy);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(setup).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 
-  it("keeps a refused setup code in the confirm, and says not available when the relay is forced off", async () => {
-    serve({
-      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
-      "POST /api/phone-relay/setup": () => {
-        throw new Error("the setup code names an invalid relay address");
-      },
-    });
-    const refused = await renderView();
-    await act(async () => click(refused.host.querySelector('[role="switch"]')!));
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    await act(async () => type(dialog.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!, "wks1:localhost:wki1.a.b"));
-    await act(async () => click(button(dialog, "Turn On")));
-    expect(dialog.querySelector('[role="alert"]')?.textContent).toBe("Could not set up phone access: the setup code names an invalid relay address");
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    await act(async () => refused.root.unmount());
-
+  it("says not available when the relay is forced off", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }) });
     const off = await renderView();
     expect(off.host.textContent).toContain("Not available on this PC yet. Use Tailscale below.");
@@ -130,30 +126,29 @@ describe("PhoneAccessSettings", () => {
   it("names a used, expired or failed setup code in plain words", async () => {
     let answer = "invite-used";
     serve({
-      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
+      "GET /api/phone-relay/status": () => status({ available: true, base: "wink.test", state: "off", host: null, lastError: "relay client failed" }),
+      "GET /api/phone/devices": () => ({ phones: [] }),
       "POST /api/phone-relay/setup": () => {
         throw new Error(answer);
       },
     });
     const { host, root } = await renderView();
-    await act(async () => click(host.querySelector('[role="switch"]')!));
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    await act(async () => type(dialog.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!, "wks1:wink.test:wki1.invite.sig"));
+    await act(async () => type(host.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!, "wks1:wink.test:wki1.invite.sig"));
     for (const [code, text] of [
       ["invite-used", "This setup code was already used. Ask for a new one."],
       ["invite-expired", "This setup code has expired. Ask for a new one."],
       ["enroll-failed", "Could not set up phone access. Try again, or ask for a new setup code."],
     ]) {
       answer = code;
-      await act(async () => click(button(dialog, "Turn On")));
-      expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(text);
+      await act(async () => click(button(host, "Set Up")));
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(text);
     }
     await act(async () => root.unmount());
   });
 
   it("clears a refusal as soon as the code is edited, in either setup box", async () => {
     for (const [relay, route] of [
-      [status({ available: true, configured: false, enabled: false, state: "off", host: null }), "POST /api/phone-relay/setup"],
+      [status({ available: true, state: "off", host: null, lastError: "relay client failed" }), "POST /api/phone-relay/setup"],
       [status({ state: "enrolling", host: null }), "POST /api/phone-relay/enroll"],
     ] as const) {
       serve({
@@ -163,8 +158,7 @@ describe("PhoneAccessSettings", () => {
           throw new Error("the setup code names an invalid relay address");
         },
       });
-      const { host, root } = await renderView();
-      if (!relay.configured) await act(async () => click(host.querySelector('[role="switch"]')!));
+      const { root } = await renderView();
       const input = document.querySelector("input")!;
       await act(async () => type(input, "wks1:localhost:wki1.a.b"));
       await act(async () => input.form!.requestSubmit());
@@ -294,6 +288,7 @@ describe("PhoneAccessSettings", () => {
     expect(remove).toHaveBeenCalledWith({ method: "DELETE" });
     expect(host.textContent).not.toContain("Pixel");
     expect(host.textContent).toContain("iPhone");
+    expect(JSON.parse(localStorage.getItem("omb-phone-relay")!).phones.map((phone: { name: string }) => phone.name)).toEqual(["iPhone"]);
     await act(async () => root.unmount());
   });
 
@@ -349,6 +344,47 @@ describe("This PC", () => {
     const { host, root } = await renderView();
     expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
+    await act(async () => root.unmount());
+  });
+
+  it("paints the last signed-in phones before the PC answers", async () => {
+    const pixel = { id: "p1", name: "Pixel", createdAt: Date.UTC(2026, 9, 1), lastSeenAt: Date.UTC(2026, 9, 6) };
+    localStorage.setItem("omb-phone-relay", JSON.stringify({ status: status(), phones: [pixel] }));
+    let answer = (_: unknown) => {};
+    serve({
+      "GET /api/phone-relay/status": () => new Promise(() => {}),
+      "GET /api/google-account": signedIn,
+      "GET /api/phone/devices": () => new Promise((resolve) => { answer = resolve; }),
+    });
+    const { host, root } = await renderView();
+    const list = () => [...host.querySelectorAll("[data-signed-in] [data-account-row]")];
+    expect(list().map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Pixel"]);
+    const first = list()[0];
+    await act(async () => answer({ phones: [{ ...pixel, lastSeenAt: Date.UTC(2026, 9, 9) }] }));
+    expect(list()[0]).toBe(first);
+    expect(list()[0]?.textContent).toContain("Oct 9");
+    expect(JSON.parse(localStorage.getItem("omb-phone-relay")!).phones[0].lastSeenAt).toBe(Date.UTC(2026, 9, 9));
+    await act(async () => root.unmount());
+  });
+
+  it("holds a quiet row, not None, until the phones first answer", async () => {
+    localStorage.setItem("omb-phone-relay", JSON.stringify({ status: status() }));
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => new Promise(() => {}) });
+    const { host, root } = await renderView();
+    const list = [...host.querySelectorAll("[data-signed-in] [data-account-row]")];
+    expect(list).toHaveLength(1);
+    expect(list[0]!.textContent!.trim()).toBe("");
+    expect(host.querySelector("[data-signed-in] .animate-pulse")).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("warms the signed-in phones with the relay state", async () => {
+    const pixel = { id: "p1", name: "Pixel", createdAt: Date.UTC(2026, 9, 1), lastSeenAt: Date.UTC(2026, 9, 6) };
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.includes("google") ? signedIn() : url.includes("phone/devices") ? { phones: [pixel] } : status())));
+    await warmRelay();
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": () => new Promise(() => {}), "GET /api/phone/devices": () => new Promise(() => {}) });
+    const { host, root } = await renderView();
+    expect(host.querySelector("[data-signed-in]")?.textContent).toContain("Pixel");
     await act(async () => root.unmount());
   });
 
@@ -415,47 +451,6 @@ describe("This PC", () => {
     expect(toggle.disabled).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     await act(async () => root.unmount());
-  });
-
-  it("no ticket: the confirm asks for the setup code", async () => {
-    const setup = vi.fn(() => status());
-    serve({
-      "GET /api/phone-relay/status": () => status({ available: true, configured: false, enabled: false, state: "off", host: null }),
-      "GET /api/google-account": signedIn,
-      "GET /api/phone/devices": () => ({ phones: [] }),
-      "POST /api/phone-relay/setup": setup,
-    });
-    const { host, root } = await renderView();
-    await act(async () => click(host.querySelector('[role="switch"]')!));
-    const input = dialog()!.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!;
-    expect(button(dialog()!, "Turn On").disabled).toBe(true);
-    await act(async () => type(input, " wks1.code "));
-    await act(async () => click(button(dialog()!, "Turn On")));
-    expect(setup).toHaveBeenCalledWith({ method: "POST", body: JSON.stringify({ code: "wks1.code" }) });
-    expect(dialog()).toBeNull();
-    expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-    await act(async () => root.unmount());
-  });
-
-  it("keeps the setup code field when setup fails after the PC saved the base", async () => {
-    vi.useFakeTimers();
-    let relay = status({ available: true, configured: false, enabled: false, state: "off", host: null });
-    const setup = vi.fn(() => {
-      relay = status({ state: "reconnecting", host: null });
-      throw new Error("enrollment failed");
-    });
-    serve({ "GET /api/phone-relay/status": () => relay, "GET /api/google-account": signedIn, "GET /api/phone/devices": () => ({ phones: [] }), "POST /api/phone-relay/setup": setup });
-    const { host, root } = await renderView();
-    await act(async () => click(host.querySelector('[role="switch"]')!));
-    await act(async () => type(dialog()!.querySelector<HTMLInputElement>('input[aria-label="Setup Code"]')!, "wks1.code"));
-    await act(async () => click(button(dialog()!, "Turn On")));
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-    expect(dialog()?.querySelector('input[aria-label="Setup Code"]')).not.toBeNull();
-    expect(dialog()?.querySelector('[role="alert"]')).not.toBeNull();
-    await act(async () => click(button(dialog()!, "Turn On")));
-    expect(setup).toHaveBeenCalledTimes(2);
-    await act(async () => root.unmount());
-    vi.useRealTimers();
   });
 
   it("keeps the switch when signed out without the desktop sign-in", async () => {

@@ -12,8 +12,8 @@ import { cn } from "@/lib/cn";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "dim-sand", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand"]);
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
+const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night"]);
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -45,7 +45,7 @@ function Miniature({ skin }: { skin: SkinId }) {
         <span className="h-[3px] w-[74%] rounded-full bg-ink-secondary/30" />
       </div>
       {/* thread */}
-      <div className="flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]">
+      <div data-mini-thread="" className="flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]">
         <span className="h-[13px] w-[62%] self-end rounded-md bg-bubble-user" />
         <div className="flex w-[88%] flex-col gap-[3px] rounded-md bg-card p-[4px]">
           <span className="h-[2px] w-full rounded-full bg-ink/45" />
@@ -134,7 +134,7 @@ export function SkinPicker() {
               <div className="flex flex-wrap items-start gap-1.5 px-0.5 pb-0.5">
                 {/* Auto basis lets the New tag drop to its own line instead of covering a long name. */}
                 <div className={cn("min-w-0", isNew ? "flex-[1_1_auto]" : "flex-1")}>
-                  <div className="text-[13px] font-medium text-ink">{skin.name}</div>
+                  <div className="text-[13px] font-medium text-ink">{skin.nameKey ? t(skin.nameKey) : skin.name}</div>
                 </div>
                 {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
                 {isNew && (

@@ -4,7 +4,7 @@ import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, tree
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import "./MapTree.css";
 
-interface Labels { folders(n: number): string; files(n: number): string; same: string; different: string }
+interface Labels { folders(n: number): string; files(n: number): string; more(n: number): string; same: string; different: string }
 
 interface MapTreeProps {
   index: TreeIndex;
@@ -25,6 +25,7 @@ interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y:
 const TIP = { x: 1.4, y: 0.7 };
 // It rests 1px off the bottom-right corner of the row's 7px square, so its halo clears the square.
 const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
+const CLASHES = 4;
 export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -255,7 +256,8 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   return <>
     {team && <div className="map-tree-team">
       <div className="map-tree-legend">{ordered.map(worker => <span key={worker.id} data-now={worker.id === current?.worker || undefined}><i style={tint(color(worker.id))} />{worker.nick}<em>{worker.files.length}</em></span>)}</div>
-      {clashes.map(clash => <div key={`${clash.path}\0${clash.a}\0${clash.b}`} className="map-tree-clash" title={clash.path}><Clash same={clash.same} /><code>{name(clash.path)}</code><span>{nick(clash.a)} + {nick(clash.b)} · {clash.same ? labels.same : labels.different}</span></div>)}
+      {clashes.slice(0, clashes.length > CLASHES ? CLASHES - 1 : CLASHES).map(clash => <div key={clash.path} className="map-tree-clash" title={clash.path}><Clash same={clash.same} /><code>{name(clash.path)}</code><span>{clash.ids.map(nick).join(" + ")} · {clash.same ? labels.same : labels.different}</span></div>)}
+      {clashes.length > CLASHES && <div className="map-tree-clash" title={clashes.slice(CLASHES - 1).map(clash => clash.path).join("\n")}><svg className="map-tree-x" aria-hidden="true" /><span>{labels.more(clashes.length - CLASHES + 1)}</span></div>}
     </div>}
     <div ref={view} className="map-tree" data-team={team || undefined} style={{ height: layout.height }}>
       <svg className="map-tree-lines" aria-hidden="true"><path ref={lines} /><path ref={hot} className="map-tree-hot" style={team && current ? { stroke: color(current.worker) } : undefined} /></svg>

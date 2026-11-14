@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
-import { mapFileDiff, mapFiles, mapHead, mapDiffLines, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
+import { mapFileDiff, mapFiles, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
 import { createMapPane, type MapPaneRecord } from "./map-pane.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { watchMapPanes } from "./map-events.ts";
@@ -321,3 +321,13 @@ it("disconnects when the lifecycle bridge rejects the request", async () => {
   try { await vi.waitFor(() => expect(disconnected).toHaveBeenCalledOnce()); }
   finally { stop(); }
 });
+
+it("lists every file of a repo whose file list runs past the usual git output cap", async () => {
+  const { root } = repo();
+  const dir = "d".repeat(120);
+  mkdirSync(join(root, dir));
+  for (let i = 0; i < 4500; i++) writeFileSync(join(root, dir, `f${i}.ts`), "");
+  const paths = await mapRepoFiles(root);
+  expect(paths).toHaveLength(4501);
+  expect(paths.join("").length).toBeGreaterThan(512 * 1024);
+}, 60_000);

@@ -682,14 +682,10 @@ describe("GroupWizard members", () => {
           { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
           { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash Medium" },
-          { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash Low" },
-          { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash High" },
           { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-          { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash High" },
-          { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
           { id: "legacy-custom", label: "Legacy custom", custom: true },
         ],
-        "gemini-3.5-flash",
+        "gemini-2.5-flash",
       ),
     ];
     const { host, root } = await renderWizard();
@@ -708,7 +704,7 @@ describe("GroupWizard members", () => {
         "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium",
       ]);
-      // The engine default (3.5) is not offered, so the select resolves to
+      // The engine default (2.5) is not offered, so the select resolves to
       // 3.8 Flash High even though Argon is listed first.
       expect(modelSelect.value).toBe("gemini-3.8-flash-high");
       const [nameInput] = nameInputs(host);

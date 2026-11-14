@@ -511,7 +511,21 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const resume = seen.calls.find((c: { method: string }) => c.method === "thread/resume");
-    expect(resume.params).toEqual({ threadId: "codex-thread-9", approvalPolicy: "untrusted", approvalsReviewer: "user" });
+    expect(resume.params).toEqual({ threadId: "codex-thread-9", approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: "workspace-write" });
+  });
+
+  it.each([false, true])("gives a resumed thread the sandbox a fresh one gets (fullAuto %s)", async (fullAuto) => {
+    await create({ mode: "resume", fullAuto });
+    const sandboxOf = async (method: string, resumeCursor?: string) => {
+      const dump = join(scratch, `sandbox-${method.replace("/", "-")}-${fullAuto}.json`);
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: `t-sandbox-${method}`, text: "write it", resumeCursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.threadId === `t-sandbox-${method}`);
+      return JSON.parse(readFileSync(dump, "utf8")).calls.find((c: { method: string }) => c.method === method).params.sandbox;
+    };
+    const fresh = await sandboxOf("thread/start");
+    expect(fresh).toBe(fullAuto ? "danger-full-access" : "workspace-write");
+    expect(await sandboxOf("thread/resume", "codex-thread-9")).toBe(fresh);
   });
 
   it("offers the approval chip unless fullAuto means nothing ever asks", async () => {

@@ -61,7 +61,8 @@ async function press(key: string, init: KeyboardEventInit = {}, target: Element 
   return event;
 }
 
-const altS = (shiftKey = false, target?: Element | null) => press(shiftKey ? "S" : "s", { code: "KeyS", altKey: true, shiftKey }, target);
+const altKey = (code: "KeyS" | "KeyT", shiftKey = false, target?: Element | null) => press(code === "KeyS" ? "s" : "t", { code, altKey: true, shiftKey }, target);
+const altT = (target?: Element | null) => altKey("KeyT", false, target);
 const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
 const strip = () => document.querySelector("[data-picker-style-strip]");
 const shown = () => document.querySelector("[data-picker-style-button]")?.getAttribute("data-picker-view");
@@ -93,10 +94,10 @@ afterEach(async () => {
 });
 
 describe("Picker style strip", () => {
-  it("opens with Alt+S and closes with Alt+S, Esc, an outside click or its button, fading like a popover", async () => {
+  it("opens with Alt+T and closes with Alt+T, Esc, an outside click or its button, fading like a popover", async () => {
     await mount();
-    for (const close of [() => altS(), () => press("Escape"), () => act(async () => { backdrop().dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); }), () => tap("[data-picker-style-button]")]) {
-      expect((await altS()).defaultPrevented).toBe(true);
+    for (const close of [() => altT(), () => press("Escape"), () => act(async () => { backdrop().dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); }), () => tap("[data-picker-style-button]")]) {
+      expect((await altT()).defaultPrevented).toBe(true);
       expect(strip()?.classList.contains("animate-pop-in")).toBe(true);
       expect(strip()?.hasAttribute("data-closing")).toBe(false);
       await close();
@@ -106,34 +107,35 @@ describe("Picker style strip", () => {
     expect(picker()).toBeNull();
   });
 
-  it("rotates styles live with Alt+Shift+S, strip open or closed, and keeps each", async () => {
+  it("opens the strip with Alt+T from the local-model search box", async () => {
+    await mount("list");
+    await tap('button[aria-expanded="false"]:not([data-picker-style-button])');
+    const search = document.querySelector<HTMLInputElement>(".model-cross-custom input")!;
+    expect(search).not.toBeNull();
+    expect((await altT(search)).defaultPrevented).toBe(true);
+    expect(strip()).not.toBeNull();
+  });
+
+  it("ignores Alt+S and Alt+Shift+S in the picker", async () => {
     await mount();
-    const seen = [];
-    for (let i = 0; i < 4; i++) {
-      await altS(true);
-      seen.push([shown(), localStorage.getItem("omb-model-picker-view")]);
-    }
-    expect(seen).toEqual([["list", "list"], ["chart", "chart"], ["machine", "machine"], ["dial", "dial"]]);
-    expect(strip()).toBeNull();
-    await altS();
-    await altS(true);
-    expect([shown(), strip()?.querySelector('[aria-checked="true"]')?.getAttribute("data-picker-style")]).toEqual(["list", "list"]);
+    for (const shift of [false, true]) expect((await altKey("KeyS", shift)).defaultPrevented).toBe(false);
+    expect([shown(), strip(), localStorage.getItem("omb-model-picker-view")]).toEqual(["dial", null, "dial"]);
+    await altT();
+    await altKey("KeyS");
     expect(strip()?.hasAttribute("data-closing")).toBe(false);
   });
 
-  it("leaves Alt+S and Alt+Shift+S to the local model search", async () => {
-    await mount("list");
-    await tap('button[aria-expanded="false"]:not([data-picker-style-button])');
-    const search = document.querySelector("input")!;
-    search.focus();
-    expect((await altS(false, search)).defaultPrevented).toBe(false);
-    expect((await altS(true, search)).defaultPrevented).toBe(false);
-    expect([shown(), strip()]).toEqual(["list", null]);
+  it.each([["dial", ".dial-keys"], ["list", ".model-cross-footer"], ["chart", ".chart-keys"], ["machine", ".vm-fine"]])("%s key row names Alt+T Style and no rotation", async (view, row) => {
+    await mount(view);
+    for (let i = 0; i < 50 && !document.querySelector(row); i++) await wait(5);
+    const text = document.querySelector(row)!.textContent!.replace(/[\s+]/g, "");
+    expect(text).toContain("AltTStyle");
+    expect(text).not.toMatch(/AltS|Shift|Next/);
   });
 
   it("puts Theme first and on, and keeps a picked look until Theme is picked again", async () => {
     await mount();
-    await altS();
+    await altT();
     expect(looks()).toEqual(["Theme*", "Dark", "Light", "Atelier"]);
     expect(backdrop().hasAttribute("data-light")).toBe(false);
     await tap('[data-picker-look="light"]');
@@ -142,20 +144,40 @@ describe("Picker style strip", () => {
     await act(async () => root.unmount());
     await mount();
     expect(backdrop().hasAttribute("data-light")).toBe(true);
-    await altS();
+    await altT();
     await tap('[data-picker-look="theme"]');
     expect(looks()).toEqual(["Theme*", "Dark", "Light", "Atelier"]);
     expect([backdrop().hasAttribute("data-light"), localStorage.getItem("omb-model-picker-look")]).toEqual([false, null]);
   });
 
+  it.each([["style", '[data-picker-style="list"]'], ["look", '[data-picker-look="light"]']])("closes after a %s tile pick, with the pick applied and focus back on the picker", async (_kind, tile) => {
+    await mount();
+    await altT();
+    await tap(tile);
+    expect([shown(), localStorage.getItem("omb-model-picker-view"), localStorage.getItem("omb-model-picker-look")].join()).toBe(tile.includes("list") ? "list,list," : "dial,dial,light");
+    await closesWithFade();
+    expect(document.activeElement?.closest("[data-model-picker-content]")).not.toBeNull();
+  });
+
+  it("leaves Enter and Space native on a focused tile, and its click closes the strip", async () => {
+    await mount();
+    await altT();
+    const tile = document.querySelector<HTMLElement>('[data-picker-look="atelier"]')!;
+    tile.focus();
+    // jsdom does not turn Enter or Space into a click; a browser does, so the strip must not swallow them.
+    for (const key of ["Enter", " "]) expect((await press(key, {}, tile)).defaultPrevented).toBe(false);
+    await act(async () => tile.click());
+    expect(localStorage.getItem("omb-model-picker-look")).toBe("atelier");
+    await closesWithFade();
+  });
+
   it("saves the Machine as a style, reopens on it, and closes the picker from its X", async () => {
     await mount();
-    await altS();
+    await altT();
     await tap('[data-picker-style="machine"]');
     for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);
     expect([shown(), localStorage.getItem("omb-model-picker-view")]).toEqual(["machine", "machine"]);
-    expect(strip()?.hasAttribute("data-closing")).toBe(false);
-    await press("Escape");
+    await closesWithFade();
     expect(document.activeElement?.classList.contains("model-machine")).toBe(true);
     const enter = await press("Enter", {}, document.querySelector(".model-machine [data-picker-style-button]"));
     expect([enter.defaultPrevented, dispatch.mock.calls.length, picker() !== null]).toEqual([false, 0, true]);
@@ -167,26 +189,30 @@ describe("Picker style strip", () => {
     expect(picker()).toBeNull();
   });
 
-  it("keeps the saved Machine and the style keys to pickers with the dial", async () => {
+  it("opens the strip with Alt+T without the dial, keeping the saved Machine unapplied", async () => {
     await mount("machine", false);
-    await altS();
-    await altS(true);
-    expect([document.querySelector(".model-machine"), document.querySelector("[data-picker-style-button]"), strip()]).toEqual([null, null, null]);
+    expect((await altT()).defaultPrevented).toBe(true);
+    expect([document.querySelector(".model-machine"), document.querySelector("[data-picker-style-button]")]).toEqual([null, null]);
+    expect(strip()).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("machine");
+    await altT();
+    await closesWithFade();
   });
 
-  it.each(["style", "look"] as const)("folds eight %s tiles to four plus More, keeping the pick up front", async (kind) => {
+  it.each(["style", "look"] as const)("folds eight %s tiles to four plus More, keeping the pick up front; opening More picks nothing", async (kind) => {
     const tiles = Array.from({ length: 8 }, (_, i) => ({ id: `t${i + 1}`, label: `T${i + 1}`, mini: null }));
+    const onPick = vi.fn();
     const host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
     await act(async () => {
-      root.render(createElement(TileRow, { kind, title: kind, more: (count: number) => `More (${count})`, tiles, selected: "t7", onPick: () => undefined }));
+      root.render(createElement(TileRow, { kind, title: kind, more: (count: number) => `More (${count})`, tiles, selected: "t7", onPick }));
     });
     const names = () => [...host.querySelectorAll(`[data-picker-${kind}]`)].map((tile) => tile.textContent);
     expect(names()).toEqual(["T1", "T2", "T3", "T7"]);
     expect(host.querySelector(`[data-picker-more="${kind}"]`)?.textContent).toBe("More (4)");
     await tap(`[data-picker-more="${kind}"]`);
     expect(names()).toEqual(["T1", "T2", "T3", "T7", "T4", "T5", "T6", "T8"]);
+    expect(onPick).not.toHaveBeenCalled();
   });
 });

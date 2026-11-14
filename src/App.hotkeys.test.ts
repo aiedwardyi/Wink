@@ -597,3 +597,62 @@ describe("conversation layout", () => {
     expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"');
   });
 });
+
+describe("model picker owns Alt+T", () => {
+  const mount = async () => {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: [{ id: "b1", threadId: "t1", name: "Scout", messages: [], modelSelection: { instanceId: "inst", model: "m" } }],
+      groups: [],
+      selectedId: "b1",
+    }));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
+    return {
+      press: async (shiftKey: boolean) => {
+        const event = new KeyboardEvent("keydown", { code: "KeyT", key: "t", altKey: true, shiftKey, bubbles: true, cancelable: true });
+        await act(async () => { window.dispatchEvent(event); });
+        return event;
+      },
+      unmount: async () => {
+        await act(async () => root.unmount());
+        host.remove();
+        document.querySelector("[data-model-picker-content]")?.remove();
+        document.documentElement.removeAttribute("data-skin");
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+        localStorage.clear();
+      },
+    };
+  };
+
+  it("leaves the theme and Settings alone while the picker is open", async () => {
+    const { press, unmount } = await mount();
+    try {
+      const picker = document.body.appendChild(document.createElement("div"));
+      picker.setAttribute("data-model-picker-content", "");
+      const before = document.documentElement.dataset.skin;
+      expect((await press(true)).defaultPrevented).toBe(false);
+      expect((await press(false)).defaultPrevented).toBe(false);
+      expect(document.documentElement.dataset.skin).toBe(before);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("still cycles the theme and opens Themes with no picker open", async () => {
+    const { press, unmount } = await mount();
+    try {
+      const before = document.documentElement.dataset.skin;
+      expect((await press(true)).defaultPrevented).toBe(true);
+      expect(document.documentElement.dataset.skin).not.toBe(before);
+      expect((await press(false)).defaultPrevented).toBe(true);
+    } finally {
+      await unmount();
+    }
+  });
+});

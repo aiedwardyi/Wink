@@ -8,8 +8,11 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SkinPicker } from "./SkinPicker";
 
 let root: Root;
-const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Dim Sand", "Wink Day", "Notebook"];
-const darkCount = 8;
+const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
+const darkCount = 10;
+const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", Lagoon: "라군", Snow: "스노우" };
+const scene = ["Lagoon Night", "Snow Night", "Lagoon", "Snow"];
+const taggedOld = () => tagged().filter((name) => !scene.includes(name!));
 const kept = ["Wink Violet", "Wink Black", "Pewter", "Precision Dimmed"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
 const names = () => tiles().map((button) => button.querySelector(".font-medium")?.textContent);
@@ -41,9 +44,10 @@ afterEach(async () => {
 });
 
 describe("featured themes", () => {
-  it.each(["en", "ko"] as const)("starts folded with eleven featured themes in %s and reveals every offered theme", async (locale) => {
+  it.each(["en", "ko"] as const)("starts folded with fifteen featured themes in %s and reveals every offered theme", async (locale) => {
     await mount("precision", locale);
-    expect(names()).toEqual(featured);
+    const shown = locale === "en" ? featured : featured.map((name) => koScene[name] ?? name);
+    expect(names()).toEqual(shown);
     const more = document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(more).not.toBeNull();
     expect(more.textContent).toContain(locale === "en" ? "More themes" : "더 많은 테마");
@@ -57,7 +61,7 @@ describe("featured themes", () => {
     await act(async () => more.click());
     expect(more.getAttribute("aria-expanded")).toBe("false");
     await folded();
-    expect(names()).toEqual(featured);
+    expect(names()).toEqual(shown);
   });
 
   it("keeps an extra active theme up front, follows external changes and resets the fold on remount", async () => {
@@ -126,12 +130,15 @@ describe("featured themes", () => {
 });
 
 describe("New tag", () => {
-  it.each(["en", "ko"] as const)("marks the three new themes until tried in %s", async (locale) => {
+  it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
+    await mount("precision", "en");
+    expect(tagged()).toEqual(["Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow"]);
+    await act(async () => root.unmount());
     await mount("precision", locale);
-    expect(tagged()).toEqual(["Bronze", "Dim Sand"]);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
     await act(async () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
-    expect(tagged()).toEqual(["Bronze", "Dim Sand", "Precision Dimmed"]);
+    expect(tagged()).toHaveLength(7);
+    expect(tagged().at(-1)).toBe("Precision Dimmed");
   });
 
   it("drops the tag for good after a picker click", async () => {
@@ -139,22 +146,41 @@ describe("New tag", () => {
     const bronze = tiles().find((button) => button.querySelector(".font-medium")?.textContent === "Bronze")!;
     await act(async () => bronze.click());
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Dim Sand"]);
+    expect(taggedOld()).toEqual(["Dim Sand"]);
     await act(async () => root.unmount());
     await render();
-    expect(tagged()).toEqual(["Dim Sand"]);
+    expect(taggedOld()).toEqual(["Dim Sand"]);
   });
 
   it("drops the tag after the theme hotkey applies it", async () => {
     await mount("precision");
     await act(async () => applySkin(nextSkin("precision-dimmed")));
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Dim Sand"]);
+    expect(taggedOld()).toEqual(["Dim Sand"]);
   });
 
   it("drops the tag for a theme started on", async () => {
     await mount("dim-sand");
     await act(async () => applySkin("precision"));
-    expect(tagged()).toEqual(["Bronze"]);
+    expect(taggedOld()).toEqual(["Bronze"]);
+  });
+});
+
+describe("Scene themes", () => {
+  it.each([
+    ["en", ["Lagoon Night", "Snow Night"], ["Lagoon", "Snow"]],
+    ["ko", ["라군 나이트", "스노우 나이트"], ["라군", "스노우"]],
+  ] as const)("puts Lagoon and Snow up front as Day and Night tiles with the New tag in %s", async (locale, night, day) => {
+    await mount("precision", locale);
+    const shown = names();
+    expect(shown.indexOf(night[0])).toBeLessThan(shown.indexOf(day[0]));
+    for (const name of [...night, ...day]) {
+      expect(shown).toContain(name);
+      expect(tagged()).toContain(name);
+    }
+    const snowNight = tiles().find((button) => button.querySelector(".font-medium")?.textContent === night[1])!;
+    await act(async () => snowNight.click());
+    expect(document.documentElement.dataset.skin).toBe("snow-night");
+    expect(snowNight.getAttribute("aria-pressed")).toBe("true");
   });
 });

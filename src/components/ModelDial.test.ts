@@ -258,10 +258,12 @@ describe("ModelDial", () => {
     await mount();
     await openStrip();
     for (const view of backToDial ? ["list", "dial"] : ["list"]) {
+      await openStrip();
       await act(async () => { viewButton(view).focus(); viewButton(view).click(); });
     }
     expect(localStorage.getItem("omb-model-picker-view")).toBe(backToDial ? "dial" : "list");
-    await key("Escape");
+    await wait(400);
+    expect(document.querySelector("[data-picker-style-strip]")).toBeNull();
     expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
     await key("Enter");
     expect(saved()).toEqual({ instanceId: "claude", model: "claude-opus-5-5", effort: "high", mode: "pinned" });
@@ -346,10 +348,10 @@ describe("ModelDial", () => {
     expect(document.querySelector(".model-dial")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
     expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["list", "list"]);
-    await act(async () => viewButton("chart").click());
+    await pickView("chart");
     expect(document.querySelector(".model-chart")).not.toBeNull();
     expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["chart", "chart"]);
-    await act(async () => viewButton("dial").click());
+    await pickView("dial");
     expect(document.querySelector(".model-dial")).not.toBeNull();
     expect([shownView(), localStorage.getItem("omb-model-picker-view")]).toEqual(["dial", "dial"]);
     expect(saved()).toBeUndefined();

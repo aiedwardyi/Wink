@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
-import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
+import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -150,6 +150,15 @@ describe("call token", () => {
     const brief = h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`Open: "Hey, I'm here." No name or intro.`);
     expect(brief).not.toMatch(/Greet/);
+  });
+
+  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
+    const h = harness({ liveCall: { voice } });
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
+    expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
+    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
@@ -318,7 +327,7 @@ describe("brief STATUS", () => {
   afterEach(() => { _resetSteerQueue(); });
   const statusOf = (brief: string) => brief.split("STATUS:\n")[1]!.split("\nLocal time ")[0]!;
 
-  it("replaces NOW with busy state, waiting sends, the open card and worker reports", async () => {
+  it("replaces NOW with busy state, waiting sends and worker reports; the open card waits for the call to read it", async () => {
     const h = harness();
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "note", text: "[pane aaaaaaaa] [BUILD | opus | high] from Juno (b1): FAIL BUILD branch=x sha=1 dirty=0\nstack trace" });
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Your bot has a question", subtitle: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM", "Still 1 AM"], askUser: true } });
@@ -333,10 +342,10 @@ describe("brief STATUS", () => {
     expect(statusOf(brief)).toBe([
       "Juno is busy, working on: fix the login page.",
       "Sends waiting to run after this.",
-      "Open question for the person: Restart at 8:15 PM instead? Options: Yes, 8:15 PM; Still 1 AM.",
       "Workers, newest first: BUILD reported FAILED.",
     ].join("\n"));
     expect(statusOf(brief)).not.toContain("stack trace");
+    expect(statusOf(brief)).not.toContain("Open question");
   });
 
   it("stays under 1.6 KB in Korean", async () => {
@@ -348,6 +357,22 @@ describe("brief STATUS", () => {
     const status = statusOf(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string);
     expect(Buffer.byteLength(status, "utf8")).toBeLessThanOrEqual(STATUS_MAX_BYTES);
     expect(status).not.toContain("�");
+  });
+});
+
+describe("brief model line", () => {
+  it("names the chip's model even when the chat says another", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "what model r u" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "My setup says I'm Claude Haiku 5.5." });
+    const bot = { ...h.bot, busy: true, modelSelection: { instanceId: "claude", model: "claude-haiku-5-5" }, pendingModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
+    const catalog = { claude: [{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }], codex: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] } as Record<string, { id: string; label: string }[]>;
+    const brief = await buildBrief(bot, h.store.activePath(bot.threadId), "User", 0, "en", undefined, (id) => ({ models: { options: catalog[id] ?? [] } }));
+    const [chat, status] = brief.split("STATUS:");
+    expect(chat).toContain("I'm Claude Haiku 5.5");
+    expect(status).toContain("GPT-6.1 Sol");
+    expect(status).not.toContain("Haiku");
+    expect(brief).toContain("Never mention Gemini, a helper or a voice model.");
   });
 });
 

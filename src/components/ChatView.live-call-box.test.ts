@@ -34,6 +34,7 @@ vi.mock("@/lib/live-call/audio", () => ({
     onIdle = () => {};
     onStart = () => {};
     async capture(onFrame: (pcm: ArrayBuffer) => void) { fakes.capture(); if (fakes.micError) throw Object.assign(new Error("Permission denied"), { name: fakes.micError }); fakes.frame = onFrame; }
+    stopMic() {}
     play() {}
     flush() {}
     close() {}
@@ -515,10 +516,11 @@ describe("live call in the message box", () => {
       expect(start).toHaveBeenCalledTimes(1);
       expect(confirm.disabled).toBe(true);
       expect(tokens()).toBe(2);
-      expect(fakes.capture).not.toHaveBeenCalled();
+      // The mic opens on each tap, beside the token: once for the keyless try, once for this start.
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
       await act(async () => finish(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" })));
       await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
-      expect(fakes.capture).toHaveBeenCalledTimes(1);
+      expect(fakes.capture).toHaveBeenCalledTimes(2);
     } finally {
       finish?.(Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" }));
       await unmount();

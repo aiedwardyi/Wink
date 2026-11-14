@@ -875,9 +875,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // a user-level approvals_reviewer = "auto_review" would otherwise answer
         // escalations with a reviewer model, never reaching the chip or Auto mode
         const approvalsReviewer = "user";
+        // a resume without it falls back to the config default, often read-only
+        const sandbox = config.fullAuto ? "danger-full-access" : "workspace-write";
         if (cursor) {
           try {
-            const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer });
+            const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox });
             codexThreadId = resumed?.thread?.id ?? cursor;
           } catch {
             resumeFailed = true;
@@ -890,7 +892,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             cwd: turn.cwd ?? homedir(),
             model: selection.model,
             ...(selection.modelProvider ? { modelProvider: selection.modelProvider } : {}),
-            sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
+            sandbox,
             approvalPolicy,
             approvalsReviewer,
             ...(turn.system ? { developerInstructions: turn.system } : {}),
