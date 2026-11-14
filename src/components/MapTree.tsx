@@ -177,11 +177,9 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       ? <button key={path} type="button" {...props} data-map-file={path} data-state="changed" aria-current={selected === path} onClick={() => onOpen(path)}>{body}</button>
       : <span key={path} {...props}>{body}</span>;
   };
-  // A folded box opens its first changed file, which unfolds that branch.
-  const folded = (it: TreeItem) => {
-    const prefix = it.kind === "box" ? it.dir!.path : it.parent?.dir?.path ?? "";
-    return order.find(path => !shown.has(path) && (!prefix || path.startsWith(prefix + "/")));
-  };
+  // A folded box opens the first changed file it holds, which unfolds that branch.
+  const folded = (it: TreeItem) => order.find(path => !shown.has(path) && (it.kind === "box" ? path.startsWith(it.dir!.path + "/")
+    : it.folds?.some(dir => path.startsWith(dir + "/")) || it.filesOf === path.slice(0, Math.max(0, path.lastIndexOf("/")))));
   const box = (it: TreeItem) => {
     const dir = it.dir!;
     const ids = team ? under(dir.path) : [];

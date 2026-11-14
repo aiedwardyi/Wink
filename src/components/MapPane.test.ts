@@ -231,6 +231,49 @@ it("keeps the step title, breadcrumb and diff on one file through every hop", as
   expect(view()).toEqual(["a.ts", "src/a.ts", undefined, "1+edit in src/a.ts"]);
 });
 
+it("opens only a file from the folders a folded folders box holds, never one under a visible box", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
+  const dirs: [string, number][] = [["src", 20], ["big", 20], ["c1", 6], ["c2", 6], ["c3", 6], ["c4", 6], ["zeta-folder-long", 2]];
+  const paths = dirs.flatMap(([dir, n]) => Array.from({ length: n }, (_, i) => `${dir}/f${i}.ts`));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path: "src/f1.ts", files: ["src/f1.ts", "big/f2.ts", "zeta-folder-long/f1.ts"].map(path => ({ path, added: 1, removed: 0 })) }]);
+  expect([...host.querySelectorAll("button.map-tree-box")].map(box => box.textContent)).toContain("big/20");
+  await act(async () => host.querySelector<HTMLButtonElement>("button.map-tree-more")!.click());
+  expect(host.querySelector("[data-map-path]")?.getAttribute("data-map-path")).toBe("zeta-folder-long/f1.ts");
+});
+
+it("moves focus with Up and Down onto a file that sat in a folded box", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
+  const paths = ["src", "server", "docs"].flatMap(dir => Array.from({ length: 20 }, (_, i) => `${dir}/f${i}.ts`));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path: "src/f1.ts", files: [{ path: "src/f1.ts", added: 1, removed: 0 }, { path: "server/f2.ts", added: 1, removed: 0 }] }]);
+  expect(host.querySelector('[data-map-file="server/f2.ts"]')).toBeNull();
+  const row = host.querySelector<HTMLElement>('[data-map-file="src/f1.ts"]')!;
+  row.focus();
+  await act(async () => { row.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); });
+  expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
+  expect(document.activeElement?.getAttribute("data-map-file")).toBe("server/f2.ts");
+});
+
+it("keeps the changed files on the tree with a Retry when the repo's files fail to load", async () => {
+  let down = true;
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? down ? new Response("", { status: 503 }) : Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  const path = () => host.querySelector("[data-map-path]")?.getAttribute("data-map-path");
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-top .map-empty")?.textContent).toBe("Could not load all files Retry");
+  await click('[data-map-file="src/manual.ts"]');
+  expect(path()).toBe("src/manual.ts");
+  await act(async () => { host.querySelector('[data-map-file="src/manual.ts"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); });
+  expect(path()).toBe("src/a.ts");
+  down = false;
+  await click(".map-top .map-empty button");
+  expect(host.querySelector(".map-top .map-empty")).toBeNull();
+  expect(host.querySelector('.map-tree-file[data-tree-row="README.md"]')).not.toBeNull();
+});
+
 it("steps through the changed files in tree order with Up and Down only where the Map has focus", async () => {
   const scrolled = vi.fn();
   const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });

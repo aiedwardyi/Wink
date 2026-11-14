@@ -31,6 +31,8 @@ export interface TreeItem {
   dirs?: number;
   count?: number;
   filesOnly?: boolean;
+  folds?: string[];
+  filesOf?: string;
   changed?: boolean;
   label?: string;
   sub?: string;
@@ -126,15 +128,15 @@ function build(index: TreeIndex, o: TreeOptions) {
       }
       let own = stack(dir);
       if (own && focus && dirOf(focus) !== dir.path) {
-        kids.push(item({ kind: "more", id: "f:" + dir.path, dirs: 0, count: dir.files.length, parent: it, filesOnly: true, changed: dir.files.some(file => o.changed.has(file)) }));
+        kids.push(item({ kind: "more", id: "f:" + dir.path, dirs: 0, count: dir.files.length, parent: it, filesOnly: true, filesOf: dir.path, changed: dir.files.some(file => o.changed.has(file)) }));
         own = null;
       }
       const loose = own || kids.some(kid => kid.id === "f:" + dir.path) ? 0 : dir.files.length;
       if (own) kids.push(item({ kind: "stack", id: "s:" + dir.path, dir, parent: it, ...own }));
       if (it.kind === "root" && !small) {
         for (const sub of shut) kids.push(item({ kind: "box", id: "d:" + sub.path, dir: sub, parent: it }));
-        if (loose) kids.push(item({ kind: "more", id: "f:", dirs: 0, count: loose, parent: it, filesOnly: true }));
-      } else if (shut.length || loose) kids.push(item({ kind: "more", id: "m:" + dir.path, dirs: shut.length, count: shut.reduce((sum, sub) => sum + sub.total, 0) + loose, parent: it, changed: shut.some(sub => lit.has(sub.path)) }));
+        if (loose) kids.push(item({ kind: "more", id: "f:", dirs: 0, count: loose, parent: it, filesOnly: true, filesOf: "" }));
+      } else if (shut.length || loose) kids.push(item({ kind: "more", id: "m:" + dir.path, dirs: shut.length, count: shut.reduce((sum, sub) => sum + sub.total, 0) + loose, parent: it, folds: shut.map(sub => sub.path), filesOf: loose ? dir.path : undefined, changed: shut.some(sub => lit.has(sub.path)) }));
       it.kids = kids;
       next.push(...kids);
     }
@@ -195,13 +197,13 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
         row.splice(row.indexOf(last), 1);
         let more = row.find(it => it.id === "m:");
         if (!more) {
-          more = { kind: "more", id: "m:", dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 };
+          more = { kind: "more", id: "m:", dirs: 0, count: 0, folds: [], parent, x: 0, y: 0, w: 0, h: 0, bw: 0 };
           const at = row.findIndex(it => it.filesOnly);
           row.splice(at < 0 ? row.length : at, 0, more);
         }
-        more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path);
+        more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path); more.folds!.push(last.dir!.path);
         const loose = row.find(it => it.id === "f:");
-        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; }
+        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; more.filesOf = ""; }
         measure(more, o, maxStack);
       }
       if (o.team && width(row) > W) for (const id of ["m:", "f:"]) { const it = row.find(it => it.id === id); if (it && width(row) > W) row.splice(row.indexOf(it), 1); }
@@ -227,7 +229,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
       if (!more) { more = { kind: "more", id: "m:" + parent.dir!.path, dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 }; row.splice(row.indexOf(last) + 1, 0, more); }
       row.splice(row.indexOf(last), 1);
       gone.add(last);
-      more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path);
+      more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path); (more.folds ??= []).push(last.dir!.path);
       measure(more, o, maxStack);
       parent.kids = row.filter(it => it.parent === parent);
       groups = group();

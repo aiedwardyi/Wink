@@ -61,7 +61,7 @@ async function addedFile(cwd: string, path: string): Promise<MapFile> {
 }
 
 export async function mapFiles(cwd: string, base: string, common?: string): Promise<MapFile[]> {
-  const [numstat, untracked, ranges] = await Promise.all([
+  const [numstat, untracked, { ranges }] = await Promise.all([
     mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
     mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]),
     mapRanges(cwd, [base], RANGE_LIMIT),
@@ -75,8 +75,9 @@ export async function mapFiles(cwd: string, base: string, common?: string): Prom
       const file: MapFile = { path: match[3], added: Number(match[1]) || 0, removed: Number(match[2]) || 0 };
       if (match[1] === "-") file.binary = true;
       const lines = ranges.get(file.path)?.map(launch);
-      const moved = shift?.get(file.path);
-      if (lines && !file.binary) file.ranges = moved ? lines.map(([start, end]) => [onto(start, moved, false), onto(end, moved, true)]) : lines;
+      const moved = shift?.ranges.get(file.path);
+      // A failed or cut-off move would publish launch lines as common ones.
+      if (lines && !file.binary && shift?.complete !== false) file.ranges = moved ? lines.map(([start, end]) => [onto(start, moved, false), onto(end, moved, true)]) : lines;
       files.push(file);
     }
   }
@@ -104,10 +105,12 @@ function onto(line: number, hunks: Hunk[], end: boolean) {
   return line + shift;
 }
 
-async function mapRanges(cwd: string, revs: string[], limit: number, paths: string[] = []): Promise<Map<string, Hunk[]>> {
+async function mapRanges(cwd: string, revs: string[], limit: number, paths: string[] = []): Promise<{ ranges: Map<string, Hunk[]>; complete: boolean }> {
   let patch = "";
-  try { patch = await mapGit(cwd, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", ...revs, "--", ...paths]); }
+  let complete = true;
+  try { patch = await mapGit(cwd, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", ...revs, "--", ...paths]); }
   catch (error) {
+    complete = false;
     const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
     if (partial.success) patch = partial.data.stdout;
   }
@@ -127,7 +130,7 @@ async function mapRanges(cwd: string, revs: string[], limit: number, paths: stri
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? /.exec(line);
     if (hunk && file && file.length < limit) file.push([Number(hunk[1]), hunk[2] === undefined ? 1 : Number(hunk[2]), Number(hunk[3]), hunk[4] === undefined ? 1 : Number(hunk[4])]);
   }
-  return ranges;
+  return { ranges, complete };
 }
 
 export async function mapWalkFiles(cwd: string, limit = WALK_LIMIT): Promise<string[]> {
