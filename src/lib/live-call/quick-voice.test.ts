@@ -276,6 +276,28 @@ describe("the mic is live from the tap", () => {
   });
 });
 
+describe("say it and hang up", () => {
+  it("talks from the tap, hangs up, and the bot gets his words as his message with no greeting", async () => {
+    const words = ["hey", "do", "this", "real", "quick"];
+    const { call, audio, engine, posts, tick } = setup({ words, tokenMs: 500, responses: { "/messages": ACCEPTED } });
+    const started = call.start();
+    for (let i = 0; i < words.length; i++) {
+      audio.word(i);
+      await tick(200);
+    }
+    await started;
+    engine().events.ready();
+    expect(engine().texts).toEqual([]);
+    engine().transcribe();
+    call.end();
+    expect(call.state().status).toBe("ended");
+    await tick(1_100);
+    expect(sent(posts)).toEqual([expect.objectContaining({ text: "hey do this real quick", call: { id: CALL, order: true } })]);
+    expect(engine().texts).toEqual([]);
+    expect(ends(posts)).toBe(1);
+  });
+});
+
 describe("a quick call never waits on the greeting", () => {
   it("drops the greeting when he is already talking as the call connects", async () => {
     const { call, audio, engine, tick } = setup({ words: ["rename", "it"], tokenMs: 300 });
