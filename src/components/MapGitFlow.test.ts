@@ -116,7 +116,7 @@ it("slants the branch off main and back on straight lines and fills it as the PR
   expect(slants()).toHaveLength(2);
   flows = { a: flows.a, b: flow({ pr: pr({ number: 1531, checks: [{ name: "lint", state: "fail" }, { name: "vitest", state: "pending" }] }) }), c: flow({ pr: null, pushed: 1 }) };
   await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA"), worker("c", "GAMMA")], all: true });
-  expect(fills(".map-flow-thread")).toEqual([5 / 6, 1, .25]);
+  expect(fills(".map-flow-thread")).toEqual([3.5 / 6, 1, .25]);
   expect(slants()).toHaveLength(4);
   expect(slants().join(" ")).not.toMatch(/[CQSATcqsat]/);
 });

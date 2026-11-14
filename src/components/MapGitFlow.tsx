@@ -34,6 +34,7 @@ const EVERY = 30_000;
 const PRESS = 450;
 const DOTS = 6;
 const FACES = 3;
+const STAGES = 6;
 type Seen = { flow: MapFlow; added: ReadonlySet<string>; join: boolean; live: boolean };
 type Tip = { id: string; lines: string[]; left?: number; right?: number };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
@@ -143,12 +144,17 @@ function summary(flow: MapFlow, c: Copy) {
   return `${head} ${c.state.open}`;
 }
 
-// Done stages fill whole; a push or checks still running fill part way.
+// Done stages fill whole; a push before the PR or checks still running fill part way and stop the fill there.
 function fills(flow: MapFlow, stages: MapStage[]) {
   const reach = stages.findLastIndex(stage => stage.on);
-  return stages.map((stage, index) => index < reach ? 1 : index > reach + 1 ? 0
-    : stage.key === "push" && flow.pushed < flow.total ? flow.pushed / flow.total
-    : stage.key === "checks" && stage.total ? (stage.pass! + stage.fail!) / stage.total : Number(stage.on));
+  let stop = false;
+  return stages.map((stage, index) => {
+    if (stop || index > reach + 1) return 0;
+    const part = stage.key === "push" && !flow.pr && flow.pushed < flow.total ? flow.pushed / flow.total
+      : stage.key === "checks" && stage.pending && !ended(flow.pr) ? (stage.pass! + stage.fail!) / stage.total! : undefined;
+    stop = part !== undefined;
+    return part ?? Number(index <= reach);
+  });
 }
 
 const failing = (flow: MapFlow) => mapFlowStages(flow).some(stage => stage.key === "checks" && stage.fail);
@@ -237,7 +243,7 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
         <i /><b>{item.nick}</b>
         <span className="map-flow-mini" aria-hidden="true">
           <svg className="map-flow-rise" viewBox="0 0 12 18"><path d="M1 15.5L10.5 6H12" /></svg>
-          <span className="map-flow-thread" data-end={!pr || undefined} style={{ "--fill": fills(flow, stages).reduce((sum, part) => sum + part, 0) / 6 } as CSSProperties}>
+          <span className="map-flow-thread" data-end={!pr || undefined} style={{ "--fill": fills(flow, stages).reduce((sum, part) => sum + part, 0) / STAGES } as CSSProperties}>
             {flow.commits.slice(0, DOTS).toReversed().map(commit => <i key={commit.sha} data-new={state.added.has(commit.sha) || undefined} />)}
             {Icon && <span className="map-flow-badge" data-tone={pr.state}><Icon size={8} strokeWidth={3} /></span>}
             {pr?.checks.filter(check => check.state !== "skip").map((check, index) => <u key={`${check.name}\0${index}`} data-state={check.state} />)}
