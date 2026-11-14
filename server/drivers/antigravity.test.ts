@@ -55,9 +55,14 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Argon tiers first, then 3.8 Flash ahead of older Flash entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of older Flash entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
+      { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
+    ]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 6)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
@@ -90,6 +95,10 @@ describe("readAntigravityModelCatalog", () => {
   // Update this list only after re-running `agy models` and pasting the output —
   // PR #86 shipped a bare gemini-3.8-flash because nobody did.
   const AGY_MODELS_OUTPUT_1_3_5 = [
+    // Carbon tiers from `agy models` on 1.5.8.
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",

@@ -669,13 +669,14 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Carbon, Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
         "ag-1",
         "Antigravity",
         [
+          { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon Low" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon High" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon Low" },
           { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
@@ -700,6 +701,7 @@ describe("GroupWizard members", () => {
       // SAFETY: the selector targets only the row model dropdowns rendered above.
       const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
       expect([...modelSelect.options].map((o) => o.value)).toEqual([
+        "gemini-4-carbon-low",
         "gemini-4-argon-high",
         "gemini-4-argon-low",
         "gemini-4-hydrogen-medium",

@@ -3,7 +3,7 @@
   "version": "1",
   "index": "legal",
   "label": "Vals.ai Legal Research Bench (all-pass)",
-  "updated": "2026-11-09",
+  "updated": "2026-11-11",
   "rows": [
     {
       "model": "claude-fable-5",
@@ -72,6 +72,17 @@
       "kind": "independent"
     },
     {
+      "model": "gemini-4-carbon",
+      "effort": "all",
+      "value": 55.769,
+      "cost_per_task": 8.743524,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-14T01:33:42.122Z",
+      "kind": "independent"
+    },
+    {
       "model": "gemini-4-argon",
       "effort": "all",
       "value": 54.808,
@@ -80,6 +91,17 @@
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
       "retrieved_at": "2026-11-09T20:38:09.108Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-hydrogen",
+      "effort": "all",
+      "value": 53.846,
+      "cost_per_task": 6.268559,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-14T01:33:42.122Z",
       "kind": "independent"
     },
     {

@@ -291,9 +291,9 @@ describe("promo price on the cost tab", () => {
       [...host.querySelectorAll("span")].filter((el) => !el.children.length && el.textContent?.includes(date)).map((el) => el.className.includes("break-keep"));
     const argon = () => [...host.querySelectorAll<HTMLElement>('[tabindex="0"]')].find((el) => (el.getAttribute("aria-label") ?? el.textContent)?.includes("Gemini 4 Argon"))!;
     await costRow([2026, 10, 30], "Gemini 4 Argon", "ko");
-    expect(kept()).toEqual([true]);
-    act(() => argon().focus());
     expect(kept()).toEqual([true, true]);
+    act(() => argon().focus());
+    expect(kept()).toEqual([true, true, true]);
     await mount();
     for (let i = 0; i < 5; i++) press(window);
     act(() => argon().focus());

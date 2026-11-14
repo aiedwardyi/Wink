@@ -266,6 +266,9 @@ describe("ModelPicker friends chip", () => {
       models: {
         default: "gemini-4-argon-high",
         options: [
+          { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)" },
+          { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)" },
+          { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
           { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)" },
@@ -295,6 +298,8 @@ describe("ModelPicker friends chip", () => {
     const list = html.slice(html.indexOf("data-model-picker-content"));
     expect(list).toContain('model-cross-name">Gemini 4 Argon<');
     expect(list).toContain('model-cross-name">Gemini 4 Hydrogen<');
+    expect(list).toContain('model-cross-name">Gemini 4 Carbon<');
+    expect(list.indexOf("Gemini 4 Carbon")).toBeLessThan(list.indexOf("Gemini 4 Argon"));
     expect(list.indexOf("Gemini 4 Argon")).toBeLessThan(list.indexOf("Gemini 4 Hydrogen"));
     expect(list.indexOf("Gemini 4 Hydrogen")).toBeLessThan(list.indexOf("Gemini 3.8 Flash"));
     expect(list).not.toContain("model-cross-note");
@@ -302,6 +307,7 @@ describe("ModelPicker friends chip", () => {
       expect(list).toContain(`data-model-tier="gemini-4-argon-${tier}"`);
     }
     expect(list).toContain('data-model-cell="gemini-4-hydrogen-high"');
+    expect(list).toContain('data-model-cell="gemini-4-carbon-high"');
   });
 
   it.each([
