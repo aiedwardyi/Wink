@@ -173,6 +173,19 @@ it("retries a loopback load that timed out on first compile", async () => {
   } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
 });
 
+it("asks again after a server error, so a page sees a starting server come up", async () => {
+  let hits = 0;
+  const upstream = createServer((req, res) => req.url === "/api/data" && !hits++ ? res.writeHead(503).end("starting") : res.writeHead(200, { "content-type": "application/json" }).end('{"ok":1}'));
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    expect((await get("/api/data")).status).toBe(503);
+    expect(await get("/api/data")).toMatchObject({ status: 200, body: '{"ok":1}' });
+    expect(hits).toBe(2);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
 it("waits for dev chunks and sends uncached HEAD probes without reading route bodies", async () => {
   const methods = [];
   const upstream = createServer((req, res) => {

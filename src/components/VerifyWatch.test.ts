@@ -174,7 +174,7 @@ it.each(["en", "ko"] as const)("plays silently without sound controls in %s", as
 
 it("switches both viewport tabs after recorded playback finishes", async () => {
   const tick = animationClock();
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {} } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {}, setTransform() {} } as unknown as CanvasRenderingContext2D);
   vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
   await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
   await tick(100);
@@ -186,6 +186,17 @@ it("switches both viewport tabs after recorded playback finishes", async () => {
     expect(host.querySelector(".verify-watch-stage")?.getAttribute("data-tile")).toBe(index ? "phone" : "desktop");
     expect(host.querySelector("canvas")?.width).toBe(index ? 392 : 1280);
   }
+});
+
+it.each([[2, 2560, 1440], [1, 1280, 720]])("draws the replay at the screen's pixels, not the page's (ratio %s)", async (ratio, width, height) => {
+  const tick = animationClock(), setTransform = vi.fn();
+  vi.stubGlobal("devicePixelRatio", ratio);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {}, drawImage() {}, setTransform } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect([host.querySelector("canvas")?.width, host.querySelector("canvas")?.height]).toEqual([width, height]);
+  expect(setTransform).toHaveBeenLastCalledWith(ratio, 0, 0, ratio, 0, 0);
 });
 
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
@@ -220,7 +231,7 @@ it.each([false, true])("keeps docked captions outside the target's stage (live=%
 it.each([false, true])("draws reel boxes at the selected screenshot's scroll (live=%s)", async live => {
   const tick = animationClock();
   const strokeRect = vi.fn();
-  const context = { fillRect() {}, strokeRect, drawImage() {} };
+  const context = { fillRect() {}, strokeRect, drawImage() {}, setTransform() {} };
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
   vi.spyOn(VerifyWatchShow.prototype, "frame").mockReturnValue({ jpeg: new Uint8Array([1]), ms: 0, scrollY: 500 });
   vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "missing", box: [10, 20, 80, 30], scrollY: 600 }])));
