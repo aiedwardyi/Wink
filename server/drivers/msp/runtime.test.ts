@@ -134,7 +134,7 @@ describe("MSP turns (fake host)", () => {
   });
 
   it.each([
-    ["Muse Code 1.4.15 (1.4.15-R8339.1)", ["serve", "-c", "run.reminder_roster.agents=[]"]],
+    ["Muse Code 1.4.15 (1.4.15-R8339.1)", ["serve", "--trust-workspace", "-c", "run.reminder_roster.agents=[]"]],
     ["Muse Code 1.4.14 (1.4.14-R7309.1)", ["serve"]],
   ])("serves %s with %j", async (version, argv) => {
     const dump = join(scratch, "muse-serve-args.json");
