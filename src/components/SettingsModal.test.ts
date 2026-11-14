@@ -69,12 +69,6 @@ vi.mock("./DesktopCapabilities", () => ({
   }),
 }));
 
-vi.mock("./CompanionSection", () => ({
-  CompanionSection: () => {
-    throw new Error("companion must stay parked");
-  },
-}));
-
 vi.mock("./EnginesSettings", () => ({
   EnginesSettings: () => null,
 }));
