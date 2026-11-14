@@ -77,15 +77,18 @@ const SKIN_CHROME = Object.freeze({
   "precision-dimmed": Object.freeze({ color: "#121316", symbolColor: "#a3a7b3" }),
   bronze: Object.freeze({ color: "#181512", symbolColor: "#b4ada3" }),
   "dim-sand": Object.freeze({ color: "#c2b49a", symbolColor: "#43392b" }),
+  "lagoon-night": Object.freeze({ color: "#0b242a", symbolColor: "#9fc2c0" }),
+  snow: Object.freeze({ color: "#eeebf7", symbolColor: "#545b7c" }),
+  "snow-night": Object.freeze({ color: "#121316", symbolColor: "#a3a7b3" }),
 });
 
 const DEFAULT_SKIN = "ledger";
-const LIGHT_SKINS = new Set(["atelier", "lagoon", "ledger", "notebook", "messenger", "community-light", "code-review", "blueprint", "wink-day", "paper-tape", "dim-sand"]);
+const LIGHT_SKINS = new Set(["atelier", "lagoon", "ledger", "notebook", "messenger", "community-light", "code-review", "blueprint", "wink-day", "paper-tape", "dim-sand", "snow"]);
 const SKIN_PREFERENCE_FILE = "skin-preference.json";
 const LOCAL_STORAGE_DIR = path.join("Local Storage", "leveldb");
 const OMB_SKIN_MARKER = Buffer.from("omb-skin");
 const KNOWN_SKIN_RE =
-  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision-dimmed|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio|inkwell|graphite|merlot|moss|bronze|dim-sand)(?![A-Za-z0-9_-])/;
+  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon-night|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision-dimmed|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio|inkwell|graphite|merlot|moss|bronze|dim-sand|snow-night|snow)(?![A-Za-z0-9_-])/;
 const MAX_SKIN_ID_LEN = Math.max(...Object.keys(SKIN_CHROME).map((id) => id.length));
 
 function migrateSkin(skin) {

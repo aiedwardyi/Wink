@@ -467,7 +467,7 @@ describe("wiring", () => {
     // Industry normal (Discord/Slack jump on send): the gesture re-arms
     // follow and scrolls to the end. Both views hand their jumpToLatest to
     // the composer, which fires it on send and retry.
-    expect(chatView).toContain("onSend={jumpToLatest}");
+    expect(chatView).toMatch(/onSend=\{\(\) => \{\s*jumpToLatest\(\);/);
     expect(groupView).toContain("onSend={jumpToLatest}");
     expect(composerView).toContain("onSend?: () => void;");
     expect(composerView).toContain("onSend?.();");

@@ -33,9 +33,9 @@ afterEach(() => {
   }
 });
 
-// The value CSS defines for one custom property inside one skin's block.
+// The value CSS defines for one custom property inside one skin's block, alone or first in a shared list.
 function cssToken(skin, name) {
-  const block = css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  const block = (css.match(new RegExp(`\\[data-skin="${skin}"\\]\\s*\\{([^}]*)\\}`)) ?? css.match(new RegExp(`\\[data-skin="${skin}"\\](?:,\\s*\\[data-skin="[a-z-]+"\\])+\\s*\\{([^}]*)\\}`)))?.[1] ?? "";
   return block.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]+)`))?.[1]?.toLowerCase() ?? null;
 }
 
