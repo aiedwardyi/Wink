@@ -98,7 +98,7 @@ const WORKER_CARD = [
 ];
 const typo: VerifyDocFinding = { kind: "spelling", line: 5, page: 1, quote: "recieve", fix: "receive" };
 
-async function watchShort(reduced = false) {
+async function watchShort(reduced = false, hidden = false) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: reduced && query.includes("reduce"), addEventListener() {}, removeEventListener() {} })));
@@ -114,7 +114,7 @@ async function watchShort(reduced = false) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ site: "NOTE-SORT.md", replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
+  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ site: "NOTE-SORT.md", replay: ["run-123456"] }), threadId: "thread", live: false, hidden, onClose() {} })));
   return { host, root, to: (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); }) };
 }
 
@@ -180,5 +180,92 @@ it("shows a check that could not finish as not checked in the watch, live and re
     expect(host.querySelector("[data-current]")?.textContent).toBe("Could not check this document");
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
+  }
+});
+
+it("keeps the leading cursor in view on every frame of a long replay", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+  const LINE = 24, VIEW = 400, n = 200, lines = Array.from({ length: n }, (_, i) => `Line ${i + 1} of a long research note, read by four checkers.`);
+  const bytes = [
+    chunk(0, { runId: "run-123456", site: "ADEMARK.md", page: "" }),
+    chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] }),
+    chunk(2, { ms: 24, kind: "doc-chunk", from: 1, to: n, state: "start" }),
+    chunk(2, { ms: 16_008, kind: "doc-chunk", from: 1, to: n, state: "done" }),
+    chunk(3, { status: "completed", ms: 19_960, issues: [], notChecked: [] }),
+  ];
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ start(stream) { for (const part of bytes) stream.enqueue(part); stream.close(); } }))));
+  // Layout: rows stacked LINE apart in a VIEW-tall stage; a smooth scrollTo eases over 300 ms and restarts from where it is, like Chrome's.
+  let top = 0, glide: { from: number; to: number; at: number } | null = null;
+  const max = n * LINE - VIEW, clamp = (y: number) => Math.min(max, Math.max(0, y));
+  const scrolled = () => {
+    if (glide) {
+      const k = Math.min(1, (performance.now() - glide.at) / 300);
+      top = glide.from + (glide.to - glide.from) * (k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2);
+      if (k === 1) glide = null;
+    }
+    return top;
+  };
+  const rect = (y: number, h: number) => ({ top: y, bottom: y + h, left: 0, right: 600, width: 600, height: h, x: 0, y }) as DOMRect;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const el = this as HTMLElement;
+    if (el.classList.contains("verify-doc-stage")) return rect(0, VIEW);
+    if (el.classList.contains("verify-doc-line")) return rect((Number(el.dataset.n) - 1) * LINE - scrolled(), LINE);
+    return rect(-scrolled(), n * LINE);
+  });
+  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>();
+  Element.prototype.animate = function (this: Element, frames: Keyframe[], ms: number | KeyframeAnimationOptions) {
+    if (frames[0]?.transform) drawn.set(this, { frames, at: performance.now(), ms: typeof ms === "number" ? ms : Number(ms.duration) });
+    return {} as Animation;
+  };
+  const yOf = (transform: unknown) => Number(/,(-?[\d.]+)px\)/.exec(String(transform))![1]);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ site: "ADEMARK.md", replay: ["run-123456"] }), threadId: "thread", live: false, hidden: false, onClose() {} })));
+  const stage = host.querySelector<HTMLElement>(".verify-doc-stage")!;
+  Object.defineProperties(stage, {
+    clientHeight: { get: () => VIEW },
+    scrollHeight: { get: () => n * LINE },
+    scrollTop: { get: scrolled, set: (y: number) => { glide = null; top = clamp(y); } },
+  });
+  stage.scrollTo = ((options: ScrollToOptions) => {
+    const to = clamp(options.top ?? scrolled());
+    if (options.behavior === "smooth") glide = { from: scrolled(), to, at: performance.now() };
+    else stage.scrollTop = to;
+  }) as typeof stage.scrollTo;
+  let reading = 0, out = 0;
+  for (let ms = 0; ms < 6_000; ms += 16) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+    if (!host.querySelector('[data-n="1"]')?.hasAttribute("data-on")) continue;
+    const readers = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => el.dataset.kind !== "numbering");
+    if (!readers.length) continue;
+    const lead = Math.max(...readers.map(el => {
+      const glide = drawn.get(el), k = glide ? Math.min(1, (performance.now() - glide.at) / glide.ms) * (glide.frames.length - 1) : 0;
+      if (!glide || k >= glide.frames.length - 1) return yOf(el.style.transform);
+      const i = Math.floor(k), a = yOf(glide.frames[i]!.transform), b = yOf(glide.frames[i + 1]!.transform);
+      return a + (b - a) * (k - i);
+    }));
+    reading++;
+    if (lead < scrolled() || lead + 21 > scrolled() + VIEW) out++;
+  }
+  expect(reading).toBeGreaterThan(150);
+  expect(out).toBe(0);
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => root.unmount());
+});
+
+it("runs no camera while the chat is hidden or motion is reduced", async () => {
+  for (const [reduced, hidden] of [[false, true], [true, false]]) {
+    const frame = vi.spyOn(window, "requestAnimationFrame");
+    const { root, to } = await watchShort(reduced, hidden);
+    await to(3_000);
+    expect(frame).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   }
 });
