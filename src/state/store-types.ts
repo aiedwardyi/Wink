@@ -430,7 +430,7 @@ export interface InstanceInfo {
   pickerModels?: InstanceInfo["models"];
   displayName: string;
   snapshot: {
-    state: "available" | "unavailable";
+    state: "available" | "unavailable" | "checking";
     reason?: string;
     authenticated?: boolean;
     authChecked?: boolean;

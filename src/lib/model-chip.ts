@@ -174,9 +174,10 @@ export function modelFamilyAccent(driverKind?: string): string {
 /** Short status for the model-picker engine pill. CLI --version belongs on Set CLI. */
 export function engineBadgeText(
   _snapshot: { version?: string | null },
-  kind: "not-installed" | "sign-in" | "ready",
+  kind: "not-installed" | "sign-in" | "ready" | "checking",
   t: Translate,
 ): string {
+  if (kind === "checking") return t("engines.checking");
   if (kind === "not-installed") return t("model.notInstalled");
   if (kind === "sign-in") return t("model.signInRequired");
   return t("onboarding.ready");

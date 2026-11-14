@@ -34,6 +34,11 @@ export function needsSignIn(instance: InstanceInfo | undefined): boolean {
   return instance?.snapshot.state === "available" && instance.snapshot.authenticated === false;
 }
 
+/** The first engine check has not answered yet. */
+export function engineChecking(instance: Pick<InstanceInfo, "snapshot"> | undefined): boolean {
+  return instance?.snapshot.state === "checking";
+}
+
 /** The agent CLI itself is absent. Local-model injection needs the CLI but
  * does not need its cloud account to be signed in. */
 export function needsCli(instance: InstanceInfo | undefined): boolean {

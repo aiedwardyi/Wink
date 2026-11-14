@@ -7,7 +7,7 @@ import { modelEffortLabel } from "@/lib/model-chip";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
-import { needsCli, needsSignIn } from "./EngineSetup";
+import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import type { ModelDialHandle } from "./ModelDial";
 import { altKeyLabel } from "./PickerStyleStrip";
 import "./ModelChart.css";
@@ -146,7 +146,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
   const lab = rows.findIndex((row) => row.instance === line?.row.instance);
   const nowSelection = withPickerEffort(rows.find((row) => row.instance.instanceId === current.instanceId)?.instance, current);
   const now = locate(lines, nowSelection);
-  const locked = (row: PickerRow) => needsCli(row.instance) || needsSignIn(row.instance);
+  const locked = (row: PickerRow) => !engineChecking(row.instance) && (needsCli(row.instance) || needsSignIn(row.instance));
   const pickable = canCommit(draft);
   const lastIn = useRef(new Map<string, string>());
   if (line) lastIn.current.set(line.row.instance.instanceId, line.key);

@@ -267,10 +267,10 @@ describe("startup timing", () => {
       if (accounts === "failed") throw new Error("restore failed");
     });
     startupTiming.afterPaint("probes", () => new Promise<void>((resolve) => { release = resolve; }));
-    const describeInstances = vi.fn(async () => []);
+    const describeInstances = vi.fn(async (_probe: string) => []);
     const pending = runInNewContext(`(async () => { ${statement} })()`, {
       method: "GET", path: "/api/instances", startupTiming, url: new URL("http://localhost/api/instances"),
-      describeInstances, resetPathCache() {}, withRateLimits: (value: unknown) => value,
+      describeInstances, instanceChecks: { describe: () => describeInstances("cached") }, resetPathCache() {}, withRateLimits: (value: unknown) => value,
       rememberAutomaticAvailability() {}, json() {}, res: {},
       botAccounts: { pickerInstances: (value: unknown) => value, accountInstances: (value: unknown) => value },
     }) as Promise<void>;
