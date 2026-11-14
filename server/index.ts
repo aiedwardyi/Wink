@@ -17,6 +17,7 @@ import {
 } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
+import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { savedKeysPrompt } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
@@ -1061,6 +1062,8 @@ store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAge
 store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-haiku-4-5", "claude-haiku-5-5");
 store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-6-sol", "gpt-6.1-sol", { resetSession: true });
 store.renameModel(registry.instances().filter((i) => i.driverKind === "codex").map((i) => i.instanceId), "gpt-5.6-terra", "gpt-6.1-terra", { resetSession: true });
+const antigravityIds = registry.instances().filter((i) => i.driverKind === "antigravityAgent").map((i) => i.instanceId);
+for (const [from, to] of RETIRED_GEMINI_FLASH_IDS) store.renameModel(antigravityIds, from, to);
 const sendSequencer = new SendSequencer();
 
 type ChatLatencyStage =

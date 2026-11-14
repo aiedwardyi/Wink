@@ -103,17 +103,6 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)", contextWindow: 1_048_576 },
     { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)", contextWindow: 1_048_576 },
-    // 3.7 ids confirmed against the agy 1.1.12 binary's own model table
-    { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)", contextWindow: 1_048_576 },
-    { id: "gemini-3.7-flash-medium", label: "Gemini 3.7 Flash (Medium)", contextWindow: 1_048_576 },
-    { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash (Low)", contextWindow: 1_048_576 },
-    { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash (High)", contextWindow: 1_048_576 },
-    { id: "gemini-3.6-flash-medium", label: "Gemini 3.6 Flash (Medium)", contextWindow: 1_048_576 },
-    { id: "gemini-3.6-flash-low", label: "Gemini 3.6 Flash (Low)", contextWindow: 1_048_576 },
-    // 3.5 ids confirmed against the agy 1.1.27 binary's own model table
-    { id: "gemini-3.5-flash-high", label: "Gemini 3.5 Flash (High)", contextWindow: 1_048_576 },
-    { id: "gemini-3.5-flash-medium", label: "Gemini 3.5 Flash (Medium)", contextWindow: 1_048_576 },
-    { id: "gemini-3.5-flash-low", label: "Gemini 3.5 Flash (Low)", contextWindow: 1_048_576 },
     // claude-sonnet-4-6, claude-opus-4-6-thinking, and gpt-oss-120b-medium
     // below predate the ground-truth rule (driver PR #30) and do not appear
     // in a current `agy models` run — see MODEL-AG-STALE. Left in place
@@ -1154,7 +1143,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           // stdin like a turn: a summary prompt on argv blows the Windows command line
           const child = spawnCli(
             config.cli,
-            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.6-flash-low"],
+            ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low"],
             { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
           );
           return await new Promise<string>((resolve, reject) => {

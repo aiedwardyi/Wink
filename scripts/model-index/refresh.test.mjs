@@ -183,7 +183,7 @@ describe("list price parsers", () => {
   });
 
   it("reads the Gemini promo end and next price, and skips a model the page dropped", () => {
-    const prices = listPrices.parseGoogle(fixture("google-pricing.html"), ["gemini-3.8-flash", "gemini-3.7-flash"]);
+    const prices = listPrices.parseGoogle(fixture("google-pricing.html"), ["gemini-3.8-flash", "gemini-2.5-flash"]);
     expect(prices["gemini-3.8-flash"]).toEqual({
       input: 0.75,
       cachedInput: 0.075,
@@ -191,7 +191,7 @@ describe("list price parsers", () => {
       until: "2026-12-31",
       next: { from: "2027-01-01", input: 1.5, cachedInput: 0.15, output: 7.5 },
     });
-    expect(prices["gemini-3.7-flash"]).toBeUndefined();
+    expect(prices["gemini-2.5-flash"]).toBeUndefined();
   });
 
   it("reads a model with no Free tier from its Standard paid column", () => {

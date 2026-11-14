@@ -395,7 +395,6 @@ describe("picker catalogs", () => {
           "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
           "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-          "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
           "gemini-3.1-pro-high",
         ].map((id) => ({ id, label: id })),
       },
@@ -410,30 +409,29 @@ describe("picker catalogs", () => {
     expect(PICKER_MODEL_IDS).toContain("gemini-4-argon");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-hydrogen");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-carbon");
-    expect(PICKER_MODEL_IDS).not.toContain("gemini-3.7-flash");
   });
 
-  it("keeps a 3.7 pin working as one off-list cell with its tiers", () => {
+  it("keeps a 3.1 Pro pin working as one off-list cell with its tiers", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
-        default: "gemini-3.7-flash-medium",
+        default: "gemini-3.1-pro-low",
         options: [
           "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
           "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-          "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+          "gemini-3.1-pro-high", "gemini-3.1-pro-low",
         ].map((id) => ({ id, label: id })),
       },
     };
-    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-3.7-flash-medium" })[0]!;
+    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-3.1-pro-low" })[0]!;
     const offList = row.cells.filter((cell) => cell.offList);
     expect(offList).toHaveLength(1);
     expect(offList[0]!.options.map((option) => option.id).sort()).toEqual([
-      "gemini-3.7-flash-high", "gemini-3.7-flash-low", "gemini-3.7-flash-medium",
+      "gemini-3.1-pro-high", "gemini-3.1-pro-low",
     ]);
     expect(pickerEfforts(row, offList[0]!).map((option) => option.model)).toEqual([
-      "gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high",
+      "gemini-3.1-pro-low", "gemini-3.1-pro-high",
     ]);
   });
 
