@@ -1356,6 +1356,51 @@ describe("MSP warm host (recorded transport)", () => {
     expect(methods(peers[0])).not.toContain("session/resume");
     expect(peers[0].requests.filter((m) => m.method === "turn/start").map((m) => m.params.reasoningEffort)).toEqual(["medium", "low"]);
   });
+  it("room turns without a cursor start a fresh session on a new host", async () => {
+    await start();
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message." }));
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message, then second message." }));
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.exitCode).not.toBeNull();
+    for (const peer of peers) {
+      expect(methods(peer).filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods(peer).filter((method) => method === "session/start")).toHaveLength(1);
+      expect(methods(peer)).not.toContain("session/resume");
+    }
+  });
+  it("keeps a queued accepted turn alive until its recorded completion", async () => {
+    gate = (method, reply, _peer, nth) => {
+      if (method === "turn/start" && nth === 2 && reply.result?.status === "accepted") {
+        reply.result.disposition = "queued";
+        reply.result.startedNewTurn = false;
+      }
+    };
+    await start();
+    const first = await send();
+    await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((method) => method === "turn/start")).toHaveLength(2);
+  });
+  it("reports this turn's tokens once and ignores a replay from the previous turn", async () => {
+    let previous: Message | undefined;
+    gate = (method, reply, peer, nth) => {
+      if (method !== "turn/start" || reply.method !== "session/tokenUsage") return;
+      if (nth === 1) previous = structuredClone(reply);
+      else {
+        peers[peer].write(previous!);
+        peers[peer].write(structuredClone(reply));
+      }
+    };
+    await start();
+    const first = await send();
+    const firstDone = await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    const secondDone = await completed(second);
+    expect(firstDone).toMatchObject({ usage: { input: 33301, output: 16, cachedInput: 0 } });
+    expect(secondDone).toMatchObject({ usage: { input: 28925, output: 23, cachedInput: 0 } });
+  });
   const kept = () => pool.stats().idle;
   const exited = (peer: { child: { exitCode: number | null } }) => peer.child.exitCode !== null;
   const stagesOf = (turnId: string) =>
@@ -1709,6 +1754,68 @@ describe("MSP warm host (recorded transport)", () => {
     expect(Date.now() - closedAt).toBeLessThan(2_000);
     await completed(await send({ resumeCursor: cursorOf(first) }));
     expect(peers).toHaveLength(2);
+  });
+
+  describe("free RAM under the warm floor", () => {
+    let now: number;
+    let free: number;
+    let sweep: () => void;
+    const minutes = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 60_000;
+        sweep();
+      }
+    };
+    beforeEach(() => {
+      now = 0;
+      // This PC: 32 GB with 3.9 GB free, under the 4.8 GB (15%) floor.
+      free = 3.9 * 1024 ** 3;
+      sweep = () => {};
+      pool = createWarmPool({
+        totalmem: () => 32 * 1024 ** 3, freemem: () => free, cpus: () => 16, now: () => now,
+        timers: { setInterval: (fn) => { sweep = fn; return 1; }, clearInterval: () => {} },
+      });
+    });
+
+    it("keeps the host and session for the next turn on the thread", async () => {
+      await start();
+      const first = await send();
+      await completed(first);
+      minutes(1);
+      const second = await send({ resumeCursor: cursorOf(first) });
+      await completed(second);
+      expect(peers).toHaveLength(1);
+      expect(exited(peers[0])).toBe(false);
+      expect(methods(peers[0]).filter((m) => m === "session/start" || m === "session/resume")).toEqual(["session/start"]);
+      expect(stagesOf(second)).toEqual(["prompt-sent", "finishing"]);
+      expect(kept()).toBe(1);
+    });
+
+    it("still closes the kept host after the idle TTL", async () => {
+      await start();
+      await completed(await send());
+      minutes(9);
+      expect(kept()).toBe(1);
+      minutes(1);
+      expect(kept()).toBe(0);
+      await expect.poll(() => exited(peers[0])).toBe(true);
+    });
+
+    it("drops the kept host when free RAM falls under 1.5 GB", async () => {
+      await start();
+      await completed(await send());
+      free = 1024 ** 3;
+      minutes(1);
+      expect(kept()).toBe(0);
+    });
+
+    it("keeps at most two idle Muse hosts", async () => {
+      await start();
+      for (const threadId of ["t1", "t2", "t3"]) await completed(await send({ threadId }));
+      expect(peers).toHaveLength(3);
+      expect(kept()).toBe(2);
+      expect(exited(peers[2])).toBe(true);
+    });
   });
   it("cachedCapture returns the probe's label hash and the registry incarnation", async () => {
     await start();
