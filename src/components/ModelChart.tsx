@@ -382,7 +382,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
                 <g key={id} className="mdl" data-sel={item === line || undefined} data-lab={rank(item) === 1 || undefined} data-hov={tip?.id === id || undefined}>
                   {item === line && <polyline className="glow" points={points} />}
                   <polyline points={points} />
-                  {pts.map((p, k) => <circle key={k} className="dot" cx={p.x} cy={p.y} r={4} />)}
+                  {pts.map((p, k) => <circle key={k} className="dot" cx={p.x} cy={p.y} />)}
                 </g>
               );
             })}
