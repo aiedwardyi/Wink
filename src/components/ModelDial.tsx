@@ -621,8 +621,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
             <span><kbd>←</kbd><kbd>→</kbd>{t("model.modelAxis")}</span>
             <span><kbd>Enter</kbd>{t("settings.profile.save")}</span>
             <span><kbd>Esc</kbd>{t("createBot.cancel")}</span>
-            <span><kbd>{altKeyLabel()}</kbd><kbd>S</kbd>{t("model.style")}</span>
-            <span><kbd>{altKeyLabel()}</kbd><kbd>Shift</kbd><kbd>S</kbd>{t("model.style.next")}</span>
+            <span><kbd>{altKeyLabel()}</kbd><kbd>T</kbd>{t("model.style")}</span>
           </span>
           <span>{item?.label.toUpperCase()} · <b>{names[index]?.name.toUpperCase()}</b> · {String(index + 1).padStart(2, "0")}/{String(count).padStart(2, "0")}</span>
         </footer>
