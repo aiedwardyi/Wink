@@ -159,12 +159,13 @@ describe("Picker style strip", () => {
     expect(document.activeElement?.closest("[data-model-picker-content]")).not.toBeNull();
   });
 
-  it("closes after a keyboard pick on a focused tile", async () => {
+  it("leaves Enter and Space native on a focused tile, and its click closes the strip", async () => {
     await mount();
     await altT();
     const tile = document.querySelector<HTMLElement>('[data-picker-look="atelier"]')!;
     tile.focus();
-    await press("Enter", {}, tile);
+    // jsdom does not turn Enter or Space into a click; a browser does, so the strip must not swallow them.
+    for (const key of ["Enter", " "]) expect((await press(key, {}, tile)).defaultPrevented).toBe(false);
     await act(async () => tile.click());
     expect(localStorage.getItem("omb-model-picker-look")).toBe("atelier");
     await closesWithFade();
