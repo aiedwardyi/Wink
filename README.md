@@ -167,8 +167,8 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 ## Build from source
 
 ```powershell
-git clone https://github.com/aiedwardyi/Wink.git Orbit
-cd Orbit
+git clone https://github.com/aiedwardyi/Wink.git
+cd Wink
 pnpm install --frozen-lockfile
 pnpm dev:desktop    # the desktop app
 pnpm dev            # or the browser UI at http://127.0.0.1:5199

@@ -9,8 +9,8 @@ Windows 10 / 11 x64 is the release platform. The server and the test suite are p
 Requirements: Node.js 24+, pnpm 10.33, and at least one engine CLI signed in (see the README).
 
 ```powershell
-git clone https://github.com/aiedwardyi/Wink.git Orbit
-cd Orbit
+git clone https://github.com/aiedwardyi/Wink.git
+cd Wink
 pnpm install --frozen-lockfile
 
 pnpm dev:server       # harness server on 127.0.0.1:8799
