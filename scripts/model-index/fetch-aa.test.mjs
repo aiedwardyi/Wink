@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFi
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { API_URL, buildSnapshot, INDEX_PAGE, loadResponse, MANUAL, parseResponse, publishedIndexVersion, rawFileArg } from "./fetch-aa.mjs";
+import { API_URL, BENCHMARKS, buildSnapshot, INDEX_PAGE, loadResponse, MANUAL, parseResponse, publishedIndexVersion, rawFileArg } from "./fetch-aa.mjs";
 import { beginRun, Unverifiable } from "./lib.mjs";
 
 const { describe, it } = process.env.NODE_TEST_CONTEXT ? await import("node:test") : await import("vitest");
@@ -33,17 +33,15 @@ describe("AA response", () => {
     assert.equal(snapshot.updated, null);
   });
 
-  it("uses Terminal-Bench 4.0 fractions, keeps precision and skips null scores", () => {
-    const { snapshot } = build({ previous: { ...previous, benchmark: "aa-terminal-bench", version: "4.0" } });
-    assert.deepEqual(snapshot.rows.map(({ effort, value }) => [effort, value]), [["xhigh", 50], ["max", 71.7]]);
-    assert.throws(() => build({ previous: { ...previous, benchmark: "aa-terminal-bench", version: "5.0" } }), /version/);
-    assert.deepEqual(MANUAL.map(({ name }) => name), ["aa-gdpval", "aa-frontiercode"]);
+  it("skips null scores", () => {
+    const { snapshot } = build({ rows: rows().map((row) => (row.slug === "gpt-6-1-sol-high" ? { ...row, evaluations: { artificial_analysis_intelligence_index: null } } : row)) });
+    assert.deepEqual(snapshot.rows.map(({ effort, value }) => [effort, value]), [["xhigh", 55.8], ["max", 62.9]]);
+    assert.deepEqual(MANUAL.map(({ name }) => name), ["aa-gdpval", "aa-frontiercode", "aa-terminal-bench"]);
   });
 
-  it("stops the Intelligence Index when AA publishes another version, leaving Terminal-Bench alone", () => {
+  it("stops the Intelligence Index when AA publishes another version", () => {
     assert.throws(() => build({ indexVersion: "5.0.1" }), (error) => error instanceof Unverifiable && /is now v5\.0\.1, snapshot is 4\.3\.2/.test(error.message));
     assert.equal(build({ indexVersion: "4.3.2" }).snapshot.rows.length, 3);
-    assert.equal(build({ indexVersion: "5.0.1", previous: { ...previous, benchmark: "aa-terminal-bench", version: "4.0" } }).snapshot.rows.length, 2);
   });
 
   it("reads one Intelligence Index version from the public page, or fails", () => {
@@ -76,9 +74,6 @@ describe("AA response", () => {
       for (const field of Object.keys(fields)) assert.equal(Object.hasOwn(row, field), false);
     }
     assert.deepEqual(needsCost, ["claude-opus-5-5 xhigh", "gpt-6.1-sol high"]);
-    const terminal = build({ previous: { ...prior, benchmark: "aa-terminal-bench", version: "4.0", rows: [{ ...prior.rows[0], value: 71.7 }] } });
-    assert.deepEqual(terminal.snapshot.rows.find((row) => row.effort === "max").interval, fields.interval);
-    assert.equal(terminal.snapshot.rows.find((row) => row.effort === "max").harness, "Default");
   });
 
   it("rejects malformed, absent, nonnumeric, duplicate and unassigned scores", () => {
@@ -95,10 +90,10 @@ describe("AA response", () => {
     assert.equal(stable.snapshot.rows[0].model, "opus");
   });
 
-  it("carries cost when the old score rounds to the API score", () => {
+  it("keeps the precise score and its cost when it rounds to the API score", () => {
     const prior = { ...previous, rows: [{ model: "claude-opus-5-5", effort: "max", value: 49.6258, cost_per_task: 1.25, cost_benchmark: "aa-intelligence-index", cost_source: "https://artificialanalysis.ai/models/claude-opus-5-5" }] };
     const { snapshot, needsCost } = build({ previous: prior, rows: [{ ...rows()[0], evaluations: { artificial_analysis_intelligence_index: 49.6 } }] });
-    assert.equal(snapshot.rows[0].value, 49.6);
+    assert.equal(snapshot.rows[0].value, 49.6258);
     for (const field of ["cost_per_task", "cost_benchmark", "cost_source"]) assert.equal(snapshot.rows[0][field], prior.rows[0][field]);
     assert.deepEqual(needsCost, []);
   });
@@ -118,13 +113,6 @@ describe("AA response", () => {
     assert.ok(needsCost.includes("claude-opus-5-5 max"));
   });
 
-  it("compares Terminal-Bench at the converted fraction's precision despite float noise", () => {
-    const prior = { ...previous, benchmark: "aa-terminal-bench", version: "4.0", rows: [{ model: "claude-opus-5-5", effort: "max", value: 31.313131313131297, cost_per_task: 2.07, interval: { low: 30, high: 33 }, harness: "Default" }] };
-    const { snapshot, needsCost } = build({ previous: prior, rows: [{ ...rows()[0], evaluations: { terminalbench_v4_0: 0.313131313131313 } }] });
-    assert.equal(snapshot.rows[0].value, 31.3131313131313);
-    for (const field of ["cost_per_task", "interval", "harness"]) assert.deepEqual(snapshot.rows[0][field], prior.rows[0][field]);
-    assert.deepEqual(needsCost, []);
-  });
 });
 
 describe("AA input", () => {
@@ -153,7 +141,7 @@ describe("AA input", () => {
         assert.equal(options.headers["x-api-key"], undefined);
         return { status: 200, text: async () => "Intelligence Index v5.0.1 incorporates 9 evaluations" };
       }
-      assert.equal(url, API_URL);
+      assert.equal(url, `${API_URL}?page=1`);
       keys.push(options.headers["x-api-key"]);
       return { status: 200, text: async () => readFileSync(fixture, "utf8") };
     };
@@ -173,6 +161,29 @@ describe("AA input", () => {
       globalThis.fetch = original;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("AA free API", () => {
+  it("reads every page of the free language models list, and leaves Terminal-Bench to a hand check", async () => {
+    const pages = rows().map((row, i, all) => JSON.stringify({ tier: "free", intelligence_index_version: 5, pagination: { page: i + 1, has_more: i < all.length - 1 }, data: [row] }));
+    const original = globalThis.fetch;
+    const urls = [];
+    globalThis.fetch = async (url) => {
+      if (url === INDEX_PAGE) return { status: 200, text: async () => "Intelligence Index v5.0.1" };
+      urls.push(url);
+      return { status: 200, text: async () => pages[urls.length - 1] };
+    };
+    try {
+      beginRun();
+      const response = await loadResponse({ apiKey: "key", keyFile: join(scratch, "no-key") });
+      assert.deepEqual(urls, pages.map((_, i) => `https://artificialanalysis.ai/api/v2/language/models/free?page=${i + 1}`));
+      assert.deepEqual(response.rows, rows());
+    } finally {
+      globalThis.fetch = original;
+    }
+    assert.deepEqual(Object.keys(BENCHMARKS), ["aa-intelligence-index"]);
+    assert(MANUAL.some(({ name }) => name === "aa-terminal-bench"));
   });
 });
 
@@ -204,8 +215,8 @@ describe("AA refresh integration", () => {
       const script = join(dir, "scripts/model-index/refresh.mjs");
       const run = spawnSync(process.execPath, ["--import", stub.href, script, "--aa-raw", fixture], { encoding: "utf8", env });
       assert.equal(run.status, 2, run.stderr + run.stdout);
-      for (const name of ["rams-index", "vals-legal-research", "vals-cyberbench", "list-prices", "aa-intelligence-index", "aa-terminal-bench"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
-      for (const name of ["aa-gdpval", "aa-frontiercode", "vals-legalbench", "lmarena-webdev"]) {
+      for (const name of ["rams-index", "vals-legal-research", "vals-cyberbench", "list-prices", "aa-intelligence-index"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
+      for (const name of ["aa-gdpval", "aa-frontiercode", "aa-terminal-bench", "vals-legalbench", "lmarena-webdev"]) {
         if (name.startsWith("aa-")) assert.match(run.stdout, new RegExp(`${name}: MANUAL`));
         assert.equal(readFileSync(join(dir, "shared/model-index-sources", name + ".json"), "utf8"), readFileSync(join(root, "shared/model-index-sources", name + ".json"), "utf8"));
       }
