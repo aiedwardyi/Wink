@@ -917,7 +917,7 @@ export function PhoneSetupFlowView({
         <button
           onClick={c.start}
           disabled={!c.state || c.busy || c.accountBusy}
-          className="mt-5 w-full max-w-[320px] rounded-lg bg-accent py-2.5 text-[14px] font-medium text-accent-ink hover:opacity-90 disabled:cursor-wait disabled:opacity-40"
+          className="mt-5 w-full max-w-[320px] rounded-lg bg-accent py-2.5 text-[14px] font-medium text-accent-ink hover:brightness-110 disabled:cursor-wait disabled:opacity-40"
         >
           {variant === "settings"
             ? c.state?.devices.length
@@ -1012,7 +1012,7 @@ export function PhoneSetupFlowView({
             <button
               disabled={c.accountBusy || (!c.codeSent && !canSubmitEmail) || (c.codeSent && c.code.length !== 8)}
               onClick={c.codeSent ? c.verifyCode : c.requestCode}
-              className="rounded-lg bg-accent py-2.5 text-[14px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+              className="rounded-lg bg-accent py-2.5 text-[14px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
             >
               {c.accountBusy ? "Working…" : c.codeSent ? "Verify and continue" : "Email me a code"}
             </button>

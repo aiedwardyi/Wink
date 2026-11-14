@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { botChain, handsOff } from "./bot-chain.ts";
+import { botChain, CHAIN_PENDING_MS, handsOff } from "./bot-chain.ts";
 
 const rando = { id: "b-rando", name: "Rando" };
 const star = { id: "tb-star", name: "스타줌" };
 const bots = [rando, star];
 const people = ["Edward", "JJ"];
-const line = (kind: "host" | "person" | "bot", id: string, text: string) => ({ author: { kind, id }, text });
+const line = (kind: "host" | "person" | "bot", id: string, text: string, at = Date.now()) => ({ author: { kind, id }, text, at });
 
 describe("handsOff", () => {
   it("holds for a bot line that @'s another bot only", () => {
@@ -33,5 +33,21 @@ describe("botChain", () => {
     expect(botChain([], bots, people)).toBe(0);
     expect(botChain([line("bot", rando.id, "@스타줌 hi"), line("bot", star.id, "Done. @Edward @JJ")], bots, people)).toBe(0);
     expect(botChain([line("bot", rando.id, "@스타줌 hi"), line("person", "p1", "thanks")], bots, people)).toBe(0);
+  });
+
+  it("is 0 for a handoff whose bot is known idle, however new", () => {
+    expect(botChain([line("bot", star.id, "@Rando your turn")], bots, people, { working: () => false })).toBe(0);
+  });
+
+  it("counts a handoff to a working bot however old", () => {
+    expect(botChain([line("bot", star.id, "@Rando your turn", 0)], bots, people, { working: (id) => id === rando.id })).toBe(1);
+  });
+
+  it("counts a handoff to a bot it can't see only while that line is pending", () => {
+    const at = 1_000_000;
+    const log = [line("bot", rando.id, "@스타줌 your turn", at)];
+    expect(botChain(log, bots, people, { now: at + CHAIN_PENDING_MS - 1 })).toBe(1);
+    expect(botChain(log, bots, people, { now: at + CHAIN_PENDING_MS })).toBe(0);
+    expect(botChain(log, bots, people, { now: at + 1, since: at + 1 })).toBe(0);
   });
 });

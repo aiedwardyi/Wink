@@ -410,8 +410,8 @@ describe("connected apps and bot details Korean coverage", () => {
     expect(ko["connectedApps.unavailable"]).not.toMatch(/temporarily unavailable/);
     expect("room.manageMembersTitle" in en).toBe(false);
     expect("room.manageMembersTitle" in ko).toBe(false);
-    expect(en["room.details"]).toBe("Room Details");
-    expect(ko["room.details"]).toBe("채팅방 세부 정보");
+    expect(en["room.details"]).toBe("Group details");
+    expect(ko["room.details"]).toBe("그룹 세부 정보");
     expect(en["bot.details"]).toBe("Bot Details");
     expect(ko["bot.details"]).toBe("봇 세부 정보");
     for (const key of ["show.collapse", "bot.collapseDetails", "room.collapseDetails"]) {

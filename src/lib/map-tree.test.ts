@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { treeIndex, treeLayout } from "./map-tree";
+import type { MapWorker } from "../../shared/map-pane";
+import { mapClashes, treeIndex, treeLayout } from "./map-tree";
 
 it("keeps boxes in a row apart when every worker's branches cannot fit side by side", () => {
   const tops = ["src", "packages", "server", "tests", "docs", "assets"];
@@ -30,4 +31,65 @@ it("folds sibling folders that cannot fit even after shrinking into a folders bo
     for (const path of paths) expect(items.some(it => it.files?.includes(path)) || folded(path)).toBe(true);
     if (current) expect(items.some(it => it.files?.includes(current))).toBe(true);
   }
+});
+
+const opts = (width: number, changed: Set<string>, extra: Partial<Parameters<typeof treeLayout>[1]> = {}, px = 7) =>
+  ({ width, phone: true, changed, measure: (text: string) => text.length * px, folders: (n: number) => `+${n} folders`, files: (n: number) => `+${n} files`, ...extra });
+const overlaps = (items: ReturnType<typeof treeLayout>["items"]) => {
+  let count = 0;
+  for (const y of new Set(items.map(it => it.y))) {
+    const spans = items.filter(it => it.y === y).map(it => [it.x, it.x + it.w]).sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < spans.length; i++) if (spans[i][0] < spans[i - 1][1]) count++;
+  }
+  return count;
+};
+
+it("keeps every box of a small project apart on a phone", () => {
+  const paths = ["package.json", "README.md", "src/index.ts", "src/components/App.tsx", "src/components/Button.tsx", "src/lib/util.ts", "server/index.ts", "server/routes/api.ts", "docs/guide.md", "docs/img/shot.png"];
+  for (const width of [366, 342]) for (const px of [6, 7]) for (const current of [undefined, "src/lib/util.ts"]) {
+    const changed = new Set(current ? [current] : []);
+    const { items } = treeLayout(treeIndex("repo", paths), opts(width, changed, { current }, px));
+    expect(overlaps(items)).toBe(0);
+    if (current) expect(items.some(it => it.files?.includes(current))).toBe(true);
+  }
+});
+
+it("keeps every box apart across random small projects on a phone", () => {
+  let seed = 7;
+  const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 2147483648 * n); };
+  const dirs = ["src", "lib", "components", "server", "routes", "docs", "img", "tests", "utils", "api", "shared", "public", "scripts", "hooks", "styles"];
+  const names = ["index.ts", "App.tsx", "util.ts", "README.md", "package.json", "guide.md", "shot.png", "api.ts", "main.css", "config.json"];
+  let bad = 0;
+  for (let run = 0; run < 2000; run++) {
+    const paths = new Set<string>();
+    for (let n = 1 + rand(40); n--;) paths.add([...Array.from({ length: rand(4) }, () => dirs[rand(dirs.length)]), names[rand(names.length)]].join("/"));
+    const list = [...paths];
+    const changed = new Set(Array.from({ length: rand(4) }, () => list[rand(list.length)]));
+    const current = changed.size && rand(3) ? [...changed][rand(changed.size)] : undefined;
+    const team = changed.size && !rand(3) ? { named: new Set(current ? [current] : []), marks: new Set<string>(), rank: () => 0 } : undefined;
+    const { items } = treeLayout(treeIndex("repo", list), opts(rand(2) ? 366 : 342, changed, { current, team }, 6 + rand(2)));
+    if (overlaps(items)) bad++;
+  }
+  expect(bad).toBe(0);
+});
+
+it("keeps a changed root file reachable when the phone's top row folds it away", () => {
+  const dirs: [string, number][] = [["src/lib", 14], ["src/components", 14], ["server", 12], ["shared", 5], ["docs", 4], ["scripts", 3], ["electron", 3], ["tests", 3], ["public", 2]];
+  const paths = ["package.json", "README.md", "tsconfig.json", "LICENSE", ...dirs.flatMap(([dir, n]) => Array.from({ length: n }, (_, i) => `${dir}/file-${i}.ts`))];
+  expect(paths).toHaveLength(64);
+  const current = "src/lib/file-3.ts";
+  const changed = new Set(["package.json", current]);
+  for (const team of [undefined, { named: new Set([current]), marks: new Set<string>(), rank: () => 0 }]) {
+    const { items } = treeLayout(treeIndex("repo", paths), opts(366, changed, { current, team }));
+    const shown = items.some(it => (it.squares ?? it.files)?.includes("package.json"));
+    const held = items.some(it => it.kind === "more" && it.changed && it.filesOf === "");
+    expect(shown || held).toBe(true);
+  }
+});
+
+it("lists a file many workers share as one clash", () => {
+  const workers: MapWorker[] = Array.from({ length: 10 }, (_, i) => ({ id: `w${i}`, nick: `W${i}`, git: true, editedAt: i, files: [{ path: "src/lib/i18n-catalog.ts", added: 1, removed: 0, ranges: [[i * 100, i * 100 + 1]] }] }));
+  workers[9].files[0].ranges = [[1, 2]];
+  expect(mapClashes(workers)).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.map(worker => worker.id), same: true }]);
+  expect(mapClashes(workers.slice(1, 9))).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.slice(1, 9).map(worker => worker.id), same: false }]);
 });

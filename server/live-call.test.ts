@@ -152,6 +152,15 @@ describe("call token", () => {
     expect(brief).not.toMatch(/Greet/);
   });
 
+  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
+    const h = harness({ liveCall: { voice } });
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
+    expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
+    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.");
+  });
+
   it("brief speaks as the bot, never mentions sending to a bot", async () => {
     const h = harness();
     await h.post("token");
@@ -318,7 +327,7 @@ describe("brief STATUS", () => {
   afterEach(() => { _resetSteerQueue(); });
   const statusOf = (brief: string) => brief.split("STATUS:\n")[1]!.split("\nLocal time ")[0]!;
 
-  it("replaces NOW with busy state, waiting sends, the open card and worker reports", async () => {
+  it("replaces NOW with busy state, waiting sends and worker reports; the open card waits for the call to read it", async () => {
     const h = harness();
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "note", text: "[pane aaaaaaaa] [BUILD | opus | high] from Juno (b1): FAIL BUILD branch=x sha=1 dirty=0\nstack trace" });
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Your bot has a question", subtitle: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM", "Still 1 AM"], askUser: true } });
@@ -333,10 +342,10 @@ describe("brief STATUS", () => {
     expect(statusOf(brief)).toBe([
       "Juno is busy, working on: fix the login page.",
       "Sends waiting to run after this.",
-      "Open question for the person: Restart at 8:15 PM instead? Options: Yes, 8:15 PM; Still 1 AM.",
       "Workers, newest first: BUILD reported FAILED.",
     ].join("\n"));
     expect(statusOf(brief)).not.toContain("stack trace");
+    expect(statusOf(brief)).not.toContain("Open question");
   });
 
   it("stays under 1.6 KB in Korean", async () => {

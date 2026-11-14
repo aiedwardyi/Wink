@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, ROOM_LIMITS, spend, type HostedGroup, type RoomAskDeps } from "./asks.ts";
@@ -247,6 +248,54 @@ describe("teamBotSend", () => {
     hostedSend(crew, { kind: "host" }, "I'll take it from here");
     expect(liveBotChain(crew)).toBe(0);
     expect(changed).toHaveBeenCalledWith({ type: "group", groupId: crew.id });
+  });
+
+  it("shows no strip for a handoff whose ask was refused", () => {
+    for (let i = 0; i < ROOM_LIMITS.asksPerPersonHour; i++) spend(group.hosted.roomId, people.chat.id, "ask");
+    said("@Wink your turn");
+    expect(asks()).toEqual([]);
+    expect(liveBotChain(group)).toBe(0);
+    const crew = store.createGroup("Crew", [wink], false, undefined, undefined, { roomId: createPeopleOnlyRoom("Crew").id }) as HostedGroup;
+    const sora = addPerson(crew.hosted.roomId, "Sora", "chat", ["Wink"]);
+    teamBotSend(crew, sora, addTeamBot(crew.hosted.roomId, sora.id, "Pete", "teal", ["Wink"]), "@Wink your turn");
+    expect(liveBotChain(crew)).toBe(0);
+  });
+
+  it("counts a host bot's handoff while the bot it tagged works, however old", () => {
+    appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink, name: "Wink" }, text: "@위키 your turn" }, Date.now() - 10 * 60_000);
+    expect(liveBotChain(group)).toBe(0);
+    expect(liveBotChain({ ...group, busyBotId: group.memberIds[1]! })).toBe(1);
+  });
+
+  it("drops a handoff to a teammate's bot once it's no longer pending, and republishes then", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      winkLine("@스타줌 your turn");
+      expect(liveBotChain(group)).toBe(1);
+      const changed = vi.fn();
+      store.onChange(changed);
+      vi.advanceTimersByTime(CHAIN_PENDING_MS);
+      expect(changed).toHaveBeenCalledWith({ type: "group", groupId: group.id });
+      expect(liveBotChain(group)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a stopped handoff hidden after a restart", async () => {
+    appendRoomEntry(group.hosted.roomId, { author: { kind: "bot", id: wink, name: "Wink" }, text: "@스타줌 your turn" }, Date.now() - 1000);
+    stopBotChain(group.hosted.roomId);
+    expect(liveBotChain(group)).toBe(0);
+    vi.resetModules();
+    const [restarted, restartedAsks, restartedDb] = await Promise.all([import("./send.ts"), import("./asks.ts"), import("./db.ts")]);
+    restartedAsks.configureRoomAsks(deps);
+    try {
+      expect(restarted.liveBotChain(group)).toBe(0);
+    } finally {
+      restartedAsks.configureRoomAsks(null);
+      restartedAsks.closeAsksDb();
+      restartedDb.closeRoomsDb();
+    }
   });
 
   it("still posts but wakes nobody past the hourly quota or in a people-only room", () => {

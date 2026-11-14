@@ -1,0 +1,49 @@
+/* The scene layer is main's first child: above its bg-app, under the transcript and composer. */
+main[data-scene] { isolation: isolate; }
+[data-chat-scene] { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; contain: strict; }
+[data-chat-scene] canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* Text straight on the scene gets a static halo in the scene's calm color; bubbles and the composer are opaque. */
+main[data-scene] { --scene-veil: var(--color-app); }
+main[data-scene] :is([data-day-separator], .orbit-message-speaker, .thinking-shimmer, [data-turn-mascot] > .tabular-nums, [data-model-label], [data-model-effort]) {
+  text-shadow: 0 0 1px var(--scene-veil), 0 0 2px var(--scene-veil), 0 0 3px var(--scene-veil), 0 0 6px var(--scene-veil), 0 0 12px var(--scene-veil);
+}
+main[data-scene] .\@container\/chathead button.text-ink {
+  text-shadow: 0 0 2px var(--scene-veil), 0 0 4px var(--scene-veil), 0 0 10px var(--scene-veil);
+}
+main[data-scene] .thinking-sheen { text-shadow: none; }
+/* The model chip is see-through; over a scene it needs a solid face. */
+main[data-scene] .\@container\/chathead button:has([data-model-label]) { background-color: var(--color-raised); }
+/* The composer's bottom bg-app slab would cut a band out of the scene. */
+main[data-scene] [data-orbit-composer-host] > .bg-app[aria-hidden="true"] { background: transparent; }
+
+/* Snow settles on bubble tops and the chat box while Wink works; static once grown. */
+main[data-scene="snow"] :is([data-orbit-message-content], [data-orbit-composer-frame]) { position: relative; }
+main[data-scene="snow"] [data-snowcap]::before {
+  content: ""; position: absolute; z-index: 3; pointer-events: none;
+  left: 9px; right: 9px; top: -6px; height: 9px;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 58%, #c7d6ec 100%);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 10' preserveAspectRatio='none'%3E%3Cpath d='M0 10C2 10 4 6.5 9 5.2C14 3.6 18 4.4 22 3.3C28 1.6 34 2.6 40 1.9C47 1.1 53 2.2 59 1.6C66 1 72 2.4 78 2.3C84 2.2 88 3.8 92 5C96 6.3 98 10 100 10Z'/%3E%3C/svg%3E") 0 0 / 100% 100% no-repeat;
+  transform: scaleY(0); transform-origin: 50% 100%;
+  transition: transform 5.2s cubic-bezier(0.2, 0, 0.38, 0.9);
+}
+main[data-scene="snow"] [data-orbit-composer-frame][data-snowcap]::before { left: 20px; right: 20px; top: -7px; height: 10px; }
+main[data-scene="snow"] [data-snowcap="1"]::before { transform: scaleY(1); }
+main[data-snow-still] [data-snowcap]::before { transition: none; }
+[data-skin="snow"] main[data-scene="snow"] [data-snowcap]::before {
+  background: linear-gradient(180deg, #ffffff 0%, #ffffff 46%, #9fb4d4 100%);
+}
+
+/* A cool sky wash at the top of the chat; static, painted once by the compositor. */
+main[data-scene="snow"] > [data-chat-scene] {
+  background: radial-gradient(130% 75% at 50% -12%, color-mix(in srgb, #7d9be0 22%, var(--color-app)) 0%, transparent 72%);
+}
+[data-skin="snow"] main[data-scene="snow"] > [data-chat-scene] {
+  background: linear-gradient(180deg, color-mix(in srgb, #8fa9d6 34%, var(--color-app)) 0%, color-mix(in srgb, #8fa9d6 10%, var(--color-app)) 38%, transparent 70%);
+}
+
+/* The theme tile's thread shows a still of its scene. */
+[data-skin="lagoon-night"] > [data-mini-thread] { background: url("./tiles/lagoon-night.jpg") center / cover; }
+[data-skin="lagoon"] > [data-mini-thread] { background: url("./tiles/lagoon.jpg") center / cover; }
+[data-skin="snow-night"] > [data-mini-thread] { background: url("./tiles/snow-night.jpg") center / cover; }
+[data-skin="snow"] > [data-mini-thread] { background: url("./tiles/snow.jpg") center / cover; }

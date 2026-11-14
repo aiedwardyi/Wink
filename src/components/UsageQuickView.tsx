@@ -194,7 +194,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   </>;
   return createPortal(
     <>
-      {phone && <div aria-hidden="true" data-closing={closing || undefined} inert={closing || undefined} className="animate-fade-in fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
+      {phone && <div aria-hidden="true" data-closing={closing || undefined} inert={closing || undefined} className="animate-fade-in fixed inset-x-0 top-0 z-50 bg-black/55" style={{ bottom: spot.dimBottom }} />}
       <div ref={box} role="dialog" aria-label={t("usage.chat.quickTitle")} data-usage-quick="" data-usage-desk="" data-closing={closing || undefined} inert={closing || undefined}
         className={cn("fixed z-50 flex flex-col overflow-hidden border border-hairline/60 bg-panel shadow-2xl",
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
@@ -216,7 +216,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
           <button type="button" data-all-usage="" onClick={() => settings("usage")}
-            className="flex min-w-0 flex-1 items-center justify-between gap-3 self-stretch px-4 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none"
+            className="flex min-w-0 flex-1 items-center justify-between gap-3 self-stretch px-4 text-left text-[13px] text-ink hover:bg-raised-hover"
             style={{ minHeight: phone ? 48 : 40 }}>
             <span>{t("usage.chat.allUsage")}</span>
             {phone ? <ChevronRight size={16} aria-hidden="true" className="-mr-1 text-ink-secondary" />

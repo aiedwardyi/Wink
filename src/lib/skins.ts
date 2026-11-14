@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from "react";
 import monoHudCss from "@/skins/mono-hud.css?inline";
 import toolSkinsCss from "@/skins/tool-skins.css?inline";
+import type { MessageKey } from "./i18n-catalog";
 import { trackSetting } from "./usage-stats";
 
 export const SKIN_IDS = [
@@ -75,6 +76,9 @@ export const SKIN_IDS = [
   "precision-dimmed",
   "bronze",
   "dim-sand",
+  "lagoon-night",
+  "snow",
+  "snow-night",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -82,6 +86,7 @@ export type Skin = {
   id: SkinId;
   name: string;
   /** One line, shown under the name in the picker. */
+  nameKey?: MessageKey;
 };
 
 export const SKINS: readonly Skin[] = [
@@ -93,7 +98,7 @@ export const SKINS: readonly Skin[] = [
   { id: "midnight", name: "Midnight" },
   { id: "atelier", name: "Atelier" },
   { id: "foundry", name: "Foundry" },
-  { id: "lagoon", name: "Lagoon" },
+  { id: "lagoon", name: "Lagoon", nameKey: "settings.skin.lagoon" },
   { id: "ledger", name: "Ledger" },
   { id: "catppuccin-frappe", name: "Catppuccin Frappe" },
   { id: "tokyo-night", name: "Tokyo Night" },
@@ -151,6 +156,9 @@ export const SKINS: readonly Skin[] = [
   { id: "precision-dimmed", name: "Precision Dimmed" },
   { id: "bronze", name: "Bronze" },
   { id: "dim-sand", name: "Dim Sand" },
+  { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight" },
+  { id: "snow", name: "Snow", nameKey: "settings.skin.snow" },
+  { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight" },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
@@ -166,6 +174,7 @@ export const LIGHT_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>([
   "wink-day",
   "paper-tape",
   "dim-sand",
+  "snow",
 ]);
 
 const TERMINAL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal"]);

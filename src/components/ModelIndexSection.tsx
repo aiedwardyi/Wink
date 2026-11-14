@@ -746,7 +746,7 @@ function Bars({
             onMouseLeave={() => onHover(null)}
             onFocus={(e) => onHover(mark.key, e.currentTarget)}
             onBlur={() => onHover(null)}
-            className="absolute inset-x-0 top-0 flex items-center gap-2.5 rounded-md outline-none hover:bg-control/40 focus-visible:bg-control/40"
+            className="absolute inset-x-0 top-0 flex items-center gap-2.5 rounded-md outline-none hover:bg-control focus-visible:bg-control"
             style={{
               height: ROW,
               transform: `translateY(${(rank.get(mark.key) ?? ranked.length) * ROW}px)`,
@@ -1022,7 +1022,7 @@ export function ModelIndexSection() {
               <div
                 ref={tipRef}
                 role="tooltip"
-                className="pointer-events-none absolute z-10 w-[224px] rounded-lg border border-hairline/60 bg-raised px-3 py-2 text-[12px] shadow-lg"
+                className="pointer-events-none absolute z-10 w-[224px] rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12px] shadow-lg animate-tip-in motion-reduce:animate-none"
                 style={{ left: place?.left ?? 0, top: place?.top ?? 0, visibility: place?.key === hover.key ? undefined : "hidden" }}
               >
                 <div className="flex items-center gap-1.5 text-ink">

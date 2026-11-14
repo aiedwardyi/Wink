@@ -508,7 +508,7 @@ describe("room focus", () => {
     joined.view!.status = "left";
     (joined.view as JoinedView).gone = true;
     await render("joined");
-    expect(host.textContent).toContain(locale === "en" ? "This room is gone." : "없어진 채팅방이에요.");
+    expect(host.textContent).toContain(locale === "en" ? "This group is gone." : "없어진 그룹이에요.");
   });
 
   it("leaves the phone keyboard closed and handles a left room", async () => {
@@ -671,12 +671,12 @@ describe("room header", () => {
 
   it("keeps only the name, the bell and the side pane, side pane last", async () => {
     await render();
-    expect(labels()).toEqual(["Design team, Open room details", "Turn off alerts for this room", "Show and media"]);
+    expect(labels()).toEqual(["Design team, Open group details", "Turn off alerts for this group", "Show and media"]);
   });
 
   it("gives a joined room only its name and bell", async () => {
     await render("joined");
-    expect(labels()).toEqual(["Design team, Open room details", "Turn off alerts for this room"]);
+    expect(labels()).toEqual(["Design team, Open group details", "Turn off alerts for this group"]);
   });
 
   it("opens Room details from the name", async () => {

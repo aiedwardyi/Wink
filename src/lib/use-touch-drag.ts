@@ -6,18 +6,19 @@ export const LONG_PRESS_MS = 400;
 export const LONG_PRESS_SLOP = 8;
 export const SCROLL_EDGE = 48;
 export const SCROLL_STEP = 10;
+export const LIFT_SCALE = 1.03;
 const LIFTED_STYLE: Record<string, string> = {
   position: "relative",
   // under the z-10 drop marker, so the target edge stays visible beneath the finger
   "z-index": "5",
-  scale: "1.03",
+  scale: String(LIFT_SCALE),
   background: "var(--color-panel)",
   "border-radius": "12px",
   "box-shadow": "0 8px 24px rgb(0 0 0 / 0.35)",
   "pointer-events": "none",
   // own layer, so following the finger doesn't re-raster the blurred shadow every frame
   "will-change": "translate",
-  transition: "scale 150ms ease-out, box-shadow 150ms ease-out",
+  transition: "scale var(--motion-moderate) var(--ease-standard), box-shadow var(--motion-moderate) var(--ease-standard)",
 };
 const LIST_STYLE = ["user-select", "-webkit-user-select", "-webkit-touch-callout"];
 // one overlay moved by translate: marking the target itself relaid out and repainted the page per row crossed
@@ -37,11 +38,29 @@ const MARK_HEIGHT: Record<TouchDropMark, number> = { top: 2, bottom: 2, into: 4 
 
 export type TouchDropMark = "top" | "bottom" | "into";
 
-/** How far down a node may be translated before it grows its scroller, whose edge scroll would then chase it forever. */
-export function roomBelow(node: HTMLElement, scroller: HTMLElement | null) {
-  if (!scroller) return Infinity;
+// how far before an end a lifted row starts to slow
+const GIVE = 24;
+export type Travel = [min: number, max: number];
+
+/** How far up and down a lifted node may be translated, scale included: past the top its scroller clips it, past the bottom it grows the scroller, whose edge scroll then chases it and whose new scrollbar rewraps every row. */
+export function travel(node: HTMLElement, scroller: HTMLElement | null): Travel {
+  if (!scroller) return [-Infinity, Infinity];
   const box = scroller.getBoundingClientRect();
-  return scroller.scrollHeight - (node.getBoundingClientRect().bottom - box.top - scroller.clientTop + scroller.scrollTop);
+  const rect = node.getBoundingClientRect();
+  const top = rect.top - box.top - scroller.clientTop + scroller.scrollTop;
+  const grow = (rect.height * (LIFT_SCALE - 1)) / 2;
+  return [grow - top, scroller.scrollHeight - top - rect.height - grow];
+}
+
+/** Follows `dy`, then slows into either end of `travel` instead of stopping dead there. */
+export function soften(dy: number, [min, max]: Travel) {
+  const sign = dy < 0 ? -1 : 1;
+  // the give never reaches back past the resting spot, so a lift alone never moves the row
+  const end = Math.max(0, dy < 0 ? -min : max);
+  const give = Math.min(GIVE, end);
+  const start = end - give;
+  const d = sign * dy - start;
+  return d > 0 ? sign * (start + (give && give * (1 - Math.exp(-d / give)))) : dy;
 }
 
 export type TouchDragHandlers = {
@@ -67,7 +86,7 @@ type Press = {
   lastX: number;
   lastY: number;
   scrollTop: number;
-  room: number;
+  travel: Travel;
   moved: boolean;
   dirty: boolean;
   styled: HTMLElement;
@@ -119,7 +138,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
     });
     const scroller = () => latest.current.scroller?.() ?? list;
     const follow = (current: Press) => {
-      current.lifted?.style.setProperty("translate", `0 ${Math.min(current.room, current.lastY - current.y + scroller().scrollTop - current.scrollTop)}px`);
+      current.lifted?.style.setProperty("translate", `0 ${soften(current.lastY - current.y + scroller().scrollTop - current.scrollTop, current.travel)}px`);
     };
     const draw = (marker: HTMLElement, next: [HTMLElement, TouchDropMark] | null) => {
       // an unchanged write can still invalidate paint, and most crossings only move the marker
@@ -193,7 +212,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         return;
       }
       press.lifted = lifted;
-      press.room = roomBelow(lifted, scroller());
+      press.travel = travel(lifted, scroller());
       for (const [key, value] of Object.entries(LIFTED_STYLE)) lifted.style.setProperty(key, value);
       lifted.setAttribute("data-touch-lifted", "");
       const marker = list.ownerDocument.createElement("div");
@@ -225,7 +244,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         lastX: touch.clientX,
         lastY: touch.clientY,
         scrollTop: scroller().scrollTop,
-        room: Infinity,
+        travel: [-Infinity, Infinity],
         moved: false,
         dirty: false,
         styled,

@@ -414,3 +414,18 @@ it("expands the file over the tree and brings the tree back with the same file, 
   await click(".map-expand");
   expect(expand()?.getAttribute("aria-label")).toBe("트리 보기");
 });
+
+it("lists a clash once per file with all its workers and caps the list with many workers", async () => {
+  const shared = ["b.ts", "src/a.ts", "src/manual.ts", "src/z.ts", "README.md"];
+  const team = Array.from({ length: 10 }, (_, i) => ({ ...workers[0], id: `w${i}`, nick: `W${i}`, editedAt: i, path: "src/a.ts", files: shared.map(path => ({ path, added: 1, removed: 0, ranges: [[i * 50 + 1, i * 50 + 1]] })) }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit(team);
+  expect(host.querySelector(".map-where")?.textContent).toBe("10 workers · 5 of 6 files changed · 5 clasheswink / 10 workers");
+  const rows = [...host.querySelectorAll(".map-tree-clash")].map(row => row.textContent);
+  expect(rows).toEqual([
+    `README.mdW0 + W1 + W2 + W3 + W4 + W5 + W6 + W7 + W8 + W9 · different lines`,
+    `b.tsW0 + W1 + W2 + W3 + W4 + W5 + W6 + W7 + W8 + W9 · different lines`,
+    `a.tsW0 + W1 + W2 + W3 + W4 + W5 + W6 + W7 + W8 + W9 · different lines`,
+    "+2 more",
+  ]);
+});

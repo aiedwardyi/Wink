@@ -31,7 +31,7 @@ export const SKINS = [
   "terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal", "vscode-dark", "studio-gray", "steel-gray",
   "claude", "precision", "mono-hud", "servo-gray", "notebook", "messenger", "community", "community-light", "code-review", "blueprint",
   "blueprint-gray", "blueprint-charcoal", "instrument", "matte", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
-  "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand",
+  "inkwell", "graphite", "merlot", "precision-dimmed", "bronze", "dim-sand", "lagoon-night", "snow", "snow-night",
   "other",
 ] as const;
 export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "auto"] as const;

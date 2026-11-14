@@ -5,6 +5,6 @@
 .mc-target>:not(.mc-tint){position:relative}
 .mc-tint{position:absolute;inset:-3px -8px;border-radius:6px;background:color-mix(in srgb,var(--color-accent) 18%,transparent);pointer-events:none;animation:mc-tint 2s ease-in-out 1 both}
 @keyframes mc-tint{0%,30%{opacity:1}100%{opacity:0}}
-.mc-in{animation:mc-in 240ms ease-out 1 both}
+.mc-in{animation:mc-in var(--motion-large) var(--ease-standard) 1 both}
 @keyframes mc-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.mc-ripple{display:none}.mc-in{animation:none}.mc-tint{animation:none}}

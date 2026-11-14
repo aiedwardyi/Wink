@@ -94,8 +94,8 @@ describe("right slot", () => {
     const press = async () => { await act(async () => toggle().click()); await wait(PRESENCE_EXIT_MS + 40); };
     if (open === "show") await press();
     else if (open === "room") {
-      await until(() => button('button[aria-label="Crew, Open room details"]'));
-      await act(async () => button('button[aria-label="Crew, Open room details"]').click());
+      await until(() => button('button[aria-label="Crew, Open group details"]'));
+      await act(async () => button('button[aria-label="Crew, Open group details"]').click());
     }
     else await openDetails();
     expect(await until(() => document.querySelector("aside[data-side-panel]:not([data-closing])"))).toBeTruthy();

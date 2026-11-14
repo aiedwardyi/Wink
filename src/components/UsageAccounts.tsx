@@ -4,12 +4,13 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { invalidateUsageBoard } from "@/lib/usage-board-client";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { MENU_CLASS } from "./MessageMenu";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 
-const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
+const PRESS = "transition-transform motion-reduce:transition-none";
 
 export function EditableAccountName({ account, revision, editable }: { account: UsageBoardAccount; revision: number; editable: boolean }) {
   const { t } = useI18n();
@@ -76,7 +77,7 @@ export function AccountPicker({ accounts, viewedId, select }: {
         <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
       </button>
       {presence.mounted && <div ref={menu} id={id} role="menu" data-closing={presence.closing || undefined}
-        className={cn(MENU_CLASS, "absolute -left-1.5 top-full z-10 mt-1 max-h-72 w-[248px] origin-top-left overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}
+        className={cn(MENU_CLASS, "absolute -left-1.5 top-full z-10 mt-1 max-h-72 w-[248px] origin-top-left overflow-y-auto [@media(pointer:coarse)]:w-[304px]")}
         onBlur={(event) => { if (event.relatedTarget && event.relatedTarget !== trigger.current && !event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
         onKeyDown={(event) => {
           if (event.key === "Tab") setOpen(false);
@@ -97,7 +98,7 @@ export function AccountPicker({ accounts, viewedId, select }: {
             // A pick that moves focus (Usage focuses the account it brings into view) keeps it there.
             if (menu.current?.contains(document.activeElement)) close(); else setOpen(false);
           }}
-          className={cn("flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-normal text-ink hover:bg-raised/70 [@media(pointer:coarse)]:min-h-11",
+          className={cn("flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-normal text-ink [@media(pointer:coarse)]:min-h-11", MENU_ITEM_HOVER,
             item.id === viewed.id && "bg-raised/50")}>
           <span className="min-w-0 flex-1 truncate">{item.name}</span>
           {item.main && <span className="shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
