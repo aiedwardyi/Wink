@@ -207,6 +207,8 @@ type AppServer = {
   turn?: { line(msg: any): void; error(e: Error): void; close(code: number | null): void };
   lease?: Lease;
   exited: Promise<void>;
+  /** The thread total last reported: a warm turn starts its spend there, as a resume replay would. */
+  total?: TurnUsage;
 };
 
 const appServerAlive = (server: AppServer) =>
@@ -460,7 +462,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let initialized = false;
       // turn/completed arrived: the native turn is over, not just ended early
       let nativeDone = false;
-      const spend: TurnSpend = {};
+      const spend: TurnSpend = warm?.total ? { baseline: warm.total } : {};
+      // a warm process's earlier stderr belongs to earlier turns
+      server.stderr = "";
       const state = {
         settled: false,
         lastText: "",
@@ -788,6 +792,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             } else if (p.tokenUsage?.total && !state.spend.latest) state.spend.baseline = toUsage(p.tokenUsage.total);
             const t = p.tokenUsage?.total;
             if (t) {
+              server.total = toUsage(t);
               emit({
                 ...base(threadId, turnId),
                 type: "thread.token-usage.updated",

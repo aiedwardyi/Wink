@@ -140,6 +140,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_RATE_LIMITS;
     delete process.env.FAKE_CODEX_USAGE;
     delete process.env.FAKE_CODEX_USAGE_REPLAY;
+    delete process.env.FAKE_CODEX_USAGE_TURNS;
     delete process.env.FAKE_CODEX_MESSAGES;
     delete process.env.FAKE_CODEX_NO_INJECT;
     delete process.env.FAKE_CODEX_ELICIT;
@@ -887,6 +888,23 @@ describe("CodexDriver turns (fake app-server)", () => {
       { resumeCursor: "codex-thread-9" },
     );
     expect(done).toMatchObject({ usage: { input: 200, output: 10, cachedInput: 100 } });
+  });
+
+  it("does not count the previous call again on a warm follow-up", async () => {
+    await create();
+    process.env.FAKE_CODEX_USAGE_TURNS = JSON.stringify([
+      [{ last: tokens([300, 100, 20]), total: tokens([1000, 400, 90]) }],
+      // a rate-limit-only report repeats the previous total and its last call
+      [{ last: tokens([300, 100, 20]), total: tokens([1000, 400, 90]) }, { last: tokens([200, 100, 10]), total: tokens([1200, 500, 100]) }],
+    ]);
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const turn = async (resumeCursor?: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-warm-usage", text: "go", resumeCursor });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    expect(await turn()).toMatchObject({ usage: { input: 300, output: 20, cachedInput: 100 } });
+    expect(await turn("codex-thread-1")).toMatchObject({ usage: { input: 200, output: 10, cachedInput: 100 } });
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("takes a resumed turn's spend and prompt from its own calls, not a bigger replayed turn", async () => {
