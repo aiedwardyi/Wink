@@ -1,4 +1,4 @@
-// Wink server — the harness host. Clients hold no transports
+// Wink server: the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
