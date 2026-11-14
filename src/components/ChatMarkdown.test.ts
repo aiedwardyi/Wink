@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatMarkdown, isRelativeHref, resolveRelativePath, settleStreamTail, streamBlocks, warmMarkdown } from "./ChatMarkdown";
 import { LinkedText } from "./LinkedText";
 import { applyLocale } from "@/lib/i18n";
-import { closeShow, showItem } from "@/lib/show-pane";
+import { closeShow, lastShown, showItem } from "@/lib/show-pane";
 import { applySkin } from "@/lib/skins";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -1055,7 +1055,91 @@ describe("relative file links", () => {
     });
   });
 
-  it.each(["zip", "txt", "docx"])("saves a linked %s card from an authenticated browser without the desktop bridge", async (ext) => {
+  describe("file chips", () => {
+    const sentences = "Updated [test.txt](C:\\w\\test.txt) to say test4.\n\nGenerated a dog image: [dog.png](C:\\w\\dog.png).\n\nSaved to [dog.png](C:\\w\\dog.png).";
+    const read = ["Updated test.txt to say test4.", "Generated a dog image: dog.png.", "Saved to dog.png."];
+    let host: HTMLElement;
+    let root: Root;
+    const chips = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card][data-chip]")];
+    const cards = () => [...host.querySelectorAll<HTMLButtonElement>("[data-show-card]:not([data-chip])")];
+    const lines = () => [...host.querySelectorAll("p")].map((line) => line.textContent);
+    const mount = (text: string, pictured = false) => act(async () => root.render(createElement(ChatMarkdown, { text, threadId: "t1", pictured })));
+    const desktop = () => Object.defineProperty(window, "ogb", { configurable: true, value: { openFile: vi.fn() } });
+    const phoneFiles = () => act(async () => {
+      await vi.waitFor(() => expect(host.querySelector("[data-show-card], [data-phone-media]")).not.toBeNull());
+    });
+    beforeEach(() => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
+      host = document.createElement("div");
+      document.body.append(host);
+      root = createRoot(host);
+    });
+    afterEach(async () => {
+      await act(async () => root.unmount());
+      host.remove();
+      Reflect.deleteProperty(window, "ogb");
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps a file named in a sentence inside the sentence, a picture with its thumbnail", async () => {
+      desktop();
+      await mount(sentences);
+      expect(lines()).toEqual(read);
+      expect(chips().map((chip) => chip.textContent)).toEqual(["test.txt", "dog.png", "dog.png"]);
+      expect(cards()).toHaveLength(0);
+      expect(chips().map((chip) => chip.querySelector("img")?.getAttribute("src") ?? null)).toEqual([null, "/api/threads/t1/linked-file?path=C%3A%5Cw%5Cdog.png", "/api/threads/t1/linked-file?path=C%3A%5Cw%5Cdog.png"]);
+      expect(chips()[0]!.querySelector("svg")).not.toBeNull();
+    });
+
+    it("keeps the card for a file on its own line", async () => {
+      desktop();
+      await mount("Here it is:\n[dog.png](C:\\w\\dog.png)\n\n- [a.pdf](C:\\w\\a.pdf)\n- Report: [d.pdf](C:\\w\\d.pdf)\n\n**[b.pdf](C:\\w\\b.pdf)**");
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage", "a.pdfPDF", "b.pdfPDF"]);
+      expect(chips().map((chip) => chip.textContent)).toEqual(["d.pdf"]);
+    });
+
+    it("opens a chip's file in the pane, a text file too", async () => {
+      desktop();
+      await mount(sentences);
+      await act(async () => chips()[0]!.click());
+      expect(chips()[0]!.hasAttribute("data-showing")).toBe(true);
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\test.txt", kind: "text" });
+      await act(async () => chips()[1]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\dog.png", kind: "image" });
+      expect(chips().map((chip) => chip.hasAttribute("data-showing"))).toEqual([false, true, true]);
+      expect(window.ogb!.openFile).not.toHaveBeenCalled();
+    });
+
+    it("draws no second picture for a file the reply already showed", async () => {
+      desktop();
+      await mount("Generated a dog image: [dog.png](C:\\w\\dog.png).\n\n[dog.png](C:\\w\\dog.png)", true);
+      expect(chips().map((chip) => chip.textContent)).toEqual(["dog.png"]);
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => cards()[0]!.click());
+      expect(cards()[0]!.hasAttribute("data-showing")).toBe(true);
+    });
+
+    it("keeps the sentence whole on a phone", async () => {
+      await mount(sentences);
+      await phoneFiles();
+      expect(lines()).toEqual(read);
+      expect(chips().map((chip) => chip.textContent)).toEqual(["test.txt", "dog.png", "dog.png"]);
+      expect(cards()).toHaveLength(0);
+      expect(host.querySelector('[data-phone-media="image"]')).toBeNull();
+      await act(async () => chips()[0]!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\test.txt", kind: "text" });
+    });
+
+    it("draws no second picture on a phone either", async () => {
+      await mount("[dog.png](C:\\w\\dog.png)", true);
+      await phoneFiles();
+      expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      expect(host.querySelector("img")).toBeNull();
+    });
+  });
+
+  it.each(["zip", "docx"])("saves a linked %s card from an authenticated browser without the desktop bridge", async (ext) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
     const saved: [string | null, string | null][] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
@@ -1069,6 +1153,27 @@ describe("relative file links", () => {
       expect(host.textContent).not.toMatch(/[()]/);
       await act(async () => card.click());
       expect(saved).toEqual([[`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`, `file.${ext}`]]);
+    } finally {
+      await act(async () => root.unmount());
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows a linked txt card in the pane from a browser without the desktop bridge", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = "C:/Users/alice/Desktop/file.txt";
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `([file](${file}))`, threadId: "t1" })));
+      const card = host.querySelector<HTMLButtonElement>("[data-show-card]")!;
+      expect(card.textContent).toBe("file.txtTXT");
+      expect(card.querySelector("[data-show-icon]")).not.toBeNull();
+      await act(async () => card.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: file, kind: "text" });
+      expect(download).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       vi.restoreAllMocks();

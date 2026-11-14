@@ -47,6 +47,7 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
@@ -689,6 +690,7 @@ const MessagesList = memo(function MessagesList({
     }
     return replies;
   }, [transcript, streamingMessage]);
+  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -854,6 +856,7 @@ const MessagesList = memo(function MessagesList({
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}
                   streaming={m === streamingMessage}
+                  pictured={pictured.has(m.id)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}

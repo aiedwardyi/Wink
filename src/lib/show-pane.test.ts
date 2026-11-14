@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import type { Message } from "@/state/store";
-import { autoShowStep, closeShow, showableLinks, showItem, showKind, showMedia, togglePane, useAutoShow, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
+import { autoShowStep, closeShow, paneKind, picturedReplies, showableLinks, showItem, showKind, showMedia, togglePane, useAutoShow, useMediaThread, useShowItem, type AutoShow, type ShowItem } from "./show-pane";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,6 +24,20 @@ function walk(steps: Array<{ thread?: string; messages: Message[]; closed?: bool
 
 it("reads the kinds the pane shows and nothing else", () => {
   expect(["a.PNG", "b.jpeg", "c.pdf", "d.html", "e.htm", "f.pptx", "g", ".pdf"].map(showKind)).toEqual(["image", "image", "pdf", "page", "page", null, null, null]);
+});
+
+it("shows plain text in the pane on a click, never on its own", () => {
+  expect(["notes.txt", "NOTES.TXT", "a.png", "b.docx", ".txt"].map(paneKind)).toEqual(["text", "text", "image", null, null]);
+  expect(showKind("notes.txt")).toBeNull();
+  expect(showableLinks("[notes.txt](C:\\w\\notes.txt)")).toEqual([]);
+});
+
+it("marks the replies of a turn that already put a picture in the chat", () => {
+  const picture = (id: string, botId?: string): Message => ({ id, role: "bot", kind: "screen", image: `${id}.png`, shown: true, at: 2, ...(botId ? { from: { botId, name: botId, color: "blue" } } : {}) });
+  const said = (id: string, botId: string): Message => ({ ...bot(id, "[dog.png](C:\\w\\dog.png)"), from: { botId, name: botId, color: "blue" } });
+  expect([...picturedReplies([user("u1"), bot("b1", "On it."), picture("p1"), bot("b2", "Saved to [dog.png](C:\\w\\dog.png)."), user("u2"), bot("b3", "[cat.png](C:\\w\\cat.png)")])]).toEqual(["b1", "b2"]);
+  expect([...picturedReplies([user("u1"), picture("p1", "alpha"), said("b1", "beta"), said("b2", "alpha")])]).toEqual(["b2"]);
+  expect([...picturedReplies([user("u1"), { ...user("s1"), role: "bot", kind: "screen", png: "AAAA" }, bot("b1", "ok")])]).toEqual([]);
 });
 
 it("finds absolute file links, angle-bracketed and file:// ones too", () => {
