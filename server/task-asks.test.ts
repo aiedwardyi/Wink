@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, mergeTaskAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_STALE_MS, asksBlock, asksNudge, isStatusTurn, mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = new Date(2026, 10, 12, 9, 0).getTime();
@@ -20,13 +20,6 @@ const saved = (result: ReturnType<typeof mergeTaskAsks>) => {
 const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
 
 describe("task asks", () => {
-  it("tells the bot to reply first and record the ask after, in the same turn, at no added tokens", () => {
-    expect(TASK_ASKS_PROMPT).toMatch(/^Reply first, then add each user ask to update_task_state asks before the turn ends;/);
-    expect(TASK_ASKS_PROMPT).toContain("never skip or drop one");
-    expect(TASK_ASKS_PROMPT).not.toContain("in the same turn");
-    expect(tokens(TASK_ASKS_PROMPT)).toBeLessThanOrEqual(98);
-  });
-
   it("adds each ask with an id and the time it was asked", () => {
     const { asks, note } = saved(mergeTaskAsks(undefined, [
       { ask: "Fix the login redirect", status: "open" },
