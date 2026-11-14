@@ -178,16 +178,63 @@ describe("pinned ask_user question", () => {
     expect([...choices.querySelectorAll("button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
   });
 
-  it("lets the cap give way when the choices alone outgrow it, so they never leave the card", async () => {
+  it("lets the cap give way for the choices under three lines of the question, or two when it has two", async () => {
     let resized = () => {};
     vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
     let tall = 262;
+    let text = 88;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
+    // a box is never shorter than its own min-height
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? Math.max(text, parseFloat(this.style.minHeight) || 0) : 0; });
     await mount({ bot: bot([question]) });
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 346px)");
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 390px)");
+    expect(body.style.minHeight).toBe("66px");
     tall = 54;
+    text = 44;
     resized();
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 138px)");
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 160px)");
+    expect(body.style.minHeight).toBe("44px");
+  });
+
+  it("stops the card at the composer's room: the question gives lines back first, then the choices scroll", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    const computed = globalThis.getComputedStyle;
+    const isPane = (el: Element) => el.classList.contains("overflow-y-auto") && !!el.querySelector("[data-pending-question]");
+    vi.spyOn(globalThis, "getComputedStyle").mockImplementation((el, pseudo) => (isPane(el) ? { overflowY: "auto" } as CSSStyleDeclaration : computed(el, pseudo)));
+    let tall = 252;
+    let over = 84;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? tall + 128 : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? 304 + over : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? 304 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["168px", "auto"]);
+    tall = 200;
+    over = 32;
+    resized();
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    over = 900;
+    resized();
+    expect(card()!.style.maxHeight).toBe("106px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("fades a cut question at its foot until it is scrolled to its end", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).toContain("data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]");
+    expect(body.hasAttribute("data-cut")).toBe(true);
+    vi.spyOn(body, "scrollTop", "get").mockReturnValue(88);
+    await act(async () => body.dispatchEvent(new Event("scroll")));
+    expect(body.hasAttribute("data-cut")).toBe(false);
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
