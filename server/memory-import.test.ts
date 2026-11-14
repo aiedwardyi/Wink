@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBotRoutes } from "./bot-routes.ts";
 import { DATA_DIR } from "./config.ts";
@@ -17,6 +17,15 @@ import {
 } from "./memory-import.ts";
 import { Store, type BotRecord } from "./store.ts";
 import { loadMemory, memoryHealthOf, memorySystemPrompt, MEMORY_MAX_LINES, workspaceDir, WORKSPACES_DIR } from "./workspace.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return { ...original, readFileSync: vi.fn(original.readFileSync) };
+});
+
+afterEach(() => {
+  vi.mocked(readFileSync).mockRestore();
+});
 
 const DATE = "2026-11-14";
 const NOW = new Date(2026, 10, 14, 9, 30).getTime();
@@ -352,6 +361,40 @@ describe("memory import", () => {
     expect(receipt.skipped).toContainEqual({ id: bots[0]!.id, name: "Lyra", reason: "edited" });
     expect(read(bots[0]!.id)).toBe(broken);
     expect(sideFiles(bots[0]!.id)).toEqual(files);
+  });
+
+  it("leaves a bot whose MEMORY.md will not read untouched, never taking it for a missing file", () => {
+    seed(bots[0]!.id);
+    const before = sideFiles(bots[0]!.id);
+    const locked = memoryFile(bots[0]!.id);
+    const real = vi.mocked(readFileSync).getMockImplementation()!;
+    vi.mocked(readFileSync).mockImplementation(((path: Parameters<typeof readFileSync>[0], options?: Parameters<typeof readFileSync>[1]) => {
+      if (path === locked) throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      return real(path, options);
+    }) as typeof readFileSync);
+    const receipt = importer().run(bots[0]!.id, { text: exportOf(200) });
+    vi.mocked(readFileSync).mockImplementation(real);
+    if ("error" in receipt) throw new Error(receipt.error);
+    expect(receipt.skipped).toContainEqual({ id: bots[0]!.id, name: "Lyra", reason: "failed" });
+    expect(read(bots[0]!.id)).toBe(SEEDED);
+    expect(sideFiles(bots[0]!.id)).toEqual(before);
+    expect(receipt.bots.map((bot) => bot.name)).toEqual(["Orin"]);
+  });
+
+  it("never replaces a side file of the same name it did not write", () => {
+    seed(bots[0]!.id);
+    writeFileSync(join(workspaceDir(bots[0]!.id), "memory", "imported-chatgpt.md"), "# My own notes on ChatGPT\n- keep\n");
+    const before = { memory: read(bots[0]!.id), files: sideFiles(bots[0]!.id) };
+    const receipt = importer().run(bots[0]!.id, { text: exportOf(200) });
+    if ("error" in receipt) throw new Error(receipt.error);
+    expect(receipt.skipped).toContainEqual({ id: bots[0]!.id, name: "Lyra", reason: "edited" });
+    expect({ memory: read(bots[0]!.id), files: sideFiles(bots[0]!.id) }).toEqual(before);
+  });
+
+  it("falls back to the paste's own Source line when the source name is blank", () => {
+    const receipt = importer().run(bots[0]!.id, { text: exportOf(200, "Gemini"), source: "  " });
+    if ("error" in receipt) throw new Error(receipt.error);
+    expect(receipt.source).toBe("Gemini");
   });
 
   it("never posts the paste as a message: the bot's thread gets one memory.save row", () => {
