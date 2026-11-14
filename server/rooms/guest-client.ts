@@ -7,6 +7,7 @@ import { request } from "node:https";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
+import { handsOff } from "../../shared/bot-chain.ts";
 import { hostFor, LABEL_RE, labelFromHost, ROOM_CODE_RE } from "../../shared/relay-protocol.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES, MAX_MESSAGE_FILES, ROOM_FILE_TYPES } from "./files.ts";
@@ -125,6 +126,8 @@ export interface JoinedView {
   canReact: boolean;
   /** This PC's own bots the room still lists, by the host's id. */
   myBots: Array<{ id: string; botId: string; working?: boolean; since?: number; waiting?: boolean; error?: string }>;
+  /** Bot lines in a live handoff, for the strip. */
+  botChain: number;
   /** The host answered Leave with 404: the room was deleted. */
   gone?: true;
 }
@@ -148,6 +151,7 @@ export interface GuestClientDeps {
   onStop?(roomId: string): void;
   /** What this PC's bots in the room are doing now. */
   botTurn?(roomId: string, id: string): { working?: boolean; since?: number; waiting?: boolean; error?: string } | undefined;
+  botChain?(roomId: string): number;
   alert?(alert: RoomAlert): void;
   https?: HttpsDeps;
   /** Silence before a stream counts as dropped, and the reconnect backoff. */
@@ -621,12 +625,15 @@ export class GuestClient {
     const myBots = room.status === "joined" && listed.size
       ? myRoomBots(room.roomId).filter((bot) => listed.has(bot.id)).map(({ id, botId }) => ({ id, botId, ...this.deps.botTurn?.(room.roomId, id) }))
       : [];
-    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
+    return { roomId: room.roomId, status: room.status, link, me: room.me, state: room.state, ...joinedSummary(room), canReact: link === "live" && Boolean(sync?.reacts), myBots, botChain: this.deps.botChain?.(room.roomId) ?? 0, ...(this.gone.has(room.roomId) ? { gone: true } : {}) };
   }
 
   private alertLine(roomId: string, entry: JoinedEntry): void {
     const room = joinedRoom(roomId);
     if (!room || (entry.author.kind === "person" && entry.author.id === room.me.id)) return;
+    const state = room.state;
+    // a handoff pings no one; the line that closes it does
+    if (state && handsOff(entry, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)])) return;
     const chat = `joined:${roomId}`;
     const line = { chat, threadId: chat, room: room.state?.roomName ?? "", name: entry.author.name, text: roomLineText(entry.text, entry.files) };
     alertWhenUnread(line, () => joinedSummary(room).unread > 0, this.deps.alert, this.deps.timing?.alertMs, this.alerts);

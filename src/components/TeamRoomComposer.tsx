@@ -11,15 +11,15 @@ export function useTeamRoomReply(base: string, draftId: string, messages: Messag
   return reply;
 }
 
-export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop }: {
+export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain }: {
   name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; replyTo: Message | null; onClearReply: () => void; offline?: boolean;
   onConsumeReply: () => void; onRestoreReply: (message: Message, threadId: string) => void;
-  status?: readonly RoomBotStatus[]; onStop?: () => void;
+  status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number;
 }) {
   return (
     <>
       <CallWidgetSlot className="px-3 pb-2 md:hidden" />
-      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop }} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
+      <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
     </>
   );
 }

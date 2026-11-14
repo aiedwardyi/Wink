@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { SideEvent, SideHandle, SideInput } from "../contracts.ts";
 import { spawnCli } from "../procs.ts";
 import { retireAppServer } from "./codex-catalog.ts";
+import { codexDirect } from "./codex-direct.ts";
 
 export interface CodexSpawn {
   cli: string;
@@ -38,7 +39,7 @@ function decline(method: string): Record<string, unknown> {
 export function forkCodex(spawn: CodexSpawn, input: SideInput): SideHandle {
   const tempDir = mkdtempSync(join(tmpdir(), "omb-side-"));
   try {
-    const child = spawnCli(spawn.cli, spawn.args, { ...spawn.policy, cwd: spawn.cwd, env: spawn.env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawnCli(spawn.cli, spawn.args, { ...spawn.policy, cwd: spawn.cwd, env: spawn.env, stdio: ["pipe", "pipe", "pipe"], direct: codexDirect });
     const live: SideHandle["live"] = { pid: child.pid ?? 0, procStart: Date.now(), cwd: spawn.cwd, tempDir };
     const listeners = new Set<(event: SideEvent) => void>();
     const emit = (event: SideEvent) => {

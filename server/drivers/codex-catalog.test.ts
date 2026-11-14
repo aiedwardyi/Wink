@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   decodeCodexSelection,
   encodeCodexSelection,
   OFFICIAL_CODEX_PROVIDER,
+  readCodexAppServerModelCatalog,
   readCodexModelCatalog,
   retireAppServer,
   STATIC_CODEX_MODELS,
@@ -167,6 +168,31 @@ describe("readCodexModelCatalog", () => {
         { id: "gpt-6-astra", label: "GPT-6 Astra" },
         { id: "gpt-fake-default", label: "GPT Fake Default" },
         { id: "gpt-page-two", label: "GPT Page Two" },
+      ],
+    });
+  });
+
+  it("reads the recorded app-server model/list reply", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/model-list.json", import.meta.url), "utf8"));
+    chmodSync(FAKE_CLI, 0o755);
+    const catalog = await readCodexAppServerModelCatalog(FAKE_CLI, {
+      HOME: join(tmpdir(), "omb-codex-recorded-models"),
+      PATH: process.env.PATH,
+      FAKE_CODEX_MODEL_PAGES: JSON.stringify(recorded.reply.pages),
+    });
+
+    expect(catalog).toEqual({
+      default: "gpt-6.1-sol",
+      options: [
+        { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+        { id: "gpt-6-astra", label: "GPT-6-Astra" },
+        { id: "gpt-6-sol", label: "GPT-6-Sol" },
+        { id: "gpt-6-luna", label: "GPT-6-Luna" },
+        { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
+        { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+        { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
+        { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
+        { id: "gpt-5.5", label: "GPT-5.5" },
       ],
     });
   });

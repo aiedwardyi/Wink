@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { canonicalAccountHome, type AccountContext } from "../account-policy.ts";
 import { parseCodexAccount, type CodexAccount } from "./codex-account.ts";
+import { codexDirect } from "./codex-direct.ts";
 
 import type { ModelCatalog } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
@@ -109,6 +110,7 @@ export function readCodexAppServerModelCatalog(
     const child = spawnCli(cli, ["app-server"], {
       cwd: homedir(),
       env,
+      direct: codexDirect,
       ...(policy?.account ? { account: policy.account, accountDriver: "codex" } : {}),
       stdio: ["pipe", "pipe", "pipe"],
     });

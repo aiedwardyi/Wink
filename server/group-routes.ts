@@ -473,7 +473,11 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       cancelGroupTurnOperations(group.id, group.threadId);
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
-      if (group.hosted) stopBotChain(group.hosted.roomId);
+      if (group.hosted) {
+        stopBotChain(group.hosted.roomId);
+        // hides the strip even when no host bot was working
+        broadcast({ kind: "group", group: publicGroupState(group) });
+      }
       const stopping = group.hosted ? stopRoomAsks(group.hosted.roomId) : [];
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
       const ended = stopping.length ? () => Promise.all(stopping.map((askId) => finishEnd(askId))) : undefined;

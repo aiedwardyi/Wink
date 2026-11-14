@@ -56,6 +56,27 @@ describe("Onboarding engine check", () => {
     expect(trackOnboard).toHaveBeenCalledExactlyOnceWith("welcome");
   });
 
+  it("asks for engines again until no first check is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("ogb", { platform: "win32" });
+      const row = (state: string) => ({ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state }, models: { default: "", options: [] } });
+      const answers = [row("checking"), row("checking"), row("available")];
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ instances: [answers.shift() ?? row("available")] })));
+      const host = document.createElement("div");
+      const root = createRoot(host);
+      roots.push(root);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(Onboarding, { onDone: vi.fn() }))));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(fetch).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps desktop setup even when bots exist", async () => {
     vi.stubGlobal("ogb", { platform: "win32" });
     const onDone = vi.fn();

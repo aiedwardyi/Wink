@@ -53,14 +53,15 @@ describe("call token", () => {
     expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
-  it("sends the saved voice and language in the Live setup", async () => {
-    const h = harness({ liveCall: { voice: "Alnilam", language: "ko" } });
-    const { data } = await h.post("token", { locale: "en" });
+  it("sends the saved voice and follows the app language over an old saved call language", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam", language: "en" } as AppConfig["liveCall"] });
+    const { data } = await h.post("token", { locale: "ko" });
     expect(data.voice).toBe("Alnilam");
     const setup = h.sent().bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
-    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko"] });
-    expect(setup.systemInstruction.parts[0].text).toContain("Speak Korean");
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
+    expect(setup.systemInstruction.parts[0].text).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(setup.systemInstruction.parts[0].text).not.toContain("Switch only when");
     expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
 
@@ -220,18 +221,6 @@ describe("call token", () => {
     expect(brief).toContain("You have full access to the person's PC and projects");
     expect(brief).toContain("never say you can't do it or lack access");
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
-  });
-
-  it("brief pins a picked language", async () => {
-    const h = harness({ liveCall: { language: "ko" } });
-    await h.post("token", { locale: "en" });
-    h.cfg.liveCall = { language: "en" };
-    await h.post("token", { locale: "ko" });
-    const brief = (call: number) => h.sent(call).bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief(0)).toContain("Speak Korean");
-    expect(brief(0)).toContain("ask again in Korean");
-    expect(brief(1)).toContain("Speak English");
-    expect(brief(0)).not.toContain("the user's language");
   });
 
   it("brief answers English or Korean in kind, any other language in the app language", async () => {

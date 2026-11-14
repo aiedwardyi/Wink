@@ -324,6 +324,27 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual(["@Pete-Coder third"]);
   });
 
+  it("counts the live handoff for the strip until Stop or a person speaks", () => {
+    const turns = new MyRoomBotTurns(deps);
+    expect(turns.chain(ROOM)).toBe(0);
+    line(peter, "@Pete-Coder work with EdBot");
+    line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "@EdBot Peter is free after 7", now());
+    line(edbot, "@Mini what about Mina?", now());
+    expect(turns.chain(ROOM)).toBe(2);
+    line(mini, "Done: Sat 7:30. @Peter @Edward", now());
+    expect(turns.chain(ROOM)).toBe(0);
+    line(edbot, "@Mini one more", now());
+    expect(turns.chain(ROOM)).toBe(4);
+    deps.changed.mockClear();
+    turns.stop(ROOM);
+    expect(deps.changed).toHaveBeenCalledWith(ROOM);
+    line(mini, "@EdBot still here", now());
+    expect(turns.chain(ROOM)).toBe(0);
+    line({ kind: "person", id: "p2", name: "Mina" }, "go on", now());
+    line(edbot, "@Mini back to it", now());
+    expect(turns.chain(ROOM)).toBe(1);
+  });
+
   it("stops only this room's own turn on the owner's Stop, without a failure row", async () => {
     deps.interrupt = vi.fn(async () => {});
     const turns = new MyRoomBotTurns(deps);

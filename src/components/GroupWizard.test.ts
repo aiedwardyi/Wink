@@ -669,7 +669,7 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Argon beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
@@ -678,6 +678,7 @@ describe("GroupWizard members", () => {
         [
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon High" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon Low" },
+          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
           { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash Medium" },
           { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash Low" },
@@ -701,6 +702,7 @@ describe("GroupWizard members", () => {
       expect([...modelSelect.options].map((o) => o.value)).toEqual([
         "gemini-4-argon-high",
         "gemini-4-argon-low",
+        "gemini-4-hydrogen-medium",
         "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium",
       ]);

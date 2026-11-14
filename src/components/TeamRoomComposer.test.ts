@@ -701,14 +701,42 @@ describe("joined room turns", () => {
     expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [String(path), init?.method])).toContainEqual(["/api/joined/rooms/r9/stop", "POST"]);
   });
 
-  it("offers no Stop while the bot only waits, and keeps the wait row in the composer like a host room", async () => {
+  it("offers Stop while the bot only waits, and keeps the wait row in the composer like a host room", async () => {
     joined.view!.myBots = [{ id: "tb1", botId: "b1", waiting: true }];
     await render("joined");
-    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
     expect(host.querySelector("[data-turn-mascot]")).toBeNull();
     const row = host.querySelector<HTMLElement>("[data-my-bot-turn]")!;
     expect(row.className).toContain("text-[12px]");
     expect(row.className).toContain("px-1");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [String(path), init?.method])).toContainEqual(["/api/joined/rooms/r9/stop", "POST"]);
+  });
+
+  it.each([
+    ["en", "Bots are working it out · turn 2"],
+    ["ko", "봇끼리 맞추는 중 · 2턴"],
+  ] as const)("shows the %s handoff strip in the composer", async (locale, text) => {
+    applyLocale(locale);
+    joined.view!.botChain = 2;
+    await render("joined");
+    expect(host.querySelector("[data-bot-chain]")!.textContent).toBe(text);
+    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
+    joined.view!.myBots = [{ id: "tb1", botId: "b1", working: true }];
+    await render("joined");
+    expect(host.querySelector("[data-orbit-composer-stop]")).not.toBeNull();
+  });
+});
+
+describe("people-only room handoff", () => {
+  it("shows the strip and a room Stop on the host while teammates' bots hand off", async () => {
+    joined.dispatched.length = 0;
+    await act(async () => root.render(createElement(TeamRoomView, { group: { ...group, botChain: 4 } as TeamRoom })));
+    expect(host.querySelector("[data-bot-chain]")!.textContent).toBe("Bots are working it out · turn 4");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-orbit-composer-stop]")!.click());
+    expect(joined.dispatched).toContainEqual({ type: "interruptGroup", groupId: "g1" });
+    await render();
+    expect(host.querySelector("[data-bot-chain]")).toBeNull();
+    expect(host.querySelector("[data-orbit-composer-stop]")).toBeNull();
   });
 });
 
