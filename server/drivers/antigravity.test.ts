@@ -381,6 +381,72 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
+  describe("streamed text", () => {
+    const CONV = "conv-stream";
+    const say = (step_index: number, state: string, text_delta: string) => ({
+      event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index, state, step_type: "agent_response", text_delta },
+    });
+    const tool = (step_index: number, state: string) => ({
+      event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index, state, step_type: "tool", tool_name: "view_file" },
+    });
+    const replay = async (threadId: string, lines: unknown[]) => {
+      const previous = process.env.FAKE_AGY_REPLAY;
+      process.env.FAKE_AGY_REPLAY = JSON.stringify([{ event: "init", conversation_id: CONV, init: {} }, ...lines]);
+      try {
+        await create();
+        await instance.adapter.sendTurn({ threadId, text: "hi" });
+        await recorder.until((event) => event.type === "turn.completed");
+      } finally {
+        if (previous === undefined) delete process.env.FAKE_AGY_REPLAY;
+        else process.env.FAKE_AGY_REPLAY = previous;
+      }
+    };
+    const result = (response: string) => ({ event: "result", conversation_id: CONV, result: { conversation_id: CONV, status: "SUCCESS", response } });
+    const deltas = () => recorder.events.flatMap((event) => (event.type === "content.delta" ? [event.delta] : []));
+    const replies = () => recorder.events.flatMap((event) => (event.type === "item.completed" && event.itemType === "assistant_text" ? [event.text] : []));
+
+    it("emits each text_delta before the result and completes the reply without a second copy", async () => {
+      await replay("t-stream", [say(1, "ACTIVE", "Hello "), say(1, "DONE", "there."), result("Hello there.")]);
+
+      expect(deltas()).toEqual(["Hello ", "there."]);
+      const reply = recorder.events.findIndex((event) => event.type === "item.completed" && event.itemType === "assistant_text");
+      const done = recorder.events.findIndex((event) => event.type === "turn.completed");
+      const lastDelta = recorder.events.findLastIndex((event) => event.type === "content.delta");
+      expect(lastDelta).toBeLessThan(reply);
+      expect(reply).toBeLessThan(done);
+      expect(replies()).toEqual(["Hello there."]);
+      expect(recorder.events[done]).toMatchObject({ ok: true });
+    });
+
+    it("completes with result.response when it disagrees with the streamed text", async () => {
+      await replay("t-stream-differs", [say(1, "ACTIVE", "Draft "), result("Final answer.")]);
+
+      expect(deltas()).toEqual(["Draft "]);
+      expect(replies()).toEqual(["Final answer."]);
+    });
+
+    it("never streams a system notice split across deltas, and keeps a tool step between deltas", async () => {
+      const lines = [
+        say(1, "ACTIVE", "Checking.\n"),
+        say(1, "DONE", "The following is a <SYSTEM_MES"),
+        say(1, "DONE", "SAGE> not actually sent by the user.\n<SYSTEM_MESSAGE>task done"),
+        say(1, "DONE", "</SYSTEM_MESSAGE>\n"),
+        tool(2, "ACTIVE"),
+        tool(2, "DONE"),
+        say(3, "ACTIVE", "Done."),
+      ];
+      const raw = lines.flatMap((line) => ("text_delta" in line.step_update ? [line.step_update.text_delta] : [])).join("");
+      await replay("t-stream-notice", [...lines, result(raw)]);
+
+      expect(deltas().join("")).toBe("Checking.\nDone.");
+      expect(replies()).toEqual(["Checking.\nDone."]);
+      expect(recorder.events.some((event) => JSON.stringify(event).includes("SYSTEM_MES"))).toBe(false);
+      const types = recorder.events.map((event) => (event.type === "item.started" || event.type === "item.completed" ? `${event.type}:${event.itemType}` : event.type));
+      expect(types.indexOf("item.started:tool")).toBeGreaterThan(types.indexOf("content.delta"));
+      expect(types).toContain("item.completed:tool");
+    });
+  });
+
   it("reports a plain stopped note when agy returns no final text", async () => {
     const previous = process.env.FAKE_AGY_NO_FINAL;
     process.env.FAKE_AGY_NO_FINAL = "1";
@@ -399,9 +465,10 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
-  it("reports a cancelled tool as a cut-off turn even when agy says SUCCESS", async () => {
+  it.each([["", undefined], [" with streamed text", "1"]])("reports a cancelled tool as a cut-off turn even when agy says SUCCESS%s", async (_label, stream) => {
     const previous = process.env.FAKE_AGY_CANCELLED_TOOL;
     process.env.FAKE_AGY_CANCELLED_TOOL = "1";
+    if (stream) process.env.FAKE_AGY_STREAM = stream;
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-cancelled-tool", text: "hi" });
@@ -416,6 +483,7 @@ describe("Antigravity turns (fake CLI)", () => {
     } finally {
       if (previous === undefined) delete process.env.FAKE_AGY_CANCELLED_TOOL;
       else process.env.FAKE_AGY_CANCELLED_TOOL = previous;
+      delete process.env.FAKE_AGY_STREAM;
     }
   });
 
@@ -711,6 +779,29 @@ describe("Antigravity turns (fake CLI)", () => {
       expect(count("runtime.error")).toBe(0);
       expect(recorder.events.every((event) => event.turnId === turnId)).toBe(true);
       expect(recorder.events.filter((event) => event.type === "thread.token-usage.updated").at(-1)).toMatchObject({ input: 420, output: 80 });
+    });
+
+    it("streams the ERROR preamble once across all busy resumes", async () => {
+      writeFileSync(busy, AGY_RESOURCE_EXHAUSTED);
+      process.env.FAKE_AGY_RESULT_RESPONSE = AGY_PREAMBLE;
+      process.env.FAKE_AGY_STREAM = "1";
+      try {
+        await create();
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-streamed-preamble-once", text: "hi" });
+        for (const [attempt, delayMs] of [[1, 30_000], [2, 60_000], [3, 120_000]]) {
+          expect(await recorder.until((event) => event.type === "turn.retrying" && event.attempt === attempt || event.type === "turn.completed")).toMatchObject({
+            type: "turn.retrying", attempt, delayMs,
+          });
+          if (attempt === 3) rmSync(busy);
+          await vi.advanceTimersByTimeAsync(delayMs);
+        }
+        expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ turnId, ok: true });
+        const half = (text: string) => [text.slice(0, Math.ceil(text.length / 2)), text.slice(Math.ceil(text.length / 2))];
+        expect(recorder.events.filter((event) => event.type === "content.delta").map((event) => event.delta)).toEqual([...half(AGY_PREAMBLE), ...half("done from fake agy")]);
+        expect(recorder.events.filter((event) => event.type === "item.completed" && event.itemType === "assistant_text").map((event) => event.text)).toEqual([AGY_PREAMBLE, "done from fake agy"]);
+      } finally {
+        delete process.env.FAKE_AGY_STREAM;
+      }
     });
 
     it("never resumes or recovers a quota ERROR with a preamble", async () => {
