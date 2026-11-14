@@ -10,6 +10,7 @@ import { redactSecretsInText } from "./redact.ts";
 import type { RoutineRequestOperation } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 import { activeRunForRoutine, runThread } from "../shared/working-thread.ts";
+import { WAKE_LATE_MS, wakeFireLine } from "./self-wake.ts";
 
 export type RoutineSchedule =
   | { type: "once"; at: number }
@@ -52,6 +53,8 @@ export interface Routine {
   /** Conversation that created this routine in chat. Calendar/import-created
    * routines intentionally have no source, and older files migrate in place. */
   sourceThreadId?: string;
+  /** A bot's one-off wake_me: set without a card, gone once it fires. */
+  wake?: true;
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -76,6 +79,9 @@ export interface RoutineRun {
   /** The chat the run reports to; a local run also fires there. Cloud and
    * webhook runs execute on the separate `threadId`. */
   sourceThreadId?: string;
+  wake?: true;
+  /** A wake that rang after Wink was off at its time. */
+  late?: true;
   threadId?: string;
   cardMessageId?: string;
   startedAt?: number;
@@ -435,7 +441,7 @@ export class RoutineManager {
     );
   }
 
-  create(input: RoutineInput, request?: RoutineRequestCommitFor<"create">): Routine {
+  create(input: RoutineInput, request?: RoutineRequestCommitFor<"create">, wake?: { threadId: string }): Routine {
     if (request) {
       const receipt = this.matchingRoutineRequestReceipt(request);
       if (receipt) {
@@ -452,7 +458,8 @@ export class RoutineManager {
       ...clean,
       // Only a confirmed chat card supplies `request`; the public calendar
       // API cannot choose an arbitrary transcript as a reporting target.
-      sourceThreadId: request?.threadId,
+      sourceThreadId: request?.threadId ?? wake?.threadId,
+      ...(wake ? { wake: true as const } : {}),
       nextRunAt: clean.enabled ? this.initialOccurrence(clean.schedule, at) : null,
       createdAt: at,
       updatedAt: at,
@@ -646,12 +653,15 @@ export class RoutineManager {
       let changed = false;
       const missedRuns: RoutineRun[] = [];
       const missedNotified = new Set<string>();
+      const rangWakes = new Set<string>();
+      const caughtUp: RoutineRun[] = [];
       for (const routine of this.routines) {
         if (!routine.enabled || routine.nextRunAt == null || routine.nextRunAt > now) continue;
         let scheduledFor: number | null = routine.nextRunAt;
         let catchUpAt: number | null = null;
         while (scheduledFor !== null && scheduledFor <= now) {
-          if (now - scheduledFor > CATCH_UP_MS) {
+          // a wake is never missed: one overdue past the catch-up window still fires, late
+          if (now - scheduledFor > CATCH_UP_MS && !routine.wake) {
             const missed = this.newRun(routine, scheduledFor, false);
             missed.status = "missed";
             missed.finishedAt = now;
@@ -668,14 +678,27 @@ export class RoutineManager {
           scheduledFor =
             routine.schedule.type === "once" ? null : nextOccurrence(routine.schedule, scheduledFor);
         }
-        if (catchUpAt !== null) this.emitRun(this.newRun(routine, catchUpAt, false));
+        if (catchUpAt !== null) {
+          const run = this.newRun(routine, catchUpAt, false);
+          if (routine.wake && now - catchUpAt > WAKE_LATE_MS) {
+            run.late = true;
+            run.routineName = `${run.routineName} (late)`;
+          }
+          caughtUp.push(run);
+        }
+        if (routine.wake) rangWakes.add(routine.id);
         routine.nextRunAt = scheduledFor;
         if (routine.schedule.type === "once") routine.enabled = false;
         routine.updatedAt = Math.max(now, routine.updatedAt + 1);
         this.emitRoutine(routine);
         changed = true;
       }
+      // the fired wake leaves in the same save as its run, so it can never ring twice
+      if (rangWakes.size) this.routines = this.routines.filter((routine) => !rangWakes.has(routine.id));
       if (changed) this.save();
+      for (const id of rangWakes) this.options.emit?.({ kind: "routine.deleted", routineId: id });
+      // emitRun can save, so a run goes out only once its wake is gone from the file
+      for (const run of caughtUp) this.emitRun(run);
       for (const missed of missedRuns) this.options.onRunFailed?.(missed);
 
       const queued = this.runs.filter((run) => run.status === "queued").sort((a, b) => a.scheduledFor - b.scheduledFor);
@@ -749,7 +772,8 @@ export class RoutineManager {
       queueMicrotask(() => void this.tick());
     };
     try {
-      await this.options.startChatTurn({ ...run, triggerSource }, routineFireLine(run, prompt), fail);
+      const line = run.wake ? wakeFireLine(run, prompt, this.now()) : routineFireLine(run, prompt);
+      await this.options.startChatTurn({ ...run, triggerSource }, line, fail);
     } catch (error) {
       if (error instanceof Error && isBusyRejection(error)) this.requeue(run);
       else fail(error instanceof Error ? error.message : String(error));
@@ -851,6 +875,7 @@ export class RoutineManager {
       manual,
       triggerSource: manual ? "manual" : "schedule",
       sourceThreadId: routine.sourceThreadId,
+      ...(routine.wake ? { wake: true as const } : {}),
       createdAt: this.now(),
     };
     this.runs.push(run);
