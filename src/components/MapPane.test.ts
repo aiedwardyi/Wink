@@ -27,6 +27,11 @@ const repo = { name: "wink", paths: ["README.md", "b.ts", "src/a.ts", "src/manua
 const reads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/file?"));
 const emit = (items = workers) => act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: items }) }); });
 const click = (selector: string) => act(async () => { host.querySelector<HTMLButtonElement>(selector)!.click(); });
+type Spot = { x: number; y: number };
+const offLine = (points: Spot[], a: Spot, b: Spot) => Math.max(...points.map(p => {
+  const k = Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / ((b.x - a.x) ** 2 + (b.y - a.y) ** 2)));
+  return Math.hypot(p.x - a.x - k * (b.x - a.x), p.y - a.y - k * (b.y - a.y));
+}));
 
 beforeEach(() => {
   close.mockReset();
@@ -282,6 +287,31 @@ it("lights the picked file's square at once and sends the arrow a beat behind, s
   expect(pin()).toBe(jumped);
 });
 
+it("walks a worker's edit along the tree lines but sends a clicked file's arrow straight there", async () => {
+  let clock = 1000;
+  let id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  vi.stubGlobal("requestAnimationFrame", (done: FrameRequestCallback) => { frames.set(++id, done); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (at: number) => frames.delete(at));
+  const step = (ms: number) => { clock += ms; const due = [...frames.values()]; frames.clear(); for (const done of due) done(clock); };
+  const tip = () => { const [x, y] = host.querySelector<HTMLElement>(".map-tree-pin")!.style.transform.match(/-?[\d.]+/g)!.map(Number); return { x: x + 1.4, y: y + 0.7 }; };
+  const travel = () => { const trail = [tip()]; for (let ms = 0; ms < 1000; ms += 16) { step(16); trail.push(tip()); } return trail; };
+  const edit = { path: "src/a.ts", added: 2, removed: 0 };
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[1]]);
+  for (let i = 0; i < 10; i++) step(200);
+  const home = tip();
+  await emit([{ ...workers[1], editedAt: 3, path: edit.path, files: [...workers[1].files, edit] }]);
+  const walked = travel();
+  expect(offLine(walked, home, walked.at(-1)!)).toBeGreaterThan(3);
+  await click('[data-map-file="b.ts"]');
+  const picked = travel();
+  expect(new Set(picked.map(at => `${at.x} ${at.y}`)).size).toBeGreaterThan(5);
+  expect(picked.at(-1)).toEqual(home);
+  expect(offLine(picked, walked.at(-1)!, home)).toBeLessThan(0.5);
+});
+
 it("keeps the step title, breadcrumb and diff on one file through every hop", async () => {
   const waiting: (() => void)[] = [];
   vi.mocked(fetch).mockImplementation(url => {
@@ -333,7 +363,7 @@ it("moves focus with Up and Down onto a file that sat in a folded box", async ()
   expect(document.activeElement?.getAttribute("data-map-file")).toBe("server/f2.ts");
 });
 
-it("walks the arrow up out of a folding branch, across and down into the one opening, and jumps on a held key", async () => {
+it("sends a picked file's arrow in one straight line into a branch that opens as another folds, and jumps on a held key", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
   const paths = ["src", "server", "docs"].flatMap(dir => Array.from({ length: 20 }, (_, i) => `${dir}/f${i}.ts`));
   vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
@@ -367,11 +397,12 @@ it("walks the arrow up out of a folding branch, across and down into the one ope
   step(35);
   const first = tip();
   expect(Math.hypot(first.x - before.x, first.y - before.y)).toBeGreaterThan(1);
-  let top = first.y;
-  for (let ms = 16; ms < 440; ms += 16) { step(16); top = Math.min(top, tip().y); }
-  expect(top).toBeLessThan(numbers(host.querySelector<HTMLElement>('[data-node="d:server"]')!)[1]);
+  const trail = [first];
+  for (let ms = 16; ms < 440; ms += 16) { step(16); trail.push(tip()); }
   step(16);
   expect(off("server/f2.ts")).toBeLessThan(1);
+  expect(new Set(trail.map(at => `${at.x} ${at.y}`)).size).toBeGreaterThan(5);
+  expect(offLine(trail, before, tip())).toBeLessThan(0.5);
   for (let i = 0; i < 5; i++) step(200);
   await key("server/f2.ts", true);
   expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/f1.ts");
