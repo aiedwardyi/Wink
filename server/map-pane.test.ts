@@ -285,6 +285,27 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   againAbort.abort();
 });
 
+it("opens with every live worker in its first snapshot instead of adding them one by one", async () => {
+  const workers = ["pane-a", "pane-b", "pane-c"].map(sessionId => {
+    const { root } = repo();
+    writeFileSync(join(root, "file.ts"), `const ${sessionId.slice(-1)} = 2;\n`);
+    return { sessionId, cwd: root, label: sessionId.toUpperCase() };
+  });
+  const feature = createMapPane({ panes: async () => workers, subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", new URL(req.url!, "http://localhost"));
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const first: MapSnapshot = JSON.parse(text.slice(6, text.indexOf("\n\n")));
+  expect(first.workers.map(worker => [worker.nick, worker.files.length])).toEqual([["PANE-A", 1], ["PANE-B", 1], ["PANE-C", 1]]);
+});
+
 it("recognizes non-git folders", async () => {
   const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
   roots.push(folder);
