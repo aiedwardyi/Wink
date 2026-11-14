@@ -183,6 +183,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
   const items: TreeItem[] = [];
   let y = 0;
   let tight = false;
+  let overlap = false;
   const gone = new Set<TreeItem>();
   rows.forEach((row, r) => {
     for (let i = row.length; i--;) if (gone.has(row[i].parent!)) { gone.add(row[i]); row.splice(i, 1); }
@@ -242,6 +243,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
     }
     let limit = W;
     for (const group of groups.toReversed()) { group.x = Math.max(0, Math.min(group.x, limit - group.w)); limit = group.x - GAP * 2; }
+    for (let i = 1; i < groups.length; i++) if (groups[i].x < groups[i - 1].x + groups[i - 1].w) overlap = true;
     let h = 0;
     for (const group of groups) {
       let x = group.x;
@@ -252,7 +254,7 @@ export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
   // Branches that cannot sit side by side fold the way a phone does: only the current file's path stays open.
   if (tight && !o.phone && o.current) return treeLayout(index, { ...o, phone: true });
   // A small project too wide to open every folder lays out like a big one: changed branches only.
-  if (tight && small) return treeLayout(index, o, true);
+  if (overlap && small) return treeLayout(index, o, true);
   return { items, height: y - VGAP + 2, lit };
 }
 
