@@ -1,7 +1,7 @@
 import { sign } from "node:crypto";
 import { reportPayload, reportReceiptSchema, type ReportReceipt, type TeamReport } from "../shared/team-report.ts";
 import { readIdentity, readTicket, ticketProblem } from "./phone-relay/store.ts";
-import { teamIdToken, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamRelayOrigin, type TeamTokenSource } from "./team-stats.ts";
 
 export async function boundedReportJson(response: Response, max: number): Promise<unknown> {
   if (Number(response.headers.get("content-length")) > max || !response.body) throw new Error("invalid report response size");

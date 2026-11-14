@@ -349,7 +349,7 @@ import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
 import { hasOwnerChat, myChatsRoute, ownerChats, ownerTopics, roomEchoesSinceLastUserTurn, roomEchoesTaken, SEARCH_TOOL, writeRoomEcho } from "./one-mind.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
-import { teamRelayBase, teamRoute } from "./team-route.ts";
+import { teamRelayBase, teamRoute } from "./team-stats.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";

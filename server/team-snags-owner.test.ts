@@ -9,7 +9,7 @@ import { paneNotesSinceLastUserTurn } from "./context-compaction.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote, paneWakeEnabled, PaneWakeScheduler, PANE_WAKE_DEBOUNCE_MS } from "./pane-wake.ts";
 import { Store, type StoreChange } from "./store.ts";
 import { chiefSnagIds, claimTeamSnags, postChiefNote, teamSnagNote, type ClaimedSnag, type TeamSnagOwnerOptions } from "./team-snags-owner.ts";
-import { teamOwnerHash } from "./team-route.ts";
+import { teamOwnerHash } from "./team-stats.ts";
 
 const snag: ClaimedSnag = {
   id: "9f2c41d07a5e4b6c8d1e3f2a0b9c7d6e", at: 1_793_425_560_000, event: "stalled", build: "1.0.217", os: "win32",

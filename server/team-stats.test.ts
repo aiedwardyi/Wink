@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { googleSubHash } from "../shared/google-id-token.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
-import { teamIdToken, teamRelayOrigin, teamRoute, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamRelayOrigin, teamRoute, type TeamTokenSource } from "./team-stats.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const payload = { now: 1, days: ["2026-10-12"], pcs: [], people: [{ id: "p", name: "Ada" }] };
