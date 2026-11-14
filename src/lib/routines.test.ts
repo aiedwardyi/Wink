@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pendingWakesFor, type Routine } from "./routines";
+import { pendingWakesFor, wakeTime, type Routine } from "./routines";
 
 const routine = (patch: Partial<Routine>): Routine => ({
   id: "r", name: "Wake", prompt: "note", botId: "bot-1", runOn: "maus", enabled: true,
@@ -19,5 +19,14 @@ describe("pendingWakesFor", () => {
     ];
     expect(pendingWakesFor(routines, ["bot-1"], "chat").map((wake) => wake.id)).toEqual(["soon", "later"]);
     expect(pendingWakesFor(routines, ["bot-1", "bot-2"], "chat").map((wake) => wake.id)).toEqual(["peer", "soon", "later"]);
+  });
+});
+
+describe("wakeTime", () => {
+  it("names the day only when the wake is not today", () => {
+    const now = new Date(2026, 10, 14, 1, 0).getTime();
+    expect(wakeTime(new Date(2026, 10, 14, 3, 45).getTime(), now, "en")).toBe("03:45");
+    expect(wakeTime(new Date(2026, 10, 15, 3, 45).getTime(), now, "en")).toBe("Sun 03:45");
+    expect(wakeTime(new Date(2026, 10, 21, 3, 45).getTime(), now, "en")).toBe("Sat 03:45");
   });
 });

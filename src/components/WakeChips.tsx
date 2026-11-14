@@ -1,20 +1,19 @@
 import { AlarmClock, X } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
-import { pendingWakesFor } from "@/lib/routines";
+import { pendingWakesFor, wakeTime } from "@/lib/routines";
 import { api, useStore } from "@/state/store";
 
 /** A bot's pending wake_me wakes in this chat; tapping one cancels it. */
 export function WakeChips({ botIds, threadId }: { botIds: readonly string[]; threadId: string }) {
   const { state, dispatch } = useStore();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const wakes = pendingWakesFor(state.routines, botIds, threadId);
   if (!wakes.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5 px-5 pb-2 max-md:px-4">
       {wakes.map((wake) => {
-        const at = new Date(wake.nextRunAt);
-        const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+        const time = wakeTime(wake.nextRunAt, Date.now(), locale);
         return (
           <button
             key={wake.id}

@@ -415,9 +415,10 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     wake: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const from = store.bot(String(body.fromBotId ?? ""));
-      if (!from) return json(res, 403, { error: "unknown sender" });
-      const fromThreadId = String(body.fromThreadId ?? "");
+      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      const from = source ? store.bot(source.botId) : undefined;
+      if (!source || !from) return json(res, 403, { error: "unknown sender" });
+      const fromThreadId = source.threadId;
       if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
       if (typeof body.cancel === "string") {
         return cancelWake(routines, from.id, body.cancel)

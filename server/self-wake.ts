@@ -19,13 +19,23 @@ export function pendingWakes(routines: RoutineManager, botId: string): Routine[]
   return routines.listRoutines().filter((routine) => routine.wake && routine.botId === botId && routine.nextRunAt !== null);
 }
 
+function parseAt(raw: string): number {
+  const match = RFC3339_WITH_OFFSET.exec(raw);
+  const at = match ? Date.parse(raw) : NaN;
+  if (!match || !Number.isFinite(at)) return NaN;
+  const zone = match[3]!.toUpperCase();
+  const offset = zone === "Z" ? 0 : (zone[0] === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
+  // Date.parse rolls 2026-11-31 over into December
+  return new Date(at + offset * 60_000).toISOString().slice(0, 16) === raw.slice(0, 16) ? at : NaN;
+}
+
 export function setWake(
   routines: RoutineManager,
   input: { botId: string; threadId: string; at: unknown; note: unknown },
   now = Date.now(),
 ): { ok: true; id: string; at: number; local: string } | { ok: false; error: string } {
   const raw = typeof input.at === "string" ? input.at.trim() : "";
-  const at = RFC3339_WITH_OFFSET.test(raw) ? Date.parse(raw) : NaN;
+  const at = parseAt(raw);
   if (!Number.isFinite(at)) return { ok: false, error: "at must be an RFC3339 time with an offset, like 2026-11-14T03:45:00+09:00." };
   if (at - now < MIN_AHEAD_MS || at - now > MAX_AHEAD_MS) {
     return { ok: false, error: `at must be between 1 minute and 7 days from now (now is ${new Date(now).toISOString()}).` };

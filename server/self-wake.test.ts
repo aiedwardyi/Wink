@@ -1,7 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { CommsCallers } from "./comms-caller.ts";
+import { createInternalRoutes } from "./internal-routes.ts";
 
 import { RoutineManager, type RoutineManagerOptions } from "./routines.ts";
 import { cancelWake, setWake, WAKE_MAX_PENDING } from "./self-wake.ts";
@@ -52,6 +57,8 @@ describe("self-wake", () => {
     expect(wake(h, "2026-11-14T03:45:00")).toMatchObject({ ok: false });
     expect(wake(h, iso(START + 5 * 60_000), "x".repeat(501))).toMatchObject({ ok: false });
     expect(wake(h, iso(START + 5 * 60_000), "  ")).toMatchObject({ ok: false });
+    expect(setWake(h.manager, { botId: "bot-1", threadId: "chat-7", at: "2026-11-31T01:00:00Z", note: "n" }, Date.UTC(2026, 10, 28))).toMatchObject({ ok: false });
+    expect(wake(h, "2026-11-14T24:30:00+09:00")).toMatchObject({ ok: false });
     const ok = wake(h, "2026-11-14T10:15:00+09:00");
     expect(ok).toMatchObject({ ok: true, at: Date.UTC(2026, 10, 14, 1, 15) });
     if (ok.ok) expect(ok.local).toBeTruthy();
@@ -106,6 +113,35 @@ describe("self-wake", () => {
     await h.manager.tick();
     expect(onDisk.length).toBeGreaterThan(0);
     for (const snapshot of onDisk) expect(snapshot.runs.length > 0 && snapshot.routines.length > 0).toBe(false);
+  });
+
+  it("sets and cancels wakes only as the bot its token belongs to", async () => {
+    const h = harness();
+    const callers = new CommsCallers();
+    const routes = createInternalRoutes({
+      store: { bot: (id: string) => ({ id }) },
+      connectorThread: () => ({}),
+      routines: h.manager,
+      resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
+    } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const post = async (body: object) => {
+      const req = new EventEmitter() as IncomingMessage;
+      req.headers = { authorization: `Bearer ${callers.token("bot-a", "chat-a")}` };
+      let out = "";
+      const res = { writeHead() {}, getHeader() {}, setHeader() {}, end(value: string) { out = value; } } as unknown as ServerResponse;
+      const pending = routes.wake(req, res);
+      req.emit("data", JSON.stringify(body));
+      req.emit("end");
+      await pending;
+      return JSON.parse(out);
+    };
+    const set = await post({ fromBotId: "bot-b", fromThreadId: "chat-b", at: new Date(Date.now() + 5 * 60_000).toISOString(), note: "spoofed" });
+    expect(h.manager.listRoutines().map((r) => [r.botId, r.sourceThreadId])).toEqual([["bot-a", "chat-a"]]);
+    const other = setWake(h.manager, { botId: "bot-b", threadId: "chat-b", at: iso(START + 5 * 60_000), note: "b's own" }, START);
+    if (!other.ok) throw new Error(other.error);
+    expect((await post({ fromBotId: "bot-b", fromThreadId: "chat-b", cancel: other.id })).error).toBeTruthy();
+    expect(h.manager.listRoutines()).toHaveLength(2);
+    expect((await post({ cancel: set.id })).ok).toBe(true);
   });
 
   it("caps pending wakes per bot", () => {
