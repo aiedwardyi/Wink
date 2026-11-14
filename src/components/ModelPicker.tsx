@@ -545,7 +545,7 @@ export function ModelPickerControl({
             else { setMachine(false); dialogRef.current?.focus(); }
           }}>{setup}</ModelMachine>
         </Suspense>}
-        {strip.mounted && <PickerStyleStrip closing={strip.closing} shown={shown} styles={styles} picked={picked} skin={skin} onStyle={chooseStyle} onLook={savePickerLook} />}
+        {strip.mounted && <PickerStyleStrip closing={strip.closing} shown={shown} styles={styles} picked={picked} skin={skin} onStyle={chooseStyle} onLook={savePickerLook} onDone={closeStrip} />}
       </div>
     </div>
   );
