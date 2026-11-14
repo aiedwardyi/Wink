@@ -2,7 +2,7 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
-## [1.0.266] - 2026-11-14
+## [1.0.266] - 2026-11-15
 
 ### Changed
 - A file named mid-sentence is a plain underlined link, and a picture it links to appears under the reply. Click either to open it on the right.
