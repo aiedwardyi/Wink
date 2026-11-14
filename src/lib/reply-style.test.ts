@@ -6,6 +6,12 @@ afterEach(() => {
 });
 
 describe("reply style preference", () => {
+  it.each([null, "other"])("types live when storage contains %s", async (stored) => {
+    vi.stubGlobal("localStorage", { getItem: () => stored });
+    const { loadReplyStyle } = await import("./reply-style");
+    expect(loadReplyStyle()).toBe("live");
+  });
+
   it("saves without a browser window", async () => {
     vi.stubGlobal("window", undefined);
     vi.stubGlobal("localStorage", undefined);
