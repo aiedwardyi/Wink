@@ -248,6 +248,8 @@ export class LiveCall {
   private voiceAt = 0;
   private draining?: LiveEngine;
   private drained?: () => void;
+  private holdTimer?: ReturnType<typeof setTimeout>;
+  private lateFinish?: (engine: LiveEngine | null) => void;
 
   constructor(deps: Deps) {
     this.deps = deps;
@@ -300,12 +302,14 @@ export class LiveCall {
     if (!session) {
       if (this.snapshot.status === "needsKey") {
         this.mic = undefined;
-        void mic.then((error) => { if (!error && !this.mic && !this.ended) this.deps.audio.stopMic(); });
+        this.early = new EarlyMic();
+        // A capture that failed late can still hold the mic.
+        void mic.then(() => { if (!this.mic && !this.ended) this.deps.audio.stopMic(); });
       }
       return;
     }
     const error = await mic;
-    if (this.ended) return;
+    if (this.ended) return this.lateConnect(session);
     if (error) return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     this.frameAt = this.now();
     this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
@@ -364,6 +368,12 @@ export class LiveCall {
     this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
     const events: LiveEvents = {
       ready: () => {
+        if (draining() && this.early && this.lateFinish) {
+          for (const pcm of this.early.frames) engine.sendAudio(pcm);
+          this.early = undefined;
+          engine.audioPaused();
+          return this.hold(engine, HANG_UP_WAIT_MS, this.lateFinish);
+        }
         if (!mine()) return;
         clearTimeout(this.readyTimer);
         this.connected = true;
@@ -631,6 +641,7 @@ export class LiveCall {
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
+      this.open.settle(this.stats.userLines);
       return this.answerTool("declined", spoken ? HEARD : undefined);
     }
     this.clearPending();
@@ -678,7 +689,8 @@ export class LiveCall {
     this.turnSent = true;
     const upto = this.stats.userLines;
     const run = this.deliver(text, tag, sendId);
-    void run.then((result) => { if (reached(result)) this.open.settle(upto); });
+    // A lost receipt may have reached the bot, so a hang-up never sends it again.
+    void run.then((result) => { if (!result.startsWith("not sent")) this.open.settle(upto); });
     this.sends.add(run);
     void run.finally(() => this.sends.delete(run));
     return run;
@@ -783,7 +795,7 @@ export class LiveCall {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
-      this.open.settle(this.stats.userLines);
+      this.open.add(this.stats.userLines, text);
       const at = this.now();
       void this.send(`${card.prefix}${text}`, { ask: true }).then((result) => {
         if (reached(result)) {
@@ -807,7 +819,6 @@ export class LiveCall {
     if (!this.pending || !ended || this.snapshot.hushed) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
-    if (consent) this.open.settle(this.stats.userLines);
     if (consent) void this.answer(consent === "yes", true);
   }
 
@@ -1163,20 +1174,40 @@ export class LiveCall {
     clearInterval(this.micTimer);
     clearTimeout(this.readyTimer);
     this.deps.audio.close();
-    const done = () => {
-      engine?.close();
-      void this.wrapUp(Boolean(engine), share, at, hangUp);
+    const finish = (heard: LiveEngine | null) => {
+      heard?.close();
+      void this.wrapUp(Boolean(heard), share, at, hangUp);
     };
+    // Hung up while it connected: what he said is still heard once the voice is ready.
+    if (hangUp && this.early?.spoke && !this.snapshot.muted) {
+      this.lateFinish = finish;
+      if (engine) this.hold(engine, READY_MS, finish);
+      return;
+    }
     // His last words can still be on their way: the mic is off, the socket stays open for them a moment.
-    if (!hangUp || !engine || !live || this.snapshot.muted || !this.voiceAt || at - this.voiceAt > IN_FLIGHT_MS) return done();
-    this.draining = engine;
+    if (!hangUp || !engine || !live || this.snapshot.muted || !this.voiceAt || at - this.voiceAt > IN_FLIGHT_MS) return finish(engine);
     engine.audioPaused();
-    const timer = setTimeout(() => this.drained?.(), HANG_UP_WAIT_MS);
+    this.hold(engine, HANG_UP_WAIT_MS, finish);
+  }
+
+  private hold(engine: LiveEngine, ms: number, finish: (engine: LiveEngine) => void) {
+    clearTimeout(this.holdTimer);
+    this.draining = engine;
+    this.holdTimer = setTimeout(() => this.drained?.(), ms);
     this.drained = () => {
-      clearTimeout(timer);
-      this.draining = this.drained = undefined;
-      done();
+      clearTimeout(this.holdTimer);
+      this.draining = this.drained = this.lateFinish = undefined;
+      finish(engine);
     };
+  }
+
+  private lateConnect(session: LiveSession) {
+    const finish = this.lateFinish;
+    if (!finish || this.draining) return;
+    this.connect(session);
+    const engine = this.engine!;
+    this.engine = null;
+    this.hold(engine, READY_MS, finish);
   }
 
   /** On hang-up, words nothing dealt with go to the bot as his message, so a quick call still gets its order done. */
@@ -1188,12 +1219,15 @@ export class LiveCall {
     }
     if (hangUp) await Promise.all([...this.sends]);
     const words = hangUp ? this.open.text() : "";
-    if (this.pending) {
+    if (this.pending && !words) {
       this.stats.orders.dropped += 1;
-      if (!words) this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
-      this.pending = undefined;
+      this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
     }
-    if (words) void this.send(words, { order: true });
+    this.pending = undefined;
+    if (words) {
+      const result = await this.send(words, { order: true });
+      if (!reached(result)) this.postLines([{ who: "voice", text: told(result, words), at: this.now() }]);
+    }
     if (!this.callId || this.snapshot.startedAt === undefined) return;
     const { ttfa, usage, ...counts } = this.stats;
     const body = {
