@@ -178,16 +178,33 @@ describe("pinned ask_user question", () => {
     expect([...choices.querySelectorAll("button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
   });
 
-  it("lets the cap give way when the choices alone outgrow it, so they never leave the card", async () => {
+  it("lets the cap give way for the choices under three lines of the question, or two when it has two", async () => {
     let resized = () => {};
     vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
     let tall = 262;
+    let text = 88;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? text : 0; });
     await mount({ bot: bot([question]) });
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 346px)");
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 390px)");
+    expect(body.style.minHeight).toBe("66px");
     tall = 54;
+    text = 44;
     resized();
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 138px)");
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 160px)");
+    expect(body.style.minHeight).toBe("44px");
+  });
+
+  it("fades a cut question at its foot until it is scrolled to its end", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).toContain("data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]");
+    expect(body.hasAttribute("data-cut")).toBe(true);
+    vi.spyOn(body, "scrollTop", "get").mockReturnValue(88);
+    await act(async () => body.dispatchEvent(new Event("scroll")));
+    expect(body.hasAttribute("data-cut")).toBe(false);
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
