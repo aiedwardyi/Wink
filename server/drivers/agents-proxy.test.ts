@@ -55,6 +55,7 @@ let routinesResponse: unknown = {
   ],
 };
 let lastRoutineRequestBody: any = null;
+let lastWakeBody: any = null;
 interface TaskStateRequestBody {
   pause_automatic_wakes?: boolean;
   fromBotId: string;
@@ -262,6 +263,17 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify(routinesResponse));
     }
+    if (req.method === "POST" && req.url === "/api/internal/wake") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastWakeBody = JSON.parse(data);
+        const refused = lastWakeBody.at === "refuse";
+        res.writeHead(refused ? 400 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(refused ? { error: "You already have 10 pending wakes. Cancel one first." } : lastWakeBody.cancel ? { ok: true } : { id: "wake-1", local: "Sat, Nov 14, 03:45 (Asia/Seoul)" }));
+      });
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/internal/routine-requests") {
       let data = "";
       req.on("data", (c) => (data += c));
@@ -381,6 +393,7 @@ describe("agents-proxy MCP surface", () => {
       "list_routines",
       "propose_routine",
       "propose_routine_action",
+      "wake_me",
       "set_keep_going",
       "no_reply_needed",
     ]);
@@ -1083,6 +1096,25 @@ describe("agents-proxy MCP surface", () => {
     expect(tool.inputSchema.properties.routine_id.type).toBe("string");
   });
 
+  it("sets, refuses and cancels a self-wake without a confirmation card", async () => {
+    lastWakeBody = null;
+    lastRoutineRequestBody = null;
+    const set = await callTool("wake_me", { at: "2026-11-14T03:45:00+09:00", note: "resume the deploy check" });
+    expect(set.result.isError).toBeFalsy();
+    expect(set.result.content[0].text).toContain("wake-1");
+    expect(set.result.content[0].text).toContain("03:45");
+    expect(lastWakeBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", at: "2026-11-14T03:45:00+09:00", note: "resume the deploy check" });
+    expect(lastRoutineRequestBody).toBeNull();
+    const refused = await callTool("wake_me", { at: "refuse", note: "x" });
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0].text).toContain("10 pending wakes");
+    const cancelled = await callTool("wake_me", { cancel: "wake-1" });
+    expect(cancelled.result.isError).toBeFalsy();
+    expect(lastWakeBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", cancel: "wake-1" });
+    const missing = await callTool("wake_me", {});
+    expect(missing.result.isError).toBe(true);
+  });
+
   it("proposes a weekly routine through a confirmation-only request", async () => {
     lastRoutineRequestBody = null;
     const res = await callTool("propose_routine", {
@@ -1282,7 +1314,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(19);
+    expect(list.result.tools).toHaveLength(20);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1294,7 +1326,7 @@ describe("agents-proxy identity gate", () => {
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_TEAM_REPORTS: "1" }, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toContain("unavailable in peer turns");
@@ -1314,7 +1346,7 @@ describe("agents-proxy catalog", () => {
 
   it("replaces only the five ask-driven definitions with the bounded pair", async () => {
     const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
-    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "react", "ask_user", "show_image", "list_routines", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
     expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
   });
 
