@@ -58,9 +58,9 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
       {
         clip: hydrogenClip,
         lightClip: hydrogenLightClip,
-        title: { en: "Gemini 4 Hydrogen is here", ko: "Gemini 4 Hydrogen 추가" },
+        title: { en: "Gemini 4 Carbon + Hydrogen are here", ko: "Gemini 4 Carbon + Hydrogen 추가" },
         line: { en: "Google's fast Gemini for everyday work.", ko: "일상 작업에 빠른 Google Gemini." },
-        show: { en: "Press Alt+M and pick Gemini 4 Hydrogen.", ko: "Alt+M을 누르고 Gemini 4 Hydrogen을 고르세요." },
+        show: { en: "Press Alt+M and pick Gemini 4 Carbon or Hydrogen.", ko: "Alt+M을 누르고 Gemini 4 Carbon 또는 Hydrogen을 고르세요." },
       },
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },

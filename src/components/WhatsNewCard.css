@@ -13,7 +13,7 @@
 .whats-new-tiles { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; margin-top: 12px; }
 .whats-new-tile { display: grid; grid-row: span 4; grid-template-rows: subgrid; min-width: 0; }
 .whats-new-frame { aspect-ratio: 16 / 10; overflow: hidden; border: 1px solid var(--whats-new-line); border-radius: 6px; background: var(--color-inset); }
-.whats-new-frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.whats-new-frame :is(img, canvas) { display: block; width: 100%; height: 100%; object-fit: cover; }
 .whats-new-tile-title { margin-top: 8px; font-weight: 500; }
 .whats-new-line { margin-top: 2px; color: var(--color-ink-secondary); font-size: 12.5px; animation: var(--animate-fade-in); }
 .whats-new-show { justify-self: start; align-self: start; margin: 6px 0 0 -6px; padding: 2px 6px; border-radius: 5px; color: var(--color-accent); font-size: 12.5px; font-weight: 500; cursor: pointer; }
