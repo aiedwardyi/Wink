@@ -93,7 +93,7 @@ export function runHiddenVerify(input) {
     const { all, visible } = (${pageTools.toString()})();
     const text = (document.body?.innerText ?? "").trim().length;
     const spins = document.getAnimations().some(a => a.playState === "running" && a.effect?.getComputedTiming().iterations === Infinity && a.effect.target instanceof Element && visible(a.effect.target) && a.effect.getKeyframes().some(k => /rotate/.test(k.transform ?? "") || k.rotate));
-    return !text && !all("img,svg,canvas,video,iframe,input,textarea,select").some(visible) || text < 200 && (spins || all("[aria-busy=true],[role=progressbar],progress").some(visible));
+    return !text && !all("img,svg,canvas,video,iframe,input,textarea,select").some(visible) || text < 200 && (spins || all("[aria-busy=true],[role=progressbar]:not([aria-valuenow]),progress:indeterminate").some(visible));
   })()`;
   async function settle(cdp, inflight, quietSince, until) {
     for (;;) {
@@ -136,12 +136,12 @@ export function runHiddenVerify(input) {
         })) { hmr.add(e.url); break; }
       }
     }));
+    for (const event of ["Network.dataReceived", "Network.loadingFinished"]) disposers.push(cdp.on(event, () => { quiet = Date.now(); }));
     disposers.push(cdp.on("Network.responseReceived", e => {
-      // Answered: a fetch whose body the page never reads gets no loadingFinished.
+      // Answered: a fetch whose body the page never reads gets no loadingFinished, so a body still arriving only holds off quiet.
       inflight.delete(e.requestId); quiet = Date.now();
-      const where = plain(new URL(e.response.url).pathname, 120);
-      if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where, measured: `HTTP ${e.response.status}; reload the page` });
-      else if (e.response.status < 400) for (let n = loads.length; n--;) if (loads[n].where === where) loads.splice(n, 1);
+      if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where: plain(new URL(e.response.url).pathname, 120), url: e.response.url, measured: `HTTP ${e.response.status}; reload the page` });
+      else if (e.response.status < 400) for (let n = loads.length; n--;) if (loads[n].url === e.response.url) loads.splice(n, 1);
     }));
     disposers.push(cdp.on("Network.loadingFailed", e => {
       inflight.delete(e.requestId); quiet = Date.now();

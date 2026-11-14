@@ -153,6 +153,21 @@ it("waits for the page's requests to finish before it measures", async () => {
   expect(seen).toEqual([0, 0]);
 });
 
+it("waits for a body still arriving before it measures", async () => {
+  const i = input(), arriving = new Set(["desktop", "phone"]), seen = [];
+  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
+    f.events[tile]["Network.requestWillBeSent"]({ requestId: "api", type: "Fetch", request: { url: "http://127.0.0.1:1234/api" } });
+    f.events[tile]["Network.responseReceived"]({ requestId: "api", type: "Fetch", response: { url: "http://127.0.0.1:1234/api", status: 200 } });
+    for (const ms of [100, 200, 300, 400]) setTimeout(() => f.events[tile]["Network.dataReceived"]({ requestId: "api", dataLength: 4096 }), ms);
+    setTimeout(() => { arriving.delete(tile); f.events[tile]["Network.loadingFinished"]({ requestId: "api" }); }, 500);
+  };
+  const observe = f.values;
+  f.values = { has: rule => observe.has(rule) || rule === "copy", get: rule => rule === "copy" ? (seen.push(arriving.size), { texts: [] }) : observe.get(rule) };
+  await runHiddenVerify(i).done;
+  f.values = observe;
+  expect(seen).toEqual([0, 0]);
+});
+
 it("checks nothing on a page that never gets past loading", async () => {
   vi.useFakeTimers();
   const i = input();
@@ -250,10 +265,10 @@ it("drops a load error the page got past while its server started", async () => 
   const i = input();
   for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
     for (const status of [503, 200]) f.events[tile]["Network.responseReceived"]({ type: "Fetch", response: { url: "http://127.0.0.1:1234/api/data?since=1", status } });
-    f.events[tile]["Network.responseReceived"]({ type: "Fetch", response: { url: "http://127.0.0.1:1234/api/down", status: 503 } });
+    for (const [id, status] of [["broken", 503], ["ok", 200]]) f.events[tile]["Network.responseReceived"]({ type: "Fetch", response: { url: `http://127.0.0.1:1234/api/user?id=${id}`, status } });
   };
   const result = await runHiddenVerify(i).done;
-  expect(result.issues).toEqual([expect.objectContaining({ checker: "PAGE_ERRORS", where: "/api/down", measured: "HTTP 503; reload the page" })]);
+  expect(result.issues.map(issue => issue.where)).toEqual(["/api/user"]);
 });
 
 it("keeps clean clicks free of issues and avoids recounting load errors", async () => {
