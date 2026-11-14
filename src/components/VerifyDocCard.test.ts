@@ -193,6 +193,7 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] }),
     chunk(2, { ms: 24, kind: "doc-chunk", from: 1, to: n, state: "start" }),
     chunk(2, { ms: 16_008, kind: "doc-chunk", from: 1, to: n, state: "done" }),
+    chunk(2, { ms: 19_960, kind: "doc-finding", finding: { kind: "names", line: 5, page: 1, quote: "Line 5", fix: "x" } }),
     chunk(3, { status: "completed", ms: 19_960, issues: [], notChecked: [] }),
   ];
   vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ start(stream) { for (const part of bytes) stream.enqueue(part); stream.close(); } }))));
@@ -214,9 +215,10 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     if (el.classList.contains("verify-doc-line")) return rect((Number(el.dataset.n) - 1) * LINE - scrolled(), LINE);
     return rect(-scrolled(), n * LINE);
   });
-  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>();
+  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>(), leaving = new Set<Element>();
   Element.prototype.animate = function (this: Element, frames: Keyframe[], ms: number | KeyframeAnimationOptions) {
     if (frames[0]?.transform) drawn.set(this, { frames, at: performance.now(), ms: typeof ms === "number" ? ms : Number(ms.duration) });
+    if (frames.at(-1)?.opacity === 0) leaving.add(this);
     return {} as Animation;
   };
   const yOf = (transform: unknown) => Number(/,(-?[\d.]+)px\)/.exec(String(transform))![1]);
@@ -235,11 +237,10 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     if (options.behavior === "smooth") glide = { from: scrolled(), to, at: performance.now() };
     else stage.scrollTop = to;
   }) as typeof stage.scrollTo;
-  let reading = 0, out = 0;
+  let reading = 0, out = 0, named = 0;
   for (let ms = 0; ms < 6_000; ms += 16) {
     await act(async () => { await vi.advanceTimersByTimeAsync(16); });
-    if (!host.querySelector('[data-n="1"]')?.hasAttribute("data-on")) continue;
-    const readers = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => el.dataset.kind !== "numbering");
+    const readers = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => el.dataset.kind !== "numbering" && !leaving.has(el));
     if (!readers.length) continue;
     const lead = Math.max(...readers.map(el => {
       const glide = drawn.get(el), k = glide ? Math.min(1, (performance.now() - glide.at) / glide.ms) * (glide.frames.length - 1) : 0;
@@ -248,9 +249,11 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
       return a + (b - a) * (k - i);
     }));
     reading++;
+    if (readers.some(el => el.dataset.line === "5" && el.dataset.kind === "names")) named++;
     if (lead < scrolled() || lead + 21 > scrolled() + VIEW) out++;
   }
   expect(reading).toBeGreaterThan(150);
+  expect(named).toBeGreaterThan(0);
   expect(out).toBe(0);
   expect(host.querySelector(".verify-watch-again")).not.toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });

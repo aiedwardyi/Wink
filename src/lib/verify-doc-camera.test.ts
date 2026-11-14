@@ -31,6 +31,24 @@ it("eases to a stop without pushing the names cursor out the top", () => {
   expect(cam.v).toBeLessThan(1);
 });
 
+it("goes back up with a reader that points above the view", () => {
+  const cam = cameraStep({ x: 4_000, v: 900, speed: 900, to: 4_400 }, { lead: { y: 3_000, to: 110 } }, 460, 100_000, 16);
+  expect(cam.x).toBeLessThanOrEqual(3_000);
+});
+
+it("keeps following when a resize clamps the view", () => {
+  vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+  const stage = { scrollTop: 0, clientHeight: 460, scrollHeight: 2_000 } as HTMLElement, hand = vi.fn();
+  docCamera(stage, now => ({ lead: reader(now) }), () => true, hand);
+  vi.advanceTimersByTime(3_000);
+  expect(stage.scrollTop).toBe(1_540);
+  Object.assign(stage, { clientHeight: 800, scrollTop: 1_200 });
+  vi.advanceTimersByTime(100);
+  expect(hand).not.toHaveBeenCalled();
+  expect(stage.scrollTop).toBe(1_200);
+  expect(vi.getTimerCount()).toBe(1);
+});
+
 it("stops on a hand scroll and leaves nothing scheduled", () => {
   vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
   const stage = { scrollTop: 0, clientHeight: 460, scrollHeight: 10_000 } as HTMLElement, hand = vi.fn();

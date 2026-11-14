@@ -23,19 +23,22 @@ export function cameraStep(cam: DocCamera, { lead, stop }: DocView, view: number
     v = above < 0 ? above : Math.min(v, above, held);
     if (below > 0) v = Math.max(v, below * 1000 / WALL_MS);
   }
-  const floor = lead ? Math.min(lead.y + BOTTOM - view, lead.y - TOP) : 0;
-  const x = Math.min(max, Math.max(0, cam.x + v * dt / 1000, floor));
+  const floor = lead ? lead.y + BOTTOM - view : 0, ceiling = lead ? lead.y - TOP : Infinity;
+  const x = Math.max(0, Math.min(max, ceiling, Math.max(cam.x + v * dt / 1000, floor)));
   return { x, v: (x - cam.x) * 1000 / dt, speed, to: lead?.to };
 }
 
 /** Moves `stage` every frame until stopped, the follow is off, or a hand scrolls it. */
 export function docCamera(stage: HTMLElement, cursors: (now: number) => DocView, following: () => boolean, onHand: () => void): () => void {
-  let cam: DocCamera = { x: stage.scrollTop, v: 0, speed: 0 }, set = stage.scrollTop, last = performance.now(), frame = 0;
+  let cam: DocCamera = { x: stage.scrollTop, v: 0, speed: 0 }, set = stage.scrollTop, room = stage.scrollHeight - stage.clientHeight, last = performance.now(), frame = 0;
   const tick = () => {
     if (!following()) return;
-    if (Math.abs(stage.scrollTop - set) > 1) { onHand(); return; }
+    const max = stage.scrollHeight - stage.clientHeight;
+    // A resize can clamp or re-anchor scrollTop: only a moved view at the same size is a hand.
+    if (max !== room) { room = max; cam = { ...cam, x: stage.scrollTop }; }
+    else if (Math.abs(stage.scrollTop - set) > 1) { onHand(); return; }
     const now = performance.now();
-    cam = cameraStep(cam, cursors(now), stage.clientHeight, stage.scrollHeight - stage.clientHeight, now - last);
+    cam = cameraStep(cam, cursors(now), stage.clientHeight, max, now - last);
     last = now;
     stage.scrollTop = cam.x;
     set = stage.scrollTop;

@@ -81,7 +81,7 @@ function linesInView(stage: HTMLElement): [number, number] | null {
 
 /** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `glide`: a camera moves the view. */
 function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean) {
-  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean; find: boolean }>(), fading = new Set<ReturnType<typeof setTimeout>>();
   let offset = 0;
   return {
     move(c: DocCursor) {
@@ -109,7 +109,7 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
         el.lastElementChild!.textContent = tag(c.kind);
         layer.append(el);
         el.animate?.([{ opacity: 0 }, { opacity: 1 }], FADE_MS);
-        shown.set(c.id, cursor = { el, x, y, from: y, at: 0, ms: 0, band: c.band, lead });
+        shown.set(c.id, cursor = { el, x, y, from: y, at: 0, ms: 0, band: c.band, lead, find: false });
       }
       const { el, x: fx, y: fy } = cursor, label = el.lastElementChild as HTMLElement;
       const spot = tagSpot({}, { x, y }, label.offsetWidth, [row.parentElement!.getBoundingClientRect().right - origin.left, layer.clientHeight], 1)!;
@@ -117,14 +117,14 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       el.dataset.line = String(c.line);
       el.style.transform = `translate(${x}px,${y}px)`;
       if (c.duration) el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration);
-      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead });
+      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead, find: c.quote !== undefined });
     },
     /** The furthest-down reader of the chunk being read and the names cursor, in the stage's scroll space. */
     view(now: number): DocView {
       const seen: DocView = {};
       for (const c of shown.values()) {
         const y = offset + c.from + (c.y - c.from) * glideEase(Math.min(1, (now - c.at) / Math.max(1, c.ms)));
-        if (c.band === 0) seen.stop = Math.min(seen.stop ?? Infinity, y);
+        if (c.band === 0 && !(c.lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
         else if (c.lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, offset + c.y) };
       }
       return seen;
