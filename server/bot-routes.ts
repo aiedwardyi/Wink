@@ -19,6 +19,7 @@ import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
+import { IMPORT_MAX_BYTES, type MemoryImport } from "./memory-import.ts";
 import { modelPickPatch } from "./pending-model.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
@@ -44,6 +45,7 @@ type BotRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
+  memoryImport: MemoryImport;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -508,6 +510,17 @@ export function createBotRoutes(deps: BotRouteDeps) {
       memoryHealthCheck.refresh(m[1]);
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
+    },
+    importMemory: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      // JSON escaping can double a paste, so the body gets room past the paste's own cap
+      const parsed = z.object({ text: z.string(), source: z.string().max(200).optional(), threadId: z.string().optional() })
+        .safeParse(await readBody(req, IMPORT_MAX_BYTES * 2 + 64 * 1024));
+      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
+      const receipt = deps.memoryImport.run(m[1], parsed.data);
+      if (!("error" in receipt)) return json(res, 200, receipt);
+      if (receipt.error === "too-large") return json(res, 413, { error: receipt.error, maxBytes: IMPORT_MAX_BYTES });
+      return json(res, receipt.error === "empty" ? 400 : 500, { error: receipt.error });
     },
     memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });

@@ -757,6 +757,8 @@ export class Store {
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
   readonly trash = new TrashList();
+  /** Runs once per new bot, after it is saved; imported memory hooks in here. */
+  onBotCreated?: (bot: BotRecord) => void;
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
   private threads = new Map<string, ThreadState>();
@@ -1503,6 +1505,8 @@ export class Store {
       host?: { platform?: string; packaged?: boolean };
       /** A bot lost with bots.json comes back under its old id. */
       id?: string;
+      /** false = a bot arriving from another PC, whose memory arrives by sync. */
+      imports?: boolean;
     } = {},
   ): BotRecord {
     const name = profile.name?.trim() || pickBotName(this.bots.map((b) => b.name));
@@ -1540,6 +1544,7 @@ export class Store {
       // "I'll handle …" line looks like the bot already spoke.
       this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
     }
+    if (opts.imports !== false) this.onBotCreated?.(bot);
     return bot;
   }
 

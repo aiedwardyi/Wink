@@ -5,8 +5,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { importIntoBot, planImport } from "./memory-import.ts";
 import { markTalked, memorySyncDir, syncBotMemory, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
-import { MEMORY_SEED } from "./workspace.ts";
+import { MEMORY_SEED, workspaceDir } from "./workspace.ts";
 
 const roots: string[] = [];
 
@@ -623,5 +624,87 @@ describe("memory sync", () => {
     mkdirSync(join(a.workspace, "memory/deploy.md"));
     expect(sync(a)["memory/deploy.md"]).toBe("skipped");
     expect(JSON.parse(capture(a)).files["memory/deploy.md"]).toEqual(before);
+  });
+});
+
+describe("memory sync of an import", () => {
+  const notes = "# Memory\n- The user is Dana (noted 2026-10-02)\n- Launch notes live in memory/launch.md; read them for launch work.\n";
+  const paste = [
+    "WINK MEMORY EXPORT", "", "## Essentials", "- Lives in Seoul.", "", "## Details",
+    ...Array.from({ length: 900 }, (_, i) => `${i % 120 === 0 ? `### Topic ${i / 120}\n` : ""}- The user mentioned detail ${i}, kept word for word with its date [2026-01-01].`),
+    "", "Source: ChatGPT",
+  ].join("\n");
+
+  // the import writes through workspaceDir, so each PC's workspace is a bot folder on this machine
+  function importing() {
+    const [a, b] = pcs();
+    a.workspace = workspaceDir("sync-import-a");
+    b.workspace = workspaceDir("sync-import-b");
+    roots.push(a.workspace, b.workspace);
+    seed(notes, a, b);
+    edit(a, "- Owners: Dana, Min.\n", "memory/launch.md");
+    sync(a);
+    receive(a, b);
+    sync(b);
+    const plan = planImport(paste, { date: "2026-11-14" });
+    if ("error" in plan) throw new Error(plan.error);
+    return { a, b, plan };
+  }
+
+  const files = (pc: PC) => Object.fromEntries(readdirSync(join(pc.workspace, "memory")).sort().map((name) => [name, read(pc, `memory/${name}`)]));
+
+  it("carries every imported file to the other PC once, with nothing set aside", () => {
+    const { a, b, plan } = importing();
+    expect(plan.files.length).toBeGreaterThan(1);
+    expect(importIntoBot("sync-import-a", plan).ok).toBe(true);
+    sync(a);
+    receive(a, b);
+    const pulled = sync(b);
+    expect(pulled["MEMORY.md"]).toBe("pulled");
+    for (const file of plan.files) expect(pulled[`memory/${file.name}`]).toBe("pulled");
+    expect(read(b)).toBe(read(a));
+    expect(files(b)).toEqual(files(a));
+    expect(parked(a)).toEqual([]);
+    expect(parked(b)).toEqual([]);
+    receive(b, a);
+    expect(Object.values(sync(a)).every((result) => result === "current")).toBe(true);
+    expect(Object.values(sync(b)).every((result) => result === "current")).toBe(true);
+  });
+
+  it("keeps a note the other PC saved while this one imported", () => {
+    const { a, b, plan } = importing();
+    importIntoBot("sync-import-a", plan);
+    sync(a);
+    edit(b, `${notes}- Booked the Lisbon flights (noted 2026-11-14)\n`);
+    sync(b);
+    receive(a, b);
+    receive(b, a);
+    sync(a);
+    sync(b);
+    for (const pc of [a, b]) {
+      const kept = [read(pc)!, ...parked(pc)].join("\n");
+      expect(kept).toContain("- Booked the Lisbon flights (noted 2026-11-14)");
+      expect(kept).toContain("<!-- wink-import:chatgpt -->");
+      for (const line of notes.split("\n")) expect(read(pc)).toContain(line);
+      // side files only one PC wrote never conflict, so none is doubled
+      expect(Object.keys(files(pc)).filter((name) => name.startsWith("imported-chatgpt") && name.includes(".conflict-"))).toEqual([]);
+      for (const file of plan.files) expect(read(pc, `memory/${file.name}`)).toBe(file.body);
+    }
+    expect(read(a)).toBe(read(b));
+  });
+
+  it("settles without a conflict when both PCs import the same reply", () => {
+    const { a, b, plan } = importing();
+    importIntoBot("sync-import-a", plan);
+    importIntoBot("sync-import-b", plan);
+    sync(a);
+    sync(b);
+    receive(a, b);
+    receive(b, a);
+    sync(a);
+    sync(b);
+    expect(read(a)).toBe(read(b));
+    expect(parked(a)).toEqual([]);
+    expect(parked(b)).toEqual([]);
   });
 });

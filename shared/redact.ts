@@ -491,12 +491,17 @@ export function redactSecretsInText(text: string): string {
   return out;
 }
 
-/** Private room memory: the shared masks plus prose credentials and invite codes. */
-export function redactRoomMemory(text: string): string {
+/** The shared masks plus prose credentials ("my password is ..."). */
+export function redactProseSecrets(text: string): string {
   // wkr1: is a public URI prefix; its wki_ credential is masked separately.
   const prose = text.replace(PROSE_SECRET, (m: string, lead: string, quote: string, value: string, at: number, all: string) =>
     !PROSE_VALUE.test(value) || (value === "wkr1" && all[at + m.length] === ":") || isCodeValue(quote, value, all, at + m.length) ? m : `${lead}${quote}${mask(value)}${quote}`);
-  return redactSecretsInText(prose).replace(ROOM_CODE, (value: string) => /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
+  return redactSecretsInText(prose);
+}
+
+/** Private room memory: the shared masks plus prose credentials and invite codes. */
+export function redactRoomMemory(text: string): string {
+  return redactProseSecrets(text).replace(ROOM_CODE, (value: string) => /[2-9]/.test(value) && /[A-Z]/.test(value) ? mask(value) : value);
 }
 
 /** Deep copy with credential VALUES replaced. Handles the two shapes that
