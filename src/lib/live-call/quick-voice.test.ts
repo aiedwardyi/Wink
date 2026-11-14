@@ -57,12 +57,15 @@ function fakeAudio(clock: () => number): Mic {
   };
 }
 
-function setup(opts: { words?: string[]; tokenMs?: number; responses?: Record<string, Posted> } = {}) {
+type Reply = Posted | (() => Posted);
+
+function setup(opts: { words?: string[]; tokenMs?: number; keyless?: number; responses?: Record<string, Reply> } = {}) {
   let t = 0;
   const clock = () => t;
   const audio = fakeAudio(clock);
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any; at: number }> = [];
+  let keyless = opts.keyless ?? 0;
   const call = new LiveCall({
     botId: "b1",
     botName: "Nova",
@@ -73,9 +76,10 @@ function setup(opts: { words?: string[]; tokenMs?: number; responses?: Record<st
     post: async (path, body) => {
       posts.push({ path, body, at: t });
       const hit = Object.entries(opts.responses ?? {}).find(([suffix]) => path.endsWith(suffix));
-      if (hit) return hit[1];
+      if (hit) return typeof hit[1] === "function" ? hit[1]() : hit[1];
       if (path.endsWith("/call/token")) {
         if (opts.tokenMs) await new Promise((resolve) => setTimeout(resolve, opts.tokenMs));
+        if (keyless-- > 0) return { status: 409, data: {} };
         return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: "Aoede" } };
       }
       return { status: 200, data: {} };
@@ -232,6 +236,118 @@ describe("hang-up keeps his words", () => {
   });
 });
 
+describe("hang-up keeps his words, review cases", () => {
+  it("sends nothing after he tapped No on the offer", async () => {
+    const { call, engine, posts, tick } = await live();
+    engine().events.heard("Delete the old branches.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Delete the old branches." } }]);
+    await call.answer(false);
+    call.end();
+    await tick(1_100);
+    expect(sent(posts)).toEqual([]);
+  });
+
+  it("never sends twice an order whose receipts were lost", async () => {
+    const { call, engine, posts, tick } = await live({ responses: { "/messages": { status: 502, data: { error: "bad gateway" } } } });
+    engine().events.heard("Open the Orbit folder.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await tick(2_000);
+    call.end();
+    await tick(1_100);
+    expect(sent(posts).map((body) => body.text)).toEqual(["Open the Orbit folder.", "Open the Orbit folder."]);
+  });
+
+  it("sends a spoken yes that never reached the bot on hang-up", async () => {
+    let tries = 0;
+    const { call, engine, posts, tick } = await live({ responses: { "/messages": () => (tries++ ? ACCEPTED : { status: 409, data: { error: "switched tasks" } }) } });
+    engine().events.heard("Open the Orbit folder.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
+    engine().events.turnDone();
+    engine().events.heard("Yes.");
+    engine().events.answering();
+    await tick(0);
+    call.end();
+    await tick(1_100);
+    expect(sent(posts).map((body) => body.text)).toEqual(["Open the Orbit folder.", "Open the Orbit folder. Yes."]);
+  });
+
+  it("sends an answer to the bot's question that never reached it on hang-up", async () => {
+    let tries = 0;
+    const { call, engine, posts, tick } = await live({ responses: { "/messages": () => (tries++ ? ACCEPTED : { status: 409, data: { error: "switched tasks" } }) } });
+    call.observe({ busy: false, messages: [{ id: "ask", role: "bot", kind: "options", at: 6_000, card: { title: "q", subtitle: "Ship 1.0.264 now?", options: ["Ship it", "Wait"], askUser: true } } as never] });
+    engine().events.answering();
+    engine().events.turnDone();
+    engine().events.heard("Ship it.");
+    engine().events.answering();
+    await tick(0);
+    call.end();
+    await tick(1_100);
+    expect(sent(posts).map((body) => body.text)).toEqual(["Re: “Ship 1.0.264 now?”\nShip it.", "Ship it."]);
+  });
+
+  it("leaves a Not sent line, before the call ends, when the hang-up message fails", async () => {
+    const { call, engine, posts, tick } = await live({ responses: { "/messages": { status: 409, data: { error: "switched tasks" } } } });
+    engine().events.heard("Rename the logo file.");
+    call.end();
+    await tick(1_100);
+    expect(linesOf(posts)).toEqual(["user: Rename the logo file.", "voice: Not sent: Rename the logo file. (switched tasks)"]);
+    expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines", "messages", "lines", "end"]);
+  });
+
+  it("counts an offer his words replaced as not dropped", async () => {
+    const { call, engine, posts, tick } = await live();
+    engine().events.heard("Open the Orbit folder.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
+    call.end();
+    await tick(1_100);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats.orders).toMatchObject({ proposed: 1, dropped: 0 });
+  });
+
+  it("still sends what he said when he hangs up before the call connected", async () => {
+    const words = ["rename", "the", "logo"];
+    const { call, audio, engines, engine, posts, tick } = setup({ words, tokenMs: 800, responses: { "/messages": ACCEPTED } });
+    const started = call.start();
+    for (let i = 0; i < words.length; i++) {
+      audio.word(i);
+      await tick(150);
+    }
+    call.end();
+    expect(engines).toHaveLength(0);
+    await tick(400);
+    await started;
+    expect(engines).toHaveLength(1);
+    engine().events.ready();
+    expect(engine().paused).toBe(1);
+    expect(engine().texts).toEqual([]);
+    engine().transcribe();
+    await tick(1_100);
+    expect(engine().closed).toBe(true);
+    expect(sent(posts)).toEqual([expect.objectContaining({ text: "rename the logo", call: { id: CALL, order: true } })]);
+  });
+
+  it("still sends what he said when he hangs up while the voice connects", async () => {
+    const words = ["push", "it"];
+    const { call, audio, engine, posts, tick } = setup({ words, tokenMs: 100, responses: { "/messages": ACCEPTED } });
+    const started = call.start();
+    audio.word(0);
+    await tick(100);
+    await started;
+    audio.word(1);
+    call.end();
+    engine().events.ready();
+    engine().transcribe();
+    await tick(1_100);
+    expect(sent(posts).map((body) => body.text)).toEqual(["push it"]);
+  });
+});
+
 describe("the mic is live from the tap", () => {
   const WORDS = ["hey", "do", "this", "real", "quick", "rename", "the", "logo", "file", "please"];
 
@@ -265,6 +381,30 @@ describe("the mic is live from the tap", () => {
     await tick(400);
     await started;
     expect(audio.captures).toEqual([0]);
+  });
+
+  it("turns the mic back off for a keyless call even when the mic failed to start", async () => {
+    const { call, audio, tick } = setup({ keyless: 1 });
+    audio.capture = async () => { throw new Error("Playback blocked"); };
+    await call.start();
+    await tick(0);
+    expect(call.state().status).toBe("needsKey");
+    expect(audio.stops).toBe(1);
+  });
+
+  it("drops what was said in the keyless try when the call starts again", async () => {
+    const { call, audio, engine, tick } = setup({ words: ["hello"], tokenMs: 100, keyless: 1 });
+    const keyless = call.start();
+    audio.word(0);
+    await tick(100);
+    await keyless;
+    expect(call.state().status).toBe("needsKey");
+    const started = call.start();
+    await tick(100);
+    await started;
+    engine().events.ready();
+    expect(engine().frames).toEqual([]);
+    expect(engine().texts.filter((text) => GREETING.test(text))).toHaveLength(1);
   });
 
   it("turns the mic back off when the call needs a key", async () => {
