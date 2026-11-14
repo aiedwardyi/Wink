@@ -61,7 +61,7 @@ export function hiddenStartHits(file, text) {
 
 export function checkHiddenStarts(files = trackedFiles(scanned), read = readSource) {
   const counts = new Map();
-  return files.flatMap((file) => hiddenStartHits(file, read(file)))
+  const unhidden = files.flatMap((file) => hiddenStartHits(file, read(file)))
     .filter((hit) => {
       const entry = allowlist.find((entry) => entry.file === hit.file);
       if (!entry) return true;
@@ -70,6 +70,9 @@ export function checkHiddenStarts(files = trackedFiles(scanned), read = readSour
       return count > entry.starts;
     })
     .map((hit) => `${hit.file}:${hit.line}: ${hit.name}() starts a process without windowsHide: true; a terminal window can open on Windows`);
+  const stale = allowlist.filter((entry) => files.includes(entry.file) && (counts.get(entry.file) ?? 0) < entry.starts)
+    .map((entry) => `${entry.file}: the allow-list permits ${entry.starts} unhidden starts but the file has ${counts.get(entry.file) ?? 0}; lower its count`);
+  return [...unhidden, ...stale];
 }
 
 runCheck(import.meta.url, checkHiddenStarts);

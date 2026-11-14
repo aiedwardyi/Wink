@@ -38,6 +38,10 @@ describe("hidden process start gate", () => {
     expect(checkHiddenStarts(["server/env-path.ts"], () => `${start} execFile("sh", []);`)).toHaveLength(1);
   });
 
+  it("fails the gate when an allowlisted file has fewer starts than its entry permits", () => {
+    expect(checkHiddenStarts(["server/env-path.ts"], () => "")).toEqual(["server/env-path.ts: the allow-list permits 1 unhidden starts but the file has 0; lower its count"]);
+  });
+
   it("accepts the repository with only its explicit base exceptions", () => {
     expect(checkHiddenStarts()).toEqual([]);
   });
