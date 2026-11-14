@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
 import { mapClashes, treeIndex, treeOrder } from "@/lib/map-tree";
 import { mapWorkerSlots } from "@/lib/map-worker-colors";
+import { MapGitFlow } from "./MapGitFlow";
 import { MapTree } from "./MapTree";
 import "./MapPane.css";
 
@@ -202,7 +203,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         {lost && <p className="map-empty" role="status">{c.lost} <button type="button" onClick={() => setRepoRetry(repoRetry + 1)}>{c.retry}</button></p>}
         {index && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
-      {/* Git flow row */}
+      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
       {worker.git && files.length > 0 && <>
         <div className="map-crumbs">
           <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>

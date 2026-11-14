@@ -9,6 +9,7 @@ import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
+import { createMapFlow, type MapGh } from "./map-pr.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -37,11 +38,13 @@ export interface MapPaneDeps {
   panes(botId: string): Promise<MapPaneRecord[]>;
   reason?(botId: string, pane: MapPaneRecord, editedAt: number): string | undefined;
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
+  gh?: MapGh;
 }
 
 export function createMapPane(deps: MapPaneDeps) {
   const fallback = new Map<string, string | null>();
   const readers = new Map<string, Set<Map<string, WatchedPane>>>();
+  const flows = createMapFlow(deps.gh);
 
   function live(res: ServerResponse, botId: string) {
     const panes = new Map<string, WatchedPane>();
@@ -146,6 +149,11 @@ export function createMapPane(deps: MapPaneDeps) {
       if (!record) return json(res, 404, { error: "No such worker" });
       try { return json(res, 200, { name: basename(record.root), paths: record.base ? await mapRepoFiles(record.root) : await mapWalkFiles(record.root) }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
+    }
+    if (route === "flow") {
+      if (!record?.base) return json(res, 404, { error: "No such worker" });
+      try { return json(res, 200, await flows.flow(record.root, record.base)); }
+      catch { return json(res, 503, { error: "Could not read git" }); }
     }
     const file = record?.worker.files.find(file => file.path === path);
     if (!record?.base || !file) return json(res, 404, { error: "No such changed file" });
