@@ -201,9 +201,13 @@
 .mm-specks { position: absolute; z-index: 7; inset: 0; pointer-events: none; opacity: 0; }
 .mm-specks i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / 0.9); }
 
+/* an outgoing fold must not hold the page's scroll range open */
+.mm-wrap:has(> .mm[data-stacked] .mm-fold[data-leaving]) { overflow: clip; }
 .mm[data-stacked] .mm-ray, .mm[data-stacked] .mm-newest { display: none !important; }
 .mm[data-stacked] .mm-glow, .mm[data-stacked]::after { height: 620px; }
+.mm[data-stacked]::after { display: none; }
 .mm[data-stacked] .mm-grid { display: flex; flex-direction: column; gap: 12px; perspective: none; }
+.mm[data-stacked] .mm-slot { position: relative; }
 .mm[data-stacked] .mm-live { order: -1; }
 .mm[data-stacked] .mm-slot > .mm-panel, .mm[data-stacked] .mm-bottom .mm-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 0 12px; padding: 14px; }
 .mm[data-stacked] .mm-panel-top, .mm[data-stacked] .mm-panel .mm-label { display: contents !important; }
@@ -216,12 +220,8 @@
 .mm[data-stacked] .mm-count b { font-size: 24px; line-height: 26px; }
 .mm[data-stacked] .mm-count span { font-size: 12px; }
 .mm[data-stacked] .mm-panel[aria-expanded="true"] { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); box-shadow: 0 0 40px rgb(99 102 241 / calc(0.3 * var(--mem-glow))); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.mm[data-stacked] [data-fold="opening"] { animation: mm-fold-open var(--motion-large) var(--ease-entrance); }
-.mm[data-stacked] [data-fold="opening"] .mm-list li:nth-child(-n+14), .mm[data-stacked] [data-fold="opening"] .mm-topics li:nth-child(-n+14) > .mm-topic { animation: mm-arrive var(--motion-moderate) var(--ease-entrance) 60ms backwards; }
+.mm[data-stacked] .mm-fold[data-leaving] { position: absolute; z-index: 2; top: 100%; left: 0; right: 0; pointer-events: none; }
 .mm[data-stacked] .mm-fold .mm-list:not(.mm-topics) li:nth-child(n+15) { content-visibility: auto; contain-intrinsic-block-size: auto 52px; }
-@keyframes mm-fold-open { from { opacity: 0; transform: translateY(-10px); } }
-.mm-sweep { position: absolute; z-index: 1; pointer-events: none; top: 0; left: 0; width: 65%; height: min(420px, 100%); opacity: 0;
-  background: radial-gradient(closest-side, rgb(var(--mm-violet) / calc(0.5 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.22 * var(--mem-glow))) 55%, transparent); }
 .mm-fold-edit { margin: 6px 0 2px auto; height: 44px; display: flex; }
 .mm[data-stacked] .mm-topic { min-height: 44px; }
 .mm-fold { position: relative; overflow: hidden; margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }

@@ -86,17 +86,17 @@ export function fadePanel({ sheet, content }: Pick<OpenParts, "sheet" | "content
   ];
 }
 
-// a phone fold takes its height at once, so what sits below slides down from where it was
-export function openFold(fold: HTMLElement, below: HTMLElement[], sweep: HTMLElement | null, loose: Animation[]) {
-  if (reducedMemoryMotion()) return;
-  const height = fold.offsetHeight;
-  // a fold taller than the screen sends these off it at once, and its deferred rows' estimates would make them jump
-  if (height < window.innerHeight) for (const el of below) loose.push(el.animate([{ transform: `translateY(${-height}px)` }, { transform: "none" }], { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }));
-  if (sweep) loose.push(sweep.animate([
-    { transform: "translateX(-100%)", opacity: 0 },
-    { offset: 0.3, opacity: 1 },
-    { transform: "translateX(190%)", opacity: 0 },
-  ], { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }));
+export function openFold(fold: HTMLElement): Animation[] {
+  return reducedMemoryMotion() ? [] : light({ sheet: fold, content: [...fold.children] as HTMLElement[], side: "bottom", from: 1, mist: null, specks: null });
+}
+
+// layout lands once; rows travel from their painted positions, including a half-finished move
+export function moveRows(before: Map<HTMLElement, number>, opening: boolean): Animation[] {
+  if (reducedMemoryMotion()) return [];
+  const rows = [...before].map(([el, top]) => ({ el, by: top - el.getBoundingClientRect().top }));
+  return rows.filter(({ el, by }) => el.isConnected && Math.abs(by) > 0.5).map(({ el, by }) => el.animate([
+    { transform: `translateY(${by}px)` }, { transform: "none" },
+  ], { duration: opening ? MOTION_LARGE_MS : MOTION_FAST_MS, easing: EASE_STANDARD }));
 }
 
 // a close is the open played back from where it is, a whole one in MOTION_FAST_MS; resolves false when turned around again
