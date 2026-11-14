@@ -94,7 +94,7 @@ describe("augmentedPath", () => {
         "omb-fake-cli",
         [],
         // bare GUI-style PATH + our augmentation — the augmentation must win
-        { env: { PATH: augmentedPath() } },
+        { env: { PATH: augmentedPath() }, windowsHide: true },
         (err, out) => (err ? reject(err) : resolve(out)),
       );
     });
@@ -264,7 +264,7 @@ winOnly("resolveCli (Windows)", () => {
     expect(r.args).toEqual([join(dir, "node_modules", "pkg", "bin", "ombfake.js"), "-p", "hi"]);
     expect(r.command.toLowerCase()).toMatch(/node\.exe$/);
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+      execFile(r.command, r.args, { windowsHide: true }, (err, out) => (err ? reject(err) : resolve(out))),
     );
     expect(stdout.trim()).toBe("js target -p,hi");
   });
@@ -304,7 +304,7 @@ winOnly("resolveCli (Windows)", () => {
     expect(r.args).toEqual([script, "a", "b"]);
 
     const stdout = await new Promise<string>((resolve, reject) =>
-      execFile(r.command, r.args, (err, out) => (err ? reject(err) : resolve(out))),
+      execFile(r.command, r.args, { windowsHide: true }, (err, out) => (err ? reject(err) : resolve(out))),
     );
     expect(stdout.trim()).toBe("shebang a,b");
   });

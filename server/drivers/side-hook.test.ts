@@ -27,6 +27,7 @@ describe("side hook", () => {
     const run = spawnSync(process.execPath, [...preload, HOOK, dir], {
       input: JSON.stringify({ session_id: "fork-1", hook_event_name: "PreToolUse", cwd: root, tool_name, tool_input }),
       encoding: "utf8",
+      windowsHide: true,
     });
     expect(run.status).toBe(0);
     return JSON.parse(run.stdout).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
