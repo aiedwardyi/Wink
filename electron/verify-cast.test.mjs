@@ -27,7 +27,7 @@ it("records through the existing adapter and holds acks to four fps", async () =
   const cdp = { send, on: (name, cb) => { events.on(name, cb); return () => events.off(name, cb); } };
   const cast = startCast({ cdp, page: {}, tile: "desktop", started: Date.now(), frame: f => frames.push(f) });
   await Promise.resolve();
-  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth: 1280, maxHeight: 720 });
+  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 640 });
   events.emit("Page.screencastFrame", { data: "/9j/2Q==", sessionId: 1 });
   expect(frames).toHaveLength(1);
   expect(send.mock.calls.some(([method]) => method === "Page.screencastFrameAck")).toBe(false);
@@ -77,48 +77,10 @@ it("drops backed-up live frames, seeds late readers and ends without Watch", () 
   expect(rows.at(-1)).toMatchObject({ kind: 3, ms: 140 });
 });
 
-it.each([["desktop", 1280, 1280, 720], ["phone", 784, 784, 1600]])("keeps the %s page's own pixels and fits each frame under the link cap", async (tile, width, maxWidth, maxHeight) => {
-  const frame = vi.fn(), send = vi.fn(async () => {}), sizes = [];
-  const toJPEG = vi.fn(quality => Buffer.alloc(quality > 65 ? 200 * 1024 : 1000, 1));
-  const capturePage = vi.fn(async () => ({ resize: size => { sizes.push(size); return { toJPEG }; } }));
-  const cast = startCast({ cdp: { send, on: () => () => {} }, page: { capturePage }, tile, started: Date.now(), frame });
-  await cast.shot();
-  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth, maxHeight });
-  expect(sizes).toEqual([{ width }]);
-  expect(toJPEG.mock.calls.map(([quality]) => quality)).toEqual([80, 65]);
-  expect(validFrame({ type: "cast", runId: "run-123456", ...frame.mock.calls[0][0] }, "child")).toBe(true);
-  cast.stop();
-});
-
 it("captures a frame on demand for the scroll stop it was asked at", async () => {
   const frame = vi.fn(), capturePage = vi.fn(async () => ({ resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
   const cast = startCast({ cdp: { send: async () => {}, on: () => () => {} }, page: { capturePage }, tile: "desktop", started: Date.now(), frame });
   await cast.shot();
   expect(frame).toHaveBeenCalledWith(expect.objectContaining({ tile: "desktop", data: "/9j/2Q==" }));
-  cast.stop();
-});
-
-it("halves a frame the page's own pixels cannot fit under the link cap, and sends none that never fits", async () => {
-  const frame = vi.fn(), sizes = [];
-  let fits = 640;
-  const capturePage = vi.fn(async () => ({ resize: size => { sizes.push(size.width); return { toJPEG: () => Buffer.alloc(size.width <= fits ? 1000 : 200 * 1024, 1) }; } }));
-  const cast = startCast({ cdp: { send: async () => {}, on: () => () => {} }, page: { capturePage }, tile: "desktop", started: Date.now(), frame });
-  await cast.shot();
-  expect(sizes).toEqual([1280, 640]);
-  expect(validFrame({ type: "cast", runId: "run-123456", ...frame.mock.calls[0][0] }, "child")).toBe(true);
-  fits = 0;
-  await cast.shot();
-  expect(frame).toHaveBeenCalledTimes(1);
-  cast.stop();
-});
-
-it("sends no screencast frame the link would drop, so the capture fallback still runs", async () => {
-  const events = new EventEmitter(), frames = [], capturePage = vi.fn(async () => ({ resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
-  const cast = startCast({ cdp: { send: async () => {}, on: (name, cb) => { events.on(name, cb); return () => events.off(name, cb); } }, page: { capturePage }, tile: "desktop", started: Date.now(), frame: f => frames.push(f) });
-  events.emit("Page.screencastFrame", { data: "A".repeat(192 * 1024), sessionId: 1 });
-  expect(frames).toEqual([]);
-  cast.readerStop();
-  await new Promise(setImmediate);
-  expect(frames).toEqual([expect.objectContaining({ data: "/9j/2Q==" })]);
   cast.stop();
 });

@@ -116,18 +116,23 @@ const nearest = (list: Stored[], y: number) => list.reduce((best, f) => Math.abs
 
 interface Spot { x: number; y: number; w: number; thing: number; top: number | null; visits: number }
 
-function spotsOf(things: Thing[]) {
+function spotsOf(things: Thing[], [w, h]: readonly number[]) {
   const spots = new Map<string, Map<string, Spot>>();
   things.forEach((thing, i) => {
     for (const row of thing.rows) {
-      const box = row.box;
-      if (row.result === "skip" || !box) continue;
-      const checker = typeof row.checker === "string" ? row.checker : "CHECK", own = spots.get(checker) ?? new Map<string, Spot>();
+      if (row.result === "skip") continue;
+      const checker = typeof row.checker === "string" ? row.checker : "CHECK", own = spots.get(checker) ?? new Map<string, Spot>(), box = row.box;
       spots.set(checker, own);
+      if (!box) continue;
       const x = box[0]! + Math.min(box[2]! * 0.3, 12), y = box[1]! + Math.min(box[3]! * 0.6, 10);
       own.set(`${x},${y}`, { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 });
     }
   });
+  // A check with no box looked at the page as a whole.
+  for (const own of spots.values()) {
+    if (own.size) continue;
+    for (const [x, y] of [[0.35, 0.4], [0.65, 0.6]] as const) own.set(`${x}`, { x: w! * x, y: h! * y, w: 0, thing: 0, top: 0, visits: 0 });
+  }
   return new Map([...spots].map(([checker, own]) => [checker, [...own.values()]]));
 }
 
@@ -135,7 +140,7 @@ interface Lane { id: string; checker: string; extra: number }
 
 /** Each checker's glides over its own checks in view, arriving one cursor at a time; spare cursors join the checker with the most boxes left to visit. */
 function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[], slot: number, play: number, scrollAt: (at: number) => number): Cursor[] {
-  const spots = spotsOf(things), route: Cursor[] = [], h = size[1]!;
+  const spots = spotsOf(things, size), route: Cursor[] = [], h = size[1]!;
   const lanes: Lane[] = [...spots.keys()].map(checker => ({ id: checker, checker, extra: 0 }));
   if (!lanes.length) return route;
   const shown = (spot: Spot, top: number) => { const y = spot.y - (spot.top ?? top); return y >= 0 && y <= h - 16; };

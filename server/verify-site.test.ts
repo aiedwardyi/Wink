@@ -163,11 +163,7 @@ it("streams only to thread readers, saves after the reply, and serves replay or 
     controller.enqueue(chunk(2, { kind: "part", part: "loads", ms: 2 }));
     void done.then(() => { controller.enqueue(chunk(3, { status: "completed", ms: 4, issues: [], notChecked: [] })); controller.close(); });
   } });
-  let polls = 0;
-  bridge!.poll = async run => {
-    if (!polls++) return { runId: run.runId, revision: 1, state: "running", counts: counts(1), result: null };
-    await done; return { runId: run.runId, revision: 2, state: "completed", counts: counts(10), result: result([], { runId: run.runId }) };
-  };
+  bridge!.poll = async run => { await done; return { runId: run.runId, revision: 2, state: "completed", counts: counts(10), result: result([], { runId: run.runId }) }; };
   const pending = tool({ entry: "site" });
   const live = await until(() => broadcasts.find(message => message.verify?.live));
   const runId = live.verify!.runId;
@@ -227,7 +223,6 @@ it("holds the next run until a cancelled cast retires", async () => {
     controller.enqueue(chunk(0, { v: 1, runId: run.runId, site: run.site, page: run.entry }));
     retire = () => controller.close();
   } });
-  bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(1), result: null }];
   const aborter = new AbortController(), first = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
   await until(() => broadcasts.some(message => message.verify?.live));
   const second = tool({ entry: "site" }); await until(() => card()?.status === "waiting");
@@ -385,9 +380,9 @@ describe("verify_site hidden checks", () => {
   });
 
   it("refuses a rerun while the original run is live even if its card is stale", async () => {
-    bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(1), result: null }];
     const pending = tool({ entry: "site" });
-    const previous = await until(() => card());
+    await until(() => bridge!.starts.length === 1);
+    const previous = card()!;
     const message = store.activePath(threadId).find(message => message.verify)!;
     store.patchMessage(threadId, message.id, { verify: { ...previous, startedAt: Date.now() - 80_000 } });
     expect((await decide(previous.runId, "rerun", previous.decisionNonce)).status).toBe(404);
@@ -455,31 +450,6 @@ describe("verify_site Auto", () => {
     await verify.startAuto({ ...input, episode: "task-two" });
     expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(2);
     expect(card()?.fixed).toBeUndefined();
-  });
-
-  it("shows no card, Check or replay for a run that checked nothing", async () => {
-    const seen: string[] = [];
-    store.onChange((change) => { if ((change.type === "message" || change.type === "message.patch") && change.message.verify) seen.push(change.message.verify.status); });
-    bridge!.cast = async run => new ReadableStream({ start(controller) {
-      controller.enqueue(chunk(0, { v: 1, runId: run.runId, site: run.site, page: run.entry, startedAt: Date.now(), tiles: { desktop: [1280, 720], phone: [392, 800] } }));
-      controller.enqueue(chunk(1, { tile: "desktop", ms: 1, data: Buffer.from([255, 216, 255, 217]) }));
-      controller.enqueue(chunk(3, { status: "blocked", ms: 20_000, issues: [], notChecked: [] }));
-      controller.close();
-    } });
-    const none = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
-    bridge!.states = [
-      { runId: "x", revision: 1, state: "running", counts: none, result: null },
-      { runId: "x", revision: 2, state: "blocked", counts: none, result: result([], { counts: none, errorCode: "page-failed" }), errorCode: "page-failed" },
-    ];
-    expect(await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "loading" })).toBe(true);
-    await new Promise(resolve => setTimeout(resolve, 50));
-    expect(seen).toEqual([]);
-    expect(card()).toBeUndefined();
-    expect(broadcasts.filter(message => message.verify)).toEqual([]);
-    expect(existsSync(join(DATA_DIR, "verify-replays", threadId))).toBe(false);
-    bridge!.states = finalStates(result());
-    await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "loaded" });
-    expect(card()?.status).toBe("completed");
   });
 
   it("queues behind a tool run and replaces an older auto run for the same thread", async () => {
@@ -563,7 +533,7 @@ describe("verify_site Auto", () => {
     expect(JSON.stringify(context.transcript)).not.toContain("Pane note");
   });
 
-  it.each(["running", "completed"])("frees the slot after a %s card persistence failure", async status => {
+  it.each(["preparing", "running", "completed"])("frees the slot after a %s card persistence failure", async status => {
     const append = store.appendMessage.bind(store);
     const patch = store.patchMessage.bind(store);
     vi.spyOn(store, "appendMessage").mockImplementation((thread, input) => {
@@ -582,13 +552,13 @@ describe("verify_site Auto", () => {
     expect((await tool({ entry: "site" })).body.status).toBe("completed");
   });
 
-  it("moves the card running, completed with counts from the first check, broadcasting counts only in memory", async () => {
+  it("moves the card preparing, running, completed with counts, broadcasting counts only in memory", async () => {
     store.patchBot(botId, { autoApprove: true });
     const seen: string[] = [];
     store.onChange((change) => { if (change.type === "message" || change.type === "message.patch") if (change.message.verify) seen.push(change.message.verify.status); });
     bridge!.states = finalStates(result([{ checker: "CONTRAST", tile: "phone", rule: "contrast", where: "p.lede", measured: "3.1:1, needs 4.5:1" }]));
     const reply = await tool({ entry: "site" });
-    expect([...new Set(seen)]).toEqual(["running", "completed"]);
+    expect([...new Set(seen)]).toEqual(["preparing", "running", "completed"]);
     expect(broadcasts.at(-1)?.verify?.counts?.completed).toBe(5);
     expect(card()).toMatchObject({ status: "completed", counts: counts(10, 1), issueTotal: 0, issues: [], details: [expect.objectContaining({ rule: "contrast" })] });
     expect(reply.body.text).toContain("no problems found");
@@ -642,7 +612,6 @@ describe("verify_site cancellation", () => {
   beforeEach(() => store.patchBot(botId, { autoApprove: true }));
 
   it("a dropped request cancels once", async () => {
-    bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(1), result: null }];
     const aborter = new AbortController();
     const pending = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
     await until(() => bridge!.starts.length === 1);

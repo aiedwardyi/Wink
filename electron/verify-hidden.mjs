@@ -13,9 +13,6 @@ import { blockedGuard } from "./verify-rules/blocked.mjs";
 const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule];
 const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeout"]);
 const SHOT_MS = 2000;
-/** A page gets as long to settle as a named app gets to serve (server/verify-app.ts). */
-const SETTLE_MS = 20_000;
-const QUIET_MS = 300;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
 
@@ -88,32 +85,9 @@ export function runHiddenVerify(input) {
       return null;
     }
   }
-  // Still loading: a spinner, busy region or progress bar over little text, or nothing on screen at all.
-  const loading = `(() => {
-    const { all, visible } = (${pageTools.toString()})();
-    const text = (document.body?.innerText ?? "").trim().length;
-    const spins = document.getAnimations().some(a => a.playState === "running" && a.effect?.getComputedTiming().iterations === Infinity && a.effect.target instanceof Element && visible(a.effect.target) && a.effect.getKeyframes().some(k => /rotate/.test(k.transform ?? "") || k.rotate));
-    return !text && !all("img,svg,canvas,video,iframe,input,textarea,select").some(visible) || text < 200 && (spins || all("[aria-busy=true],[role=progressbar]:not([aria-valuenow]),progress:indeterminate").some(visible));
-  })()`;
-  async function settle(cdp, inflight, quietSince, until) {
-    for (;;) {
-      if (ended) throw fault("cancelled");
-      const busy = await race(cdp.ev(loading)).catch(error => {
-        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
-        return true;
-      });
-      if (!busy && !inflight.size && Date.now() - quietSince() >= QUIET_MS) return;
-      if (Date.now() >= until) {
-        if (busy) throw fault("page-failed");
-        return;
-      }
-      await race(new Promise(resolve => setTimeout(resolve, 100)));
-    }
-  }
   async function setup(tile) {
-    const page = input.pages[tile], cdp = adapters[tile] = attach(page), events = [], loads = [], aborted = [], requests = new Map(), inflight = new Set();
+    const page = input.pages[tile], cdp = adapters[tile] = attach(page), events = [], loads = [], aborted = [], requests = new Map();
     const blocked = [], hmr = new Set(), origin = new URL(input.url).origin;
-    let quiet = 0;
     for (const event of ["render-process-gone", "destroyed", "unresponsive"]) {
       const handler = () => { if (!ended) stop("page-failed"); };
       page.on(event, handler);
@@ -123,11 +97,7 @@ export function runHiddenVerify(input) {
       const message = e.exception?.description || e.text;
       events.push({ where: plain(`${e.url?.replace(origin, "") || "page"}:${(e.lineNumber ?? 0) + 1}`, 120), measured: plain(`${message}; reload the page`.replaceAll(origin, ""), 160) });
     }));
-    disposers.push(cdp.on("Network.requestWillBeSent", e => {
-      requests.set(e.requestId, { url: e.request.url, type: e.type });
-      if (e.type !== "EventSource") inflight.add(e.requestId);
-      quiet = Date.now();
-    }));
+    disposers.push(cdp.on("Network.requestWillBeSent", e => requests.set(e.requestId, { url: e.request.url, type: e.type })));
     disposers.push(cdp.on("Network.webSocketCreated", e => {
       for (let stack = e.initiator?.stack; stack; stack = stack.parent) {
         if (stack.callFrames.some(frame => {
@@ -136,15 +106,10 @@ export function runHiddenVerify(input) {
         })) { hmr.add(e.url); break; }
       }
     }));
-    for (const event of ["Network.dataReceived", "Network.loadingFinished"]) disposers.push(cdp.on(event, () => { quiet = Date.now(); }));
     disposers.push(cdp.on("Network.responseReceived", e => {
-      // Answered: a fetch whose body the page never reads gets no loadingFinished, so a body still arriving only holds off quiet.
-      inflight.delete(e.requestId); quiet = Date.now();
-      if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where: plain(new URL(e.response.url).pathname, 120), url: e.response.url, measured: `HTTP ${e.response.status}; reload the page` });
-      else if (e.response.status < 400) for (let n = loads.length; n--;) if (loads[n].url === e.response.url) loads.splice(n, 1);
+      if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where: plain(new URL(e.response.url).pathname, 120), measured: `HTTP ${e.response.status}; reload the page` });
     }));
     disposers.push(cdp.on("Network.loadingFailed", e => {
-      inflight.delete(e.requestId); quiet = Date.now();
       const request = requests.get(e.requestId);
       if (!request) return;
       if (e.blockedReason || input.blockedUrls().includes(request.url) || new URL(request.url).origin !== origin) blocked.push({ url: request.url, type: e.type ?? request.type });
@@ -161,22 +126,15 @@ export function runHiddenVerify(input) {
     const geometry = VERIFY_GEOMETRY[tile];
     await race(cdp.send("Emulation.setDeviceMetricsOverride", { width: geometry.cssW, height: geometry.cssH, deviceScaleFactor: geometry.dpr, mobile: geometry.mobile, scale: 1 }));
     if (tile === "phone") await race(cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }));
-    const until = Date.now() + SETTLE_MS;
     await race(page.loadURL(input.url));
-    await settle(cdp, inflight, () => quiet, until);
+    if (input.frame) {
+      casts[tile] = startCast({ cdp, page, tile, started, frame: input.frame });
+      casts[tile].readerStop();
+    }
     try { await race(cdp.ev("(() => { void document.body.offsetWidth; return document.fonts.ready.then(() => true); })()")); }
     catch (error) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
       notChecked.add(`fonts (${tile})`);
-    }
-    if (input.frame) {
-      // A hidden window paints when captured, and that capture still holds its last paint, maybe the loading screen: capture once, then wait for the paint.
-      if (page.capturePage) await race(Promise.race([page.capturePage().catch(() => {}), new Promise(resolve => setTimeout(resolve, SHOT_MS))]));
-      await race(cdp.ev("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")).catch(error => {
-        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
-      });
-      casts[tile] = startCast({ cdp, page, tile, started, frame: input.frame });
-      casts[tile].readerStop();
     }
     await shot(tile, 0);
     return { cdp, events, loads, aborted, blocked, requests, hmr };
