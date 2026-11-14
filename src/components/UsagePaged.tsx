@@ -2,12 +2,12 @@ import { cloneElement, useLayoutEffect, useRef, useState, type ReactElement, typ
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
-import { EASE_ENTRANCE } from "@/lib/motion";
+import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import type { UsageBoardAccount, UsageBoardEngine } from "@/lib/usage-board";
 import { AccountPicker } from "./UsageAccounts";
 
-const ARROW = "relative flex size-7 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink transition-[background-color,transform] duration-100 enabled:hover:bg-raised-hover enabled:active:scale-90 enabled:active:bg-raised-hover disabled:opacity-25 motion-reduce:transition-none [@media(pointer:coarse)]:size-11";
+const ARROW = "relative flex size-7 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink enabled:hover:bg-raised-hover disabled:opacity-25 [@media(pointer:coarse)]:size-11";
 export type RowSlots = { name?: ReactNode };
 
 /** Today's layout: Main on the left and one other account on the right, picked with the dropdown or the arrows (phones page through every account, Main first). Picking only views an account; Main changes only with Use. The arrows sit on the engine row, so a phone row keeps room for the name. */
@@ -35,7 +35,7 @@ export function PagedAccounts({ engine, checked, stacked, t, head, row, group }:
     if (!dir || reducedMotion()) return;
     // Only what sits under the head moves, so the arrows stay under the finger.
     for (const part of live.current?.firstElementChild?.children ?? []) {
-      if (!part.hasAttribute("data-account-head")) part.animate([{ opacity: 0, transform: `translateX(${dir * 12}px)` }, {}], { duration: 160, easing: EASE_ENTRANCE });
+      if (!part.hasAttribute("data-account-head")) part.animate([{ opacity: 0, transform: `translateX(${dir * 12}px)` }, {}], { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD });
     }
   }, [current?.id]);
   if (!current) return <>{head()}{group(row(main))}</>;
