@@ -222,7 +222,7 @@ describe("terminal proxy", () => {
 
   it("posts no launch note when the spawn fails, and a failed note never fails the spawn", async () => {
     const config = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1", harness: "http://127.0.0.1:2", commsToken: "comms" };
-    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Too many bot terminals (limit 16)" }), { status: 400 }));
+    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Too many bot terminals (limit 128)" }), { status: 400 }));
     expect((await callTool("terminal_spawn", refused, config, { label: "worker" })).isError).toBe(true);
     expect(refused).toHaveBeenCalledTimes(1);
     const harnessDown = vi.fn(async (url: string | URL | Request) => {
@@ -293,7 +293,7 @@ describe("terminal proxy", () => {
 
   it("keeps the launch recipes out of the spawn description and points at the playbook", () => {
     expect(TOOLS[2].description).toContain("To run a worker, call terminal_playbook first");
-    expect(TOOLS[2].description).toContain("Max 16 live panes per bot");
+    expect(TOOLS[2].description).toContain("Max 128 live panes per bot");
     expect(TOOLS[2].description).not.toContain("--dangerously-skip-permissions");
     expect(TOOLS[2].description).not.toContain(workerModelsText());
     expect(TOOLS[2].description.length).toBeLessThan(500);

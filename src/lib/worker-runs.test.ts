@@ -573,11 +573,11 @@ describe("listedRuns", () => {
       expect(bare(["eeeeeeee-1"]).map((shown) => shown.run.nick)).toEqual(["WORK", "eeeeeeee"]);
     });
 
-    it("lists every live pane up to the 16 per bot cap", () => {
-      const ids = Array.from({ length: 16 }, (_, index) => `${String(index).padStart(8, "0")}-1`);
+    it("lists every live pane up to the 128 per bot cap", () => {
+      const ids = Array.from({ length: 128 }, (_, index) => `${String(index).padStart(8, "0")}-1`);
       const listed = listedRuns([], new Set(ids));
-      expect(listed).toHaveLength(16);
-      expect(new Set(listed.map((shown) => shown.run.id)).size).toBe(16);
+      expect(listed).toHaveLength(128);
+      expect(new Set(listed.map((shown) => shown.run.id)).size).toBe(128);
     });
 
     it("lists nothing extra while liveness is unknown", () => {

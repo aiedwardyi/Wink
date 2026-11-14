@@ -68,7 +68,8 @@ const stallSignature = (screenText) => AGENT_BUSY_RE.test(screenText) ? screenTe
 const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!waitsOnly || /\b[1-9]\d* (?:shells?|monitors?)\b/u.test(line)));
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
-export const BOT_PANE_LIMIT = 16;
+// Only stops a runaway loop; free memory is the real gate (16 workers used about 13 GB).
+export const BOT_PANE_LIMIT = 128;
 // Pane-count readers (terminal-bridge, server/terminal-snapshot.ts, src/lib/terminal-panes.ts) accept up to this many per bot.
 export const BOT_PANE_TOTAL = BOT_PANE_LIMIT + REMOTE_PANE_CEILING;
 // Exited panes stay readable until this many terminals are open.
@@ -1792,7 +1793,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const free = freeMemory();
       if (free < floor) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
-        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(floor / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close.`);
+        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(floor / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
       }
       paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
