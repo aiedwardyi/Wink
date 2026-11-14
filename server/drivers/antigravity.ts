@@ -72,6 +72,19 @@ function stripAntigravitySystemNotices(text: string): string {
   return text.replace(AGY_SYSTEM_NOTICE, "");
 }
 
+const AGY_NOTICE_HEADS = ["the following is a <system_message>", "<system_message>"];
+
+/** Where a notice that has not fully streamed in yet begins (text.length if none). */
+function unfinishedNoticeStart(text: string): number {
+  const open = text.search(/(?:The following is a )?<SYSTEM_MESSAGE>/i);
+  if (open !== -1) return open;
+  const lower = text.toLowerCase();
+  for (let i = Math.max(0, lower.length - AGY_NOTICE_HEADS[0].length); i < lower.length; i++) {
+    if (AGY_NOTICE_HEADS.some((head) => head.startsWith(lower.slice(i)))) return i;
+  }
+  return text.length;
+}
+
 function isCancelledTool(payload: { state?: string; tool_info?: { output?: string } | string }): boolean {
   return payload.state === "ERROR" && AGY_CONTEXT_CANCELLATION.test(JSON.stringify(payload.tool_info ?? payload));
 }
@@ -836,6 +849,20 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       let cancelledTool = false;
       let lastStepType: string | undefined;
       let lastStepState: string | undefined;
+      // every text_delta so far, and the shown text already streamed from it
+      let deltaText = "";
+      let streamed = "";
+      const streamDelta = (delta: string) => {
+        deltaText += delta;
+        if (cancelledTool) return;
+        const shown = stripAntigravitySystemNotices(deltaText);
+        const ready = shown.slice(0, unfinishedNoticeStart(shown));
+        if (ready.length <= streamed.length || !ready.trim() || !ready.startsWith(streamed)) return;
+        // a busy resume repeating text already shown holds until it differs
+        if ([...shownResponses].some((text) => text.startsWith(ready))) return;
+        emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: ready.slice(streamed.length) });
+        streamed = ready;
+      };
 
       // A busy resume is the same logical turn, so its usage carries forward.
       const withPriorUsage = (usage: { input_tokens?: number; cache_read_tokens?: number; output_tokens?: number }): TurnUsage => ({
@@ -907,14 +934,15 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               } else if (payload.state === "ERROR") {
                 emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId, ok: false });
               }
-            } else if (payload.step_type === "agent_response" && payload.usage) {
-              emit({ ...base(threadId, turnId), type: "thread.token-usage.updated", ...withPriorUsage(payload.usage) });
+            } else if (payload.step_type === "agent_response") {
+              if (typeof payload.text_delta === "string") streamDelta(payload.text_delta);
+              if (payload.usage) emit({ ...base(threadId, turnId), type: "thread.token-usage.updated", ...withPriorUsage(payload.usage) });
             }
             break;
           }
           case "result": {
             promptAccepted = true;
-            // agy delivers the assistant text in result.response (not streamed)
+            // result.response is every text_delta joined
             const response = stripAntigravitySystemNotices(typeof payload.response === "string" ? payload.response : "");
             const realResponse = Boolean(response.trim()) && !cancelledTool;
             const parsedError = z.string().safeParse(payload.error);
@@ -928,7 +956,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               && (busyReason !== null || AGY_NOT_ACCOUNT_ERROR.test(agyError) || (AGY_TIMEOUT_ERROR.test(agyError) && !AGY_ACCOUNT_ERROR.test(agyError)));
             if (realResponse && !shownResponses.has(response)) {
               shownResponses.add(response);
-              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: response });
+              const rest = response.startsWith(streamed) ? response.slice(streamed.length) : "";
+              if (rest) emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: rest });
               emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: response });
             }
             const conversation = conversationId ?? resumeCursor;
