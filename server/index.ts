@@ -308,6 +308,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
+import { createMemoryImport } from "./memory-import.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { readCuaConnection } from "./local-computer.ts";
@@ -1713,7 +1714,7 @@ function importProfileChanges(): void | Promise<void> {
         mascotStyle: remoteStyle.success ? remoteStyle.data : DEFAULT_MASCOT_STYLE,
         section: typeof remoteBot.sectionId === "string" ? sectionNames.get(remoteBot.sectionId) : undefined,
         autoApprove: true,
-      }, { seedMessages: false, id: item.localId ?? undefined });
+      }, { seedMessages: false, id: item.localId ?? undefined, imports: false });
     }
     bindSyncId(profileSyncSettings.botMap, bot.id, item.globalId);
     // the avatar keeps its local base, so a later pass applies it once Drive delivers the asset
@@ -2860,6 +2861,26 @@ for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refre
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
+const memoryImport = createMemoryImport({
+  dataDir: DATA_DIR,
+  store,
+  skip: (bot) => {
+    if (bot.hidden) return "removed";
+    const instance = registry.get(bot.modelSelection.instanceId);
+    return instance && !supportsWorkspaceFiles(instance.driverKind) ? "engine" : null;
+  },
+  saved: (botId) => {
+    memoryHealthCheck.refresh(botId);
+    void memoryLookup.refresh(botId);
+  },
+});
+store.onBotCreated = (bot) => {
+  try {
+    memoryImport.seed(bot);
+  } catch (error) {
+    console.warn(`[memory-import] new bot seed failed (${error instanceof Error ? error.name : "error"})`);
+  }
+};
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
 const roomTurnInstruction = new Map<string, string>();
@@ -5295,11 +5316,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
   const closedAsk = closedAskNotes(activeMessages, text, userMessage.id);
+  const importNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind) ? memoryImport.takeNote(bot.id) : [];
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...importNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5834,7 +5856,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId), ...callLines, ...closedAsk, ...syncNotes, ...importNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -7601,6 +7623,7 @@ const botRoutes = createBotRoutes({
   taskPacketForWrite,
   projectNotesCheck,
   memoryHealthCheck,
+  memoryImport,
   activeVpsThreads,
   resumePaneWakes,
 });
@@ -8513,6 +8536,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
+    if (m && method === "POST") {
+      return await botRoutes.importMemory(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
     if (m && method === "GET") {

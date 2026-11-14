@@ -373,15 +373,16 @@ describe("send path wiring", () => {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
   }).outputText}\nreturn run;`)() as (scope: object) => string;
 
-  const turn = (opts: object | undefined, driverKind = "claudeAgent") => {
+  const turn = (opts: object | undefined, driverKind = "claudeAgent", importNote: string[] = []) => {
     const take = vi.fn((): string[] => ["[recall]"]);
+    const takeNote = vi.fn((): string[] => importNote);
     const scope = {
-      opts, memoryLookup: { take }, instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
+      opts, memoryLookup: { take }, memoryImport: { takeNote }, instance: { driverKind, instanceId: "i1" }, supportsWorkspaceFiles: (kind: string) => kind !== "boxAgent",
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: { i1: "c1" } }, instanceId: "i1", rewound: false, fresh: false, recycled: false, text: "typed words",
       threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
     };
-    return { prompt: run(scope), take };
+    return { prompt: run(scope), take, takeNote };
   };
 
   it.each(["claudeAgent", "codex", "acp", "antigravity"])("runs on a typed turn on %s", (kind) => {
@@ -406,12 +407,20 @@ describe("send path wiring", () => {
     expect(turn(undefined, "boxAgent").take).not.toHaveBeenCalled();
   });
 
+  it("carries a memory import note on a typed turn only", () => {
+    const typed = turn(undefined, "codex", ["[Wink memory import: x]"]);
+    expect(typed.takeNote).toHaveBeenCalledWith("b1");
+    expect(typed.prompt).toBe("[Wink memory import: x]\n\n[recall]\n\nCurrent message:\n\nhello");
+    expect(turn({ automationSource: "schedule" }, "codex", ["[Wink memory import: x]"]).takeNote).not.toHaveBeenCalled();
+    expect(turn(undefined, "boxAgent", ["[Wink memory import: x]"]).takeNote).not.toHaveBeenCalled();
+  });
+
   it("leaves the turn text byte-identical with nothing to add", () => {
     const scope = turn(undefined);
     expect(scope.prompt).not.toBe("hello");
     const take = vi.fn((): string[] => []);
     expect(run({
-      opts: undefined, memoryLookup: { take }, instance: { driverKind: "codex", instanceId: "i1" }, supportsWorkspaceFiles: () => true,
+      opts: undefined, memoryLookup: { take }, memoryImport: { takeNote: () => [] }, instance: { driverKind: "codex", instanceId: "i1" }, supportsWorkspaceFiles: () => true,
       bot: { id: "b1" }, threadId: "t1", task: { resumeCursors: {} }, instanceId: "i1", rewound: false, fresh: true, recycled: false, text: "typed words",
       threadSyncV2: null, mailForTurn: () => [], store: {}, paneNotes: [], paneNoteIds: [], paneTokens: 0, modelContextWindow: 1, routineCards: [], quickAnswers: [], roomEchoes: [], callLines: [], closedAskNotes: () => [], activeMessages: [], userMessage: {},
       accountNotices: { forTurn: () => ({}) }, currentPrompt: "hello",
@@ -425,7 +434,7 @@ describe("send path wiring", () => {
   });
 
   it("survives the summary rebuild", () => {
-    expect(section("              const notes = [", "\n              turnPrompt = notes.length")).toContain("...recallNotes");
+    expect(section("              const notes = [", "\n              turnPrompt = notes.length")).toContain("...importNotes, ...recallNotes");
   });
 
   it("gives rows back on every path that stops before the provider", () => {
