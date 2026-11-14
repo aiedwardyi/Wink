@@ -10,7 +10,7 @@ import { AccountPicker } from "./UsageAccounts";
 const accounts = [
   { id: "acct-1", name: "Claude 1", number: 1 },
   { id: "acct-2", name: "Claude 2", number: 2 },
-  { id: "acct-3", name: "Studio", number: 3 },
+  { id: "acct-3", name: "Studio", number: 3, nickname: "Studio" },
   { id: "acct-4", name: "Claude 4", number: 4 },
 ];
 let root: Root;
@@ -47,8 +47,8 @@ it("names accounts only and reports picks by id", async () => {
   await render();
   expect(picker().textContent).toBe("Claude 1");
   await act(async () => picker().click());
-  expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", "2Claude 2", "3Studio", "4Claude 4"]);
-  expect(items().map((item) => item.querySelector("[data-tile]")?.textContent)).toEqual(["1", "2", "3", "4"]);
+  expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", "2Claude 2", "Studio", "4Claude 4"]);
+  expect(items().map((item) => item.querySelector("[data-tile]")?.textContent)).toEqual(["1", "2", undefined, "4"]);
   expect(host.querySelector('[role="menu"] svg')).toBeNull();
   expect(items().map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
   await act(async () => items()[2]!.click());
@@ -65,7 +65,7 @@ it("tags Main in the list in English and Korean", async () => {
     root = createRoot(host);
     await render(list);
     await act(async () => picker().click());
-    expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", `2Claude 2${main}`, "3Studio", "4Claude 4"]);
+    expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", `2Claude 2${main}`, "Studio", "4Claude 4"]);
     expect(items()[1]!.getAttribute("aria-label")).toBe(`Claude 2 ${main}`);
   }
 });

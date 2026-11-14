@@ -185,6 +185,22 @@ describe("terminal status line quota ticker", () => {
     }
   });
 
+  it("prefixes [n] on a multi-account line only for an unnamed account", async () => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    expect(text(q("[data-term-ticker]"))).toContain("[1]");
+    await unmount();
+    const board = structuredClone(usageBoardFixture);
+    const claude = board.engines.find((each) => each.engine === "claude")!;
+    claude.mainId = claude.accounts.find((each) => each.nickname)!.id;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/usage/board")
+      ? new Response(JSON.stringify(board), { headers: { "content-type": "application/json" } })
+      : new Promise<Response>(() => {})));
+    await load(7.2);
+    await mount(botOn("claude"), instancesFor(board));
+    expect(q("[data-term-ticker]"), "ticker").not.toBeNull();
+    expect(text(q("[data-term-ticker]"))).not.toMatch(/\[\d+\]/);
+  });
+
   it("keeps the Multiplexer bot tab and only the tightest window on a phone", async () => {
     await mount(botOn("claude"), instancesFor(usageBoardFixture), { skin: "multiplexer", phone: true });
     const status = q("[data-term-status]");

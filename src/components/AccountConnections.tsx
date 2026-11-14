@@ -137,7 +137,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
-  const tile = name && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
+  const tile = name && !name.nickname && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
   const draining = account.drain && account.drain.phase !== "failed";
   const signInRow = !ready && !account.drain;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));

@@ -36,7 +36,7 @@ export function EditableAccountName({ account, revision, editable }: { account: 
 
 /** Passive inspection: finds an account by name and number only, and never changes Main. */
 export function AccountPicker({ accounts, viewedId, select }: {
-  accounts: { id: string; name: string; number: number; main?: boolean }[];
+  accounts: { id: string; name: string; number: number; nickname?: string | null; main?: boolean }[];
   viewedId: string;
   select: (id: string) => void;
 }) {
@@ -102,7 +102,7 @@ export function AccountPicker({ accounts, viewedId, select }: {
           }}
           className={cn("flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-normal text-ink hover:bg-raised/70 [@media(pointer:coarse)]:min-h-11",
             item.id === viewed.id && "bg-raised/50")}>
-          <Tile number={item.number} terminal={terminal} />
+          {!item.nickname && <Tile number={item.number} terminal={terminal} />}
           <span className="min-w-0 flex-1 truncate">{item.name}</span>
           {item.main && <span className="shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
         </button>)}

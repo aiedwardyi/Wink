@@ -198,6 +198,16 @@ it.each(["en", "ko"] as const)("keeps the original number tile beside phone acco
   expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
 });
 
+it.each([false, true])("drops the number tile once an account has a nickname (phone=%s)", async (phone) => {
+  board.engines[0]!.accounts[0]!.nickname = "Studio";
+  board.engines[0]!.accounts[0]!.name = "Studio";
+  await mount({ phone });
+  expect(row()?.textContent).toContain("Studio");
+  expect(row()?.querySelector("[data-account-number]")).toBeNull();
+  const unnamed = host.querySelector('[data-connection-account]:not([data-connection-account="claude"])');
+  expect(unnamed?.querySelector("[data-account-number]")?.textContent).toBe("2");
+});
+
 it.each(["en", "ko"] as const)("renders each email as plain text, not a control, in %s", async (locale) => {
   await mount({ locale });
   const emails = [...host.querySelectorAll<HTMLElement>("[data-account-email]")];
