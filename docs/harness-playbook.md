@@ -78,6 +78,7 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
 - Keep sound off the speakers: test browsers keep `--mute-audio`; a clip that needs sound captures it without playing it, or adds it afterwards.
+- Test browsers run headless: a headed one, even off-screen, takes the user's keyboard focus mid-typing. A check that needs a real window asks first. On Windows, this prints nothing while yours run: `Get-Process chrome,msedge -EA 0 | ? { $_.MainWindowHandle -ne 0 -and $_.Path -match 'ms-playwright' }`
 - Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.
 - Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.

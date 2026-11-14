@@ -75,6 +75,13 @@ describe("harness playbook", () => {
     expect(loadHarnessPlaybook()).toContain("An editing job in a plain folder gets no worktree: one worker edits it in place");
   });
 
+  it("keeps test browsers headless so they never take the user's focus", () => {
+    const prompt = loadHarnessPlaybook().replace(/\s+/g, " ");
+    expect(prompt).toContain("Test browsers run headless: a headed one, even off-screen, takes the user's keyboard focus");
+    expect(prompt).toContain("A check that needs a real window asks first.");
+    expect(prompt).toContain("`Get-Process chrome,msedge -EA 0 | ? { $_.MainWindowHandle -ne 0 -and $_.Path -match 'ms-playwright' }`");
+  });
+
   it("edits a checkout with uncommitted changes in place and checks its files", () => {
     const prompt = loadHarnessPlaybook();
     expect(prompt).toContain("The same goes for a checkout with uncommitted changes");
@@ -280,7 +287,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15328);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15631);
   });
 
   it("fills the worktree path from the configured root", () => {
