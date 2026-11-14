@@ -271,7 +271,8 @@ function fitChoices(card: HTMLDivElement | null) {
       card.style.maxHeight = `max(30dvh, ${tall + CARD_REST + kept}px)`;
       const over = pane ? pane.scrollHeight - pane.clientHeight : 0;
       if (over > 0) {
-        const room = card.offsetHeight - over;
+        // other content in the pane can overflow it too: the card keeps its heading, a line of the question and a line of choices
+        const room = Math.max(CARD_REST + 2 * line, card.offsetHeight - over);
         card.style.maxHeight = `${room}px`;
         // the question gives lines back, down to one, while that keeps every choice in sight
         if (tall + CARD_REST + line <= room || room - CARD_REST - kept < line) body.style.minHeight = "";

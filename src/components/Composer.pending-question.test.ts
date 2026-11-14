@@ -196,6 +196,35 @@ describe("pinned ask_user question", () => {
     expect(body.style.minHeight).toBe("44px");
   });
 
+  it("stops the card at the composer's room: the question gives lines back first, then the choices scroll", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    const computed = globalThis.getComputedStyle;
+    const isPane = (el: Element) => el.classList.contains("overflow-y-auto") && !!el.querySelector("[data-pending-question]");
+    vi.spyOn(globalThis, "getComputedStyle").mockImplementation((el, pseudo) => (isPane(el) ? { overflowY: "auto" } as CSSStyleDeclaration : computed(el, pseudo)));
+    let tall = 252;
+    let over = 84;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? tall + 128 : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? 304 + over : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? 304 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["168px", "auto"]);
+    tall = 200;
+    over = 32;
+    resized();
+    expect(card()!.style.maxHeight).toBe("296px");
+    expect(body.style.minHeight).toBe("");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    over = 900;
+    resized();
+    expect(card()!.style.maxHeight).toBe("106px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
   it("fades a cut question at its foot until it is scrolled to its end", async () => {
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : 0; });
     await mount({ bot: bot([question]) });
