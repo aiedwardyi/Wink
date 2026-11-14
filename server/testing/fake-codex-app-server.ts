@@ -13,6 +13,7 @@
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //   FAKE_CODEX_USAGE  JSON array of tokenUsage payloads, one
 //                     thread/tokenUsage/updated per model call of the turn
+//   FAKE_CODEX_USAGE_TURNS  JSON array, one FAKE_CODEX_USAGE list per turn of this process
 //   FAKE_CODEX_USAGE_REPLAY  JSON tokenUsage the app-server replays after
 //                     thread/resume, stamped with an earlier turn's id
 //   FAKE_CODEX_MESSAGES  JSON array of {text, phase?}: the turn's agentMessage
@@ -71,7 +72,9 @@ const dump = () => {
   }
 };
 
+let turns = 0;
 const finishTurn = () => {
+  const usage = process.env.FAKE_CODEX_USAGE_TURNS ? JSON.stringify(JSON.parse(process.env.FAKE_CODEX_USAGE_TURNS)[turns++] ?? []) : process.env.FAKE_CODEX_USAGE;
   // bench-quiet never started tool items (see turn/start), so there is
   // nothing to complete — a text-only fixture turn.
   if (process.env.FAKE_CODEX_TOOL_FIXTURE) {
@@ -87,10 +90,10 @@ const finishTurn = () => {
   }
   const messages = process.env.FAKE_CODEX_MESSAGES ? JSON.parse(process.env.FAKE_CODEX_MESSAGES) : [{ text: "done from fake codex" }];
   messages.forEach((message: object, i: number) => notify("item/completed", { item: { id: `m${i + 1}`, type: "agentMessage", ...message } }));
-  if (process.env.FAKE_CODEX_USAGE) {
+  if (usage) {
     // like the real app-server: one report per model call, each carrying
     // that call (`last`) and the running thread total
-    for (const tokenUsage of JSON.parse(process.env.FAKE_CODEX_USAGE)) {
+    for (const tokenUsage of JSON.parse(usage)) {
       notify("thread/tokenUsage/updated", { threadId: "codex-thread-1", turnId: "native-turn-1", tokenUsage });
     }
   } else if (mode === "usage-calls") {
