@@ -9,6 +9,7 @@ import { FileMenu, type FileMenuAt } from "./MediaMenu";
 import { useMediaViewer } from "./MediaViewerProvider";
 
 const VIDEO = /\.(mp4|m4v|mov|webm)$/i;
+export const BADGE = "absolute flex size-5 items-center justify-center rounded-full bg-black/55 text-white";
 
 function useSeen(ref: RefObject<HTMLElement | null>, watch: boolean): boolean {
   const [seen, setSeen] = useState(false);
@@ -66,7 +67,7 @@ export function ShowCard({ threadId, path, onOpen, bare = false }: { threadId: s
           {named === "image" && !bare ? <img src={linkedFileSrc(threadId, path)} alt="" loading="lazy" className="size-full object-cover" />
             : poster ? <>
               <img src={poster} alt="" decoding="async" className="size-full object-cover" />
-              <span data-play-badge className="absolute flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+              <span data-play-badge className={BADGE}>
                 <Play size={9} aria-hidden="true" className="ml-px fill-current" />
               </span>
             </>

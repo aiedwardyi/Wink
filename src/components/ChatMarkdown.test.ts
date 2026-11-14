@@ -1163,8 +1163,50 @@ describe("relative file links", () => {
         expect(host.querySelector(".chat-md")!.lastElementChild!.hasAttribute("data-linked-picture")).toBe(true);
         expect(lines()).toEqual(read);
         expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
-        expect(host.querySelector("[data-linked-picture] svg")).toBeNull();
         expect(host.querySelector("[data-linked-picture]")!.textContent).toBe("");
+      });
+
+      it("marks the picture with the card's pane icon, and a click on it shows the picture", async () => {
+        desktop();
+        await act(async () => closeShow());
+        await mount("Saved to [plot.png](C:\\w\\plot.png).");
+        const icons = [...host.querySelectorAll<SVGElement>("[data-linked-picture] button svg")];
+        expect(icons.map((icon) => icon.hasAttribute("data-show-icon"))).toEqual([true]);
+        expect(icons[0]!.parentElement!.className).toContain("rounded-full bg-black/55 text-white");
+        expect(host.querySelectorAll("[data-linked-picture] button")).toHaveLength(1);
+        await act(async () => void icons[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\plot.png", kind: "image" });
+        expect(document.querySelector("[data-media-viewer]")).toBeNull();
+      });
+
+      it("opens the file card's menu on a right-click, on the link and on the picture", async () => {
+        desktop();
+        const menu = async (target: Element) => {
+          const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+          await act(async () => void target.dispatchEvent(event));
+          const open = [...document.querySelectorAll("[data-file-menu]:not([data-closing])")];
+          return { prevented: event.defaultPrevented, menus: open.length, name: open[0]?.getAttribute("aria-label"), items: [...(open[0]?.querySelectorAll("[role=menuitem]") ?? [])].map((item) => item.textContent) };
+        };
+        await mount("[chart.png](C:\\w\\chart.png)");
+        const card = await menu(cards()[0]!);
+        expect(card).toMatchObject({ prevented: true, menus: 1, name: "chart.png" });
+        expect(card.items.length).toBeGreaterThan(0);
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "", threadId: "t1" })));
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(await menu(pictures()[0]!)).toEqual(card);
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "", threadId: "t1" })));
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(await menu(links()[0]!)).toEqual(card);
+      });
+
+      it("leaves a long-press on a phone's picture alone, like the card", async () => {
+        await mount(sentences);
+        await phoneFiles();
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        await act(async () => void pictures()[0]!.dispatchEvent(event));
+        expect(event.defaultPrevented).toBe(false);
+        expect(document.querySelector("[data-file-menu]:not([data-closing])")).toBeNull();
+        expect(host.querySelectorAll("[data-linked-picture] [data-show-icon]")).toHaveLength(1);
       });
 
       it("draws different pictures in link order", async () => {

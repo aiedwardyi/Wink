@@ -9,12 +9,12 @@ import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffec
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, PanelRight } from "lucide-react";
 import { LinkedFolderLink } from "./LinkedFolderSheet";
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
 import { ReadableImage } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
-import { ShowCard } from "./ShowCard";
+import { BADGE, ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -684,13 +684,22 @@ function LocalFileLink({
   return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))} inline={inline} pictured={pictured}>{children}</DesktopFileLink>;
 }
 
-/** A picture a sentence links to, drawn under the reply. A click shows it in the pane; one that can't load draws nothing. */
+/** A picture a sentence links to, drawn under the reply with the card's pane mark and file menu. A click shows it in the pane; one that can't load draws nothing. */
 function LinkedPicture({ threadId, path }: { threadId: string; path: string }) {
   const [failed, setFailed] = useState(false);
+  const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
   if (failed) return null;
+  const menu = (event: MouseEvent<HTMLElement>) => {
+    if (!window.ogb?.openFile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMenuAt({ x: event.clientX, y: event.clientY, opener: event.currentTarget });
+  };
   return (
-    <div data-linked-picture>
-      <ReadableImage src={linkedFileSrc(threadId, path)} loading="lazy" className="rounded-lg border border-hairline/30" onOpen={() => showItem({ threadId, path, kind: "image" })} onError={() => setFailed(true)} />
+    <div data-linked-picture onContextMenu={menu}>
+      <ReadableImage src={linkedFileSrc(threadId, path)} loading="lazy" className="rounded-lg border border-hairline/30" onOpen={() => showItem({ threadId, path, kind: "image" })} onError={() => setFailed(true)}
+        badge={<span className={`${BADGE} right-1.5 top-1.5`}><PanelRight data-show-icon size={11} aria-hidden="true" /></span>} />
+      <FileMenu at={menuAt} path={path} onOpen={() => void window.ogb?.openFile?.(path).catch(() => {})} onClose={() => setMenuAt(null)} />
     </div>
   );
 }
