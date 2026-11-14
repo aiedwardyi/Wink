@@ -188,6 +188,17 @@ it("switches both viewport tabs after recorded playback finishes", async () => {
   }
 });
 
+it("draws the replay at the screen's pixels, not the page's", async () => {
+  const tick = animationClock(), setTransform = vi.fn();
+  vi.stubGlobal("devicePixelRatio", 2);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {}, drawImage() {}, setTransform } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect([host.querySelector("canvas")?.width, host.querySelector("canvas")?.height]).toEqual([2560, 1440]);
+  expect(setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
+});
+
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
   applyLocale(locale);
   const tick = animationClock();

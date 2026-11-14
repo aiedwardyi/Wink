@@ -1,7 +1,18 @@
+import { VERIFY_GEOMETRY } from "./verify-protocol.mjs";
+
+// The link drops a cast frame of 192 KiB base64 or more.
+const FRAME_BYTES = 140 * 1024;
+
 export function startCast({ cdp, page, tile, started, frame }) {
   let stopped = false, received = false, capturing = false, last = -Infinity;
   const timers = new Set();
-  const jpeg = image => image.resize(tile === "desktop" ? { width: 640 } : { height: 800 }).toJPEG(60).toString("base64");
+  const { cssW, cssH, dpr } = VERIFY_GEOMETRY[tile], size = { maxWidth: cssW * dpr, maxHeight: cssH * dpr };
+  const jpeg = image => {
+    const sized = image.resize({ width: size.maxWidth });
+    let bytes;
+    for (const quality of [80, 65, 50]) if ((bytes = sized.toJPEG(quality)).length <= FRAME_BYTES) break;
+    return bytes.toString("base64");
+  };
   const emit = data => {
     if (stopped || Date.now() - last < 250) return;
     last = Date.now();
@@ -17,7 +28,7 @@ export function startCast({ cdp, page, tile, started, frame }) {
     }, 250);
     timers.add(timer);
   });
-  void cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, ...(tile === "desktop" ? { maxWidth: 640 } : { maxHeight: 800 }) }).catch(() => {});
+  void cdp.send("Page.startScreencast", { format: "jpeg", quality: 70, ...size }).catch(() => {});
   return {
     readerStop() {
       if (stopped || received || capturing || !page.capturePage || Date.now() - last < 250) return;

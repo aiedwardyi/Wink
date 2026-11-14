@@ -27,7 +27,7 @@ it("records through the existing adapter and holds acks to four fps", async () =
   const cdp = { send, on: (name, cb) => { events.on(name, cb); return () => events.off(name, cb); } };
   const cast = startCast({ cdp, page: {}, tile: "desktop", started: Date.now(), frame: f => frames.push(f) });
   await Promise.resolve();
-  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 640 });
+  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth: 1280, maxHeight: 720 });
   events.emit("Page.screencastFrame", { data: "/9j/2Q==", sessionId: 1 });
   expect(frames).toHaveLength(1);
   expect(send.mock.calls.some(([method]) => method === "Page.screencastFrameAck")).toBe(false);
@@ -75,6 +75,19 @@ it("drops backed-up live frames, seeds late readers and ends without Watch", () 
   expect(first.writableEnded).toBe(true); expect(late.writableEnded).toBe(true);
   const rows = [], decoder = decodeChunks(row => rows.push(row)); decoder.push(Buffer.concat(first.values)); decoder.end();
   expect(rows.at(-1)).toMatchObject({ kind: 3, ms: 140 });
+});
+
+it.each([["desktop", 1280, 1280, 720], ["phone", 784, 784, 1600]])("keeps the %s page's own pixels and fits each frame under the link cap", async (tile, width, maxWidth, maxHeight) => {
+  const frame = vi.fn(), send = vi.fn(async () => {}), sizes = [];
+  const toJPEG = vi.fn(quality => Buffer.alloc(quality > 65 ? 200 * 1024 : 1000, 1));
+  const capturePage = vi.fn(async () => ({ resize: size => { sizes.push(size); return { toJPEG }; } }));
+  const cast = startCast({ cdp: { send, on: () => () => {} }, page: { capturePage }, tile, started: Date.now(), frame });
+  await cast.shot();
+  expect(send).toHaveBeenCalledWith("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth, maxHeight });
+  expect(sizes).toEqual([{ width }]);
+  expect(toJPEG.mock.calls.map(([quality]) => quality)).toEqual([80, 65]);
+  expect(validFrame({ type: "cast", runId: "run-123456", ...frame.mock.calls[0][0] }, "child")).toBe(true);
+  cast.stop();
 });
 
 it("captures a frame on demand for the scroll stop it was asked at", async () => {
