@@ -75,9 +75,20 @@ it("keeps the stops clear of the PR summary at every pane width, giving way from
   for (const each of columns) expect(each).toMatch(/ minmax\(min-content, 1fr\) auto$/);
   expect(css).toMatch(/\.map-flow-list \{[^}]*overflow: hidden auto;/);
   // measured in the pane beside a scrollbar: the full row needs 683px, the row with the short right side 553px
-  expect(css).toMatch(/@container map-pane \(max-width: 690px\) \{\s+\.map-flow-end > small, \.map-flow-clash \{ font-size: 0; \}/);
+  expect(css).toMatch(/@container map-pane \(max-width: 690px\) \{\s+\.map-flow-end > small\[data-short\], \.map-flow-clash \{ font-size: 0; \}/);
   expect(css).toMatch(/@container map-pane \(max-width: 560px\) \{\s+\.map-flow-rows \{ padding-left: 10px;/);
   expect(css).toMatch(/@container map-pane \(max-width: 372px\) \{ \.map-flow-clash \{ display: none; \} \}/);
+});
+
+it("keeps a worker's own summary words where the right side shortens to the PR number, until the narrow row runs out of room", async () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toMatch(/\.map-flow-end > small\[data-short\]::after, \.map-flow-clash::after \{ content: attr\(data-short\);/);
+  expect(css).not.toMatch(/\.map-flow-end > small(::after)?[,{ ][^}]*(font-size: 0|attr\(data-short\))/);
+  // measured in the pane: the narrow row with a full summary, a conflict count and a scrollbar needs 436px
+  expect(css).toMatch(/@container map-pane \(max-width: 440px\) \{ \.map-flow-end > small:not\(\[data-short\]\) \{ font-size: 0; \} \}/);
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  expect([...host.querySelectorAll<HTMLElement>(".map-flow-end > small")].map(end => [end.textContent, end.getAttribute("data-short")])).toEqual([["#1529 · 1 running", "#1529"], ["pushed 2 of 2", null]]);
 });
 
 it("puts a square per check in the checks box and the details in each stop's tip", async () => {
