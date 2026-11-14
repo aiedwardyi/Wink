@@ -295,6 +295,47 @@ it("moves focus with Up and Down onto a file that sat in a folded box", async ()
   expect(document.activeElement?.getAttribute("data-map-file")).toBe("server/f2.ts");
 });
 
+it("walks the arrow up out of a folding branch, across and down into the one opening, and jumps on a held key", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(360);
+  const paths = ["src", "server", "docs"].flatMap(dir => Array.from({ length: 20 }, (_, i) => `${dir}/f${i}.ts`));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
+  let clock = 1000;
+  let id = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  vi.stubGlobal("requestAnimationFrame", (done: FrameRequestCallback) => { frames.set(++id, done); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (at: number) => frames.delete(at));
+  const step = (ms: number) => { clock += ms; const due = [...frames.values()]; frames.clear(); for (const done of due) done(clock); };
+  const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const tip = () => { const [x, y] = numbers(host.querySelector<HTMLElement>(".map-tree-pin")!); return { x: x + 3.4, y: y + 3.7 }; };
+  const off = (path: string) => {
+    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+    const [x, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+    const at = tip();
+    return Math.hypot(at.x - x - 14, at.y - y - parseFloat(row.parentElement!.style.top) - parseFloat(row.style.top) - 17 / 2);
+  };
+  const key = (path: string, repeat: boolean) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: repeat ? "ArrowDown" : "ArrowUp", repeat, bubbles: true, cancelable: true })); });
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], path: "src/f1.ts", files: [{ path: "src/f1.ts", added: 1, removed: 0 }, { path: "server/f2.ts", added: 1, removed: 0 }] }]);
+  for (let i = 0; i < 10; i++) step(200);
+  expect(off("src/f1.ts")).toBeLessThan(1);
+  const before = tip();
+  await key("src/f1.ts", false);
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
+  const first = tip();
+  expect(Math.hypot(first.x - before.x, first.y - before.y)).toBeGreaterThan(1);
+  expect(off("server/f2.ts")).toBeGreaterThan(20);
+  let top = first.y;
+  for (let ms = 16; ms < 440; ms += 16) { step(16); top = Math.min(top, tip().y); }
+  expect(top).toBeLessThan(numbers(host.querySelector<HTMLElement>('[data-node="d:server"]')!)[1]);
+  step(16);
+  expect(off("server/f2.ts")).toBeLessThan(1);
+  for (let i = 0; i < 5; i++) step(200);
+  await key("server/f2.ts", true);
+  expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/f1.ts");
+  expect(off("src/f1.ts")).toBeLessThan(1);
+});
+
 it("keeps the changed files on the tree with a Retry when the repo's files fail to load", async () => {
   let down = true;
   vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? down ? new Response("", { status: 503 }) : Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "x", line: 1 }] }));
