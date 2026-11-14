@@ -1,7 +1,7 @@
 // Every message into a team room: the host's through the normal send route,
 // a person's through the door. The host's line is only committed here: the
 // normal group turn answers it. A person's wakes one bot, at most, with an ask.
-import { botChain, CHAIN_LINES } from "../../shared/bot-chain.ts";
+import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import { alertWhenUnread, roomLineText } from "./alerts.ts";
@@ -10,7 +10,7 @@ import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError,
 import { ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
-import { askById, createAsk, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
+import { askById, createAsk, roomAskDeps, roomAsks, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
 import { teamBots, type TeamBot } from "./team-bots.ts";
 
 export type RoomSender = { kind: "host" } | { kind: "person"; id: string };
@@ -19,6 +19,9 @@ const statusError = (status: number, message: string) => Object.assign(new Error
 
 /** Rooms whose bot lines wake no bot until a person or the host speaks again. */
 const stopped = new Set<string>();
+/** This run's start: a handoff line from before it is no longer pending. */
+const BOOT = Date.now();
+const lapses: ChainLapses = new Map();
 
 const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
   const bot = roomAskDeps().store.bot(id);
@@ -93,7 +96,20 @@ export function liveBotChain(group: HostedGroup): number {
   const roomId = group.hosted.roomId;
   if (stopped.has(roomId)) return 0;
   try {
-    return botChain(recentRoomEntries(roomId, CHAIN_LINES), [...groupBots(group), ...teamBots(roomId)], [roomAskDeps().hostName(), ...roomPeople(roomId).map((person) => person.name)]);
+    const { store, hostName } = roomAskDeps();
+    const lines = recentRoomEntries(roomId, CHAIN_LINES);
+    const last = lines.at(-1);
+    const hostBots = groupBots(group);
+    const working = (botId: string) => {
+      // a teammate's bot works on its owner's PC
+      if (!hostBots.some((bot) => bot.id === botId)) return null;
+      if (group.busyBotId === botId || roomAsks(roomId, ["queued", "running"]).some((ask) => ask.botId === botId)) return true;
+      // a host bot's @ starts its hop a moment after the line; a teammate's bot's ask is made with it
+      return hostBots.some((bot) => bot.id === last?.author.id) ? null : false;
+    };
+    const turn = botChain(lines, [...hostBots, ...teamBots(roomId)], [hostName(), ...roomPeople(roomId).map((person) => person.name)], { working, since: BOOT });
+    if (turn && last) republishWhenLapsed(lapses, roomId, last.at, () => store.patchGroup(group.id, {}));
+    return turn;
   } catch {
     // group state goes out before room asks are configured, and for a missing room
     return 0;
