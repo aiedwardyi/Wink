@@ -102,10 +102,6 @@ vi.mock("./DesktopCapabilities", () => ({
   }),
 }));
 
-vi.mock("./CompanionSection", () => ({
-  CompanionSection: () => null,
-}));
-
 vi.mock("./EnginesSettings", () => ({
   EnginesSettings: () => null,
 }));

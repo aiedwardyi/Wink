@@ -372,7 +372,7 @@ export async function prepareProjectSession(
 
   // The project's own auth configs must be named at creation — a Session
   // cannot be edited later — so they are read before deciding whether the
-  // current Session is still the right one (issue #509: a twitter auth
+  // current Session is still the right one (a twitter auth
   // config created after the Session existed was never used).
   const authConfigs = knownAuthConfigs
     ?? await listCustomAuthConfigs(trimmed).catch((): AuthConfigMap => ({}));

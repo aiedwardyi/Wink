@@ -148,7 +148,7 @@ describe("linked files", () => {
   });
 
   it.each(["other-PC", "phone"])("streams bot-linked Desktop media outside roots to %s", async (client) => {
-    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "mredw");
+    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });
@@ -187,7 +187,7 @@ describe("linked files", () => {
   });
 
   it("hands over a bot-linked Desktop document outside roots as a download", async () => {
-    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "mredw", "Desktop");
+    const desktop = join(temp("linked-doc-", process.cwd()), "Users", "alice", "Desktop");
     mkdirSync(desktop, { recursive: true });
     const file = join(desktop, "UN-Certificate_Vertia.docx");
     writeFileSync(file, "docx-bytes");
@@ -209,7 +209,7 @@ describe("linked files", () => {
   it("keeps unlinked, code, hidden, AppData, system, and disguised files outside roots refused", async () => {
     const root = temp("linked-media-policy-", process.cwd());
     const folder = join(root, "bot");
-    const desktop = join(root, "Users", "mredw", "Desktop");
+    const desktop = join(root, "Users", "alice", "Desktop");
     mkdirSync(folder);
     mkdirSync(desktop, { recursive: true });
     const refused = [
@@ -279,7 +279,7 @@ describe("linked files", () => {
   });
 
   it.each(["other-PC", "phone"])("explains a bot-linked Desktop video outside roots to %s without exposing unlinked paths", async (client) => {
-    const user = join(temp("linked-desktop-"), "Users", "mredw");
+    const user = join(temp("linked-desktop-"), "Users", "alice");
     const desktop = join(user, "Desktop");
     const folder = join(user, "Projects", "car-advisor");
     mkdirSync(desktop, { recursive: true });

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CustomKey } from "../shared/credential-request.ts";
 import { crashCounter } from "./team-crashes.ts";
-import { teamOwnerHash } from "./team-route.ts";
+import { teamOwnerHash } from "./team-stats.ts";
 import { teamTodayRoute } from "./team-today.ts";
 
 const ORIGIN = "https://app.glitchtip.com";

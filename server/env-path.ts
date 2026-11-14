@@ -1,5 +1,5 @@
 // PATH augmentation for GUI launches — the fix for "CLI not found" when
-// the app is opened from Finder (issues #8, #12).
+// the app is opened from Finder.
 //
 // A macOS app launched from Finder inherits a bare PATH
 // (/usr/bin:/bin:...): no ~/.local/bin (the claude installer default),

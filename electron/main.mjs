@@ -125,7 +125,7 @@ const verifyProbe = process.env.OMB_VERIFY_PROBE_ROOT ? (await import("./verify-
 const verifyProbePort = verifyProbe ? await verifyProbe.allocatePort() : null;
 // release.yml bakes google-client.json into the package; self-built copies have none.
 const GOOGLE_CLIENT = googleClient(process.env, () => verifyProbe ? null : JSON.parse(fs.readFileSync(path.join(__dirname, "google-client.json"), "utf8")));
-// 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
+// 127.0.0.1 explicitly: vite binds IPv4, and a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 if (!app.isPackaged && process.env.OMB_USER_DATA) app.setPath("userData", process.env.OMB_USER_DATA);
@@ -1002,8 +1002,8 @@ async function startServerOn(port) {
   // so only the child we actually forked (matching pid + static serving)
   // counts as ours.
   // The budget is wall-clock, not a fixed poll count: a healthy boot can take
-  // well past 20s on cold machines or when pre-listen network calls stall
-  // (issue #506), and reaping an about-to-listen child reads to the user as
+  // well past 20s on cold machines or when pre-listen network calls stall,
+  // and reaping an about-to-listen child reads to the user as
   // "something else is using its ports" even though nothing was on them.
   // The probe itself is deadline-bounded (a hung health endpoint cannot wedge
   // us here forever) and reports WHY it gave up, so the error page can tell

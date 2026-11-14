@@ -8,7 +8,7 @@ import { labelFromHost, teamSnagSchema } from "../shared/relay-protocol.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { sectionKey, type Message, type Store } from "./store.ts";
-import { teamIdToken, teamOwnerHash, teamRelayBase, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { teamIdToken, teamOwnerHash, teamRelayBase, teamRelayOrigin, type TeamTokenSource } from "./team-stats.ts";
 
 export const TEAM_SNAG_POLL_MS = 10 * 60_000;
 const NOTE_MAX = 8000;

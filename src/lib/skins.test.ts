@@ -1360,7 +1360,6 @@ describe("dark ink skins", () => {
 
     const sidebarSrc = readFileSync(join(repoRoot, "src/components/Sidebar.tsx"), "utf8");
     const avatarSrc = readFileSync(join(repoRoot, "src/components/BotProfileAvatarCard.tsx"), "utf8");
-    const compSrc = readFileSync(join(repoRoot, "src/components/CompanionSection.tsx"), "utf8");
 
     const deleteChannelIdx = sidebarSrc.indexOf("chrome.deleteChannel");
     expect(deleteChannelIdx, "chrome.deleteChannel found in Sidebar.tsx").toBeGreaterThanOrEqual(0);
@@ -1392,7 +1391,6 @@ describe("dark ink skins", () => {
       const raised = skinToken(skin, "--color-raised");
       const raisedHover = skinToken(skin, "--color-raised-hover");
       const control = skinToken(skin, "--color-control");
-      const inset = skinToken(skin, "--color-inset");
 
       // 1. Sidebar "chrome.deleteChannel"
       const deleteChannelRest = /(?<!hover:)bg-raised\b/.test(deleteChannelSlice) ? raised : card;
@@ -1417,10 +1415,6 @@ describe("dark ink skins", () => {
       // Icon-only control 2: BotProfileAvatarCard remove button
       const avatarHover = avatarSrc.includes("hover:bg-danger/10") ? blend(danger, card, 0.1) : control;
       expect.soft(contrast(danger, avatarHover), `${skin} BotProfileAvatarCard hover`).toBeGreaterThanOrEqual(3.0);
-
-      // Icon-only control 3: CompanionSection remove button
-      const compHover = compSrc.includes("hover:bg-danger/10") ? blend(danger, inset, 0.1) : control;
-      expect.soft(contrast(danger, compHover), `${skin} CompanionSection hover`).toBeGreaterThanOrEqual(3.0);
     }
   });
 

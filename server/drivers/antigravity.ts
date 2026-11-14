@@ -14,7 +14,7 @@
 // auto-denies shell (`run_command` comes back as a tool ERROR); the default
 // `request-review` auto-denies; `--dangerously-skip-permissions` (fullAuto)
 // approves everything. Real per-action approval cards are a future path via
-// native ACP (agy issue #31), which would reuse acp/core.ts like grok/gemini.
+// native ACP, which would reuse acp/core.ts like grok/gemini.
 //
 // MCP: agy has no per-turn MCP flag, so Wink's servers (agents, terminal, and
 // the bot's computer: cloud box / Local VM / VPS) are mounted into the global
@@ -104,7 +104,7 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)", contextWindow: 1_048_576 },
     // claude-sonnet-4-6, claude-opus-4-6-thinking, and gpt-oss-120b-medium
-    // below predate the ground-truth rule (driver PR #30) and do not appear
+    // below predate the ground-truth rule and do not appear
     // in a current `agy models` run — see MODEL-AG-STALE. Left in place
     // pending a follow-up to confirm or remove them; see
     // ANTIGRAVITY_UNVERIFIED_LEGACY_IDS in antigravity.test.ts.
@@ -1111,7 +1111,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           // so a non-fullAuto mount could never fire. localComputerMcp stays
           // unset on purpose — the host desktop requires per-action human
           // approval (see contracts.ts), which print mode cannot deliver in
-          // any mode; that returns with the native ACP path (agy issue #31).
+          // any mode; that returns with the native ACP path.
           computerMcp: config.fullAuto,
           // The static agents entry above; each turn's identity rides on its
           // own agy child's env.

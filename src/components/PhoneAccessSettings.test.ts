@@ -295,7 +295,7 @@ describe("PhoneAccessSettings", () => {
 });
 
 describe("This PC", () => {
-  const EMAIL = "rocknblock.official@gmail.com";
+  const EMAIL = "person@example.test";
   const signedIn = () => ({ state: "signed-in", email: EMAIL });
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 

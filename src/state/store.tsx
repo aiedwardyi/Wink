@@ -478,7 +478,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) {
-        // room thread — plain linear append, no branching/mascot machinery
+        // room thread: plain linear append, no branching/mascot machinery
         const group = state.groups.find((g) => g.threadId === action.threadId);
         if (!group) return state;
         if (group.messages.some((m) => m.id === action.message.id)) return state;

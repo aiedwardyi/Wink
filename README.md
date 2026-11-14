@@ -129,6 +129,7 @@ This is everything Wink listens on, sends and stores, usage stats included.
 - `%APPDATA%\orbit-desktop`: Wink's own API keys in `credentials.bin`, encrypted with the Windows credential store through Electron `safeStorage`, the updater's install ID, and logs. It also holds Electron's browser data: local storage (UI settings and unsent drafts), plus the cookies and logins of the bots' built-in browser and of the windows that open your other PCs.
 - In the same userData folder: `error-report-consent.json` (consent), `error-report-queue.json` (pending reports), `error-report-budget.json` (daily upload count and backoff), and `error-report-active` (previous-run marker). These files are not synced by Wink.
 - Outside those, only while needed: `~/.gemini/config/mcp_config.json` during Antigravity turns (restored after) and a temp `mcp.json` per Claude turn (deleted after). Picking a local model for Grok adds it to `~/.grok/config.toml`, with that server's API key if it has one, and the entry stays.
+- Names: Wink was OpenMausBot, then Orbit. The old names in `~/.orbit`, `%APPDATA%\orbit-desktop`, the `OMB_` and `ORBIT_` variables, `orbit-msg` and the `orbit-releases` update feed stay on purpose, so existing installs keep their data, settings and updates.
 
 **Approvals**
 
@@ -167,8 +168,8 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 ## Build from source
 
 ```powershell
-git clone https://github.com/aiedwardyi/Wink.git Orbit
-cd Orbit
+git clone https://github.com/aiedwardyi/Wink.git
+cd Wink
 pnpm install --frozen-lockfile
 pnpm dev:desktop    # the desktop app
 pnpm dev            # or the browser UI at http://127.0.0.1:5199
