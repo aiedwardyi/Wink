@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -208,9 +210,9 @@ it("hops the pointer to the file just edited without covering its name, and show
 });
 
 it("moves the one arrow to the file picked with Up, Down or a click, keeps it there off Follow, and draws no box", async () => {
-  const css = ["MapTree.css", "MapPane.css"].map(file => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
-  expect(css).not.toMatch(/aria-current/);
-  expect(css).toMatch(/\.map-tree :focus-visible \{ outline: none; \}/);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapTree.css"), "utf8");
+  expect(css).not.toMatch(/\.map-tree-(file|sq)\[aria-current/);
+  expect(css).toMatch(/\.map-tree-file:focus-visible, \.map-tree-sq:focus-visible \{ outline: none; \}/);
   const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
   const pointsAt = (path: string) => vi.waitFor(() => {
     const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
