@@ -80,6 +80,31 @@ export function usePhoneHeaderNameFloor(
     let text = 0;
     let rem = 16;
     let measured = false;
+    const spacing = new Map<HTMLElement, Map<string, string>>();
+    const restoreSpacing = () => {
+      for (const [node, styles] of spacing) for (const [key, value] of styles) {
+        if (value) node.style.setProperty(key, value);
+        else node.style.removeProperty(key);
+      }
+      spacing.clear();
+    };
+    const tighten = (node: HTMLElement, key: string, value: string) => {
+      let styles = spacing.get(node);
+      if (!styles) { styles = new Map(); spacing.set(node, styles); }
+      if (!styles.has(key)) styles.set(key, node.style.getPropertyValue(key));
+      node.style.setProperty(key, value);
+    };
+    const controlsOf = () => header.lastElementChild instanceof HTMLElement && header.lastElementChild !== cluster ? header.lastElementChild : null;
+    const compact = (gap = 4) => {
+      const { chip } = chipOf();
+      const controls = controlsOf();
+      for (const node of [header, cluster, controls, chip]) if (node) tighten(node, "column-gap", `${gap}px`);
+      for (const node of [cluster, chip, ...[...controls?.children ?? []].map(child => child instanceof HTMLButtonElement ? child : child.querySelector("button"))]) {
+        if (!(node instanceof HTMLElement) || node.getBoundingClientRect().width < 1) continue;
+        const style = getComputedStyle(node);
+        for (const side of ["Left", "Right"] as const) if (px(style[`padding${side}`]) > 4) tighten(node, `padding-${side.toLowerCase()}`, "4px");
+      }
+    };
     const chipOf = () => {
       const label = header.querySelector("[data-model-label]");
       const effort = header.querySelector("[data-model-effort]");
@@ -89,10 +114,11 @@ export function usePhoneHeaderNameFloor(
         label: label instanceof HTMLElement ? label : null,
         effort: effort instanceof HTMLElement ? effort : null,
         chip,
+        wrapper: chip?.parentElement,
       };
     };
     const clearChip = () => {
-      const { label, effort, chip } = chipOf();
+      const { label, effort, chip, wrapper } = chipOf();
       if (label) {
         label.style.display = "";
         label.style.flexShrink = "";
@@ -108,9 +134,11 @@ export function usePhoneHeaderNameFloor(
         chip.style.minWidth = "";
         chip.style.maxWidth = "";
       }
+      if (wrapper) wrapper.style.minWidth = "";
     };
     const apply = () => {
       if (!alive) return;
+      restoreSpacing();
       if (!isPhone()) {
         button.style.minWidth = "";
         cluster.style.minWidth = "";
@@ -145,16 +173,20 @@ export function usePhoneHeaderNameFloor(
         if (cluster.style.minWidth !== min) cluster.style.minWidth = min;
       };
       const paint = (slot: PhoneHeaderSlot) => {
-        const { label, effort, chip } = chipOf();
+        const { label, effort, chip, wrapper } = chipOf();
         if (effort) effort.style.display = slot.showEffort ? "" : "none";
+        const minimum = slot.truncateLabel && chip && label
+          ? Math.ceil(chip.getBoundingClientRect().width - label.getBoundingClientRect().width + (px(getComputedStyle(label).fontSize) || rem))
+          : 0;
+        if (wrapper) wrapper.style.minWidth = minimum ? `${minimum}px` : "";
         if (label) {
           if (slot.showLabel) {
             label.style.display = "";
-            label.style.flexShrink = "0";
-            label.style.minWidth = "max-content";
-            label.style.maxWidth = "none";
+            label.style.flexShrink = slot.truncateLabel ? "1" : "0";
+            label.style.minWidth = slot.truncateLabel ? "1em" : "max-content";
+            label.style.maxWidth = slot.truncateLabel ? "100%" : "none";
             label.style.overflow = "hidden";
-            label.style.textOverflow = "clip";
+            label.style.textOverflow = slot.truncateLabel ? "ellipsis" : "clip";
             label.style.whiteSpace = "nowrap";
           } else {
             label.style.display = "none";
@@ -162,9 +194,9 @@ export function usePhoneHeaderNameFloor(
         }
         if (chip) {
           if (slot.showLabel) {
-            chip.style.flexShrink = "0";
-            chip.style.minWidth = "max-content";
-            chip.style.maxWidth = "none";
+            chip.style.flexShrink = slot.truncateLabel ? "1" : "0";
+            chip.style.minWidth = minimum ? `${minimum}px` : "max-content";
+            chip.style.maxWidth = slot.truncateLabel ? "100%" : "none";
           } else {
             chip.style.flexShrink = "";
             chip.style.minWidth = "";
@@ -179,7 +211,7 @@ export function usePhoneHeaderNameFloor(
         if (slot.showLabel && label) {
           const rect = label.getBoundingClientRect();
           if (rect.width < 1 || rect.right > limit + 0.5) return false;
-          if (label.scrollWidth > label.clientWidth + 1) return false;
+          if (!slot.truncateLabel && label.scrollWidth > label.clientWidth + 1) return false;
         }
         if (slot.showEffort && effort) {
           const rect = effort.getBoundingClientRect();
@@ -188,9 +220,9 @@ export function usePhoneHeaderNameFloor(
         }
         if (button.getBoundingClientRect().width + 1 < slot.nameMin) return false;
         if (slot.nameMin >= text - 0.5 && button.scrollWidth > button.clientWidth + 1) return false;
-        const controls = header.lastElementChild !== cluster ? header.lastElementChild : null;
-        const edge = chip ?? controls;
-        if (edge instanceof HTMLElement) {
+        const controls = controlsOf();
+        for (const edge of controls ? [controls, ...controls.children] : [chip]) {
+          if (!(edge instanceof HTMLElement)) continue;
           const rect = edge.getBoundingClientRect();
           if (rect.width >= 1 && rect.left < cluster.getBoundingClientRect().right - 1) return false;
         }
@@ -216,15 +248,21 @@ export function usePhoneHeaderNameFloor(
       };
       const last = slots.at(-1);
       if (!last) return;
-      let chosen = last;
-      for (const slot of slots) {
-        paint(slot);
-        if (fits(slot)) {
-          chosen = slot;
-          break;
+      const fit = () => {
+        for (const slot of slots) {
+          paint(slot);
+          if (fits(slot)) return true;
+        }
+        return false;
+      };
+      // Keep normal spacing unless even the truncated label overlaps the controls.
+      if (!fit()) {
+        compact();
+        if (!fit()) {
+          compact(2);
+          fit();
         }
       }
-      paint(chosen);
     };
     const kick = () => {
       apply();
@@ -235,6 +273,16 @@ export function usePhoneHeaderNameFloor(
     kick();
     const mutations = new MutationObserver(kick);
     mutations.observe(header, { childList: true, subtree: true, characterData: true });
+    // Menu attention changes outside the header's subtree.
+    const menu = phoneMenuButton(header.ownerDocument);
+    let menuAsking = menu?.classList.contains("needs-you-glow") ?? false;
+    const menuMutations = new MutationObserver(() => {
+      const asking = menu?.classList.contains("needs-you-glow") ?? false;
+      if (asking === menuAsking) return;
+      menuAsking = asking;
+      kick();
+    });
+    if (menu) menuMutations.observe(menu, { attributes: true, attributeFilter: ["class"] });
     window.addEventListener("resize", kick);
     void document.fonts?.ready.then(() => {
       if (!alive) return;
@@ -244,7 +292,9 @@ export function usePhoneHeaderNameFloor(
     return () => {
       alive = false;
       mutations.disconnect();
+      menuMutations.disconnect();
       window.removeEventListener("resize", kick);
+      restoreSpacing();
       button.style.minWidth = "";
       button.style.width = "";
       cluster.style.minWidth = "";

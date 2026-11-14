@@ -26,29 +26,30 @@ const ICONS: Array<[RegExp, LucideIcon]> = [
 ];
 
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
-function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
+function useMediaFiles({ threadId, messages, roomId }: MediaSource, preview = false) {
   const [index, setIndex] = useState(() => heldMedia(threadId, roomId));
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
   const removed = useRoomFilesRemoved();
 
   // A room lists again when a new message brings files.
   useEffect(() => {
+    if (preview) return;
     let alive = true;
     loadMedia(threadId, roomId).then((got) => { if (alive) setIndex(got); }, () => { if (alive) setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined }); });
     return () => { alive = false; };
-  }, [threadId, roomId, latest, removed]);
+  }, [threadId, roomId, latest, removed, preview]);
 
   const files = useMemo(() => roomId || !index ? index?.files ?? null : withLive(index.files, chatMedia(threadId, messages)), [threadId, roomId, index, messages]);
   return { files, room: index?.list ?? null };
 }
 
-export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
+export const ShowMedia = memo(function ShowMedia({ source, maximized, previewKind }: { source: MediaSource; maximized: boolean; previewKind?: MediaKind }) {
   const { t, locale } = useI18n();
-  const { files, room } = useMediaFiles(source);
+  const { files, room } = useMediaFiles(source, Boolean(previewKind));
   const photos = useMemo(() => files?.filter((file) => file.image || file.video) ?? [], [files]);
   const others = useMemo(() => files?.filter((file) => !file.image && !file.video) ?? [], [files]);
   const [, repaint] = useReducer((n: number) => n + 1, 0);
-  const kind: MediaKind = others.length && (!photos.length || pickedKind(source.threadId, source.roomId) === "files") ? "files" : "photos";
+  const kind: MediaKind = previewKind ?? (others.length && (!photos.length || pickedKind(source.threadId, source.roomId) === "files") ? "files" : "photos");
   const months = useMemo(() => mediaMonths(kind === "photos" ? photos : others, locale), [kind, photos, others, locale]);
   const day = useMemo(() => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }), [locale]);
   const images = useMemo(() => files?.filter((file) => file.image) ?? [], [files]);
@@ -68,7 +69,7 @@ export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source
       {room && <RoomFilesNotice list={room} />}
       {photos.length > 0 && others.length > 0 && (
         <div role="tablist" data-media-kinds className="show-media-kinds">
-          {KINDS.map((each) => <button key={each} type="button" role="tab" aria-selected={kind === each} onClick={() => choose(each)}>{t(each === "photos" ? "show.photos" : "show.files")}</button>)}
+          {KINDS.map((each) => <button key={each} type="button" role="tab" data-media-kind={each} aria-selected={kind === each} onClick={() => choose(each)}>{t(each === "photos" ? "show.photos" : "show.files")}</button>)}
         </div>
       )}
       <div className="show-media-body">

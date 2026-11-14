@@ -10,9 +10,9 @@ describe("phoneHeaderSlots", () => {
     expect(slots[1]).toEqual({ showEffort: false, showLabel: true, nameMin: 101 });
   });
 
-  it("shrinks the name to the floor before dropping the model label", () => {
+  it("shrinks the name to the floor before truncating the model label", () => {
     expect(slots[2]).toEqual({ showEffort: false, showLabel: true, nameMin: 64 });
-    expect(slots[3]).toEqual({ showEffort: false, showLabel: false, nameMin: 64 });
+    expect(slots[3]).toEqual({ showEffort: false, showLabel: true, truncateLabel: true, nameMin: 64 });
   });
 
   it("does not emit a duplicate slot when the name is already at the floor", () => {
@@ -21,7 +21,13 @@ describe("phoneHeaderSlots", () => {
       expect(slots).toHaveLength(3);
       expect(slots.every((slot) => slot.nameMin === name)).toBe(true);
       expect(slots[1]).toEqual({ showEffort: false, showLabel: true, nameMin: name });
-      expect(slots.at(-1)).toEqual({ showEffort: false, showLabel: false, nameMin: name });
+      expect(slots.at(-1)).toEqual({ showEffort: false, showLabel: true, truncateLabel: true, nameMin: name });
+    }
+  });
+
+  it("never offers a zero-width model label as a fitting fallback", () => {
+    for (const name of [0, 35, 64, 101, 500]) {
+      expect(phoneHeaderSlots(name, 64).every((slot) => slot.showLabel)).toBe(true);
     }
   });
 });

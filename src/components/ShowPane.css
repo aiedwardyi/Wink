@@ -54,6 +54,11 @@
   .show-pane-tabs button, .show-media-kinds button { height: 32px; }
   .show-pane-tabs button { padding-inline: 9px; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
+  .show-pane:has(> [data-pane-page]) { overflow: hidden; }
+  .show-pane > [data-pane-page] { position: absolute; inset: calc(env(safe-area-inset-top) + 56px) 0 0; display: flex; min-height: 0; }
+  .show-pane > [data-pane-page][hidden] { display: none; }
+  .show-pane > [data-pane-page] > .verify-watch-frame { margin: 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
+  .show-pane[data-pane-dismissed][data-closing] { animation: none; }
   /* a thumb a finger can catch */
   .show-media-rail { width: 28px; }
   .show-media-bubble { right: 32px; }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Download, ExternalLink, FileText, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import type { MediaSource } from "@/lib/show-media";
 import { lastShown, linkedFileSrc, saveFile, showCheck, showItem, showMap, showMedia, showName, type ShowItem } from "@/lib/show-pane";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { usePaneSwipe, type PaneSwipeTarget, type PaneTab } from "@/lib/use-pane-swipe";
 import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
 import { ShowMedia } from "./ShowMedia";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
@@ -51,6 +52,28 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     else if (card && source) openVerifyWatch({ threadId: source.threadId, owner: card.owner, live: action === "live" });
   };
   const ref = useRef<HTMLElement>(null);
+  const tabs: PaneTab[] = [
+    ...(tab === "show" || again ? ["show" as const] : []),
+    ...(source ? ["media" as const] : []),
+    ...(checkable ? ["check" as const] : []),
+    ...(source ? ["map" as const] : []),
+  ];
+  const choose = (next: PaneSwipeTarget) => {
+    if (next.kind) ref.current?.querySelector<HTMLButtonElement>(`[data-pane-current] [data-media-kind="${next.kind}"]`)?.click();
+    else if (next.tab === "show" && again) showItem(again);
+    else if (next.tab === "media" && source) showMedia(source.threadId);
+    else if (next.tab === "map" && source) showMap(source.threadId);
+    else if (next.tab === "check") openCheck();
+  };
+  const swipe = usePaneSwipe(ref, phone && !hidden && !closing, tab, tabs, choose, closePane, source?.threadId ?? watch?.threadId ?? item?.threadId);
+  const marked = swipe.highlight ?? tab;
+  const preview = phone ? swipe.preview : null;
+  const shownItem = item ?? (preview?.tab === "show" ? again : undefined);
+  const shownWatch = watch ?? (preview?.tab === "check" && card && source ? { card, threadId: source.threadId, live: action === "live" } : undefined);
+  const page = (name: PaneTab, content: ReactNode) => phone ? (
+    <div key={name} data-pane-page={name} data-pane-current={tab === name || undefined} data-pane-preview={preview?.tab === name && preview.tab !== tab || undefined}
+      hidden={tab !== name && preview?.tab !== name} inert={tab !== name || undefined}>{content}</div>
+  ) : content;
   const dock = useRef<number | undefined>(undefined);
   // The sidebar unfolds as this closes; its open width keeps the content from reflowing mid-exit.
   if (!closing) dock.current = undefined;
@@ -67,25 +90,27 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     return () => window.removeEventListener("keydown", onKey);
   }, [closing, expanded]);
 
+  const dockStyle: CSSProperties & { "--dock": string } | undefined = dock.current ? { "--dock": `${dock.current}px` } : undefined;
   const pane = (
-    <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className="verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
+    <aside ref={ref} style={dockStyle} className="verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in" data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
       <div className="show-pane-head">
         <div role="tablist" className="show-pane-tabs">
-          <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
-          {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
-          {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
-          {source && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
+          <button type="button" role="tab" aria-selected={marked === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
+          {source && <button type="button" role="tab" aria-selected={marked === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
+          {checkable && <button type="button" role="tab" aria-selected={marked === "check"} onClick={openCheck}>{t("show.check")}</button>}
+          {source && <button type="button" role="tab" aria-selected={marked === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
         </div>
         <span className="verify-watch-grow" />
         {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
         <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
       </div>
-      {item && <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />}
-      {watch && (watch.card.doc
-        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
-        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
-      {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
-      {tab === "map" && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
+      {page("show", shownItem && <ShowFrame key={`${shownItem.threadId}:${shownItem.src ?? shownItem.path}`} item={shownItem} maximized={expanded} />)}
+      {page("check", shownWatch && (shownWatch.card.doc
+        ? <VerifyDocWatchFrame key={`${shownWatch.card.runId}:${shownWatch.live}`} {...shownWatch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${shownWatch.card.runId}:${shownWatch.live}`} {...shownWatch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />))}
+      {page("media", (tab === "media" || preview?.tab === "media") && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />)}
+      {preview?.kind && source && <div data-pane-page="media-preview" data-pane-preview inert><ShowMedia source={source} maximized={expanded} previewKind={preview.kind} /></div>}
+      {page("map", (tab === "map" || preview?.tab === "map") && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={tab === "map" && !hidden && !closing} /></Suspense>)}
     </aside>
   );
   // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.
