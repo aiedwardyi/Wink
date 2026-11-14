@@ -1792,9 +1792,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
       const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
-      // A pane still loading is missing from the reading, so it holds its own floor until it shows.
+      // A pane still loading is missing from the reading, so it holds its own floor until it shows or closes.
       const loading = { at: now(), memory: floor };
-      loadingPanes = startingPanes(loadingPanes, loading.at);
+      loadingPanes = startingPanes(loadingPanes, loading.at).filter((pane) => !pane.session || (pane.session.exitCode === null && !pane.session.retired));
       const needed = loadingPanes.reduce((sum, pane) => sum + pane.memory, floor);
       if (free < needed) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
@@ -1853,7 +1853,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } finally {
         if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         remoteOpens.delete(slot);
-        if (!session || session.retired) loadingPanes = loadingPanes.filter((pane) => pane !== loading);
+        if (session) loading.session = session;
+        else loadingPanes = loadingPanes.filter((pane) => pane !== loading);
         reservedPanes -= 1;
         const left = paneReservations.get(botId) - 1;
         if (left) paneReservations.set(botId, left);

@@ -1421,6 +1421,19 @@ test("a burst of 40 claude panes against a lagging 6 GB reading opens only the p
   assert.ok((await claude(42)).sessionId);
 });
 
+test("a pane closed or exited while still loading gives its share back", async () => {
+  let owner;
+  const f = fixture({ owner: () => owner, now: () => 42, freeMemory: () => 0.7 * 1024 ** 3 });
+  owner = f.owner;
+  const claude = () => f.host.openForBot("bot-1", { label: "w", command: "claude --model opus 'hi'" });
+  const first = await claude();
+  await assert.rejects(claude(), /\(0\.7 GB free, 1\.2 GB needed\)/);
+  await f.host.closeForBot("bot-1", first.sessionId);
+  assert.ok((await claude()).sessionId);
+  f.children.at(-1).exit({ exitCode: 0 });
+  assert.ok((await claude()).sessionId);
+});
+
 test("a shell pane still loading adds its own smaller share, and a failed open adds none", async () => {
   let owner;
   let free = 8 * 1024 ** 3;
