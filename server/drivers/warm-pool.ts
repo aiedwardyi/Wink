@@ -1,5 +1,6 @@
 // Process-wide pool of speculative engine children (Grok, Muse, Gemini, and
-// Claude sessions prepared before Send). Codex never uses it. Holds no
+// Claude sessions prepared before Send), and Codex app-servers kept between a
+// thread's turns. Holds no
 // protocol code: drivers spawn and hand shake, the pool owns capacity,
 // identity generations and lifetimes.
 import os from "node:os";

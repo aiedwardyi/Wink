@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs } from "./config.ts";
 import { knownCatalogContextWindow } from "./context-compaction.ts";
@@ -27,6 +27,11 @@ import {
   withSystemChanges,
 } from "./turn-context.ts";
 import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
+
+vi.mock("./drivers/warm-pool.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./drivers/warm-pool.ts")>();
+  return { ...actual, warmPool: actual.createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 }) };
+});
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-claude-cli.ts");
 const FAKE_CODEX = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-codex-app-server.ts");
@@ -148,7 +153,7 @@ describe("system text on a resumed session", () => {
       JSON.parse(readFileSync(codexDump, "utf8")).calls;
     return {
       methods: calls.map((call) => call.method),
-      text: calls.find((call) => call.method === "turn/start")?.params.input?.[0]?.text,
+      text: calls.filter((call) => call.method === "turn/start").at(-1)?.params.input?.[0]?.text,
       developer: calls.find((call) => call.method === "thread/start")?.params.developerInstructions,
       injected: calls.find((call) => call.method === "thread/inject_items")?.params.items?.[0]?.content[0]?.text,
     };
@@ -335,8 +340,9 @@ describe("system text on a resumed session", () => {
     await start("codex");
     expect(await send("hi", system("- City: Seoul"))).toMatchObject({ developer: system("- City: Seoul"), text: "hi" });
 
+    // the warm app-server still holds the thread, so the change rides in before the next turn/start
     const second = await send("which city?", system("- City: Busan"));
-    expect(second.methods).toContain("thread/resume");
+    expect(second.methods).toEqual(["initialize", "initialized", "thread/start", "turn/start", "thread/inject_items", "turn/start"]);
     expect(second.injected).toBe(reminder("[Removed:]", "- City: Seoul", "[Added:]", "- City: Busan").join("\n"));
     expect(second.text).toBe("which city?");
   });

@@ -6,7 +6,7 @@
 // The fake is a shebang script — the same constraint codex.cmd itself
 // hits on Windows. resolveCliSpawn covers both, so these run everywhere.
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
-import type { ProviderInstance } from "../contracts.ts";
+import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
 import * as procs from "../procs.ts";
 import { createQuietEnd } from "../quiet-end.ts";
 import type { Message } from "../store.ts";
@@ -23,6 +23,11 @@ import { withSystemChanges } from "../turn-context.ts";
 import { CodexDriver } from "./codex.ts";
 import { retireAppServer } from "./codex-catalog.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+
+vi.mock("./warm-pool.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./warm-pool.ts")>();
+  return { ...actual, warmPool: actual.createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 }) };
+});
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
 
@@ -774,6 +779,61 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(methods).toContain("thread/resume");
     expect(methods).not.toContain("thread/start");
     expect(seen.argv).toContain('web_search="live"');
+  });
+
+  it("keeps the app-server warm for the thread's next turn and respawns when the spawn shape changes", async () => {
+    await create({ mode: "resume" });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const dump = join(scratch, "warm.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const turn = async (extra: Partial<SendTurnInput> = {}) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-warm", text: "hi", model: "gpt-6-sol", cwd: scratch, ...extra });
+      return recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    };
+    const methods = () => sentCalls(dump).map((call) => call.method);
+    expect(await turn()).toMatchObject({ ok: true });
+    expect(await turn({ resumeCursor: "codex-thread-1" })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(methods()).toEqual(["initialize", "initialized", "thread/start", "turn/start", "turn/start"]);
+
+    const warm = spawn.mock.results[0]!.value as ChildProcess;
+    expect(await turn({ resumeCursor: "codex-thread-1", model: "gpt-6-luna" })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(methods()).toEqual(["initialize", "initialized", "thread/resume", "turn/start"]);
+    expect(await turn({ resumeCursor: "codex-thread-1", model: "gpt-6-luna", cwd: tmpdir() })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(methods()).toEqual(["initialize", "initialized", "thread/resume", "turn/start"]);
+    // a compacted thread comes back without a cursor: fresh process, fresh thread
+    expect(await turn({ model: "gpt-6-luna", cwd: tmpdir() })).toMatchObject({ ok: true });
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(methods()).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
+
+    const last = spawn.mock.results[3]!.value as ChildProcess;
+    await instance.dispose();
+    // no app-server outlives its instance: the stale one died at the first respawn, the idle one on dispose
+    await Promise.all([warm, last].map((child) => (child.exitCode !== null || child.signalCode !== null ? undefined : once(child, "close"))));
+  });
+
+  it("ends a warm app-server on Stop, so the next turn spawns again", async () => {
+    await create({ mode: "steer" });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const steered = async (resumeCursor?: string) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-warm-stop", text: "hi", resumeCursor });
+      await recorder.until((e) => e.type === "content.delta" && e.turnId === turnId);
+      return turnId;
+    };
+    const first = await steered();
+    expect(await instance.adapter.steer!("t-warm-stop", "more")).toBe(true);
+    expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === first)).toMatchObject({ ok: true });
+    const second = await steered("codex-thread-1");
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await instance.adapter.interruptTurn("t-warm-stop");
+    expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === second)).toMatchObject({ ok: false, stopReason: "interrupted" });
+    const warm = spawn.mock.results[0]!.value as ChildProcess;
+    expect(warm.exitCode !== null || warm.signalCode !== null).toBe(true);
+    await steered("codex-thread-1");
+    expect(spawn).toHaveBeenCalledTimes(2);
+    await instance.adapter.interruptTurn("t-warm-stop");
   });
 
   // codex sends one thread/tokenUsage/updated per model call: `last` is that
