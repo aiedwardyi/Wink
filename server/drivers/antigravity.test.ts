@@ -418,6 +418,13 @@ describe("Antigravity turns (fake CLI)", () => {
       expect(recorder.events[done]).toMatchObject({ ok: true });
     });
 
+    it("completes with result.response when it disagrees with the streamed text", async () => {
+      await replay("t-stream-differs", [say(1, "ACTIVE", "Draft "), result("Final answer.")]);
+
+      expect(deltas()).toEqual(["Draft "]);
+      expect(replies()).toEqual(["Final answer."]);
+    });
+
     it("never streams a system notice split across deltas, and keeps a tool step between deltas", async () => {
       const lines = [
         say(1, "ACTIVE", "Checking.\n"),

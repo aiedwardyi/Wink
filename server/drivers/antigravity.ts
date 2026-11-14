@@ -956,6 +956,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               && (busyReason !== null || AGY_NOT_ACCOUNT_ERROR.test(agyError) || (AGY_TIMEOUT_ERROR.test(agyError) && !AGY_ACCOUNT_ERROR.test(agyError)));
             if (realResponse && !shownResponses.has(response)) {
               shownResponses.add(response);
+              // item.completed carries the reply; a result that disagrees with the stream adds no delta
               const rest = response.startsWith(streamed) ? response.slice(streamed.length) : "";
               if (rest) emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: rest });
               emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: response });
