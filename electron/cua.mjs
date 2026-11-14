@@ -263,6 +263,7 @@ export function cuaPermissionsStatus() {
   const out = spawnSync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
     env: { ...process.env, ...CUA_ENV },
   });
   try {

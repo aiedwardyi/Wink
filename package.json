@@ -27,6 +27,7 @@
     "check:glyphs": "node scripts/check-glyphs.mjs",
     "check:ko-keys": "node scripts/check-ko-keys.mjs",
     "check:fixture-dates": "node scripts/check-fixture-dates.mjs",
+    "check:hidden-starts": "node scripts/check-hidden-starts.mjs",
     "dev": "node scripts/dev.mjs",
     "companion": "node --experimental-strip-types companion/src/index.ts",
     "dev:server": "node --experimental-strip-types server/index.ts",

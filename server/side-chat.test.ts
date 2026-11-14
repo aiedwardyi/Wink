@@ -322,7 +322,7 @@ describe("quickAsk without a fork", () => {
 
 describe("sweepSide", () => {
   it("cleans dead forks and keeps live ones", async () => {
-    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    const dead = spawnSync(process.execPath, ["-e", ""], { windowsHide: true }).pid!;
     const config = join(scratch, "cfg");
     const logs = join(scratch, "logs");
     mkdirSync(join(config, "sessions"), { recursive: true });

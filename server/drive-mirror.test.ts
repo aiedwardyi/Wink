@@ -491,7 +491,7 @@ describe("Drive mirror", () => {
     pcs[0].ids.writerId = writer;
     const own = `threads-v2/bot/thread/${writer}/head.json`;
     write(pcs[0], own, "local own head");
-    const listing = execFileSync("cmd.exe", ["/d", "/c", "dir", "/x"], { cwd: dirname(dirname(join(pcs[0].folder, own))), encoding: "utf8" });
+    const listing = execFileSync("cmd.exe", ["/d", "/c", "dir", "/x"], { cwd: dirname(dirname(join(pcs[0].folder, own))), encoding: "utf8", windowsHide: true });
     const row = listing.split(/\r?\n/).find((line) => line.trim().endsWith(writer));
     const short = row?.match(/\S*~\d+\S*/)?.[0] ?? "7D3E5B~1";
     seed(`threads-v2/bot/thread/${short}/head.json`, "remote peer head");
