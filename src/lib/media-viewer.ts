@@ -7,6 +7,7 @@ export interface PreviewImage {
   src: string;
   name: string;
   caption?: string;
+  video?: boolean;
 }
 
 export interface MediaReference extends PreviewImage {
