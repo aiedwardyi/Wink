@@ -81,7 +81,7 @@ export function decodeDrivePath(name: string): string | null {
 }
 
 // Bump when a sync path kind or payload family becomes readable.
-export const DRIVE_READER_REVISION = 2;
+export const DRIVE_READER_REVISION = 3;
 
 export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   if (!validPath(path)) return "unknown";
@@ -89,7 +89,7 @@ export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   const parts = path.split("/");
   const [root] = parts;
   if (path === "workspace.json" || ["assets", "pictures", "threads", "memory"].includes(root)) return "once";
-  if (root === "changes" && parts.length === 2 && /^\d+-[A-Za-z0-9._-]+\.(?:json|notes|paths|pin|style|trash)$/.test(parts[1])) {
+  if (root === "changes" && parts.length === 2 && /^\d+-[A-Za-z0-9._-]+\.(?:json|notes|paths|pin|style|trash|room)$/.test(parts[1])) {
     return parts[1].replace(/^\d+-/, "").startsWith(`${ids.profileDeviceId}-`) ? "own" : "once";
   }
   if (root === "devices" && parts.length === 2 && parts[1].endsWith(".json")) return parts[1] === `${ids.profileDeviceId}.json` ? "own" : "peer";

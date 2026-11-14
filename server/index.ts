@@ -443,7 +443,7 @@ import "./package-export.ts";
 import { localVmTurnPlan, shouldMountLocalComputer } from "./local-routing.ts";
 import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
-import { createGroupRoutes } from "./group-routes.ts";
+import { createGroupRoutes, roomSetupPending } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
@@ -457,6 +457,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { BotTrash, type TrashEntry } from "./bot-trash.ts";
 import { createBotTrashActions } from "./bot-trash-actions.ts";
 import { finishRevive, importTrashMarks, publishTrashMarks, type TrashSyncHost } from "./bot-trash-sync.ts";
+import { importRooms, publishRooms, roomEdited, roomRemoved, type RoomSyncHost } from "./room-sync.ts";
 import { callLinesSinceLastUserTurn, createLiveCallRoutes, isCallKeyCard } from "./live-call.ts";
 import { isVoiceLine, LIVE_VOICE, type CallTag } from "../shared/live-call.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -1575,6 +1576,7 @@ function publishProfileChanges(): number {
     ...localSectionChanges(),
     { entity: "order", entityId: profileSyncSettings.workspaceId, changes: localOrderChanges(true) },
   ]);
+  const rooms = publishRoomsSafely(folder);
   // a trashed or timer-emptied bot keeps its sync id and is not missing
   const liveBotIds = new Set([
     ...store.bots.map((bot) => bot.id),
@@ -1585,11 +1587,11 @@ function publishProfileChanges(): number {
   if (deletes.missing) console.warn(`bot sync: ${deletes.missing} synced bot(s) missing here without a delete; not publishing deletes`);
   const deleted = deletes.publish;
   const clearsPending = deletes.pendingBotDeletes.length !== profileSyncSettings.pendingBotDeletes.length;
-  if (!marks && !changed.length && !deleted.length && !clearsPending) return 0;
+  if (!marks && !rooms && !changed.length && !deleted.length && !clearsPending) return 0;
   const record = (
     input: Omit<ProfileSyncOperation, "format" | "version" | "operationId" | "deviceId" | "sequence" | "recordedAt">,
   ) => nextProfileSyncOperation(baseCheckpoint ? { ...input, baseCheckpoint } : input, now);
-  let written = marks;
+  let written = marks + rooms;
   for (const item of changed.flatMap((unsynced) => ownOpSyncChanges(compatibleSyncChanges(synced, unsynced)))) {
     try {
       writeSyncOperation(folder, record(item));
@@ -1777,10 +1779,17 @@ function importProfileChanges(): void | Promise<void> {
       if (remoteSection) markImported(synced, "section", section.entityId, remoteSection, {}, section.changes);
     }
     pruneProfileSyncSectionAliases();
+    let rooms = { deferred: false };
+    try {
+      rooms = importRooms(roomSyncHost(), state, folder);
+    } catch (error) {
+      console.warn("room sync: import failed", error);
+    }
     profileSyncSettings.seenCheckpoint = state.checkpoint;
     profileSyncLastSyncAt = Date.now();
     profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
-    profileSyncSeen = { signature, invalid: remote.invalidFiles.length > 0, missingAssets };
+    // a room busy with a turn keeps its delete for the next pass
+    profileSyncSeen = { signature, invalid: remote.invalidFiles.length > 0 || rooms.deferred, missingAssets };
   };
   if (!plan.remove.length) {
     finish();
@@ -3371,6 +3380,16 @@ let botTrash: BotTrash | null = null;
 // the trash timer waits for the first profile sync pass of this run
 let profileSyncPassed = false;
 const trashSyncHost = (): TrashSyncHost => ({ dataDir: DATA_DIR, store, trash: botTrash!, settings: () => profileSyncSettings, now: Date.now });
+const roomSyncHost = (): RoomSyncHost => ({ dataDir: DATA_DIR, store, settings: () => profileSyncSettings, now: Date.now, working: groupIsWorking });
+
+function publishRoomsSafely(folder: string): number {
+  try {
+    return publishRooms(roomSyncHost(), folder);
+  } catch (error) {
+    console.warn("room sync: publish failed", error);
+    return 0;
+  }
+}
 const botTrashActions = createBotTrashActions({
   host: trashSyncHost,
   queueDeletes: (syncIds) => {
@@ -7006,7 +7025,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   // A shared group commits the host's line to the room, then answers it like any group.
   const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
-  if (!shared && roomSetupPending(group)) {
+  if (!shared && roomSetupPending(group, store.messagesFor(group.threadId).length)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
   }
   // Capture the active thread once. Every queued responder below is bound to
@@ -7124,19 +7143,6 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
   const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
   groupQueues.set(groupId, tracked.catch(() => {}));
   return message;
-}
-
-function roomSetupPending(group: GroupRecord): boolean {
-  const hasMarker =
-    Object.prototype.hasOwnProperty.call(group, "setupCompletedAt") ||
-    Object.prototype.hasOwnProperty.call(group, "setupSkippedAt");
-  return (
-    !group.dm &&
-    hasMarker &&
-    group.setupCompletedAt == null &&
-    group.setupSkippedAt == null &&
-    store.messagesFor(group.threadId).length === 0
-  );
 }
 
 function resolveReplyTarget(threadId: string, value: unknown): Message | undefined {
@@ -7506,6 +7512,17 @@ const groupRoutes = createGroupRoutes({
   closeOpenApprovals,
   releaseInterruptedBot,
   roomLaneThread: roomLanes.thread,
+  rooms: {
+    created: scheduleProfilePublish,
+    edited: (before, patch) => {
+      roomEdited(roomSyncHost(), before, patch);
+      scheduleProfilePublish();
+    },
+    removed: (group) => {
+      roomRemoved(roomSyncHost(), group);
+      scheduleProfilePublish();
+    },
+  },
 });
 const internalRoutes = createInternalRoutes({
   runDelegatedTurn,

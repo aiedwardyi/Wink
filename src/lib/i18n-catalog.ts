@@ -766,6 +766,7 @@ export const en = {
   "chrome.closeRecentlyDeleted": "Close recently deleted",
   "chrome.restoreFolderBusy": "Could not restore {name}. A file in its folder is open in another app. Close it and try again.",
   "chrome.deleteChannel": "Delete group",
+  "chrome.deleteGroupBodyAllPcs": "This deletes {name} on all your PCs. This cannot be undone.",
   "chrome.cannotContactTeammates": "This engine cannot contact teammates yet",
 
   "chrome.bots": "Bots",
@@ -2583,6 +2584,7 @@ export const ko = {
   "chrome.closeRecentlyDeleted": "최근 삭제한 봇 닫기",
   "chrome.restoreFolderBusy": "{name} 봇을 복원하지 못했습니다. 폴더 안 파일이 다른 앱에서 열려 있습니다. 닫은 뒤 다시 시도하세요.",
   "chrome.deleteChannel": "그룹 삭제",
+  "chrome.deleteGroupBodyAllPcs": "{name} 그룹을 모든 PC에서 삭제합니다. 되돌릴 수 없습니다.",
   "chrome.cannotContactTeammates": "이 엔진은 아직 팀원에게 연락할 수 없습니다",
 
   "chrome.bots": "봇",
