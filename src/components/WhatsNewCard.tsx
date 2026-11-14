@@ -28,16 +28,56 @@ function useSeen(ref: RefObject<HTMLElement | null>): boolean {
   return seen;
 }
 
+const holdStill = () => document.documentElement.hasAttribute("data-orbit-idle") || Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+
+/** Blurred, hidden or reduced motion: one frame instead of a loop that repaints every frame. */
+function useStill(): boolean {
+  const [still, setStill] = useState(holdStill);
+  useEffect(() => {
+    const update = () => setStill(holdStill());
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-orbit-idle"] });
+    const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    media?.addEventListener?.("change", update);
+    update();
+    return () => {
+      observer.disconnect();
+      media?.removeEventListener?.("change", update);
+    };
+  }, []);
+  return still;
+}
+
+function Still({ src }: { src: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const image = new Image();
+    image.onload = () => {
+      const node = canvas.current;
+      if (!node) return;
+      node.width = image.naturalWidth;
+      node.height = image.naturalHeight;
+      node.getContext("2d")?.drawImage(image, 0, 0);
+    };
+    image.src = src;
+    return () => {
+      image.onload = null;
+    };
+  }, [src]);
+  return <canvas ref={canvas} />;
+}
+
 function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; onShow: () => void }) {
   const { t } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
   const seen = useSeen(frame);
-  const light = LIGHT_SKIN_IDS.has(useSkin());
+  const still = useStill();
+  const clip = (LIGHT_SKIN_IDS.has(useSkin()) && tile.lightClip) || tile.clip;
   const [how, setHow] = useState(false);
   return (
     <div className="whats-new-tile">
       <div ref={frame} className="whats-new-frame">
-        {seen && <img src={(light && tile.lightClip) || tile.clip} alt="" draggable={false} />}
+        {seen && (still ? <Still src={clip} /> : <img src={clip} alt="" draggable={false} />)}
       </div>
       <div className="whats-new-tile-title">{tile.title[locale]}</div>
       <div key={String(how)} className="whats-new-line">{how && tile.show !== "memory" ? tile.show[locale] : tile.line[locale]}</div>

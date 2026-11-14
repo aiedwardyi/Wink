@@ -128,6 +128,57 @@ describe("whats new card", () => {
     }
   });
 
+  it("shows the Map on the left and Gemini 4 Carbon + Hydrogen on the right in 1.0.263, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.263"];
+    expect(entry.tiles).toHaveLength(2);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.263");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(2);
+      expect(tiles.map((tile) => tile.querySelector(".whats-new-tile-title")?.textContent)).toEqual(entry.tiles.map((tile) => tile.title[locale]));
+      for (const [i, tile] of entry.tiles.entries()) {
+        expect(tiles[i].textContent).toContain(tile.line[locale]);
+        act(() => tiles[i].querySelector<HTMLButtonElement>(".whats-new-show")!.click());
+        expect(tiles[i].textContent).toContain((tile.show as Record<typeof locale, string>)[locale]);
+      }
+    }
+    expect(entry.tiles[0].title.en).toContain("Map");
+    for (const locale of ["en", "ko"] as const) {
+      expect(entry.tiles[1].title[locale]).toContain("Gemini 4 Carbon + Hydrogen");
+      expect((entry.tiles[1].show as Record<typeof locale, string>)[locale]).toMatch(/Carbon.*Hydrogen/);
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("holds a still frame while the app is idle or motion is reduced", async () => {
+    const seeAll = () =>
+      act(() => {
+        for (const observer of observers) observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
+      });
+    const frames = () => [...host.querySelectorAll(".whats-new-frame")].map((frame) => frame.firstElementChild?.tagName);
+    render(RELEASE);
+    seeAll();
+    expect(frames()).toEqual(["IMG", "IMG"]);
+    await act(async () => document.documentElement.setAttribute("data-orbit-idle", "blur"));
+    expect(frames()).toEqual(["CANVAS", "CANVAS"]);
+    await act(async () => document.documentElement.removeAttribute("data-orbit-idle"));
+    expect(frames()).toEqual(["IMG", "IMG"]);
+
+    const reduce = vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList,
+    );
+    act(() => root.unmount());
+    root = createRoot(host);
+    observers = [];
+    render(RELEASE);
+    seeAll();
+    reduce.mockRestore();
+    expect(frames()).toEqual(["CANVAS", "CANVAS"]);
+  });
+
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
