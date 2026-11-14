@@ -23,20 +23,25 @@ describe("classifyMuseError MSP turn errors", () => {
 });
 
 describe("museServeArgs", () => {
+  const trust = ["--trust-workspace"];
   const off = ["-c", "run.reminder_roster.agents=[]"];
 
-  it("turns the reminder agents off from 1.4.15 on a native CLI", () => {
-    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", false)).toEqual(off);
-    expect(museServeArgs("Muse Code 1.5.0 (1.5.0-R1.1)", false)).toEqual(off);
-    expect(museServeArgs("Muse Code 2.0.1", false)).toEqual(off);
+  it("trusts the workspace and turns the reminder agents off from 1.4.15 on a native CLI", () => {
+    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", false)).toEqual([...trust, ...off]);
+    expect(museServeArgs("Muse Code 1.5.0 (1.5.0-R1.1)", false)).toEqual([...trust, ...off]);
+    expect(museServeArgs("Muse Code 2.0.1", false)).toEqual([...trust, ...off]);
   });
 
-  it("leaves older, unknown and WSL CLIs on a plain serve", () => {
+  it("still trusts the workspace behind WSL, where only the -c switch is unsafe", () => {
+    expect(museServeArgs("Muse Code 1.4.20 (1.4.20-R8619.1)", true)).toEqual(trust);
+  });
+
+  it("leaves older and unknown CLIs on a plain serve", () => {
     expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", false)).toEqual([]);
     expect(museServeArgs("Muse Code 1.3.20", false)).toEqual([]);
     expect(museServeArgs("", false)).toEqual([]);
     expect(museServeArgs(null, false)).toEqual([]);
-    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", true)).toEqual([]);
+    expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", true)).toEqual([]);
   });
 });
 
