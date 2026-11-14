@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -91,6 +91,21 @@ describe("self-wake", () => {
     h.restart();
     await h.manager.tick();
     expect(h.fired).toHaveLength(1);
+  });
+
+  it("never saves its queued run while the wake is still pending", async () => {
+    const h = harness();
+    expect(wake(h, iso(START + 5 * 60_000)).ok).toBe(true);
+    const file = join(dirs[0]!, "routines.json");
+    const onDisk: Array<{ routines: unknown[]; runs: unknown[] }> = [];
+    h.emitted.push = (payload: any) => {
+      if (payload.kind === "routine.run") onDisk.push(JSON.parse(readFileSync(file, "utf8")));
+      return 0;
+    };
+    h.setNow(START + 6 * 60_000);
+    await h.manager.tick();
+    expect(onDisk.length).toBeGreaterThan(0);
+    for (const snapshot of onDisk) expect(snapshot.runs.length > 0 && snapshot.routines.length > 0).toBe(false);
   });
 
   it("caps pending wakes per bot", () => {

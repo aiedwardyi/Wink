@@ -654,11 +654,13 @@ export class RoutineManager {
       const missedRuns: RoutineRun[] = [];
       const missedNotified = new Set<string>();
       const rangWakes = new Set<string>();
+      const caughtUp: RoutineRun[] = [];
       for (const routine of this.routines) {
         if (!routine.enabled || routine.nextRunAt == null || routine.nextRunAt > now) continue;
         let scheduledFor: number | null = routine.nextRunAt;
         let catchUpAt: number | null = null;
         while (scheduledFor !== null && scheduledFor <= now) {
+          // a wake is never missed: one overdue past the catch-up window still fires, late
           if (now - scheduledFor > CATCH_UP_MS && !routine.wake) {
             const missed = this.newRun(routine, scheduledFor, false);
             missed.status = "missed";
@@ -682,7 +684,7 @@ export class RoutineManager {
             run.late = true;
             run.routineName = `${run.routineName} (late)`;
           }
-          this.emitRun(run);
+          caughtUp.push(run);
         }
         if (routine.wake) rangWakes.add(routine.id);
         routine.nextRunAt = scheduledFor;
@@ -695,6 +697,8 @@ export class RoutineManager {
       if (rangWakes.size) this.routines = this.routines.filter((routine) => !rangWakes.has(routine.id));
       if (changed) this.save();
       for (const id of rangWakes) this.options.emit?.({ kind: "routine.deleted", routineId: id });
+      // emitRun can save, so a run goes out only once its wake is gone from the file
+      for (const run of caughtUp) this.emitRun(run);
       for (const missed of missedRuns) this.options.onRunFailed?.(missed);
 
       const queued = this.runs.filter((run) => run.status === "queued").sort((a, b) => a.scheduledFor - b.scheduledFor);
