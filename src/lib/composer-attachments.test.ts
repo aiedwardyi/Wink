@@ -1,6 +1,6 @@
 // composeMessage with images, the image tag round-trip through
 // splitAttachedImages, and the mime gate the composer pastes through.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   appendPastedText,
@@ -16,6 +16,7 @@ import {
   isImageFile,
   pasteAttachment,
   pasteImageAttachment,
+  shrunkImagePath,
   splitAttachedImages,
   visibleComposerNotice,
   type ImageAttachment,
@@ -391,6 +392,53 @@ describe("big file intake", () => {
     });
     expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: "C:\\pics\\big.png", type: "image/png" })]);
     expect(out.uploads).toEqual([]);
+  });
+
+  it("sends a big picture with a path as its smaller copy and keeps the original's path", async () => {
+    const out = await intakeFiles([fake("big.png", 13 * 1024 * 1024, "image/png")], {
+      t,
+      allowImages: true,
+      getPath: (file) => `C:\\pics\\${file.name}`,
+      uploadImage: async () => {
+        throw new Error("must not upload");
+      },
+      shrunkPath: async () => "C:\\data\\attachments\\small.webp",
+    });
+    expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: "C:\\pics\\big.png", preview: "C:\\data\\attachments\\small.webp" })]);
+    const prompt = composeMessage("look", out.attachments);
+    expect(prompt).toContain('<attached-image path="C:\\data\\attachments\\small.webp" />');
+    expect(prompt).toContain('<attached-file path="C:\\pics\\big.png" name="big.png"');
+    expect(splitAttachedImages(prompt)).toMatchObject({ display: "look", images: ["C:\\data\\attachments\\small.webp"], files: [] });
+  });
+
+  it("uploads a pathless big picture whole and marks it to shrink, but not a GIF or for an engine without images", async () => {
+    const png = fake("image (3).png", 13 * 1024 * 1024, "image/png");
+    const jpeg = fake("camera.jpg", 6 * 1024 * 1024, "image/jpeg");
+    const gif = fake("big.gif", 11 * 1024 * 1024, "image/gif");
+    const out = await intake([png, jpeg, gif]);
+    expect(out.attachments).toEqual([
+      expect.objectContaining({ kind: "upload", name: "image (3).png", shrink: true }),
+      expect.objectContaining({ kind: "upload", name: "camera.jpg", shrink: true }),
+      expect.not.objectContaining({ shrink: true }),
+    ]);
+    const plain = await intakeFiles([png], { t, allowImages: false, getPath: () => "", uploadImage: async () => null });
+    expect(plain.attachments).toEqual([expect.not.objectContaining({ shrink: true })]);
+  });
+});
+
+describe("shrunkImagePath", () => {
+  const big = new File([new Uint8Array(8)], "big.png", { type: "image/png" });
+
+  it("saves the smaller copy under the picture's name and returns its path", async () => {
+    const uploader = vi.fn(async (_file: File) => ({ path: "/data/attachments/x.webp" }));
+    const path = await shrunkImagePath(big, async () => new Blob([new Uint8Array(3)], { type: "image/webp" }), uploader);
+    expect(path).toBe("/data/attachments/x.webp");
+    expect(uploader.mock.calls[0]![0]).toMatchObject({ name: "big.png", type: "image/webp", size: 3 });
+  });
+
+  it("gives nothing when the picture cannot be shrunk or saved", async () => {
+    expect(await shrunkImagePath(big, async () => null)).toBeUndefined();
+    expect(await shrunkImagePath(big, async () => new Blob(["x"]), async () => { throw new Error("413"); })).toBeUndefined();
   });
 });
 

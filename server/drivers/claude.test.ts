@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { composeMessage, fileAttachment } from "../../src/lib/composer-attachments.ts";
 import { saveImage } from "../attachments.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, saveConfig, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
@@ -1051,6 +1052,26 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       { type: "text", text },
       { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } },
     ]);
+  });
+
+  it("sends a big picture's smaller copy as a native block and its original as a path", async () => {
+    await create();
+    const dump = join(scratch, "dump-big-picture.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+    const original = fileAttachment("image (3).png", "C:\\Users\\me\\Downloads\\Wink\\image (3).png", 13958958, "image/png");
+    original.preview = saveImage(png, "image/png").path;
+    const text = composeMessage("look", [original]);
+
+    await instance.adapter.sendTurn({ threadId: "t-big-picture", text });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.prompt.message.content).toEqual([
+      { type: "text", text },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } },
+    ]);
+    expect(text).toContain('<attached-file path="C:\\Users\\me\\Downloads\\Wink\\image (3).png"');
   });
 
   it("hands the turn child no credential it was not granted, known or not", async () => {
