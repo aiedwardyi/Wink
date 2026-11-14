@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { hapticTick } from "./phone-swipe";
+import { guardMenuTouch, type HoldMenu } from "./use-hold-menu";
 
 export const LONG_PRESS_MS = 400;
 export const LONG_PRESS_SLOP = 8;
@@ -76,6 +77,7 @@ export type TouchDragHandlers = {
   skip?: string;
   /** Holds the no-select styles on the pressed node, so a touch that only scrolls never restyles the whole list. */
   selectPressed?: boolean;
+  holdMenu?: HoldMenu;
 };
 
 type Press = {
@@ -88,6 +90,7 @@ type Press = {
   scrollTop: number;
   travel: Travel;
   moved: boolean;
+  menu: boolean;
   dirty: boolean;
   styled: HTMLElement;
   marked: [HTMLElement, TouchDropMark] | null;
@@ -111,6 +114,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
   useEffect(() => {
     if (!list) return;
     let press: Press | null = null;
+    let clearTouchTail: (() => void) | undefined;
     const hit = (x: number, y: number) => {
       const target = list.ownerDocument.elementFromPoint(x, y);
       return target && list.contains(target) ? target : null;
@@ -204,7 +208,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       }
       press.frame = requestAnimationFrame(tick);
     };
-    const lift = () => {
+    const lift = (buzz = true) => {
       if (!press) return;
       const lifted = latest.current.lift(press.pressed);
       if (!lifted) {
@@ -222,11 +226,20 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       list.append(marker);
       press.marker = marker;
       observer.observe(list, { childList: true, subtree: true });
-      hapticTick();
+      if (buzz) hapticTick();
       press.frame = requestAnimationFrame(tick);
     };
+    const hold = () => {
+      if (!press) return;
+      if (latest.current.holdMenu?.open(press.pressed, press.x, press.y)) {
+        press.menu = true;
+        hapticTick();
+      } else lift();
+    };
     const cancel = () => {
-      if (release()?.lifted) latest.current.cancel();
+      const done = release();
+      if (done?.menu) latest.current.holdMenu?.close();
+      if (done?.lifted) latest.current.cancel();
     };
     const onStart = (e: TouchEvent) => {
       cancel();
@@ -246,12 +259,13 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         scrollTop: scroller().scrollTop,
         travel: [-Infinity, Infinity],
         moved: false,
+        menu: false,
         dirty: false,
         styled,
         marked: null,
         marker: null,
         targets: null,
-        timer: setTimeout(lift, LONG_PRESS_MS),
+        timer: setTimeout(hold, LONG_PRESS_MS),
         frame: 0,
         unbind: () => {},
       };
@@ -273,8 +287,16 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       if (!press || !touch) return;
       const far = Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > LONG_PRESS_SLOP;
       if (!press.lifted) {
-        if (far) release();
-        return;
+        if (!press.menu) {
+          if (far) release();
+          return;
+        }
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        if (!far) return;
+        latest.current.holdMenu?.close();
+        lift(false);
+        if (!press) return;
       }
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
@@ -284,7 +306,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       press.dirty = true;
     };
     const onEnd = (e: TouchEvent) => {
-      if (!press?.lifted) {
+      if (!press?.lifted && !press?.menu) {
         release();
         return;
       }
@@ -292,13 +314,15 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
       const done = release()!;
+      if (done.menu) clearTouchTail = guardMenuTouch(list.ownerDocument, true);
+      if (!done.lifted) return;
       if (done.moved) {
         latest.current.drop(under(done, done.lastX, done.lastY), done.lastY);
         return;
       }
       latest.current.cancel();
       // a hold without a move is still the long-press menu
-      hit(done.x, done.y)?.dispatchEvent(
+      if (!done.menu) hit(done.x, done.y)?.dispatchEvent(
         new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: done.x, clientY: done.y }),
       );
     };
@@ -308,6 +332,10 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       e.stopPropagation();
     };
     const onScroll = () => {
+      if (press?.menu && !press.lifted) {
+        latest.current.holdMenu?.close();
+        return;
+      }
       if (press && !press.lifted) release();
     };
     list.addEventListener("touchstart", onStart, { passive: true });
@@ -324,6 +352,7 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       list.removeEventListener("contextmenu", onMenu, true);
       list.removeEventListener("scroll", onScroll);
       cancel();
+      clearTouchTail?.();
     };
   }, [list, selector, targets]);
 
