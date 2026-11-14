@@ -81,6 +81,7 @@ it("never opens a picture on its own, and opens the page or PDF handed over with
   const both = bot("b6", "[deck.pdf](C:\\work\\deck.pdf) and [dog.jpg](C:\\work\\dog.jpg)");
   expect(walk([{ messages: turn }, { messages: [...turn, dog] }, { messages: [...turn, dog, both] }])).toEqual([null, null, "C:\\work\\deck.pdf"]);
   expect(walk([{ messages: turn }, { messages: [...turn, page, dog] }])).toEqual([null, "C:\\work\\sync-flow.html"]);
+  expect(walk([{ messages: turn }, { messages: [...turn, page] }, { messages: [...turn, page, dog] }])).toEqual([null, "C:\\work\\sync-flow.html", null]);
 });
 
 let host: HTMLElement;
