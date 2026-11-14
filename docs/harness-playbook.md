@@ -196,8 +196,7 @@ When a worker reports done, check its work yourself before anything moves:
    expected files changed, no whole-file line-ending diffs.
 3. Run the targeted checks only: the test files the card names and the repo's
    typecheck, with the commands the repo's own instructions give.
-4. Don't run the full test suite or boot the app's server unless the repo's
-   instructions say that's safe.
+4. Run the full suite or boot the app's server only if the repo's instructions allow it.
 5. Read the diff for the acceptance items. A report is a claim, not proof. An
    unmet item fails even when the worker says it was already like that.
 6. Run new regression tests on the base commit first. They must fail with the
@@ -212,7 +211,7 @@ When a worker reports done, check its work yourself before anything moves:
    checkout is still clean on `<base>` and the app is not running,
    `git -C "<repo>" merge --squash <branch>` leaves the changes there
    uncommitted, as if you had made them. Otherwise ask the user first.
-10. After a merge, deploy or release, check the live result yourself before you call it done.
+10. Say merged, deployed or released only once you checked it yourself: `gh pr view` state, the live result.
 
 An in-place worker has no branch: instead of steps 1 and 2, compare the files it
 changed with the safety copy, or with `git diff` for files that were clean. Skip
