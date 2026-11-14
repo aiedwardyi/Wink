@@ -13,10 +13,10 @@ import "./MapPane.css";
 const copy = {
   en: { empty: "No live workers", walk: (total: number) => `${total.toLocaleString("en-US")} files · Not a git folder`, workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>Changed {n} of {total.toLocaleString("en-US")} files</>,
     team: (workers: number, n: number, total: number, clashes: number) => <><b>{workers}</b> workers · <b>{n}</b> of {total.toLocaleString("en-US")} files changed{clashes > 0 && <> · <b>{clashes}</b> {clashes === 1 ? "clash" : "clashes"}</>}</>, crew: (n: number) => `${n} workers`,
-    tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", loading: "Loading changes", retry: "Retry", whole: "Whole file", changes: "Changes only" },
+    tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", lost: "Could not load all files", loading: "Loading changes", retry: "Retry", whole: "Whole file", changes: "Changes only" },
   ko: { empty: "실행 중인 작업자가 없어요", walk: (total: number) => `파일 ${total.toLocaleString("ko-KR")}개 · Git 폴더가 아니에요`, workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>,
     team: (workers: number, n: number, total: number, clashes: number) => <>작업자 <b>{workers}</b>명 · 파일 {total.toLocaleString("ko-KR")}개 중 <b>{n}</b>개 변경{clashes > 0 && <> · 겹침 <b>{clashes}</b>개</>}</>, crew: (n: number) => `작업자 ${n}명`,
-    tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일", changes: "변경만" },
+    tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", lost: "전체 파일을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일", changes: "변경만" },
 };
 const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
@@ -33,6 +33,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [whole, setWhole] = useState(true);
   const cache = useRef({ key: "", diffs: new Map<string, MapDiff>() });
   const [repo, setRepo] = useState<(MapRepo & { worker: string }) | null>(null);
+  const [repoFailed, setRepoFailed] = useState<string | null>(null);
+  const [repoRetry, setRepoRetry] = useState(0);
   const [failed, setFailed] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -55,11 +57,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const clashes = useMemo(() => team ? mapClashes(snapshot.workers) : [], [team, snapshot.workers]);
   const repoWorker = team ? snapshot.workers[0]?.id : worker?.id;
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
+  const lost = !paths && !!repoWorker && repoFailed === repoWorker;
   const known = useMemo(() => new Set(paths), [paths]);
   const extra = changedKey ? changedKey.split("\0").filter(path => !known.has(path)) : [];
   const extraKey = extra.join("\0");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const index = useMemo(() => paths && treeIndex(repo?.name ?? "", extra.length ? [...paths, ...extra] : paths), [paths, extraKey]);
+  const index = useMemo(() => paths ? treeIndex(repo?.name ?? "", extra.length ? [...paths, ...extra] : paths) : lost ? treeIndex("", changed) : undefined, [paths, extraKey, lost && changedKey]);
   const order = useMemo(() => index ? treeOrder(index, new Set(changedKey.split("\0"))) : [], [index, changedKey]);
   const current = useMemo(() => worker?.path ? { path: worker.path, worker: worker.id, at: worker.editedAt } : undefined, [worker?.path, worker?.id, worker?.editedAt]);
   const base = botId && `/api/bots/${encodeURIComponent(botId)}/map`;
@@ -99,10 +102,10 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const controller = new AbortController();
     const id = repoWorker;
     request(`${base}/repo?${new URLSearchParams({ worker: id })}`, { signal: controller.signal }).then((data: MapRepo) => {
-      if (!controller.signal.aborted && Array.isArray(data?.paths)) setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths });
-    }, () => {});
+      if (!controller.signal.aborted && Array.isArray(data?.paths)) { setRepo({ worker: id, name: String(data.name ?? ""), paths: data.paths }); setRepoFailed(null); }
+    }, () => { if (!controller.signal.aborted) setRepoFailed(id); });
     return () => controller.abort();
-  }, [base, repoWorker, active, connection]);
+  }, [base, repoWorker, active, connection, repoRetry]);
 
   useEffect(() => {
     if (!active || !liveReady.current) return;
@@ -154,6 +157,18 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     if (hit) return show(hit);
     request(`${base}/file?${new URLSearchParams({ worker: id, path, whole: "1" })}`).then((full: MapDiff) => { diffs.set(`full\0${path}`, full); show(full); }, () => {});
   };
+  const reach = (path: string, focus: boolean) => {
+    const row = [...topRef.current?.querySelectorAll<HTMLElement>("[data-map-file]") ?? []].find(row => row.dataset.mapFile === path);
+    if (focus) row?.focus({ preventScroll: true });
+    row?.scrollIntoView?.({ block: "nearest" });
+    return !!row;
+  };
+  // A file in a folded box has no row until its branch unfolds.
+  const pending = useRef<{ path: string; focus: boolean } | null>(null);
+  useEffect(() => {
+    const want = pending.current;
+    if (want?.path === chosen.path) { pending.current = null; reach(want.path, want.focus); }
+  });
   const move = (event: React.KeyboardEvent) => {
     const delta = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (!delta || !order.length || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -163,9 +178,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const next = order[at < 0 ? 0 : at + delta];
     if (!next) return;
     open(next);
-    const row = [...topRef.current?.querySelectorAll<HTMLElement>("[data-map-file]") ?? []].find(row => row.dataset.mapFile === next);
-    if (event.target instanceof Element && event.target.matches("[data-map-file]")) row?.focus({ preventScroll: true });
-    row?.scrollIntoView?.({ block: "nearest" });
+    const focus = event.target instanceof Element && event.target.matches("[data-map-file]");
+    pending.current = reach(next, focus) ? null : { path: next, focus };
   };
   const codeRow = (line: MapDiffLine, key: React.Key) => <div key={key} className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{line.text || " "}</code></div>;
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
@@ -183,9 +197,10 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       </header>
       <div ref={topRef} className="map-top">
         <div className="map-where">
-          <span>{!index ? c.changed(files.length) : !worker.git ? c.walk(index.size) : team ? c.team(snapshot.workers.length, changed.size, index.size, clashes.length) : c.of(<b>{files.length}</b>, index.size)}</span>
+          <span>{!index || lost ? c.changed(files.length) : !worker.git ? c.walk(index.size) : team ? c.team(snapshot.workers.length, changed.size, index.size, clashes.length) : c.of(<b>{files.length}</b>, index.size)}</span>
           <span>{[paths && repo?.name, team ? c.crew(snapshot.workers.length) : worker.nick].filter(Boolean).join(" / ")}</span>
         </div>
+        {lost && <p className="map-empty" role="status">{c.lost} <button type="button" onClick={() => setRepoRetry(repoRetry + 1)}>{c.retry}</button></p>}
         {index && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />

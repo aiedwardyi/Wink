@@ -119,6 +119,25 @@ describe("Store", () => {
     expect(message.tool.detail.output).toEqual([text]);
   });
 
+  it.each([
+    "The code is ready.",
+    "exit code: 1 and error code: 404",
+    "the password is stored in .env",
+    "use color #3B82F6 and #E5E7EB",
+    "my pin is on the fridge",
+    "...and the code is clean now",
+  ])("saves the bot reply %s unmasked", async (text) => {
+    const { messageDatabase } = await import("./message-db.ts");
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Rando" }, { seedMessages: false });
+    const row = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "" });
+    expect(store.appendMessage(bot.threadId, { role: "bot", kind: "text", text }).text).toBe(text);
+    expect(store.patchMessage(bot.threadId, row.id, { text })?.text).toBe(text);
+    const saved = JSON.stringify(messageDatabase().prepare("SELECT json FROM messages WHERE id = ?").get(row.id));
+    expect(saved).toContain(text);
+    expect(saved).not.toContain("redacted");
+  });
+
   it("tool detail safety sends SSE message rows through the HTTP projection", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     expect(source).toContain('kind: "message", threadId: change.threadId, message: clientMessage(change.message)');
@@ -371,7 +390,7 @@ describe("Store", () => {
     expect(colors.every((color) => color === "white")).toBe(true);
   });
 
-  it("repairs a live lead on membership change, then reload resets to everyone", () => {
+  it("repairs a lead on membership change and keeps it across reload", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
@@ -382,7 +401,7 @@ describe("Store", () => {
     expect(group.defaultResponder).toEqual({ kind: "member", botId: second.id });
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "everyone" });
+    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "member", botId: second.id });
   });
 
   it("persists a channel's context when it is created", () => {
@@ -411,7 +430,7 @@ describe("Store", () => {
     expect(channel.setupCompletedAt).toEqual(expect.any(Number));
     expect(new Store(selection).group(channel.id)).toMatchObject({
       bulletin: "Ship carefully.",
-      defaultResponder: { kind: "everyone" },
+      defaultResponder: { kind: "mentions" },
       setupCompletedAt: channel.setupCompletedAt,
     });
   });

@@ -389,7 +389,8 @@ export interface ProviderAdapter {
 
 // ── provider snapshot (upstream ServerProviderShape, reduced) ────────────
 export interface ProviderSnapshot {
-  state: "available" | "unavailable";
+  /** "checking": the first probe has not answered yet; never saved. */
+  state: "available" | "unavailable" | "checking";
   reason?: string;
   authenticated?: boolean;
   authChecked?: boolean;

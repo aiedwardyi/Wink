@@ -38,6 +38,7 @@ import {
   pasteAttachment,
   pasteImageAttachment,
   rereadEmptyImages,
+  shrinksImage,
   uploadAttachment,
   visibleComposerNotice,
   type Attachment,
@@ -55,6 +56,7 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
@@ -110,8 +112,8 @@ export type RoomPerson = { id: string; name: string; owner?: string };
 
 export type RoomBotStatus = { id: string; text: string; failed?: boolean };
 
-/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` ends this PC's own bots' turns only. */
-export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void };
+/** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` backs the box's Stop. `chain` counts a live bot handoff. */
+export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number };
 
 const MAX_UPLOADS_PER_MESSAGE = 5;
 
@@ -127,6 +129,7 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAt
   const file = fileAttachment(result.name, result.path, result.size, result.type);
   file.id = id;
   file.uploadId = uploadId;
+  if (result.preview) file.preview = result.preview;
   return file;
 }
 
@@ -236,7 +239,9 @@ export function Composer({
   const threadId = group?.threadId ?? bot?.threadId ?? room?.base ?? "";
   const acceptedSends = state.acceptedSends[threadId];
   const busy = composerIsBusy(group ? Boolean(group.working) : Boolean(bot?.busy), acceptedSends);
-  const stoppable = busy || Boolean(room?.onStop);
+  const chain = group?.botChain || room?.chain;
+  // room Stop also ends a handoff no host bot is working on
+  const stoppable = busy || Boolean(room?.onStop) || Boolean(group?.botChain);
   // a room steers into its working member's turn
   const steerBot = group ? members?.find((member) => member.id === group.busyBotId) : bot;
   const canSteer =
@@ -318,7 +323,8 @@ export function Composer({
       if (kept.length) trackFeature("attach.add", { n: kept.length });
       flushSync(() => editAttachments((prev) => [...prev, ...kept]));
       for (const upload of uploads) {
-        if (kept.some((a) => a.id === upload.id)) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id));
+        const chip = kept.find((a) => a.id === upload.id);
+        if (chip) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.kind === "upload" && chip.shrink);
       }
     },
     [draftId, editAttachments, showNotice, t],
@@ -389,13 +395,13 @@ export function Composer({
     }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
-      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id));
+      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink);
       return;
     }
     dropUpload(target.id, target.uploadId);
-    const next = uploadAttachment(file);
+    const next = uploadAttachment(file, Boolean(target.shrink) && shrinksImage(file));
     editAttachments((prev) => prev.map((a) => (a.id === target.id ? next : a)));
-    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id));
+    queueUpload(next.id, file, undefined, saveUpload(draftId, next.id), next.shrink);
   };
   // A value set from code never reaches the textarea's native undo stack, so
   // Ctrl+Z right after a long paste or "Display in chat box" restores this
@@ -661,6 +667,7 @@ export function Composer({
       allowImages: engineSupportsImages,
       getPath: pathForFile,
       uploadImage: pasteImageAttachment,
+      shrunkPath: shrunkPicture,
     });
     if (added.length) addAttachments(added, uploads, startedAt);
     // Keep file-specific failures beside the attachments. A successful
@@ -1052,6 +1059,11 @@ export function Composer({
             {t("teamRoom.botBusy", { name: members?.find((member) => member.id === id)?.name ?? t("chrome.aBot") })}
           </p>
         ))}
+        {chain ? (
+          <p data-bot-chain role="status" className="mb-1.5 px-1 text-[12px] text-ink-secondary">
+            {t("teamRoom.botChain", { n: chain })}
+          </p>
+        ) : null}
         {room?.status?.map((row) => (
           <p key={row.id} data-my-bot-turn role="status" className={cn("mb-1.5 px-1 text-[12px]", row.failed ? "text-danger" : "text-ink-secondary")}>
             {row.text}

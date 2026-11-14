@@ -31,6 +31,8 @@ export interface TreeItem {
   dirs?: number;
   count?: number;
   filesOnly?: boolean;
+  folds?: string[];
+  filesOf?: string;
   changed?: boolean;
   label?: string;
   sub?: string;
@@ -126,15 +128,15 @@ function build(index: TreeIndex, o: TreeOptions) {
       }
       let own = stack(dir);
       if (own && focus && dirOf(focus) !== dir.path) {
-        kids.push(item({ kind: "more", id: "f:" + dir.path, dirs: 0, count: dir.files.length, parent: it, filesOnly: true, changed: dir.files.some(file => o.changed.has(file)) }));
+        kids.push(item({ kind: "more", id: "f:" + dir.path, dirs: 0, count: dir.files.length, parent: it, filesOnly: true, filesOf: dir.path, changed: dir.files.some(file => o.changed.has(file)) }));
         own = null;
       }
       const loose = own || kids.some(kid => kid.id === "f:" + dir.path) ? 0 : dir.files.length;
       if (own) kids.push(item({ kind: "stack", id: "s:" + dir.path, dir, parent: it, ...own }));
       if (it.kind === "root" && !small) {
         for (const sub of shut) kids.push(item({ kind: "box", id: "d:" + sub.path, dir: sub, parent: it }));
-        if (loose) kids.push(item({ kind: "more", id: "f:", dirs: 0, count: loose, parent: it, filesOnly: true }));
-      } else if (shut.length || loose) kids.push(item({ kind: "more", id: "m:" + dir.path, dirs: shut.length, count: shut.reduce((sum, sub) => sum + sub.total, 0) + loose, parent: it, changed: shut.some(sub => lit.has(sub.path)) }));
+        if (loose) kids.push(item({ kind: "more", id: "f:", dirs: 0, count: loose, parent: it, filesOnly: true, filesOf: "" }));
+      } else if (shut.length || loose) kids.push(item({ kind: "more", id: "m:" + dir.path, dirs: shut.length, count: shut.reduce((sum, sub) => sum + sub.total, 0) + loose, parent: it, folds: shut.map(sub => sub.path), filesOf: loose ? dir.path : undefined, changed: shut.some(sub => lit.has(sub.path)) }));
       it.kids = kids;
       next.push(...kids);
     }
@@ -181,7 +183,10 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
   const items: TreeItem[] = [];
   let y = 0;
   let tight = false;
+  const gone = new Set<TreeItem>();
   rows.forEach((row, r) => {
+    for (let i = row.length; i--;) if (gone.has(row[i].parent!)) { gone.add(row[i]); row.splice(i, 1); }
+    if (!row.length) return;
     for (const it of row) measure(it, o, maxStack);
     // A big repo's top row folds its smallest closed folders into one "+N folders" box until it fits.
     if (r === 1 && !small) {
@@ -192,25 +197,43 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
         row.splice(row.indexOf(last), 1);
         let more = row.find(it => it.id === "m:");
         if (!more) {
-          more = { kind: "more", id: "m:", dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 };
+          more = { kind: "more", id: "m:", dirs: 0, count: 0, folds: [], parent, x: 0, y: 0, w: 0, h: 0, bw: 0 };
           const at = row.findIndex(it => it.filesOnly);
           row.splice(at < 0 ? row.length : at, 0, more);
         }
-        more.dirs!++; more.count! += last.dir!.total;
+        more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path); more.folds!.push(last.dir!.path);
         const loose = row.find(it => it.id === "f:");
-        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; }
+        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; more.filesOf = ""; }
         measure(more, o, maxStack);
       }
       if (o.team && width(row) > W) for (const id of ["m:", "f:"]) { const it = row.find(it => it.id === id); if (it && width(row) > W) row.splice(row.indexOf(it), 1); }
       parent.kids = row.filter(it => it.parent === parent);
     }
-    const groups: { parent?: TreeItem; items: TreeItem[]; x: number; w: number }[] = [];
-    for (const it of row) {
-      const group = groups.at(-1);
-      if (group && group.parent === it.parent) group.items.push(it); else groups.push({ parent: it.parent, items: [it], x: 0, w: 0 });
-    }
+    const group = () => {
+      const groups: { parent?: TreeItem; items: TreeItem[]; x: number; w: number }[] = [];
+      for (const it of row) {
+        const group = groups.at(-1);
+        if (group && group.parent === it.parent) group.items.push(it); else groups.push({ parent: it.parent, items: [it], x: 0, w: 0 });
+      }
+      return groups;
+    };
+    let groups = group();
     const span = () => { for (const group of groups) group.w = width(group.items); return groups.reduce((sum, group) => sum + group.w, 0) + GAP * 2 * (groups.length - 1); };
     for (let guard = 0; span() > W && guard < 14; guard++) { maxStack = Math.max(96, maxStack - 12); for (const it of row) measure(it, o, maxStack); }
+    // Siblings that still cannot fit fold, rightmost first, into their parent's "+N folders" box; the current file's path stays open.
+    if (o.phone || !o.current) while (span() > W) {
+      const last = row.findLast(it => (it.kind === "dir" || it.kind === "col" || it.kind === "box") && !o.current?.startsWith(it.dir!.path + "/"));
+      if (!last) break;
+      const parent = last.parent!;
+      let more = row.find(it => it.id === "m:" + parent.dir!.path);
+      if (!more) { more = { kind: "more", id: "m:" + parent.dir!.path, dirs: 0, count: 0, parent, x: 0, y: 0, w: 0, h: 0, bw: 0 }; row.splice(row.indexOf(last) + 1, 0, more); }
+      row.splice(row.indexOf(last), 1);
+      gone.add(last);
+      more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path); (more.folds ??= []).push(last.dir!.path);
+      measure(more, o, maxStack);
+      parent.kids = row.filter(it => it.parent === parent);
+      groups = group();
+    }
     if (span() > W) tight = true;
     let end = -GAP * 2;
     for (const group of groups) {

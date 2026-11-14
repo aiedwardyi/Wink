@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MapWorker } from "../../shared/map-pane";
-import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
+import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, treeRoute, type MapClash, type Point, type TreeFont, type TreeIndex, type TreeItem } from "@/lib/map-tree";
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import "./MapTree.css";
 
@@ -23,7 +23,7 @@ interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y:
 
 // The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
 const TIP = { x: 1.4, y: 0.7 };
-const widths = new Map<string, number>();
+export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const ease = (k: number) => k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
@@ -31,7 +31,7 @@ const half = (n: number) => Math.round(n) + 0.5;
 // SAFETY: CSSProperties has no custom properties; this sets only --c.
 const tint = (color?: string) => color ? { "--c": color } as CSSProperties : undefined;
 
-function measurer(element: HTMLElement, phone: boolean) {
+export function measurer(element: HTMLElement, phone: boolean) {
   const style = getComputedStyle(element);
   const sans = style.getPropertyValue("--font-sans").trim() || "sans-serif";
   const mono = style.getPropertyValue("--font-mono").trim() || "monospace";
@@ -44,6 +44,7 @@ function measurer(element: HTMLElement, phone: boolean) {
     let width = widths.get(key);
     if (width === undefined) {
       if (canvas) { canvas.font = fonts[font]; width = canvas.measureText(text).width; } else width = text.length * parseFloat(fonts[font].split(" ")[1]) * 0.62;
+      if (widths.size >= 4096) widths.delete(widths.keys().next().value!);
       widths.set(key, width);
     }
     return width;
@@ -74,15 +75,18 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     return owners;
   }, [workers]);
   const ownersKey = [...owners.keys()].join("\0");
-  const clashBy = useMemo(() => new Map(clashes.map(clash => [clash.path, clash])), [clashes]);
+  const clashBy = useMemo(() => new Map(clashes.toReversed().map(clash => [clash.path, clash])), [clashes]);
   const clashKey = clashes.map(clash => clash.path).join("\0");
+  const focus = !follow && selected && owners.has(selected) ? selected : current?.path;
   const layout = useMemo(() => {
     const changed = new Set(owners.keys());
-    const named = new Set([...clashBy.keys(), ...current ? [current.path] : []]);
+    const named = new Set([...clashBy.keys(), ...focus ? [focus] : []]);
     const rank = (path: string) => slots.get(owners.get(path)?.[0] ?? "") ?? 99;
     const measure = view.current ? measurer(view.current, phone) : (text: string) => text.length * 7;
-    return { changed, ...treeLayout(index, { width: W, phone, changed, current: current?.path, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
-  }, [index, W, phone, ownersKey, clashKey, current?.path, team, labels, slots]);
+    return { changed, ...treeLayout(index, { width: W, phone, changed, current: focus, team: team ? { named, marks: new Set(clashBy.keys()), rank } : undefined, measure, folders: labels.folders, files: labels.files }) };
+  }, [index, W, phone, ownersKey, clashKey, focus, team, labels, slots]);
+  const order = useMemo(() => treeOrder(index, layout.changed), [index, layout.changed]);
+  const shown = useMemo(() => new Set(layout.items.flatMap(it => it.squares ?? it.files ?? [])), [layout.items]);
   const fill = (path: string) => {
     const ids = owners.get(path) ?? [];
     return ids.length > 1 ? `linear-gradient(135deg, ${color(ids[0])} 50%, ${color(ids[1])} 50%)` : color(ids[0] ?? "");
@@ -173,13 +177,25 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       ? <button key={path} type="button" {...props} data-map-file={path} data-state="changed" aria-current={selected === path} onClick={() => onOpen(path)}>{body}</button>
       : <span key={path} {...props}>{body}</span>;
   };
+  // A folded box opens the first changed file it holds, which unfolds that branch.
+  const folded = (it: TreeItem) => order.find(path => !shown.has(path) && (it.kind === "box" ? path.startsWith(it.dir!.path + "/")
+    : it.folds?.some(dir => path.startsWith(dir + "/")) || it.filesOf === path.slice(0, Math.max(0, path.lastIndexOf("/")))));
   const box = (it: TreeItem) => {
     const dir = it.dir!;
     const ids = team ? under(dir.path) : [];
-    return <div className="map-tree-box" data-changed={(it.kind === "root" ? layout.changed.size > 0 : layout.lit.has(dir.path)) || undefined} style={{ width: it.bw }}>
+    const target = it.kind === "box" ? folded(it) : undefined;
+    const Box = target ? "button" : "div";
+    return <Box type={target ? "button" : undefined} className="map-tree-box" data-changed={(it.kind === "root" ? layout.changed.size > 0 : layout.lit.has(dir.path)) || undefined} style={{ width: it.bw }} onClick={target ? () => onOpen(target) : undefined}>
       <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span>{fmt(dir.total)}</span>
       {ids.length > 0 && <s className="map-tree-ticks" style={{ background: `linear-gradient(90deg, ${ids.map((id, i) => `${color(id)} ${(i * 100 / ids.length).toFixed(2)}% ${((i + 1) * 100 / ids.length).toFixed(2)}%`).join(", ")})` }} />}
-    </div>;
+    </Box>;
+  };
+  const more = (it: TreeItem) => {
+    const target = it.changed ? folded(it) : undefined;
+    const body = <><b>{it.label}</b>{it.sub && <span>{it.sub}</span>}</>;
+    return target
+      ? <button type="button" className="map-tree-box map-tree-more" data-changed style={{ width: it.w }} onClick={() => onOpen(target)}>{body}</button>
+      : <div className="map-tree-box map-tree-more" data-changed={it.changed || undefined} style={{ width: it.w }}>{body}</div>;
   };
   const ordered = workers.toSorted((a, b) => (slots.get(a.id) ?? 99) - (slots.get(b.id) ?? 99));
   const nick = (id: string) => workers.find(worker => worker.id === id)?.nick ?? id;
@@ -193,7 +209,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       <svg className="map-tree-lines" aria-hidden="true"><path ref={lines} /><path ref={hot} className="map-tree-hot" style={team && current ? { stroke: color(current.worker) } : undefined} /></svg>
       {layout.items.map(it => <div key={it.id} ref={node => { if (node) nodes.current.set(it.id, node); else nodes.current.delete(it.id); }} className="map-tree-n" data-node={it.id} data-kind={it.kind} style={{ width: it.w }}>
         {it.dir && it.kind !== "stack" && box(it)}
-        {it.kind === "more" && <div className="map-tree-box map-tree-more" data-changed={it.changed || undefined} style={{ width: it.w }}><b>{it.label}</b>{it.sub && <span>{it.sub}</span>}</div>}
+        {it.kind === "more" && more(it)}
         {it.files && <div className="map-tree-files" style={{ top: it.kind === "col" ? TREE.BOX + TREE.SGAP : 0 }}>
           {it.squares && <div className="map-tree-sqs" style={{ width: it.per! * TREE.SQ }}>{it.squares.map(path => <button key={path} type="button" className="map-tree-sq" data-map-file={path} data-tree-row={it.files!.includes(path) ? undefined : path} aria-current={selected === path} aria-label={path} title={`${path}: ${(owners.get(path) ?? []).map(nick).join(", ")}`} style={tint(fill(path))} onClick={() => onOpen(path)} />)}</div>}
           {it.files.map((path, index) => row(it, path, index))}

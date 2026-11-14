@@ -9,7 +9,7 @@ import { reducedMotion } from "@/lib/phone-swipe";
 import { useI18n } from "@/lib/i18n";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
 import { ProviderMark } from "./ProviderIcons";
-import { needsCli, needsSignIn } from "./EngineSetup";
+import { engineChecking, needsCli, needsSignIn } from "./EngineSetup";
 import { charted, lineOf, locate, type Line, type Stop } from "./ModelChart";
 import { clunk } from "./model-machine-sound";
 import { altKeyLabel } from "./PickerStyleStrip";
@@ -150,7 +150,7 @@ export default function ModelMachine({ rows, draft, current, canCommit, onDraft,
   const cur = products.find((product) => product.line === line);
   const now = locate(lines, withPickerEffort(rows.find((row) => row.instance.instanceId === current.instanceId)?.instance, current));
   const nowProduct = products.find((product) => product.line === now.line);
-  const locked = (row: PickerRow) => needsCli(row.instance) || needsSignIn(row.instance);
+  const locked = (row: PickerRow) => !engineChecking(row.instance) && (needsCli(row.instance) || needsSignIn(row.instance));
   const same = Boolean(line && line === now.line && level === now.level);
   const pickable = canCommit(draft);
   const [vend, setVend] = useState<Vend | null>(null);

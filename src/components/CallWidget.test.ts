@@ -255,15 +255,13 @@ describe("call follows you", () => {
 });
 
 describe("call voice in Settings", () => {
-  it("offers three voices and Auto / English / Korean, and saves each pick", async () => {
+  it("offers three voices, no call language, and saves each pick", async () => {
     await mount(atlas);
     expect(pills("Call voice").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Jenn", "true"], ["Eddie", "false"], ["Adele", "false"]]);
-    expect(pills("Call language").map((p) => [p.textContent, p.getAttribute("aria-checked")])).toEqual([["Auto", "true"], ["English", "false"], ["한국어", "false"]]);
+    expect(settings().textContent).not.toContain("Call language");
     await act(async () => pills("Call voice")[1]!.click());
     expect(fakes.puts).toEqual([{ liveCall: { voice: "Alnilam" } }]);
     await vi.waitFor(() => expect(pills("Call voice")[1]!.getAttribute("aria-checked")).toBe("true"));
-    await act(async () => pills("Call language")[2]!.click());
-    expect(fakes.puts.at(-1)).toEqual({ liveCall: { language: "ko" } });
     expect(fakes.engines).toHaveLength(0);
   });
 
@@ -273,7 +271,8 @@ describe("call voice in Settings", () => {
     try {
       await render(atlas);
       const text = settings().textContent!;
-      for (const word of ["통화 목소리", "Jenn", "Eddie", "아델", "통화 언어", "자동", "한국어", "English"]) expect(text).toContain(word);
+      for (const word of ["통화 목소리", "Jenn", "Eddie", "아델"]) expect(text).toContain(word);
+      expect(text).not.toContain("통화 언어");
       await act(async () => button(settings(), "Jenn 들어보기")!.click());
       expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
       await act(async () => button(settings(), "아델 들어보기")!.click());
@@ -298,14 +297,6 @@ describe("call voice in Settings", () => {
     } finally {
       applyLocale("en");
     }
-  });
-
-  it("previews in the call language, not the app's", async () => {
-    await mount(atlas);
-    await act(async () => pills("Call language")[2]!.click());
-    await vi.waitFor(() => expect(pills("Call language")[2]!.getAttribute("aria-checked")).toBe("true"));
-    await act(async () => preview("Jenn")!.click());
-    expect(fakes.clips.map((clip) => clip.src)).toEqual(["/voice-preview/Aoede-ko.mp3"]);
   });
 
   it("previews without selecting, one clip at a time, loading none until asked", async () => {

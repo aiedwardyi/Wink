@@ -172,7 +172,7 @@ describe("room file types", () => {
     expect(download.body.equals(picture)).toBe(true);
     expect(download.headers).toMatchObject({ ...safe, "content-type": "image/png", "content-disposition": expect.stringMatching(/^attachment;/) });
     const preview = await call("GET", `/rooms/${room}/files/${image.id}/preview`);
-    expect(preview.headers).toMatchObject({ ...safe, "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/) });
+    expect(preview.headers).toMatchObject({ ...safe, "cache-control": "private, max-age=31536000, immutable", "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/) });
     const text = await call("GET", `/rooms/${room}/files/${svg.id}`);
     expect(text.headers).toMatchObject({ ...safe, "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
     expect((await call("GET", `/rooms/${room}/files/${svg.id}/preview`)).status).toBe(404);

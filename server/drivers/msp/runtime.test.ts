@@ -916,8 +916,9 @@ describe("MSP prewarm (fake host)", () => {
   let scratch: string;
   let rpcDump: string;
 
-  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true) => {
+  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true, warmPool?: WarmPool) => {
     const Driver = createMspDriver({
+      warmPool,
       driverKind: "museAgent",
       displayName: "MSP Prewarm",
       models: { default: "muse-spark-1.3", options: [] },
@@ -977,6 +978,17 @@ describe("MSP prewarm (fake host)", () => {
     const methods = JSON.parse(readFileSync(rpcDump, "utf8")) as string[];
     expect(methods.filter((m) => m === "initialize")).toHaveLength(1);
     expect(methods).toContain("turn/start");
+  });
+
+  it("runs the handshake host at low priority until a turn adopts it", async () => {
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const priority = vi.spyOn(procs, "setCliPriority");
+    await create();
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value;
+    expect(priority.mock.calls).toEqual([[child, "low"]]);
+    expect(await runTurn("t-prewarm")).toMatchObject({ ok: true });
+    expect(priority.mock.calls).toEqual([[child, "low"], [child, "normal"]]);
   });
 
   it("drops a Stop during the warm handshake without starting the turn", async () => {
@@ -1043,6 +1055,22 @@ describe("MSP prewarm (fake host)", () => {
     expect(serveSpawns(spawn)).toBe(2);
   });
 
+  it("a small PC holds a click-warmed host 60 s, then a Claude prepared session is admitted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const small = createWarmPool({ totalmem: () => 4 * 1024 ** 3, freemem: () => 3 * 1024 ** 3, cpus: () => 4 });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    await create(() => true, small);
+    await instance.prepare!();
+    const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
+    const claude = () => small.reserve({ engine: "claudeAgent", instanceId: "claude", threadId: "t" }, "fp", { generation: 0, incarnation: "c", identity: "i" }, "speculative");
+    expect(claude()).toBe("denied");
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(claude()).not.toBe("denied");
+    await small.closeAll("test", { final: true });
+  });
+
   it("keeps at most one idle prewarmed host", async () => {
     const spawn = vi.spyOn(procs, "spawnCli");
     await create();
@@ -1071,14 +1099,15 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
   let spawn: MockInstance<typeof procs.spawnCli>;
   const realSpawn = procs.spawnCli;
   const serveCalls = () => spawn.mock.calls.filter((call) => call[1].includes("serve"));
+  const start = async () => (instance ??= await MspMuseAgentDriver.create({
+    instanceId: "muse-direct",
+    displayName: "Muse",
+    environment: {},
+    enabled: true,
+    config: { cli: install.cli, fullAuto: true, workspace: dir },
+  }));
   const runTurn = async (threadId: string) => {
-    instance ??= await MspMuseAgentDriver.create({
-      instanceId: "muse-direct",
-      displayName: "Muse",
-      environment: {},
-      enabled: true,
-      config: { cli: install.cli, fullAuto: true, workspace: dir },
-    });
+    const instance = await start();
     const recorder = recordEvents(instance.adapter);
     try {
       await instance.adapter.sendTurn({ threadId, text: "hi" });
@@ -1116,6 +1145,27 @@ describe.runIf(process.platform === "win32")("MSP Muse host start (fake install)
     });
     // The version probe still runs the launcher, and with it Muse's update check.
     expect(exec.mock.calls.some(([cli, args]) => cli === install.cli && args.includes("--version"))).toBe(true);
+  });
+
+  it("lowers a direct-started handshake host and leaves the launcher at Normal", async () => {
+    // The host inherits the runner's class, which can itself be below Normal.
+    const runner = os.getPriority();
+    os.setPriority(os.constants.priority.PRIORITY_NORMAL);
+    const hostPriority = async () => {
+      await (await start()).prepare!();
+      const index = spawn.mock.calls.findLastIndex((call) => call[1].includes("serve"));
+      return os.getPriority(spawn.mock.results[index].value.pid);
+    };
+    try {
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_BELOW_NORMAL);
+      await instance!.dispose();
+      instance = undefined;
+      mapped.clear();
+      expect(await hostPriority()).toBe(os.constants.priority.PRIORITY_NORMAL);
+      expect(serveCalls().map(([command]) => command)).toEqual([install.exe, install.exe, install.cli]);
+    } finally {
+      os.setPriority(runner);
+    }
   });
 
   it("follows an update that renames the exe", async () => {

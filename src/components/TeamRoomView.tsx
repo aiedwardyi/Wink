@@ -50,7 +50,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
         empty={missing ? undefined : { name: group.name, members: [state.config?.profile?.name ?? "", ...roomPeople(group).map((person) => person.name)].filter(Boolean), picture: roomPictureUrl(base, group.picture) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} />}
       </div>
     </main>
   );

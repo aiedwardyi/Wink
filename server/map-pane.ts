@@ -68,7 +68,7 @@ export function createMapPane(deps: MapPaneDeps) {
       if (record.running) { record.dirty = true; return; }
       record.running = true;
       try {
-        const files = await mapFiles(record.root, record.base);
+        const files = await mapFiles(record.root, record.base, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed) return;
         const latest = record.path && files.some(file => file.path === record.path)
           ? { path: record.path, at: Date.now() } : await latestMapFile(record.root, files);

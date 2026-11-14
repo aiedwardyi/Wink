@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { callStatus } from "../shared/call-status.ts";
 import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
-import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveLanguage, type LiveVoice } from "../shared/live-call.ts";
+import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
 import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
@@ -23,7 +23,7 @@ export const CHAT_TAIL_TOKENS = 2_000;
 const TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 const TOKEN_MS = 30 * 60_000;
 const NEW_SESSION_MS = 60_000;
-// A dropped call resumes within this window with the same brief, voice and language.
+// A dropped call resumes within this window with the same brief and voice.
 const BRIEF_TTL_MS = 2 * 60 * 60_000;
 const BRIEFS_KEPT = 16;
 const LINES_MAX = 50;
@@ -115,15 +115,12 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, language: LiveLanguage = "auto"): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
-  const app = locale === "ko" ? "Korean" : "English";
-  const speak = language === "auto" ? app : language === "ko" ? "Korean" : "English";
-  const tongue = language === "auto"
-    ? `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`
-    : `Speak ${speak}; in Korean match their politeness. Switch only when the person clearly asks in words for a named language, and switch back when asked. Speech that sounds garbled or foreign never switches it: ask again in ${speak}.`;
+  const speak = locale === "ko" ? "Korean" : "English";
+  const tongue = `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return plainNames([
     `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
@@ -184,7 +181,7 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return lines.length ? [[CALL_LINES_HEAD, ...lines].join("\n")] : [];
 }
 
-export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE, language: LiveLanguage = "auto") {
+export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_VOICE) {
   const app = locale === "ko" ? "ko" : "en";
   return {
     model: `models/${LIVE_MODEL}`,
@@ -193,7 +190,7 @@ export function liveSetup(brief: string, locale = "en", voice: LiveVoice = LIVE_
 
 ${LIVE_ACCENTS[voice]}` : brief }] },
     tools: [{ functionDeclarations: LIVE_TOOLS }],
-    inputAudioTranscription: { languageCodes: language === "auto" ? [app, app === "ko" ? "en" : "ko"] : [language] },
+    inputAudioTranscription: { languageCodes: [app, app === "ko" ? "en" : "ko"] },
     outputAudioTranscription: {},
     realtimeInputConfig: { automaticActivityDetection: LIVE_VAD },
     contextWindowCompression: { triggerTokens: LIVE_COMPRESSION.triggerTokens, slidingWindow: { targetTokens: LIVE_COMPRESSION.targetTokens } },
@@ -210,15 +207,14 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   const { cfg, store, dataDir } = deps;
   const now = deps.now ?? Date.now;
   const fetchFn = deps.fetch ?? fetch;
-  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; language: LiveLanguage; at: number }>();
+  const briefs = new Map<string, { botId: string; brief: string; locale: string; voice: LiveVoice; at: number }>();
 
   const briefFor = async (bot: BotRecord, callId: string, locale: unknown) => {
     const cached = briefs.get(callId);
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
     const app = locale === "ko" ? "ko" : "en";
-    const language = cfg.liveCall?.language ?? "auto";
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, language);
-    const entry = { botId: bot.id, brief, locale: app, voice: cfg.liveCall?.voice ?? LIVE_VOICE, language, at: now() };
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app);
+    const entry = { botId: bot.id, brief, locale: app, voice: cfg.liveCall?.voice ?? LIVE_VOICE, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
     if (briefs.size > BRIEFS_KEPT) briefs.delete(briefs.keys().next().value!);
@@ -248,7 +244,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (!key) return json(res, 409, { error: "Add a Gemini key to call.", cardId: keyCard(bot) });
     const body = (await readBody(req)) ?? {};
     const callId = typeof body.callId === "string" && CALL_ID.test(body.callId) ? body.callId : newCallId();
-    const { brief, locale, voice, language } = await briefFor(bot, callId, body.locale);
+    const { brief, locale, voice } = await briefFor(bot, callId, body.locale);
     const at = now();
     const expiresAt = at + TOKEN_MS;
     let response: Response;
@@ -261,7 +257,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
           expireTime: new Date(expiresAt).toISOString(),
           newSessionExpireTime: new Date(at + NEW_SESSION_MS).toISOString(),
           // REST takes the SDK's liveConnectConstraints as bidiGenerateContentSetup.
-          bidiGenerateContentSetup: liveSetup(brief, locale, voice, language),
+          bidiGenerateContentSetup: liveSetup(brief, locale, voice),
         }),
         signal: AbortSignal.timeout(15_000),
       });

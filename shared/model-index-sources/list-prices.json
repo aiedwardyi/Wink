@@ -84,6 +84,25 @@
       "kind": "vendor"
     },
     {
+      "model": "gemini-4-carbon",
+      "effort": "all",
+      "price": {
+        "input": 2,
+        "cachedInput": 0.1,
+        "output": 10,
+        "until": "2026-11-30",
+        "next": {
+          "from": "2026-12-01",
+          "input": 4,
+          "cachedInput": 0.2,
+          "output": 20
+        }
+      },
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "retrieved_at": "2026-11-14T01:32:49.737Z",
+      "kind": "vendor"
+    },
+    {
       "model": "gemini-4-argon",
       "effort": "all",
       "price": {
@@ -100,6 +119,18 @@
       },
       "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
       "retrieved_at": "2026-11-09T20:39:42.363Z",
+      "kind": "vendor"
+    },
+    {
+      "model": "gemini-4-hydrogen",
+      "effort": "all",
+      "price": {
+        "input": 1.5,
+        "cachedInput": 0.075,
+        "output": 7.5
+      },
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "retrieved_at": "2026-11-13T16:03:21.822Z",
       "kind": "vendor"
     },
     {

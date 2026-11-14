@@ -125,6 +125,44 @@ it("keeps each changed file's launch line ranges for clash checks", async () => 
   expect(files.find(file => file.path === "new.ts")?.ranges).toEqual([[1, 2]]);
 });
 
+it("maps a worker's ranges onto another worker's launch commit so the same original line compares", async () => {
+  const { root, git } = repo();
+  const lines = Array.from({ length: 200 }, (_, index) => `line ${index + 1}`);
+  const write = (text: string[]) => writeFileSync(join(root, "file.ts"), text.join("\n") + "\n");
+  const commit = (text: string[]) => { write(text); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "step"); return git("rev-parse", "HEAD"); };
+  const common = commit(lines);
+  const shifted = lines.toSpliced(0, 0, ...Array.from({ length: 100 }, (_, index) => `top ${index}`)).toSpliced(160, 1, "gone");
+  const base = commit(shifted);
+  write(shifted.with(149, "edited"));
+  expect((await mapFiles(root, base)).find(file => file.path === "file.ts")?.ranges).toEqual([[150, 150]]);
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[50, 50]]);
+  write(shifted.with(160, "again").with(50, "inside").with(170, "after"));
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[0, 0], [61, 61], [71, 71]]);
+});
+
+it("reads launch line ranges when user Git drops or renames the a/ and b/ prefixes", async () => {
+  for (const config of ["diff.noprefix", "diff.mnemonicPrefix"]) {
+    const { root, git, base } = repo();
+    git("config", config, "true");
+    writeFileSync(join(root, "file.ts"), "const changed = 2;\n");
+    expect((await mapFiles(root, base)).find(file => file.path === "file.ts")?.ranges).toEqual([[1, 1]]);
+  }
+});
+
+it("leaves out clash ranges when moving them onto the common launch commit fails or is cut off", async () => {
+  const { root, git, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const changed = 2;\n");
+  expect((await mapFiles(root, base, "0".repeat(40))).find(file => file.path === "file.ts")?.ranges).toBeUndefined();
+  const lines = Array.from({ length: 20_000 }, (_, index) => `line ${index + 1} ${"x".repeat(24)}`);
+  const commit = (text: string[]) => { writeFileSync(join(root, "file.ts"), text.join("\n") + "\n"); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "step"); return git("rev-parse", "HEAD"); };
+  const common = commit(lines);
+  const shifted = lines.map((line, index) => index % 2 ? line : `${line} moved`);
+  const launch = commit(shifted);
+  writeFileSync(join(root, "file.ts"), shifted.with(19_990, "edited").join("\n") + "\n");
+  expect((await mapFiles(root, launch)).find(file => file.path === "file.ts")?.ranges).toEqual([[19_991, 19_991]]);
+  expect((await mapFiles(root, launch, common)).find(file => file.path === "file.ts")?.ranges).toBeUndefined();
+});
+
 it("walks a folder without Git for its file names, skipping dependencies and capping entries", async () => {
   const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
   roots.push(folder);

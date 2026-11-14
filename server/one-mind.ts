@@ -8,7 +8,7 @@ import { estimateContextTokens, isFallbackSummary } from "./context-compaction.t
 import type { RuntimeEvent } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { searchMessages, type SearchHit } from "./message-db.ts";
-import { redactSecretsInText } from "./redact.ts";
+import { redactRoomMemory } from "./redact.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "./store.ts";
 
 export const SEARCH_TOOL = "search_my_chats";
@@ -95,7 +95,7 @@ export function searchOwnerChats(store: Pick<Store, "messagesFor">, threads: rea
     if (reply?.role === "bot") lines.push(`  You replied: ${clip(reply.text!.replace(/\s+/g, " ").trim(), REPLY_CHARS)}`);
   }
   if (!lines.length) return `${head}\nNo match for ${JSON.stringify(q)}.`;
-  return redactSecretsInText([head, ...lines].join("\n"));
+  return redactRoomMemory([head, ...lines].join("\n"));
 }
 
 /** Headlines from the 1:1's latest summary, newest kept; empty with no summary. */
@@ -108,7 +108,7 @@ export function ownerTopics(messages: readonly Message[], owner: string): string
     .filter((line) => line && line !== "SUMMARY" && !/^\[.*\]$/.test(line)))];
   if (!lines.length) return "";
   const topics = lines.slice(-TOPICS).map((line) => `- ${clip(line, TOPIC_CHARS)}`);
-  return redactSecretsInText([`[Private: recent topics from your 1:1 with ${owner}. ${SEARCH_TOOL} finds the details. Share only what this task needs.]`, ...topics].join("\n"));
+  return redactRoomMemory([`[Private: recent topics from your 1:1 with ${owner}. ${SEARCH_TOOL} finds the details. Share only what this task needs.]`, ...topics].join("\n"));
 }
 
 /** One hidden row in the bot's active 1:1 for a settled room turn; none when it said nothing. */

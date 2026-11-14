@@ -1,6 +1,7 @@
 // This PC's own bots in rooms it joined. This PC's person wakes one by @name
 // or a reply to its line, and a room bot by @name; it works here in one hidden
 // task per room and its answer goes back through the door under its room name.
+import { botChain, CHAIN_LINES } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
@@ -96,6 +97,16 @@ export class MyRoomBotTurns {
   stop(roomId: string): void {
     this.stops.set(roomId, joinedEntries(roomId, 1)[0]?.seq ?? 0);
     this.drain();
+    this.deps.changed(roomId);
+  }
+
+  /** Bot lines in the room's live handoff, for the strip; 0 when none is live or Stop ended it. */
+  chain(roomId: string): number {
+    const state = joinedRoom(roomId)?.state;
+    const lines = joinedEntries(roomId, CHAIN_LINES);
+    const last = lines.at(-1);
+    if (!state || !last || this.halted(roomId, last.seq)) return 0;
+    return botChain(lines, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)]);
   }
 
   /** The owner's Stop: this PC's asks in the room end here; the host's bots are never touched. */

@@ -16,6 +16,7 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import { createHash } from "node:crypto";
+import os from "node:os";
 import { realpathSync, statSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { basename, isAbsolute, join } from "node:path";
@@ -24,6 +25,7 @@ import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
 
 type AccountLaunchOptions = { account?: AccountContext; accountDriver?: string };
+type DirectStart = (launch: ResolvedSpawn, env: NodeJS.ProcessEnv) => (ResolvedSpawn & { env: NodeJS.ProcessEnv }) | null;
 
 export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
   return resolveCliSpawn(cli, args);
@@ -32,19 +34,33 @@ export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
 export function spawnCli(
   cli: string,
   args: string[],
-  opts: SpawnOptions & AccountLaunchOptions & { accountBaseHome?: string },
+  opts: SpawnOptions & AccountLaunchOptions & { accountBaseHome?: string; direct?: DirectStart },
 ): ChildProcessByStdio<Writable, Readable, Readable> {
   const resolved = resolveCli(cli, args);
-  const { account, accountDriver, accountBaseHome, ...options } = opts;
+  const { account, accountDriver, accountBaseHome, direct, ...options } = opts;
   if (account && accountBaseHome) shareUserSetup(accountDriver ?? "", account, accountBaseHome);
   const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env, Boolean(accountBaseHome));
-  const child = spawn(resolved.command, launch.args, {
+  const start = (command: string, argv: string[], env?: NodeJS.ProcessEnv) => spawn(command, argv, {
     ...options,
-    ...(account ? { env: launch.env } : {}),
+    ...(env ? { env } : {}),
     // posix: own process group so kill(-pid) reaps child MCP servers;
     // win32: taskkill /T does the reaping instead (see killCliTree)
     ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
   }) as ChildProcessByStdio<Writable, Readable, Readable>; // callers always pipe all three
+  // A failed direct start throws (bad image) or has no pid (ENOENT, EACCES); the CLI still runs.
+  const startDirect = () => {
+    const fast = direct?.({ command: resolved.command, args: launch.args }, launch.env);
+    if (!fast) return null;
+    try {
+      const started = start(fast.command, fast.args, fast.env);
+      if (started.pid !== undefined) return started;
+      started.once("error", () => {});
+    } catch {
+      // fall through to the CLI
+    }
+    return null;
+  };
+  const child = startDirect() ?? start(resolved.command, launch.args, account ? launch.env : undefined);
 
   // A write to a dying child's stdin fails differently per platform, and one
   // of the ways is fatal. On POSIX the kill is synchronous, the stream is
@@ -59,6 +75,14 @@ export function spawnCli(
   // logged.
   child.stdin?.on("error", () => {});
   return child;
+}
+
+/** Windows only: POSIX cannot raise a lowered nice again, and a turn may adopt the host. Never lowers a launcher
+ * (Muse's PowerShell): its engine inherits the class at start and restoring the launcher leaves the engine low. */
+export function setCliPriority(child: Pick<ChildProcess, "pid" | "spawnfile">, priority: "low" | "normal"): void {
+  if (process.platform !== "win32" || !child.pid) return;
+  if (priority === "low" && /(^|[\\/])(powershell|pwsh|cmd|wsl)(\.exe)?$/i.test(child.spawnfile)) return;
+  try { os.setPriority(child.pid, priority === "low" ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL); } catch {}
 }
 
 const versionByBinary = new Map<string, string>();

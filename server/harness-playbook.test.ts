@@ -272,9 +272,15 @@ describe("harness playbook", () => {
     );
   });
 
+  it("settles how a visible change looks before its card launches", () => {
+    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain(
+      "Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.",
+    );
+  });
+
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15070);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(15328);
   });
 
   it("fills the worktree path from the configured root", () => {

@@ -10,6 +10,7 @@ import { pipeline } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { sniffImageMime } from "../attachments.ts";
+import { IMMUTABLE_CACHE } from "../compression.ts";
 import { DATA_DIR } from "../config.ts";
 import { RateLimiter } from "../phone-auth.ts";
 import { roomById, RoomError, type RoomFile } from "./db.ts";
@@ -395,7 +396,8 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
     "x-content-type-options": "nosniff",
     "x-content-sha256": file.sha256,
     "content-security-policy": "default-src 'none'; sandbox",
-    "cache-control": "no-store",
+    // A file id is never reused, so any image preview can paint from cache while the server is still busy booting.
+    "cache-control": preview ? IMMUTABLE_CACHE : "no-store",
   };
 }
 
