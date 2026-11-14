@@ -220,6 +220,22 @@ describe("room echo", () => {
 });
 
 describe("room echo engine provenance", () => {
+  it.each([
+    ["claude-fable-5", "claudeAgent", "codex", "Codex"],
+    ["gpt-5.4", "codex", "claudeAgent", "Claude"],
+  ])("compares cloud echoes with the engine behind %s", (model, engine, otherEngine, otherName) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "boxAgent", model)).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+    expect(roomEchoesSinceLastUserTurn([{ ...row, engine: otherEngine }], new Set(), "Edward", undefined, "boxAgent", model).join("\n")).toContain(`You (on ${otherName}) answered:`);
+  });
+
+  it.each(["geminiAgent", "boxAgent", "localModel"])("leaves %s echoes untagged", (engine) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+  });
+
   it("stores the replying engine and names it after a switch", () => {
     const { store, rando, say } = world();
     const room = store.createGroup("New group", [rando.id]);
