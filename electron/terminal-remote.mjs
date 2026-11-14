@@ -26,6 +26,9 @@ const WORKER_SETTINGS_RE = /("[^"]*"|'[^']*')|\s--settings\s+(?:"[^"]*claude-wor
 
 const gb = (bytes) => (bytes / GB).toFixed(1);
 
+/** Panes opened too recently for a free-memory reading to show them. */
+export const startingPanes = (panes, at) => panes.filter((pane) => at - pane.at < STARTING_MS);
+
 /** A terminal_spawn host from ~/.orbit/remote-hosts.json; only `enabled: true` entries run panes. */
 export function remoteHost(name, hosts) {
   const entry = hosts && Object.hasOwn(hosts, name) ? hosts[name] : null;
@@ -52,7 +55,7 @@ export function remoteSlot(host, panes, at, random = randomInt) {
   if (there.length >= REMOTE_PANE_CEILING) throw new Error(`Too many terminals on ${host} (limit ${REMOTE_PANE_CEILING}).`);
   const used = new Set(there.map((pane) => pane.port));
   const free = Array.from({ length: PORT_COUNT }, (_, index) => FIRST_PORT + index).filter((port) => !used.has(port));
-  return { host, port: free[random(free.length)], at, starting: there.filter((pane) => at - pane.at < STARTING_MS).length };
+  return { host, port: free[random(free.length)], at, starting: startingPanes(there, at).length };
 }
 
 /** The typed line: a fixed bootstrap that takes the pane's own $env:ORBIT_* at run time, so the grant is never typed. */
