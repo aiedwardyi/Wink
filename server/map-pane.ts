@@ -63,7 +63,7 @@ export function createMapPane(deps: MapPaneDeps) {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
       if (res.writableLength > 1024 * 1024) res.destroy();
     };
-    const refresh = async (record: WatchedPane) => {
+    const refresh = async (record: WatchedPane, quiet = false) => {
       if (closed || !record.base || panes.get(record.pane.sessionId) !== record) return;
       if (record.running) { record.dirty = true; return; }
       record.running = true;
@@ -74,7 +74,7 @@ export function createMapPane(deps: MapPaneDeps) {
           ? { path: record.path, at: Date.now() } : await latestMapFile(record.root, files);
         record.worker = { ...record.worker, files, editedAt: latest.at, path: latest.path, reason: deps.reason?.(botId, record.pane, latest.at) };
         record.path = undefined;
-        send();
+        if (!quiet) send();
       } catch { send(true); }
       finally {
         record.running = false;
@@ -97,31 +97,39 @@ export function createMapPane(deps: MapPaneDeps) {
         if (closed) return;
         const ids = new Set(live.map(pane => pane.sessionId));
         for (const [id, record] of panes) if (!ids.has(id)) { remove(record); panes.delete(id); fallback.delete(`${botId}:${id}`); }
+        const fresh: MapPaneRecord[] = [];
         for (const pane of live) {
-          if (closed) return;
           const existing = panes.get(pane.sessionId);
-          if (existing) { schedule(existing); continue; }
-          const key = `${botId}:${pane.sessionId}`;
-          let base = pane.baseHead && /^[a-f0-9]{40,64}$/.test(pane.baseHead) ? pane.baseHead : fallback.get(key);
-          if (base === undefined) { base = await mapHead(pane.cwd); fallback.set(key, base); }
-          if (closed) return;
-          const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
-          const record: WatchedPane = { pane, root, base, running: false, dirty: false,
-            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
-          if (closed) return;
-          panes.set(pane.sessionId, record);
-          if (base) {
-            record.watcher = watch(root, { recursive: true }, (_event, name) => {
-              if (!name) return schedule(record);
-              const path = name.toString().replaceAll("\\", "/");
-              if (path.split("/").some(part => part === ".git" || part === "node_modules")) return;
-              schedule(record, path);
-            });
-            record.watcher.on("error", () => send(true));
-            await refresh(record);
-          }
+          if (existing) schedule(existing);
+          else fresh.push(pane);
         }
-        send();
+        // New workers are read together and sent once: sent one by one, Map rebuilt its tree per worker as it opened.
+        let failed = false;
+        const read = await Promise.all(fresh.map(async (pane): Promise<WatchedPane | undefined> => {
+          const key = `${botId}:${pane.sessionId}`;
+          try {
+            let base = pane.baseHead && /^[a-f0-9]{40,64}$/.test(pane.baseHead) ? pane.baseHead : fallback.get(key);
+            if (base === undefined) { base = await mapHead(pane.cwd); fallback.set(key, base); }
+            const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
+            return { pane, root, base, running: false, dirty: false,
+              worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
+          } catch { failed = true; return undefined; }
+        }));
+        if (closed) return;
+        const records = read.filter(record => record !== undefined);
+        for (const record of records) {
+          panes.set(record.pane.sessionId, record);
+          if (!record.base) continue;
+          record.watcher = watch(record.root, { recursive: true }, (_event, name) => {
+            if (!name) return schedule(record);
+            const path = name.toString().replaceAll("\\", "/");
+            if (path.split("/").some(part => part === ".git" || part === "node_modules")) return;
+            schedule(record, path);
+          });
+          record.watcher.on("error", () => send(true));
+        }
+        await Promise.all(records.map(record => refresh(record, true)));
+        send(failed);
       } catch { send(true); }
       finally {
         syncing = false;
