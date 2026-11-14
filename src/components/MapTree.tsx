@@ -28,6 +28,33 @@ let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const ease = (k: number) => k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
 const half = (n: number) => Math.round(n) + 0.5;
+const top = (it: TreeItem, at: Point) => ({ x: at.x + (it.kind === "stack" ? 7 : it.bw / 2), y: at.y });
+
+// A file whose branch just folded has no row: the arrow climbs from where it sat up through the box that now holds the file, along the buses, and down into the opening branch.
+function foldRoute(items: readonly TreeItem[], start: Point, from: string, to: string, at: (it: TreeItem) => Point): Point[] | null {
+  const down = treeClimb(items, to, at);
+  if (!down) return null;
+  const dir = from.slice(0, Math.max(0, from.lastIndexOf("/")));
+  const holds = (it: TreeItem) => it.kind === "root" || (it.kind === "stack" ? it.dir!.path === dir
+    : it.dir ? from.startsWith(it.dir.path + "/") : it.filesOf === dir || !!it.folds?.some(path => from.startsWith(path + "/")));
+  // Items run row by row, so the last holder is the deepest.
+  let node = items.findLast(holds);
+  if (!node) return null;
+  const cut = (id: string, key: "bus" | "busOf") => down.slice(0, down.findIndex(point => point[key] === id) + 1).reverse();
+  const g = at(node);
+  const points: Point[] = node.kind === "stack" ? [start] : [start, { x: top(node, g).x, y: g.y + TREE.BOX }];
+  if (down.some(point => point.busOf === node!.id)) return [...points, ...cut(node.id, "busOf")];
+  for (; node.parent; node = node.parent) {
+    const parent: TreeItem = node.parent;
+    const head = top(node, at(node));
+    const bus = at(parent.kids?.[0] ?? node).y - TREE.VGAP / 2;
+    points.push(head, { x: head.x, y: bus });
+    if (down.some(point => point.bus === parent.id)) return [...points, ...cut(parent.id, "bus")];
+    const pg = at(parent);
+    points.push({ x: top(parent, pg).x, y: bus }, { x: top(parent, pg).x, y: pg.y + TREE.BOX });
+  }
+  return null;
+}
 // SAFETY: CSSProperties has no custom properties; this sets only --c.
 const tint = (color?: string) => color ? { "--c": color } as CSSProperties : undefined;
 
@@ -63,7 +90,9 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const nodes = useRef(new Map<string, HTMLElement>());
   const motion = useRef(new Map<string, Motion>());
   const rows = useRef(new Set<string>());
-  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number }>({ t0: 0 });
+  const hop = useRef<{ from?: string; to?: string; at?: number; t0: number; start?: Point }>({ t0: 0 });
+  const spot = useRef<Point>(undefined);
+  const held = useRef(false);
   const edit = useRef<MapTreeProps["current"]>(undefined);
   const frame = useRef(0);
   const [width, setWidth] = useState(0);
@@ -108,6 +137,14 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     return () => observer.disconnect();
   }, []);
 
+  // A held Up or Down jumps the arrow so fast scrolling stays fast.
+  useLayoutEffect(() => {
+    const key = (event: KeyboardEvent) => { held.current = event.type === "keydown" && event.repeat; };
+    document.addEventListener("keydown", key, true);
+    document.addEventListener("keyup", key, true);
+    return () => { document.removeEventListener("keydown", key, true); document.removeEventListener("keyup", key, true); };
+  }, []);
+
   useLayoutEffect(() => {
     const now = performance.now();
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -130,11 +167,14 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       if (!fresh && !still) found.get(current.path)?.animate?.([{ backgroundColor: "transparent" }, { backgroundColor: "color-mix(in oklab, var(--c, var(--color-accent)) 22%, transparent)", offset: 0.3 }, { backgroundColor: "transparent" }], { duration: 1600, easing: "ease-out" });
     }
     const stamp = focus === current?.path ? current?.at : 0;
+    const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
     if (focus && (focus !== hop.current.to || stamp !== hop.current.at)) {
-      hop.current = { from: fresh ? undefined : hop.current.to, to: focus, at: stamp, t0: fresh || still ? 0 : now + 50 };
+      const from = fresh ? undefined : hop.current.to;
+      // Across a fold the arrow is already one frame along when the files swap, so they never change under a still arrow.
+      const start = from && from !== focus && spot.current && !treeClimb(layout.items, from, at) ? spot.current : undefined;
+      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : start ? now - 1000 / 60 : now + 50, start };
       scroll = follow;
     }
-    const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
     const tick = () => {
       frame.current = 0;
       const t = performance.now();
@@ -149,17 +189,18 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
         if (node) node.style.transform = `translate(${move.x.toFixed(1)}px, ${move.y.toFixed(1)}px)`;
       }
       lines.current?.setAttribute("d", treeEdges(layout.items, at));
-      const { from, to, t0 } = hop.current;
+      const { from, to, t0, start } = hop.current;
       const climb = to ? treeClimb(layout.items, to, at) : null;
       const shown = Math.min(1, Math.max(0, (t - t0 - 350) / 400));
       if (shown < 1) moving = true;
       hot.current?.setAttribute("d", climb ? "M" + climb.map(point => `${half(point.x)} ${half(point.y)}`).join("L") : "");
       hot.current?.style.setProperty("opacity", String(1 - (1 - shown) ** 3));
       if (pin.current) {
-        const k = ease((t - t0) / 750);
-        const route = climb && from && from !== to && k < 1 ? treeRoute(layout.items, from, to!, at) : null;
+        const k = start ? 1 - (1 - Math.min(1, (t - t0) / 450)) ** 3 : ease((t - t0) / 750);
+        const route = climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
         const point = route ? treeAlong(route, k) : climb?.[0];
         if (route) moving = true;
+        spot.current = point;
         pin.current.style.opacity = point ? "1" : "0";
         if (point) pin.current.style.transform = `translate(${(point.x - 2 - TIP.x).toFixed(1)}px, ${(point.y - 3 - TIP.y).toFixed(1)}px)`;
       }
