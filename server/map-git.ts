@@ -7,6 +7,7 @@ import type { MapDiff, MapDiffLine, MapFile } from "../shared/map-pane.ts";
 
 const LIMIT = 512 * 1024;
 export const MAP_LINE_LIMIT = 500;
+const WHOLE_LIMIT = 5_000;
 
 export function mapGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((done, fail) => {
@@ -94,7 +95,7 @@ export async function latestMapFile(cwd: string, files: readonly MapFile[]): Pro
   return latest;
 }
 
-export function mapDiffLines(patch: string, totalLines?: number): MapDiff {
+export function mapDiffLines(patch: string, totalLines?: number, limit = MAP_LINE_LIMIT): MapDiff {
   const lines: MapDiffLine[] = [];
   let oldLine = 1;
   let newLine = 1;
@@ -105,25 +106,26 @@ export function mapDiffLines(patch: string, totalLines?: number): MapDiff {
     if (header) {
       const start = Number(header[1]);
       const count = start - oldLine;
-      if (count > 0) lines.push({ kind: "fold", text: "", count });
+      if (count > 0) lines.push({ kind: "fold", text: "", count, line: newLine });
       oldLine = start;
       newLine = Number(header[2]);
       hunk = true;
       continue;
     }
     if (!hunk || !/^[ +-]/.test(text)) continue;
-    if (lines.length >= MAP_LINE_LIMIT) { capped = true; break; }
+    if (lines.length >= limit) { capped = true; break; }
     const kind = text[0] === "+" ? "add" : text[0] === "-" ? "remove" : "context";
     lines.push({ kind, text: text.slice(1, 2001), line: kind === "remove" ? oldLine : newLine });
     if (text.length > 2001) capped = true;
     if (kind !== "add") oldLine++;
     if (kind !== "remove") newLine++;
   }
-  if (!capped && totalLines !== undefined && totalLines >= newLine) lines.push({ kind: "fold", text: "", count: totalLines - newLine + 1 });
+  if (!capped && totalLines !== undefined && totalLines >= newLine) lines.push({ kind: "fold", text: "", count: totalLines - newLine + 1, line: newLine });
   return { lines, capped, binary: /^(?:Binary files |GIT binary patch)/m.test(patch) };
 }
 
-export async function mapFileDiff(cwd: string, base: string, file: MapFile): Promise<MapDiff> {
+export async function mapFileDiff(cwd: string, base: string, file: MapFile, whole = false): Promise<MapDiff> {
+  const limit = whole ? WHOLE_LIMIT : MAP_LINE_LIMIT;
   if (file.binary) return { lines: [], binary: true };
   const tracked = (await mapGit(cwd, ["ls-files", "--error-unmatch", "--", file.path]).catch(() => "")).length > 0;
   // A removed tracked file is absent from the index after git rm.
@@ -131,19 +133,21 @@ export async function mapFileDiff(cwd: string, base: string, file: MapFile): Pro
   if (existed) {
     try {
       const [patch, total] = await Promise.all([
-        mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", base, "--", file.path]),
+        mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", whole ? "--unified=1000000" : "--unified=3", base, "--", file.path]),
         addedFile(cwd, file.path).then(file => file.added, () => undefined),
       ]);
       // A deleted file's pathspec also matches its replacement directory.
-      return mapDiffLines(patch.split("\ndiff --git ", 1)[0], total);
+      const own = patch.split("\ndiff --git ", 1)[0];
+      // A mode-only change has no hunks, so the whole file is read below.
+      if (!whole || total === undefined || /^@@ /m.test(own)) return mapDiffLines(own, total, limit);
     } catch (error) {
       const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
-      if (partial.success) return { ...mapDiffLines(partial.data.stdout.split("\ndiff --git ", 1)[0]), capped: true };
+      if (partial.success) return { ...mapDiffLines(partial.data.stdout.split("\ndiff --git ", 1)[0], undefined, limit), capped: true };
       throw error;
     }
   }
   const added = await fileText(cwd, file.path);
   const lines = added.text.replace(/\n$/, "").split("\n");
-  return { binary: added.binary, capped: added.capped || lines.length > MAP_LINE_LIMIT || lines.some(line => line.length > 2000),
-    lines: added.binary || !added.text ? [] : lines.slice(0, MAP_LINE_LIMIT).map((text, index) => ({ kind: "add", text: text.slice(0, 2000), line: index + 1 })) };
+  return { binary: added.binary, capped: added.capped || lines.length > limit || lines.some(line => line.length > 2000),
+    lines: added.binary || !added.text ? [] : lines.slice(0, limit).map((text, index) => ({ kind: existed ? "context" : "add", text: text.slice(0, 2000), line: index + 1 })) };
 }

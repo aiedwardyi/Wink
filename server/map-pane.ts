@@ -35,7 +35,6 @@ interface WatchedPane {
 
 export interface MapPaneDeps {
   panes(botId: string): Promise<MapPaneRecord[]>;
-  title(botId: string): string;
   reason?(botId: string, pane: MapPaneRecord, editedAt: number): string | undefined;
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
 }
@@ -105,7 +104,7 @@ export function createMapPane(deps: MapPaneDeps) {
           if (closed) return;
           const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
           const record: WatchedPane = { pane, root, base, running: false, dirty: false,
-            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), task: deps.title(botId), git: base !== null, files: [], editedAt: 0 } };
+            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
           if (closed) return;
           panes.set(pane.sessionId, record);
           if (base) {
@@ -152,7 +151,7 @@ export function createMapPane(deps: MapPaneDeps) {
     if (!record?.base || !file) return json(res, 404, { error: "No such changed file" });
     const inside = relative(record.root, resolve(record.root, path));
     if (inside.startsWith("..") || isAbsolute(inside)) return json(res, 403, { error: "File is outside the working folder" });
-    try { return json(res, 200, await mapFileDiff(record.root, record.base, file)); }
+    try { return json(res, 200, await mapFileDiff(record.root, record.base, file, url.searchParams.get("whole") === "1")); }
     catch { return json(res, 503, { error: "Could not read the diff" }); }
   }
 
@@ -169,10 +168,6 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       if (snapshot.status !== 200) throw new Error("Worker panes unavailable");
       const panes = snapshot.body.panes;
       return paneSchema.array().parse(panes ?? []);
-    },
-    title: botId => {
-      const bot = store.bot(botId);
-      return bot?.tasks?.find(task => task.threadId === bot.threadId)?.title ?? "";
     },
     reason: (botId, pane, editedAt) => {
       const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");

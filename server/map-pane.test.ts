@@ -95,9 +95,32 @@ it("keeps a deleted file diff separate from its replacement directory", async ()
   ]);
 });
 
+it("reads the whole file with its changes marked", async () => {
+  const { root, git } = repo();
+  const text = (six: string) => Array.from({ length: 12 }, (_, index) => index === 5 ? six : `line ${index + 1}`).join("\n") + "\n";
+  writeFileSync(join(root, "file.ts"), text("line 6"));
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "long");
+  writeFileSync(join(root, "file.ts"), text("line six"));
+  const base = git("rev-parse", "HEAD");
+  const [file] = await mapFiles(root, base);
+  expect((await mapFileDiff(root, base, file)).lines.map(line => line.kind)).toEqual(["fold", ...Array(3).fill("context"), "remove", "add", ...Array(3).fill("context"), "fold"]);
+  const whole = await mapFileDiff(root, base, file, true);
+  expect(whole.lines.map(line => line.kind)).toEqual([...Array(5).fill("context"), "remove", "add", ...Array(6).fill("context")]);
+  expect(whole.lines.at(-1)).toEqual({ kind: "context", text: "line 12", line: 12 });
+});
+
+it("shows the whole file when only its mode changed", async () => {
+  const { root, git, base } = repo();
+  git("update-index", "--chmod=+x", "file.ts");
+  const [file] = await mapFiles(root, base);
+  expect(file).toEqual({ path: "file.ts", added: 0, removed: 0 });
+  expect((await mapFileDiff(root, base, file, true)).lines).toEqual([{ kind: "context", text: "const before = 1;", line: 1 }]);
+});
+
 it("folds unchanged runs between unified hunks and caps rendered lines", () => {
   const diff = mapDiffLines("@@ -20,1 +20,1 @@\n-old\n+new\n@@ -50,1 +50,1 @@\n-next\n+last\n");
-  expect(diff.lines.filter(line => line.kind === "fold").map(line => line.count)).toEqual([19, 29]);
+  expect(diff.lines.filter(line => line.kind === "fold").map(line => [line.line, line.count])).toEqual([[1, 19], [21, 29]]);
   expect(mapDiffLines("@@ -1,0 +1,1000 @@\n" + "+x\n".repeat(1000))).toMatchObject({ capped: true });
 });
 
@@ -107,12 +130,32 @@ it.each([1999, 2000, 2001])("caps tracked content at 2000 characters (%s)", leng
   expect(diff.capped).toBe(length > 2000);
 });
 
+it("never shows the bot's thread title as a worker's task", async () => {
+  const { root } = repo();
+  const deps = { panes: async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ENGINE-ROWS | opus" }, { sessionId: "pane-b", cwd: root, label: "BIG-PIC | sonnet" }], title: () => "Initialize as my Orbit teacher", subscribe: () => () => {} };
+  const feature = createMapPane(deps);
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", url);
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("BIG-PIC")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const { workers }: MapSnapshot = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim());
+  expect(workers.map(worker => worker.nick)).toEqual(["ENGINE-ROWS", "BIG-PIC"]);
+  expect(text).not.toContain("Initialize as my Orbit teacher");
+});
+
 it("does no work before opening, refreshes from real edit events, and stops on close", async () => {
   const { root, git } = repo();
   const read = vi.fn(async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ALPHA | script", main: false, exited: false }]);
   let listener: (() => void) | undefined;
   const unsub = vi.fn();
-  const feature = createMapPane({ panes: read, title: () => "Fix layout", subscribe: (_bot, next) => { listener = next; return unsub; } });
+  const feature = createMapPane({ panes: read, subscribe: (_bot, next) => { listener = next; return unsub; } });
   expect(read).not.toHaveBeenCalled();
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
