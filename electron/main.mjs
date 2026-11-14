@@ -20,6 +20,7 @@ import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
+import { adoptWorkers } from "./worker-host-adopt.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
@@ -331,11 +332,21 @@ async function paneMailbox() {
   const binDir = await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin")).catch(() => null);
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
+async function paneBotNames() {
+  const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
+  const response = await fetch(`http://127.0.0.1:${port}/api/bots?messages=0`, {
+    headers: serverToken ? { Authorization: `Bearer ${serverToken}` } : {},
+    redirect: "error",
+    signal: AbortSignal.timeout(2000),
+  });
+  if (!response.ok) throw new Error("Could not read bot names");
+  return Object.fromEntries((await response.json()).bots.map((bot) => [bot.id, bot.name]));
+}
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
 const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
 const ptyModule = () => require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty");
 // The runtime lives outside the install folder, so an update can replace the app while the host keeps running.
-const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, log: slog });
+const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, adopt: true, log: slog });
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
@@ -368,16 +379,7 @@ const terminalHost = createTerminalHost({
     if (!response.ok) throw new Error("Could not resolve terminal folder");
     return response.json();
   },
-  async botNames() {
-    const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
-    const response = await fetch(`http://127.0.0.1:${port}/api/bots?messages=0`, {
-      headers: serverToken ? { Authorization: `Bearer ${serverToken}` } : {},
-      redirect: "error",
-      signal: AbortSignal.timeout(2000),
-    });
-    if (!response.ok) throw new Error("Could not read bot names");
-    return Object.fromEntries((await response.json()).bots.map((bot) => [bot.id, bot.name]));
-  },
+  botNames: paneBotNames,
 });
 const writeCredential = createCredentialWriter({
   packaged: app.isPackaged,
@@ -1402,7 +1404,7 @@ ipcMain.on("desktop:taskbar-busy", (event, value) => {
 
 const closeGuard = createCloseGuard({
   platform: process.platform,
-  workerCount: () => terminalHost.liveWorkerCount(),
+  workerCount: () => terminalHost.liveWorkerCount({ closing: true }),
   botBusy: () => botBusy,
   reveal() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2173,8 +2175,8 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && !verifyProbe) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  if (!verifyProbe) void workerHost.prewarm();
-  if (!verifyProbe) void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
+  // Panes the worker host kept come back first, so only the ones really gone are restarted.
+  if (!verifyProbe) void adoptWorkers({ client: workerHost, runs: paneRuns, host: terminalHost, mailbox: paneMailbox, botNames: paneBotNames, warn: slog, recover: (kept) => recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog, kept }) }).catch(slog);
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState

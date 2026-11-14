@@ -89,6 +89,9 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
     let resolveReady;
     let rejectReady;
     let leave;
+    let last = Infinity;
+    let caughtUp;
+    const replayed = new Promise((resolve) => { caughtUp = resolve; });
     const settled = new Promise((resolve) => { settle = resolve; });
     const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
     const exited = new Promise((resolve) => { leave = resolve; });
@@ -139,6 +142,8 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       resize: (cols, rows) => hosted((pty) => pty ? pty.resize(cols, rows) : peer.request("resize", [{ id, cols, rows }]).then(() => undefined)),
       kill: () => hosted((pty) => pty ? pty.kill() : peer.request("kill", [{ id }]).then(() => undefined)),
       terminate: () => hosted((pty) => pty ? pty.terminate?.() : peer.request("kill", [{ id, force: true }]).then(() => undefined)).catch(() => {}),
+      /** True while the worker host runs this pane, so it can outlive this app. */
+      hosted: () => mode === "host" && !finished,
       /** Lets go of a hosted pane without stopping it; false means the pane is local and cannot outlive this app. */
       detach() {
         if (mode !== "host" || finished) return false;
@@ -152,6 +157,13 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
         if (replaying || seq <= seen) return;
         seen = seq;
         fire(listeners.data, text);
+        if (seq >= last) caughtUp();
+      },
+      replayed,
+      // The reply names the last output the pane had made; the replay is over once that has been handed on.
+      replays(seq) {
+        last = seq;
+        if (seen >= last) caughtUp();
       },
       started(pid) {
         if (mode && mode !== begin.mode) return;
@@ -168,6 +180,7 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       fall,
       failed(error) {
         handles.delete(id);
+        caughtUp();
         rejectReady(error);
         finish(1, error.message);
         leave();
@@ -279,16 +292,34 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
         .then(entry.disarm, (error) => entry.fall(error.message === "Worker host is full" ? "at cap" : "failed to start a pane", error.message));
       return handle;
     },
-    /** Reattaches a pane the host kept: replays its ring after `fromSeq`, then streams live output. */
+    /** Reattaches a pane the host kept: replays its ring after `fromSeq`, then streams live output. `replayed` settles when the old output is in. */
     attach(id, fromSeq = 0) {
       if (!peer || handles.has(id)) return null;
       const pty = bind(id, null, { mode: "host", seen: fromSeq });
       const entry = handles.get(id);
-      const replay = peer.request("attach", [{ id, fromSeq }], 10_000, (reply) => entry.started(reply.pid));
+      const replay = peer.request("attach", [{ id, fromSeq }], 10_000, (reply) => {
+        entry.started(reply.pid);
+        entry.replays(reply.seq);
+      });
       replay.catch(entry.failed);
-      return { pty, replay };
+      return { pty, replay, replayed: entry.replayed };
+    },
+    /** What an earlier run of the app left: "kept" is a host this app can talk to, "unknown" one it cannot, "none" nothing. */
+    left() {
+      if (platform !== "win32" || !fs.existsSync(root)) return "none";
+      const alive = (name) => fs.existsSync(path.join(root, name)) && workerHostLock(path.join(root, name, "host.lock"));
+      const own = alive(path.basename(slot));
+      if (own === "alive") return "kept";
+      return own === "unknown" || fs.readdirSync(root).some((name) => /^v\d+$/.test(name) && name !== path.basename(slot) && alive(name) === "alive") ? "unknown" : "none";
     },
     panes: () => peer ? peer.request("list") : Promise.resolve([]),
+    /** Ends a kept pane nobody will take back: stops it if it still runs, then has the host forget it. */
+    drop(id) {
+      if (!peer || handles.has(id)) return;
+      const connection = peer;
+      orphans.add(id);
+      void connection.request("kill", [{ id }], 60_000).then(() => connection.request("forget", [{ id }])).then(() => orphans.delete(id), () => {});
+    },
     state: () => ({ connected: Boolean(peer), stalled, fault, host, panes: handles.size }),
     close() {
       closed = true;
