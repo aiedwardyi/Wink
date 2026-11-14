@@ -1089,7 +1089,7 @@ describe("relative file links", () => {
       expect(new Set(links().map((link) => link.className)).size).toBe(1);
       expect(links()[0]!.className).toContain("underline");
       expect(cards()).toHaveLength(0);
-      expect(host.querySelector("img, svg")).toBeNull();
+      expect(host.querySelector("p img, p svg")).toBeNull();
     });
 
     it("keeps the card for a file on its own line", async () => {
@@ -1135,7 +1135,7 @@ describe("relative file links", () => {
       expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
       expect(links()[0]!.className).toContain("underline");
       expect(cards()).toHaveLength(0);
-      expect(host.querySelector("img, svg, [data-phone-media]")).toBeNull();
+      expect(host.querySelector("p img, p svg, [data-phone-media]")).toBeNull();
       await act(async () => links()[0]!.click());
       expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\test.txt", kind: "text" });
       await act(async () => links()[1]!.click());
@@ -1150,6 +1150,77 @@ describe("relative file links", () => {
       await act(async () => links()[0]!.click());
       expect(saved).toEqual([["/api/threads/t1/linked-file?path=C%3A%5Cw%5Creport.docx", "report.docx"]]);
       vi.restoreAllMocks();
+    });
+
+    describe("the picture a sentence links to", () => {
+      const src = (name: string) => `/api/threads/t1/linked-file?path=${encodeURIComponent(`C:\\w\\${name}`)}`;
+      const pictures = () => [...host.querySelectorAll<HTMLImageElement>("[data-linked-picture] img")];
+
+      it("draws once under the text and keeps the links", async () => {
+        desktop();
+        await mount(sentences);
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("dog.png")]);
+        expect(host.querySelector(".chat-md")!.lastElementChild!.hasAttribute("data-linked-picture")).toBe(true);
+        expect(lines()).toEqual(read);
+        expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
+        expect(host.querySelector("[data-linked-picture] svg")).toBeNull();
+        expect(host.querySelector("[data-linked-picture]")!.textContent).toBe("");
+      });
+
+      it("draws different pictures in link order", async () => {
+        desktop();
+        await mount("Made [b.png](C:\\w\\b.png) and [a.png](C:\\w\\a.png), then [b.png](C:\\w\\b.png) again.");
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("b.png"), src("a.png")]);
+      });
+
+      it("shows the picture in the pane on a click, and opens nothing before it", async () => {
+        desktop();
+        await act(async () => closeShow());
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        expect(lastShown("t1")?.path).not.toBe("C:\\w\\chart.png");
+        await act(async () => pictures()[0]!.click());
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\chart.png", kind: "image" });
+        expect(window.ogb!.openFile).not.toHaveBeenCalled();
+        expect(document.querySelector("[data-media-viewer]")).toBeNull();
+      });
+
+      it("draws no picture the bot already showed", async () => {
+        desktop();
+        await mount(sentences, true);
+        expect(pictures()).toHaveLength(0);
+        expect(links()).toHaveLength(3);
+      });
+
+      it("draws no picture for other files, or for a file on its own line", async () => {
+        desktop();
+        await mount("Updated [test.txt](C:\\w\\test.txt) and [d.pdf](C:\\w\\d.pdf), see [clip.mp4](C:\\w\\clip.mp4).\n\n[dog.png](C:\\w\\dog.png)");
+        expect(pictures()).toHaveLength(0);
+        expect(cards().map((card) => card.textContent)).toEqual(["dog.pngImage"]);
+      });
+
+      it("draws nothing for a picture that can't load, and keeps its link", async () => {
+        desktop();
+        await mount("Saved to [chart.png](C:\\w\\chart.png).");
+        await act(async () => void pictures()[0]!.dispatchEvent(new Event("error")));
+        expect(host.querySelector("[data-linked-picture]")).toBeNull();
+        expect(host.querySelector("img")).toBeNull();
+        expect(links().map((link) => link.textContent)).toEqual(["chart.png"]);
+      });
+
+      it("waits for the reply to settle", async () => {
+        desktop();
+        await act(async () => root.render(createElement(ChatMarkdown, { text: "Saved to [chart.png](C:\\w\\chart.png).", threadId: "t1", streaming: true })));
+        expect(pictures()).toHaveLength(0);
+      });
+
+      it("draws the same picture on a phone, and a tap shows it in the pane", async () => {
+        await mount(sentences);
+        await phoneFiles();
+        expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("dog.png")]);
+        expect(links().map((link) => link.textContent)).toEqual(["test.txt", "the dog", "dog.png"]);
+        await act(async () => pictures()[0]!.click());
+        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\dog.png", kind: "image" });
+      });
     });
 
     it("draws no second picture on a phone either", async () => {

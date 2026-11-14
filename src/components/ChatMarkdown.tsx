@@ -5,7 +5,7 @@
 // generator-escaped. While a message is still streaming, a code block renders
 // as plain <pre> until its content has held still for STREAM_SETTLE_MS (the
 // fence is very likely complete), then highlights and caches.
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
@@ -176,6 +176,7 @@ function remarkInlineFiles() {
 
 const StreamingContext = createContext(false);
 const MarkdownTextContext = createContext("");
+const PictureContext = createContext<((path: string) => () => void) | null>(null);
 
 // Streaming replies split at blank lines that open a top-level block, so only
 // the growing block re-parses per frame. HTML or a fence of unclear depth stops
@@ -676,8 +677,22 @@ function LocalFileLink({
   children?: ReactNode;
 }) {
   const streaming = useContext(StreamingContext);
+  const picture = useContext(PictureContext);
+  const linked = inline && !pictured && !streaming && showKind(filePath) === "image";
+  useEffect(() => (linked ? picture?.(filePath) : undefined), [linked, picture, filePath]);
   if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)} inline={inline} pictured={pictured}>{children}</PhoneFile>;
   return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))} inline={inline} pictured={pictured}>{children}</DesktopFileLink>;
+}
+
+/** A picture a sentence links to, drawn under the reply. A click shows it in the pane; one that can't load draws nothing. */
+function LinkedPicture({ threadId, path }: { threadId: string; path: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <div data-linked-picture>
+      <ReadableImage src={linkedFileSrc(threadId, path)} loading="lazy" className="rounded-lg border border-hairline/30" onOpen={() => showItem({ threadId, path, kind: "image" })} onError={() => setFailed(true)} />
+    </div>
+  );
 }
 
 // Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content
@@ -747,6 +762,11 @@ function ChatMarkdownComponent({
   const seen = useRef(new WeakSet<Element>());
   const previousWhole = useRef(0);
   const previousStyle = useRef(style);
+  const [pictures, setPictures] = useState<string[]>([]);
+  const picture = useCallback((path: string) => {
+    setPictures((paths) => [...paths, path]);
+    return () => setPictures((paths) => paths.filter((_, i) => i !== paths.indexOf(path)));
+  }, []);
   // Live typing keeps its blocks once settled.
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
@@ -883,11 +903,14 @@ function ChatMarkdownComponent({
   }), [baseDir, threadId, localLinks, pictured]);
   return (
     <StreamingContext.Provider value={streaming}>
-      <div ref={root} className="chat-md min-w-0 [&>*+*]:mt-2">
-        {blocks.map((block, i) => (
-          <MarkdownBlock key={i} text={block} components={components} />
-        ))}
-      </div>
+      <PictureContext.Provider value={picture}>
+        <div ref={root} className="chat-md min-w-0 [&>*+*]:mt-2">
+          {blocks.map((block, i) => (
+            <MarkdownBlock key={i} text={block} components={components} />
+          ))}
+          {threadId && [...new Set(pictures)].map((path) => <LinkedPicture key={path} threadId={threadId} path={path} />)}
+        </div>
+      </PictureContext.Provider>
     </StreamingContext.Provider>
   );
 }
