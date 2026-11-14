@@ -29,6 +29,10 @@ const open = async () => {
   await act(async () => pill()!.click());
   await settle();
 };
+const fold = async () => {
+  await act(async () => button("Fold question").click());
+  await settle();
+};
 
 async function swipe(dx: number, dy: number, scrollTop = 0) {
   const target = host.querySelector<HTMLDivElement>('[tabindex="0"]')!;
@@ -52,39 +56,38 @@ afterEach(async () => {
 });
 
 describe("question folding", () => {
-  it("arrives as the one-line row, opens, and folds back without answering or dismissing", async () => {
+  it("arrives as the full card, folds to the row and opens again without answering or dismissing", async () => {
     await render("fold-chevron");
-    await open();
+    expect(pill()).toBeNull();
+    expect(host.querySelector("[data-term-choices]")?.textContent).toContain("Analytics");
     await act(async () => button("Fold question").click());
     expect(pill()?.textContent).toContain("Wink asks");
     expect(pill()?.textContent).toContain("Which design");
     expect(pill()?.getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector('[data-fold="closing"]')?.textContent).toContain("Analytics");
     await settle();
-    expect(host.textContent).not.toContain("Analytics");
+    expect(host.querySelector("[data-term-choices]")).toBeNull();
     await open();
     expect(pill()).toBeNull();
-    expect(host.textContent).toContain("Analytics");
+    expect(host.querySelector("[data-term-choices]")?.textContent).toContain("Analytics");
     expect(onPick).not.toHaveBeenCalled();
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("keeps each card's fold after switching chats and remounting", async () => {
     await render("fold-kept");
-    await open();
+    await fold();
     await render("fold-other");
-    expect(pill()).not.toBeNull();
+    expect(pill()).toBeNull();
     await act(async () => root!.unmount());
     host.remove();
     root = undefined;
     await render("fold-kept");
-    expect(pill()).toBeNull();
-    expect(host.textContent).toContain("Analytics");
+    expect(pill()).not.toBeNull();
   });
 
   it("folds on a downward swipe", async () => {
     await render("fold-swipe");
-    await open();
     await swipe(5, 75);
     expect(pill()).not.toBeNull();
     expect(onDismiss).not.toHaveBeenCalled();
@@ -92,7 +95,6 @@ describe("question folding", () => {
 
   it("leaves sideways, upward and text-scrolling gestures alone", async () => {
     await render("fold-scroll");
-    await open();
     await swipe(80, 10);
     expect(pill()).toBeNull();
     await swipe(0, -80);
@@ -104,11 +106,13 @@ describe("question folding", () => {
   it("localizes folding and reopening in Korean", async () => {
     applyLocale("ko");
     await render("fold-korean");
+    await act(async () => button("질문 접기").click());
+    await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
     expect(button("질문 숨기기")).not.toBeNull();
+    expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
-    await act(async () => button("질문 접기").click());
-    expect(pill()).not.toBeNull();
+    expect(pill()).toBeNull();
   });
 });
