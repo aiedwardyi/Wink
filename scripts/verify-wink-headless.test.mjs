@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const DIRS = [".claude/skills/verify-wink", "scripts", "tools"];
-const LAUNCH = /\.(launch|launchServer|launchPersistentContext)\(([^\n]*)/g;
+const LAUNCH = /\.(launch|launchServer|launchPersistentContext)\(([^)]*)/g;
 
 function sources() {
   return DIRS.flatMap((dir) => readdirSync(dir, { recursive: true, withFileTypes: true })
