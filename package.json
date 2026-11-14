@@ -1,7 +1,7 @@
 {
   "name": "orbit-desktop",
   "private": true,
-  "version": "1.0.263",
+  "version": "1.0.264",
   "description": "A local-first desktop workspace for AI teammates.",
   "homepage": "https://github.com/aiedwardyi/Wink",
   "repository": {
