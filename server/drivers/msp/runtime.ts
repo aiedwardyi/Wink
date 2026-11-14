@@ -860,7 +860,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (lease) {
             if (!pool.offer(lease, turnHost.session)) return false;
           } else {
-            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "speculative");
+            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "kept");
             let fresh = reserve();
             // Another host already idles under this key: this one replaces it.
             if (typeof fresh === "object" && (hosts.has(fresh) || preparing.has(fresh))) {
