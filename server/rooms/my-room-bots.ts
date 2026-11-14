@@ -110,10 +110,13 @@ export class MyRoomBotTurns {
     const last = lines.at(-1);
     if (!state || !last || this.halted(roomId, last.seq)) return 0;
     // only this PC's own bots are seen working; the rest count while their line is pending
-    const working = (id: string) => (this.turn(roomId, id)?.working || this.turn(roomId, id)?.waiting ? true : null);
-    const turn = botChain(lines, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)], { working, since: this.boot });
-    if (turn) republishWhenLapsed(this.lapses, roomId, last.at, () => this.deps.changed(roomId));
-    return turn;
+    const working = (id: string) => {
+      const turn = this.turn(roomId, id);
+      return turn?.working || turn?.waiting ? true : null;
+    };
+    const count = botChain(lines, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)], { working, since: this.boot });
+    if (count) republishWhenLapsed(this.lapses, roomId, last.at, () => this.deps.changed(roomId));
+    return count;
   }
 
   /** The owner's Stop: this PC's asks in the room end here; the host's bots are never touched. */

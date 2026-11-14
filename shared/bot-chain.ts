@@ -35,12 +35,13 @@ export type ChainLapses = Map<string, { at: number; timer: ReturnType<typeof set
 /** Republishes the room once the handoff line at `lineAt` stops pending, so its strip clears. */
 export function republishWhenLapsed(lapses: ChainLapses, roomId: string, lineAt: number, republish: () => void): void {
   const at = lineAt + CHAIN_PENDING_MS;
-  if (at <= Date.now() || lapses.get(roomId)?.at === at) return;
+  const now = Date.now();
+  if (at <= now || lapses.get(roomId)?.at === at) return;
   clearTimeout(lapses.get(roomId)?.timer);
   const timer = setTimeout(() => {
     lapses.delete(roomId);
     republish();
-  }, at - Date.now());
+  }, at - now);
   timer.unref?.();
   lapses.set(roomId, { at, timer });
 }
