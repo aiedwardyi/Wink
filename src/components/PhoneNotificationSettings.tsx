@@ -41,7 +41,7 @@ export function PhoneNotificationSettings() {
 
   if (!state) return null;
 
-  const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-control/70 disabled:cursor-not-allowed disabled:opacity-50";
+  const button = "rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50";
   return (
     <div>
       <div className="text-[14px] font-medium text-ink">{t("settings.phoneNotifications.title")}</div>

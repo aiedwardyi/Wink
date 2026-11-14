@@ -39,7 +39,7 @@ export function PhoneLinkSettings() {
         <button type="button" aria-expanded={othersOpen} aria-controls="devices-other" onClick={() => setOthersOpen((open) => !open)}
           className="group flex items-center gap-2 text-[14px] font-semibold leading-5 text-ink">
           {t("settings.devices.otherWays")}
-          <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform duration-150 ease-out group-hover:text-ink motion-reduce:transition-none", !othersOpen && "-rotate-90")} />
+          <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform group-hover:text-ink motion-reduce:transition-none", !othersOpen && "-rotate-90")} />
         </button>
         <Fold open={othersOpen} id="devices-other">
           <DevicesGroup label={t("settings.devices.otherWays")}>
