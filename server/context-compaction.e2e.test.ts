@@ -1444,7 +1444,7 @@ describe("context compaction e2e", () => {
     expect(compacted.prompt).toContain(": Review the model picker PR (PR #1348)");
     expect(compacted.prompt).toContain("- A3 building ");
     expect(compacted.prompt).not.toContain("Drop the old skin");
-    expect(compacted.system).toContain("Reply first, then add each user ask to update_task_state asks before the turn ends");
+    expect(compacted.system).toContain("Add each ask the user makes to update_task_state asks in the same turn");
     expect(compacted.tools).toContain("agents-proxy");
 
     const resumed = await turn(`${bot.name}: thanks`);
