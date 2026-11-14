@@ -306,6 +306,25 @@ it("opens with every live worker in its first snapshot instead of adding them on
   expect(first.workers.map(worker => [worker.nick, worker.files.length])).toEqual([["PANE-A", 1], ["PANE-B", 1], ["PANE-C", 1]]);
 });
 
+it("still opens the other workers when one worker's folder is gone", async () => {
+  const { root, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const kept = 2;\n");
+  const workers = [{ sessionId: "pane-gone", cwd: join(root, "missing"), label: "GONE", baseHead: base }, { sessionId: "pane-ok", cwd: root, label: "OK" }];
+  const feature = createMapPane({ panes: async () => workers, subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", new URL(req.url!, "http://localhost"));
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const first: MapSnapshot = JSON.parse(text.slice(6, text.indexOf("\n\n")));
+  expect(first.workers.map(worker => [worker.nick, worker.files.length])).toEqual([["OK", 1]]);
+});
+
 it("recognizes non-git folders", async () => {
   const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
   roots.push(folder);
