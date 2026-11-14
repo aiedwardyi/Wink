@@ -410,3 +410,38 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
   await assert.rejects(host.openForBot(row.botId, { cwd: ROOT, command: "claude" }, row), /claimed/);
   assert.equal(children.length, 1);
 });
+
+test("recovered workers the memory gate refuses are tried 3 times, then listed to their bot", async (t) => {
+  assert.ok(recovery);
+  const rows = Array.from({ length: 16 }, (_, index) => record("claude", { label: `W${index + 1}` }));
+  const f = fixture(t, rows);
+  const children = [];
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  let clock = 0;
+  let opens = 0;
+  // The reading lags: no resumed worker has loaded yet, so it stays at 6 GB.
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, now: () => clock,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 6 * 1024 ** 3, setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh" }),
+    workerLaunch: async (input) => ({ kind: "managed", executable: "claude", args: ["-r", input.resume.nativeId, NUDGE], environment: {}, account: { id: "claude", generation: 0 },
+      session: { engine: "claude", nativeId: input.resume.nativeId, launchGeneration: randomUUID(), template: input.resume.template } }),
+    loadPty: () => ({ spawn() {
+      const child = { onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write() {}, resize() {}, kill() {} };
+      children.push(child);
+      return child;
+    } }),
+  });
+  t.after(() => host.dispose());
+  await recovery.recoverWorkers({ ...f.options, wait: async (ms) => { f.waits.push(ms); clock += ms; },
+    host: { openForBot: (...args) => { opens += 1; return host.openForBot(...args); }, workerResumeStatus: () => "resumed", closeForBot: (...args) => host.closeForBot(...args) } });
+  assert.equal(children.length, 10);
+  assert.equal(opens, 10 + 6 * 3);
+  assert.equal(f.waits.filter((ms) => ms === 2000).length, opens - 1);
+  assert.equal(f.notes.length, 1);
+  const [resumed, ...restarted] = f.notes[0].text.split("\n");
+  assert.equal(resumed, `RESUMED: ${rows.slice(0, 10).map((row) => `${row.label} (claude)`).join(", ")}.`);
+  assert.match(restarted[0], /^RESTARTED: Wink restarted, so these panes you spawned closed mid-run:$/);
+  assert.deepEqual(restarted.slice(1, 7).map((line) => line.split(" [pane ")[0]), rows.slice(10).map((row) => `- ${row.label} (resume failed)`));
+  assert.match(restarted.at(-1), /Spawn a FRESH worker to continue, or tell the user\.$/);
+  assert.equal(f.runs.restarted().size, 0);
+});
