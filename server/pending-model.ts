@@ -25,3 +25,11 @@ export function applyPendingModel(bot: PendingModelBot): boolean {
   delete bot.pendingModelSelection;
   return true;
 }
+
+/** A held engine or model pick: the turn running now is not the one the chip shows. Effort alone is no switch. */
+export function switchHeld(bot: Pick<PendingModelBot, "modelSelection" | "pendingModelSelection">): boolean {
+  const next = bot.pendingModelSelection;
+  if (!next) return false;
+  const now = bot.modelSelection;
+  return next.instanceId !== now.instanceId || next.model !== now.model || (next.mode ?? "pinned") !== (now.mode ?? "pinned");
+}

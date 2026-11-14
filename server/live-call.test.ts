@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { STATUS_MAX_BYTES } from "../shared/call-status.ts";
 import { CALL_ID, LIVE_MODEL, LIVE_TOOLS, LIVE_URL } from "../shared/live-call.ts";
 import type { AppConfig } from "./config.ts";
-import { callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
+import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_TOKENS, createLiveCallRoutes, isCallKeyCard, LIVE_CALL_FILE, NOTES_MAX_BYTES, parseCallTag, plainNames } from "./live-call.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
@@ -357,6 +357,22 @@ describe("brief STATUS", () => {
     const status = statusOf(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string);
     expect(Buffer.byteLength(status, "utf8")).toBeLessThanOrEqual(STATUS_MAX_BYTES);
     expect(status).not.toContain("�");
+  });
+});
+
+describe("brief model line", () => {
+  it("names the chip's model even when the chat says another", async () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "what model r u" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "My setup says I'm Claude Haiku 5.5." });
+    const bot = { ...h.bot, busy: true, modelSelection: { instanceId: "claude", model: "claude-haiku-5-5" }, pendingModelSelection: { instanceId: "codex", model: "gpt-6.1-sol" } };
+    const catalog = { claude: [{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }], codex: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] } as Record<string, { id: string; label: string }[]>;
+    const brief = await buildBrief(bot, h.store.activePath(bot.threadId), "User", 0, "en", undefined, (id) => ({ models: { options: catalog[id] ?? [] } }));
+    const [chat, status] = brief.split("STATUS:");
+    expect(chat).toContain("I'm Claude Haiku 5.5");
+    expect(status).toContain("GPT-6.1 Sol");
+    expect(status).not.toContain("Haiku");
+    expect(brief).toContain("Never mention Gemini, a helper or a voice model.");
   });
 });
 

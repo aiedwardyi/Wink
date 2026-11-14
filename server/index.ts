@@ -7612,7 +7612,7 @@ applyBrandLeadBot({
   },
   applyProfile: botRoutes.applyProfile,
 });
-const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR });
+const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR, catalog: (instanceId) => registry.get(instanceId) });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
