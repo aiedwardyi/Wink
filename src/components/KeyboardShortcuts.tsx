@@ -3,13 +3,14 @@ import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { Card } from "./SettingsPrimitives";
 
-export function KeyboardShortcuts() {
+export function KeyboardShortcuts({ pickerStyle = false }: { pickerStyle?: boolean }) {
   const { t } = useI18n();
   const mac = /Mac/i.test(globalThis.navigator?.platform ?? "");
   const mod = mac ? "Cmd" : "Ctrl";
   const alt = mac ? "Option" : "Alt";
   const terminal: Array<[MessageKey, ...string[][]]> = !window.ogb || window.ogb.terminal ? [["shortcuts.terminal", [mod, "`"]]] : [];
   const workerPane: Array<[MessageKey, ...string[][]]> = terminal.length ? [["shortcuts.workerPane", [alt, "1–9"]]] : [];
+  const styles: Array<[MessageKey, ...string[][]]> = pickerStyle ? [["shortcuts.pickerStyle", [alt, "S"]], ["shortcuts.pickerStyleCycle", [alt, "Shift", "S"]]] : [];
   const groups: Array<{ title: MessageKey; rows: Array<[MessageKey, ...string[][]]> }> = [
     { title: "shortcuts.navigation", rows: [
       ["shortcuts.jump", ["Ctrl", "1–9"]],
@@ -23,6 +24,7 @@ export function KeyboardShortcuts() {
     ] },
     { title: "shortcuts.chat", rows: [
       ["shortcuts.model", [alt, "M"]],
+      ...styles,
       ["shortcuts.workers", [alt, "W"]],
       ...terminal,
       ["shortcuts.queue", [mod, "Enter"], [t("shortcuts.holdSend")]],

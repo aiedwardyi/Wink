@@ -6,7 +6,7 @@ import { constants, getPriority, setPriority, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { clearVersionCache, describeSpawnFailure, execCli, setCliPriority } from "./procs.ts";
+import { clearVersionCache, describeSpawnFailure, execCli, setCliPriority, spawnCli } from "./procs.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 let dir: string;
@@ -118,6 +118,42 @@ describe("execCli env", () => {
   it("turns off agy's self-updater on Windows, whose console windowsHide can't hide", async () => {
     writeFileSync(script, "console.log(process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? \"unset\");\n");
     expect(await run(["-p", "/usage"])).toBe(process.platform === "win32" ? "true" : "unset");
+  });
+});
+
+describe("spawnCli direct start", () => {
+  const output = (child: ReturnType<typeof spawnCli>) => new Promise<string>((resolve) => {
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.once("close", () => resolve(out.trim()));
+  });
+  const account = { id: "a1", of: "codex", home: join(tmpdir(), "omb-procs-account"), generation: 1 };
+
+  it("runs the direct start with env set after the account policy", async () => {
+    let seen: string[] = [];
+    const child = spawnCli(cli, ["app-server"], {
+      env: { PATH: process.env.PATH, CODEX_MANAGED_BY_NPM: "stripped" },
+      stdio: ["pipe", "pipe", "pipe"],
+      account,
+      accountDriver: "codex",
+      direct: (launch, env) => {
+        seen = launch.args;
+        return { command: process.execPath, args: ["-e", "console.log(process.env.CODEX_MANAGED_BY_NPM, process.env.CODEX_HOME)"], env: { ...env, CODEX_MANAGED_BY_NPM: "1" } };
+      },
+    });
+    expect(await output(child)).toBe(`1 ${account.home}`);
+    expect(seen.slice(0, 2)).toEqual([script, "app-server"]);
+    expect(seen).toContain('model_provider="openai"');
+  });
+
+  it("falls back to the CLI when the direct start cannot run", async () => {
+    writeFileSync(script, "console.log(process.argv.slice(2).join(\" \"));\n");
+    const child = spawnCli(cli, ["app-server"], {
+      env: { PATH: process.env.PATH },
+      stdio: ["pipe", "pipe", "pipe"],
+      direct: (_, env) => ({ command: join(dir, "missing.exe"), args: ["app-server"], env }),
+    });
+    expect(await output(child)).toBe("app-server");
   });
 });
 

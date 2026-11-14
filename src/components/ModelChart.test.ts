@@ -167,14 +167,16 @@ describe("ModelChart", () => {
 
   it("switches to the list view from the chart and back", async () => {
     await mount();
-    const button = (view: string) => document.querySelector<HTMLButtonElement>(`.model-dial-view [data-picker-view="${view}"]`)!;
-    expect(button("chart").getAttribute("aria-pressed")).toBe("true");
-    await act(async () => button("list").click());
+    const shown = () => document.querySelector("[data-picker-style-button]")?.getAttribute("data-picker-view");
+    const tile = (view: string) => document.querySelector<HTMLButtonElement>(`[data-picker-style="${view}"]`)!;
+    expect(shown()).toBe("chart");
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-picker-style-button]")!.click());
+    await act(async () => tile("list").click());
     expect(document.querySelector(".model-chart")).toBeNull();
     expect(document.querySelector(".model-cross-stage")).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("list");
-    expect(button("list").getAttribute("aria-pressed")).toBe("true");
-    await act(async () => button("chart").click());
+    expect([shown(), tile("list").getAttribute("aria-checked")]).toEqual(["list", "true"]);
+    await act(async () => tile("chart").click());
     expect(document.querySelector(".model-chart")).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("chart");
   });

@@ -55,7 +55,7 @@ export const SCREENS = [
 const FLAG = ["on", "off"] as const;
 /** Each setting with the values it can take. `from` may also be "default". */
 export const SETTINGS = {
-  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart"], pickerLook: ["follow", "dark", "light", "atelier"],
+  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart", "machine"], pickerLook: ["follow", "dark", "light", "atelier"],
   replyStyle: ["paragraphs", "live"], chatBox: ["off", "rainbow", "theme"], sidebarSide: ["left", "right"],
   toolCalls: FLAG, longerReplies: FLAG, autoNotes: FLAG, vibration: FLAG, language: ["en", "ko"], usageMode: ["used", "remaining"],
   terminalAlerts: FLAG, phoneNotifications: FLAG, approvals: ["auto", "ask"], syncChats: FLAG, phoneAccess: FLAG,
