@@ -1356,6 +1356,51 @@ describe("MSP warm host (recorded transport)", () => {
     expect(methods(peers[0])).not.toContain("session/resume");
     expect(peers[0].requests.filter((m) => m.method === "turn/start").map((m) => m.params.reasoningEffort)).toEqual(["medium", "low"]);
   });
+  it("room turns without a cursor start a fresh session on a new host", async () => {
+    await start();
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message." }));
+    await completed(await send({ threadId: "recorded-room", text: "Room transcript: first message, then second message." }));
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.exitCode).not.toBeNull();
+    for (const peer of peers) {
+      expect(methods(peer).filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods(peer).filter((method) => method === "session/start")).toHaveLength(1);
+      expect(methods(peer)).not.toContain("session/resume");
+    }
+  });
+  it("keeps a queued accepted turn alive until its recorded completion", async () => {
+    gate = (method, reply, _peer, nth) => {
+      if (method === "turn/start" && nth === 2 && reply.result?.status === "accepted") {
+        reply.result.disposition = "queued";
+        reply.result.startedNewTurn = false;
+      }
+    };
+    await start();
+    const first = await send();
+    await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((method) => method === "turn/start")).toHaveLength(2);
+  });
+  it("reports this turn's tokens once and ignores a replay from the previous turn", async () => {
+    let previous: Message | undefined;
+    gate = (method, reply, peer, nth) => {
+      if (method !== "turn/start" || reply.method !== "session/tokenUsage") return;
+      if (nth === 1) previous = structuredClone(reply);
+      else {
+        peers[peer].write(previous!);
+        peers[peer].write(structuredClone(reply));
+      }
+    };
+    await start();
+    const first = await send();
+    const firstDone = await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    const secondDone = await completed(second);
+    expect(firstDone).toMatchObject({ usage: { input: 33301, output: 16, cachedInput: 0 } });
+    expect(secondDone).toMatchObject({ usage: { input: 28925, output: 23, cachedInput: 0 } });
+  });
   const kept = () => pool.stats().idle;
   const exited = (peer: { child: { exitCode: number | null } }) => peer.child.exitCode !== null;
   const stagesOf = (turnId: string) =>
