@@ -113,6 +113,7 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
           throw new Error("unshowable");
         }
         const body = await res.text();
+        if (body.length > TEXT_MAX) throw new Error("unshowable");
         if (!alive) return;
         setText(body);
         setReady(true);

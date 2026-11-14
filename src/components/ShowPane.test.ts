@@ -73,8 +73,11 @@ it("shows a text file as text", async () => {
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("test.txt");
 });
 
-it("offers Open for a text file too big for the pane", async () => {
-  vi.mocked(fetch).mockResolvedValue(new Response("x", { status: 200, headers: { "content-length": "1000001" } }));
+it.each([
+  ["an announced size", () => new Response("x", { status: 200, headers: { "content-length": "1000001" } })],
+  ["no announced size", () => new Response("x".repeat(1_000_001), { status: 200 })],
+])("offers Open for a text file too big for the pane, with %s", async (_, reply) => {
+  vi.mocked(fetch).mockResolvedValue(reply());
   await render({ item: item("C:\\w\\huge.txt", "text"), hidden: false });
   await until(() => Boolean(host.querySelector("[data-show-fallback]")));
   expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
