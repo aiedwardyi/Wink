@@ -44,6 +44,26 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
 
+it("labels root and folder counts in both languages", async () => {
+  const paths = [...Array.from({ length: 1100 }, (_, i) => `src/${i}.ts`), "src/a.ts", "src/manual.ts", "server/x.ts"];
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json({ name: "wink", paths }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  const counts = () => [...host.querySelectorAll<HTMLElement>(".map-tree-box:not(.map-tree-more) > span")];
+  const check = (titles: string[]) => {
+    expect(counts().map(count => count.textContent)).toEqual(["1,103", "1,102", "1"]);
+    expect(counts().map(count => count.getAttribute("title"))).toEqual(titles);
+    expect(counts().map(count => count.getAttribute("aria-label"))).toEqual(titles);
+    expect(counts().every(count => !count.hasAttribute("tabindex"))).toBe(true);
+  };
+  check(["1,103 files", "1,102 files", "1 file"]);
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([workers[0]]);
+  check(["파일 1,103개", "파일 1,102개", "파일 1개"]);
+});
+
 it("follows edits across workers, pins a worker, and keeps a manual file with Follow off", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();

@@ -4,7 +4,7 @@ import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, tree
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import "./MapTree.css";
 
-interface Labels { folders(n: number): string; files(n: number): string; more(n: number): string; same: string; different: string }
+interface Labels { folders(n: number): string; files(n: number): string; count(n: number, shown: string): string; more(n: number): string; same: string; different: string }
 
 interface MapTreeProps {
   index: TreeIndex;
@@ -252,8 +252,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const ids = team ? under(dir.path) : [];
     const target = it.kind === "box" ? folded(it) : undefined;
     const Box = target ? "button" : "div";
+    const count = fmt(dir.total);
+    const countLabel = labels.count(dir.total, count);
     return <Box type={target ? "button" : undefined} className="map-tree-box" data-changed={(it.kind === "root" ? layout.changed.size > 0 : layout.lit.has(dir.path)) || undefined} style={{ width: it.bw }} onClick={target ? () => onOpen(target) : undefined}>
-      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span>{fmt(dir.total)}</span>
+      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span title={countLabel} aria-label={countLabel}>{count}</span>
       {ids.length > 0 && <s className="map-tree-ticks" style={{ background: `linear-gradient(90deg, ${ids.map((id, i) => `${color(id)} ${(i * 100 / ids.length).toFixed(2)}% ${((i + 1) * 100 / ids.length).toFixed(2)}%`).join(", ")})` }} />}
     </Box>;
   };
