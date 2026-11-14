@@ -18,6 +18,8 @@ import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./term
 import { createPaneCleanupWorker } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
+import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
+import { publishTerminalDiscovery } from "./terminal-discovery.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
@@ -327,7 +329,7 @@ async function paneMailbox() {
   const token = await readMailboxSecret(app.getPath("userData"));
   if (!token) return null;
   const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
-  const binDir = await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin")).catch(() => null);
+  const binDir = await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin"), process.platform, app.getPath("userData")).catch(() => null);
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
@@ -2149,13 +2151,13 @@ app.whenReady().then(async () => {
         })
       : Promise.resolve({ mode: "unavailable", reason: "unsupported-platform" });
   try {
-    terminalBridgeAccess = await terminalBridge.start();
+    terminalBridgeAccess = await terminalBridge.start(app.getPath("userData"));
   } catch (error) {
     terminalBridgeAccess = null;
     slog(`terminal bridge unavailable: ${error?.message ?? error}`);
   }
   // Bots' terminal tools check for claude-worker.json when they load, before any pane opens.
-  await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin")).catch(() => null);
+  await installOrbitMsg(path.join(app.getPath("home"), ".orbit", "bin"), process.platform, app.getPath("userData")).catch(() => null);
   if (app.isPackaged) {
     serverReady = await startServerPackaged();
     slog(`harness ${serverReady ? "ready" : "failed"} port=${SERVER_PORT} uptime=${process.uptime().toFixed(2)}s`);
@@ -2170,7 +2172,14 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && !verifyProbe) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  if (!verifyProbe) void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
+  if (!verifyProbe && serverReady) {
+    const mailboxUrl = `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`;
+    if (terminalBridgeAccess) await publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog);
+  }
+  if (!verifyProbe) {
+    const reports = serverReady ? deliverMailboxOutbox(app.getPath("userData"), `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`).catch(slog) : Promise.resolve();
+    void reports.then(() => recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog })).catch(slog);
+  }
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState

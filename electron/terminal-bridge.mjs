@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { BOT_PANE_TOTAL } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
 import { streamMapPanes } from "./map-events.mjs";
+import { loadTerminalBridgeToken } from "./terminal-discovery.mjs";
 
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const GRANT_PREFIX = "orbit-terminal-read-v1";
@@ -152,14 +153,14 @@ async function handleUpdate(req, res, updater, token, action) {
 }
 
 /** Private loopback bridge between the Electron terminal host and a scoped MCP proxy. */
-export function createTerminalBridge({ host, updater, errorReports, saveCredential, verify: verifyFactory, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
+export function createTerminalBridge({ host, updater, errorReports, saveCredential, verify: verifyFactory, profile, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The host is supplied by the Electron main process.
   if (!host || typeof host.readBot !== "function" || typeof host.sendBot !== "function") throw new Error("Terminal host is required");
   let server;
   let address;
   let verify;
   let closing;
-  const start = () => new Promise((resolve, reject) => {
+  const listen = () => new Promise((resolve, reject) => {
     server = createServer(async (req, res) => {
       let parsed;
       try {
@@ -328,6 +329,10 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       resolve({ url: `http://127.0.0.1:${address.port}`, token });
     });
   });
+  const start = async (dir = profile) => {
+    if (dir) token = await loadTerminalBridgeToken(dir);
+    return listen();
+  };
   const close = () => closing ??= Promise.all([
     Promise.resolve(verify).then(value => value?.close()).catch(() => {}),
     new Promise((resolve) => { if (server) server.close(() => resolve()); else resolve(); }),

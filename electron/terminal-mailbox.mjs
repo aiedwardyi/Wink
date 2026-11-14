@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { WORKER_SESSION_PS1, workerSessionHook } from "./worker-session.mjs";
+import { MAILBOX_ID_PS1, MAILBOX_DELIVERY_PS1 } from "./mailbox-send.mjs";
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const GRANT_PREFIX = "orbit-mailbox-v1";
@@ -160,33 +161,16 @@ if (-not $text.Trim()) {
   [Console]::Error.WriteLine('usage: orbit-msg "text"')
   exit 1
 }
+${MAILBOX_ID_PS1}
 $max = 8000
 do {
   $clip = if ($text.Length -gt $max) { $text.Substring(0, $max) + "` + "`" + String.raw`n[truncated]" } else { $text }
-  $payload = @{ text = $clip }
+  $payload = @{ text = $clip; messageId = $messageId; sentAt = $sentAt }
   if ($report) { $payload.kind = 'report' } elseif ($mode) { $payload.kind = 'auto' }
   $body = [Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress))
   $max = [int]($max / 2)
 } while ($body.Length -gt 16000)
-$headers = @{ Authorization = "Bearer $auth"; 'X-Orbit-Pane' = $env:ORBIT_PANE; 'X-Orbit-Bot' = $env:ORBIT_BOT; 'X-Orbit-Teacher' = $env:ORBIT_TEACHER }
-$uris = @("$env:ORBIT_URL/api/mailbox")
-if ($env:ORBIT_URL -match '^http://127\.0\.0\.1:\d+$') {
-  $uris += 'http://127.0.0.1:18799/api/mailbox', 'http://127.0.0.1:28799/api/mailbox'
-}
-$uris = $uris | Select-Object -Unique
-# Loopback only: skip system proxy auto-detect (WPAD), which .NET runs before any bypass rule and can block 30s+.
-$direct = if ($PSVersionTable.PSVersion.Major -ge 6) { @{ NoProxy = $true } } else { [Net.WebRequest]::DefaultWebProxy = $null; @{} }
-$failure = $null
-foreach ($uri in $uris) {
-  $failure = $null
-  try {
-    Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 10 @direct | Out-Null
-    break
-  } catch {
-    $failure = $_
-    if ($failure.Exception.Message -notmatch 'Unable to connect|refused') { break }
-  }
-}
+${MAILBOX_DELIVERY_PS1}
 if ($failure) {
   if ($failure.Exception.Message -match 'timed out') {
     $line = 'orbit-msg: Wink did not answer in 10s'
@@ -475,9 +459,11 @@ function claudeWorkerSettings(dir) {
 }
 
 /** orbit-msg and the Claude worker hook settings rendered for `dir`, as [name, content] pairs. */
-export function orbitBinFiles(dir) {
+export function orbitBinFiles(dir, profile = "") {
+  // Keep paths ASCII for Windows PowerShell's ANSI script reader.
+  const encodedProfile = Buffer.from(profile, "utf8").toString("base64");
   return [
-    ["orbit-msg.ps1", ORBIT_MSG_PS1.replace(/\r?\n/g, "\r\n")],
+    ["orbit-msg.ps1", ORBIT_MSG_PS1.replaceAll("__ORBIT_PROFILE__", encodedProfile).replace(/\r?\n/g, "\r\n")],
     ["orbit-msg.cmd", ORBIT_MSG_CMD.replace(/\r?\n/g, "\r\n")],
     ["orbit-msg", ORBIT_MSG_SH],
     ["orbit-clean.ps1", ORBIT_CLEAN_PS1.replace(/\r?\n/g, "\r\n")],
@@ -485,16 +471,16 @@ export function orbitBinFiles(dir) {
     ["orbit-clean", ORBIT_CLEAN_SH],
     ["orbit-compact.ps1", ORBIT_COMPACT_PS1.replace(/\r?\n/g, "\r\n")],
     ["orbit-status.ps1", ORBIT_STATUS_PS1.replace(/\r?\n/g, "\r\n")],
-    ["orbit-session.ps1", WORKER_SESSION_PS1.replace(/\r?\n/g, "\r\n")],
+    ["orbit-session.ps1", WORKER_SESSION_PS1.replaceAll("__ORBIT_PROFILE__", encodedProfile).replace(/\r?\n/g, "\r\n")],
     ["claude-worker.json", claudeWorkerSettings(dir)],
   ];
 }
 
 /** Writes orbit-msg and the Claude worker hook settings into `dir`; Windows only, returns null elsewhere. */
-export async function installOrbitMsg(dir, platform = process.platform) {
+export async function installOrbitMsg(dir, platform = process.platform, profile = path.dirname(dir)) {
   if (platform !== "win32") return null;
   await fs.mkdir(dir, { recursive: true });
-  for (const [name, content] of orbitBinFiles(dir)) {
+  for (const [name, content] of orbitBinFiles(dir, profile)) {
     const target = path.join(dir, name);
     if ((await fs.readFile(target, "utf8").catch(() => null)) !== content) {
       const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;

@@ -13,7 +13,15 @@ try {
   $hook = $text | ConvertFrom-Json
   if ($hook.hook_event_name -ne 'SessionStart' -or @('startup','resume') -notcontains $hook.source) { exit 0 }
   $body = @{ pane = $env:ORBIT_PANE; launchGeneration = $env:ORBIT_SESSION_GENERATION; session_id = $hook.session_id; transcript_path = $hook.transcript_path; cwd = $hook.cwd; source = $hook.source } | ConvertTo-Json -Compress
-  Invoke-RestMethod -Uri $env:ORBIT_SESSION_URL -Method Post -Headers @{ Authorization = "Bearer $env:ORBIT_SESSION_AUTH" } -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 10 | Out-Null
+  $direct = if ($PSVersionTable.PSVersion.Major -ge 6) { @{ NoProxy = $true } } else { [Net.WebRequest]::DefaultWebProxy = $null; @{} }
+  try {
+    Invoke-RestMethod -Uri $env:ORBIT_SESSION_URL -Method Post -Headers @{ Authorization = "Bearer $env:ORBIT_SESSION_AUTH" } -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 10 @direct | Out-Null
+  } catch {
+    $orbitProfile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ORBIT_PROFILE__'))
+    $current = [IO.File]::ReadAllText([IO.Path]::Combine($orbitProfile, 'terminal-discovery.json')) | ConvertFrom-Json
+    if ($current.url -notmatch '^http://127\.0\.0\.1:\d+$') { throw 'invalid terminal discovery' }
+    Invoke-RestMethod -Uri "$($current.url)/v1/terminal/session" -Method Post -Headers @{ Authorization = "Bearer $env:ORBIT_SESSION_AUTH" } -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 10 @direct | Out-Null
+  }
 } catch { exit 1 }
 exit 0
 `;
