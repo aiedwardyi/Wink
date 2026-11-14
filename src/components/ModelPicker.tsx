@@ -391,8 +391,7 @@ export function ModelPickerControl({
             if (machine) dialogRef.current?.focus();
             return;
           }
-          // Option+T types a character in the local-model search; leave inputs alone.
-          if (dial && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === "KeyT" && !(event.target instanceof HTMLInputElement)) {
+          if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === "KeyT") {
             event.preventDefault();
             if (event.repeat) return;
             if (styleOpen) closeStrip();
