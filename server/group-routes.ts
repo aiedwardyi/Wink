@@ -24,6 +24,7 @@ import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } fr
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
 const GROUP_BUSY = "this group is working or waiting on you - finish that turn first";
+const GROUP_WORKING = "this group is working - stop that turn first";
 
 type GroupRouteDeps = {
   store: Store;
@@ -391,7 +392,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
       if (groupIsWorking(group)) {
-        return json(res, 409, { error: "this group is working - stop that turn first" });
+        return json(res, 409, { error: GROUP_WORKING });
       }
       const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
       for (const threadId of threadIds) lastReply.delete(threadId);

@@ -1782,6 +1782,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
               }
               if (typeof settledThread === "string") {
+                // idle: no turn will start, so settle it like a queued send or Thinking never ends
                 rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.idle === true });
               }
             })

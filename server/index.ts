@@ -6739,6 +6739,8 @@ async function runClaimedGroupMemberTurn(
   // the bot. An interrupt during that setup window must still stop the queued
   // room operation before it starts a process.
   if (isCancelled?.() || hostedTurnRefused(group, threadId, bot.id, authority)) return false;
+  // removed from the group during setup: skip it, the rest still answer
+  if (!roomTurnStillAssigned(groupId, threadId, bot.id)) return true;
   // A 1:1 or another room turn may have claimed this bot while connected-app
   // setup was in flight. Re-check immediately before the synchronous claim so
   // one bot can never own two provider processes.

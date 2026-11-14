@@ -114,4 +114,13 @@ describe("a group's roster while a member is answering", () => {
     await groupQueues.get(group.id);
     expect(runGroupMemberTurn.mock.calls.map((call) => call[2])).toEqual([kai.id, zed.id]);
   });
+
+  it("rechecks the roster after a member's turn setup, right before it claims the bot", () => {
+    const node = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    const body = node.getText(index);
+    const claim = body.indexOf('store.setActivity(bot.id, "working", threadId)');
+    const recheck = body.indexOf("if (!roomTurnStillAssigned(groupId, threadId, bot.id)) return true;");
+    expect(recheck).toBeGreaterThan(body.lastIndexOf("await ", claim));
+    expect(recheck).toBeLessThan(claim);
+  });
 });
