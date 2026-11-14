@@ -4,7 +4,8 @@ import { useI18n, type LocaleId } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
-import type { SceneId } from "./ChatScene";
+import { sceneOf, type SceneId } from "./ChatScene";
+import { Miniature } from "./SkinPicker";
 import "./WhatsNewCard.css";
 
 /** Animated images keep decoding while mounted, so a preview only mounts while it can be seen. */
@@ -95,6 +96,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
   const { dispatch } = useStore();
   const entry = release ? WHATS_NEW[release] : undefined;
   const title = theme ? t("whatsNew.themeMoves", { name: t(`settings.skin.${theme}`) }) : entry?.title[locale];
+  const skin = useSkin();
   const card = useRef<HTMLElement>(null);
   const visible = useSeen(card);
   useEffect(() => {
@@ -110,6 +112,13 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
     <div className="whats-new-dock">
       <section ref={card} className="whats-new" aria-label={title} data-closing={closing || undefined}>
         <div className="whats-new-head">
+          {theme && (
+            <div className="whats-new-mini">
+              {/* Still: its scene running at this size costs about 15% of a core for as long as the row stays up. */}
+              {/* The variant that was picked; the theme's own once the pick has moved on and the row is closing. */}
+              <Miniature skin={sceneOf(skin) === theme ? skin : theme} still />
+            </div>
+          )}
           {theme ? <p>{title}</p> : <h2>{title}</h2>}
           <button type="button" className="whats-new-x" aria-label={t("whatsNew.close")} title={t("whatsNew.close")} onClick={onClose}>
             <X size={14} />

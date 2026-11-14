@@ -54,7 +54,7 @@ function MiniScene({ scene }: { scene: SceneId }) {
  * accent on purpose — a skin is mostly judged by where its colour lands, and a
  * single dot was too small to judge.
  */
-function Miniature({ skin }: { skin: SkinId }) {
+export function Miniature({ skin, still = false }: { skin: SkinId; still?: boolean }) {
   const scene = sceneOf(skin);
   return (
     <div
@@ -80,7 +80,7 @@ function Miniature({ skin }: { skin: SkinId }) {
       </div>
       {/* thread */}
       <div data-mini-thread="" className="relative isolate flex min-w-0 flex-1 flex-col gap-[4px] p-[6px]">
-        {scene && <MiniScene scene={scene} />}
+        {scene && !still && <MiniScene scene={scene} />}
         <span className="h-[13px] w-[62%] self-end rounded-md bg-bubble-user" />
         <div className="flex w-[88%] flex-col gap-[3px] rounded-md bg-card p-[4px]">
           <span className="h-[2px] w-full rounded-full bg-ink/45" />
