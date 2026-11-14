@@ -43,7 +43,7 @@ describe("skin overlay chrome", () => {
   it("covers exactly the skins the renderer ships", () => {
     // SKIN_IDS is the source of truth (src/lib/skins.ts); a skin added there
     // without a chrome entry here would leave that skin's caption buttons on
-    // the previous colour — the issue #454 failure, but for a new skin.
+    // the previous colour: the black caption block again, but for a new skin.
     const registered = [...skinIds.matchAll(/"([a-z-]+)"/g)]
       .map(([, id]) => id)
       .filter((id) => css.includes(`[data-skin="${id}"]`));

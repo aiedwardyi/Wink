@@ -351,7 +351,7 @@ function createPermissionBroker(opts: {
   // this handler stays fully wired to it. Without this flag those asks would
   // become new `pending` entries and `request.opened` cards for a turn the
   // driver already forgot (`active.delete(threadId)` already ran), which can
-  // never be answered — the "zombie card" in issue #211.
+  // never be answered: a "zombie card".
   let closed = false;
   try {
     unlinkSync(opts.socketPath);
@@ -891,7 +891,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     /** Mark the session unusable for reuse and start process teardown.
      * Does not close the permission broker — Windows named pipes drop
      * existing clients on server.close()/unlink, and a late ask on a
-     * still-open connection must still get "the turn ended" (#211). */
+     * still-open connection must still get "the turn ended". */
     const beginClose = (threadId: string, why: string): Session | undefined => {
       const s = sessions.get(threadId);
       if (!s) return undefined;

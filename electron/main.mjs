@@ -1002,8 +1002,8 @@ async function startServerOn(port) {
   // so only the child we actually forked (matching pid + static serving)
   // counts as ours.
   // The budget is wall-clock, not a fixed poll count: a healthy boot can take
-  // well past 20s on cold machines or when pre-listen network calls stall
-  // (issue #506), and reaping an about-to-listen child reads to the user as
+  // well past 20s on cold machines or when pre-listen network calls stall,
+  // and reaping an about-to-listen child reads to the user as
   // "something else is using its ports" even though nothing was on them.
   // The probe itself is deadline-bounded (a hung health endpoint cannot wedge
   // us here forever) and reports WHY it gave up, so the error page can tell
