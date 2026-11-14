@@ -58,50 +58,48 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   if (!card || hidden) return null;
   return (
     <>
-      {!open && (
-        <div className="mb-2 px-1">
-          <QuoteRow
-            data-pending-question={message.id}
-            data-question-row=""
-            data-no-swipe=""
-            className={cn("relative touch-pan-y", glowing && "arrival-glow")}
-            onAnimationEnd={(event) => {
-              if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
-            }}
-            onTouchStart={(event) => {
-              const point = event.touches[0];
-              slide.current = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, at: event.timeStamp, axis: null } : null;
-            }}
-            onTouchMove={(event) => {
-              const start = slide.current;
-              const point = event.touches[0];
-              if (!start || !point) return;
-              start.axis ??= lockAxis(point.clientX - start.x, point.clientY - start.y);
-              if (start.axis === "x") event.currentTarget.style.transform = `translateX(${point.clientX - start.x}px)`;
-            }}
-            onTouchEnd={(event) => {
-              const start = slide.current;
-              const end = event.changedTouches[0];
-              slide.current = null;
-              event.currentTarget.style.transform = "";
-              if (!start || !end) return;
-              const dx = end.clientX - start.x;
-              if ((start.axis ?? lockAxis(dx, end.clientY - start.y)) !== "x") return;
-              if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) mark(hiddenQuestions, message.id, true);
-            }}
-            onTouchCancel={(event) => {
-              slide.current = null;
-              event.currentTarget.style.transform = "";
-            }}
-            icon={<span className={BADGE}>{count}</span>}
-            label={t("ask.asks", { name: askerName })}
-            text={card.subtitle.trim().split(/\r?\n/, 1)[0]}
-            jump={{ onClick: () => fold(false), "aria-expanded": false, "aria-label": `${t("ask.expandQuestion")}: ${card.subtitle}` }}
-            onClear={() => mark(hiddenQuestions, message.id, true)}
-            clearLabel={t("ask.hideQuestion")}
-          />
-        </div>
-      )}
+      <Fold open={!open} className="mb-2 px-1">
+        <QuoteRow
+          data-pending-question={message.id}
+          data-question-row=""
+          data-no-swipe=""
+          className={cn("relative touch-pan-y", glowing && "arrival-glow")}
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
+          }}
+          onTouchStart={(event) => {
+            const point = event.touches[0];
+            slide.current = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, at: event.timeStamp, axis: null } : null;
+          }}
+          onTouchMove={(event) => {
+            const start = slide.current;
+            const point = event.touches[0];
+            if (!start || !point) return;
+            start.axis ??= lockAxis(point.clientX - start.x, point.clientY - start.y);
+            if (start.axis === "x") event.currentTarget.style.transform = `translateX(${point.clientX - start.x}px)`;
+          }}
+          onTouchEnd={(event) => {
+            const start = slide.current;
+            const end = event.changedTouches[0];
+            slide.current = null;
+            event.currentTarget.style.transform = "";
+            if (!start || !end) return;
+            const dx = end.clientX - start.x;
+            if ((start.axis ?? lockAxis(dx, end.clientY - start.y)) !== "x") return;
+            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) mark(hiddenQuestions, message.id, true);
+          }}
+          onTouchCancel={(event) => {
+            slide.current = null;
+            event.currentTarget.style.transform = "";
+          }}
+          icon={<span className={BADGE}>{count}</span>}
+          label={t("ask.asks", { name: askerName })}
+          text={card.subtitle.trim().split(/\r?\n/, 1)[0]}
+          jump={{ onClick: () => fold(false), "aria-expanded": false, "aria-label": `${t("ask.expandQuestion")}: ${card.subtitle}` }}
+          onClear={() => mark(hiddenQuestions, message.id, true)}
+          clearLabel={t("ask.hideQuestion")}
+        />
+      </Fold>
       <Fold open={open} className="mb-2">
         <div
           role="region"

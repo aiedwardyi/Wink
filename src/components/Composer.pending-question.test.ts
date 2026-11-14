@@ -104,7 +104,12 @@ const pinButton = (name: string) => {
 };
 const row = () => host!.querySelector<HTMLElement>("[data-question-row]");
 const dot = () => host!.querySelector<HTMLButtonElement>("[data-hidden-question]");
-const expand = () => act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+// the row and the card fold past each other; wait out the closing one
+const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
+const expand = async () => {
+  await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+  await settle();
+};
 const swipe = (target: Element, dx: number, dy = 0) => act(async () => {
   const touch = (type: string, x: number, y: number) => {
     const event = new Event(type, { bubbles: true });
@@ -160,6 +165,8 @@ describe("pinned ask_user question", () => {
     expect(pinButton("Staging")).toBeTruthy();
     await act(async () => pinButton("Fold question").click());
     expect(row()).not.toBeNull();
+    await settle();
+    expect(host!.querySelector("[data-term-choices]")).toBeNull();
   });
 
   it("outlines the choices in secondary ink with a 44px touch height", async () => {

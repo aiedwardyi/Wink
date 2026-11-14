@@ -24,7 +24,11 @@ async function render(id: string) {
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const pill = () => host.querySelector<HTMLButtonElement>('[data-question-row] button[aria-expanded="false"]');
-const open = () => act(async () => pill()!.click());
+const settle = () => act(() => new Promise((done) => setTimeout(done, 200)));
+const open = async () => {
+  await act(async () => pill()!.click());
+  await settle();
+};
 
 async function swipe(dx: number, dy: number, scrollTop = 0) {
   const target = host.querySelector<HTMLDivElement>('[tabindex="0"]')!;
@@ -55,10 +59,10 @@ describe("question folding", () => {
     expect(pill()?.textContent).toContain("Wink asks");
     expect(pill()?.textContent).toContain("Which design");
     expect(pill()?.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelector("[data-fold]")?.getAttribute("data-fold")).toBe("closing");
-    await act(() => new Promise((done) => setTimeout(done, 200)));
+    expect(host.querySelector('[data-fold="closing"]')?.textContent).toContain("Analytics");
+    await settle();
     expect(host.textContent).not.toContain("Analytics");
-    await act(async () => pill()!.click());
+    await open();
     expect(pill()).toBeNull();
     expect(host.textContent).toContain("Analytics");
     expect(onPick).not.toHaveBeenCalled();
