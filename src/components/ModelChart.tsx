@@ -4,7 +4,7 @@ import type { ModelSelection } from "@/state/store";
 import { pickerEfforts, pickerModels, selectPickerEffort, selectPickerModel, withPickerEffort, type PickerEffort, type PickerRow } from "@/lib/cross-model-picker";
 import { dialPrice, dialRunCost, dialScore, dialShift, dialStep, dialTier } from "@/lib/model-dial";
 import { modelEffortLabel } from "@/lib/model-chip";
-import { MOTION_LARGE_MS, MOTION_MODERATE_MS } from "@/lib/motion";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
@@ -19,22 +19,6 @@ const XMAX = 40;
 const YMAX = 70;
 // jsdom and the first frame measure 0; a desktop-sized plot keeps the dots clickable until the real size lands.
 const FALLBACK = { w: 900, h: 560 };
-
-// Temporary: three looks to pick from. The pick stays; this switch and the other two go.
-const LOOK = ((): "a" | "b" | "c" => {
-  try {
-    const look = localStorage.getItem("omb-chart-look");
-    return look === "a" || look === "b" ? look : "c";
-  } catch {
-    return "c";
-  }
-})();
-const GLIDE = {
-  a: { ms: MOTION_LARGE_MS * 1.5, ease: (k: number) => 1 - Math.pow(1 - k, 4) },
-  b: { ms: MOTION_MODERATE_MS, ease: (k: number) => 1 - Math.pow(1 - k, 3) },
-  c: { ms: MOTION_LARGE_MS, ease: (k: number) => 1 - Math.pow(1 - k, 5) },
-}[LOOK];
-const ROUND = { a: 9, b: 4, c: 2 }[LOOK];
 
 export type Stop = { option?: PickerEffort; label: string; score?: number; coding?: number; cost?: number };
 type Item = ReturnType<typeof pickerModels>[number];
@@ -88,8 +72,8 @@ function useTween(to: Point | null, instant: boolean): Point | null {
     const t0 = performance.now();
     let frame = 0;
     const step = (t: number) => {
-      const k = Math.min(1, (t - t0) / GLIDE.ms);
-      const e = GLIDE.ease(k);
+      const k = Math.min(1, (t - t0) / MOTION_LARGE_MS);
+      const e = 1 - Math.pow(1 - k, 5);
       now.current = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e };
       setAt(now.current);
       if (k < 1) frame = requestAnimationFrame(step);
@@ -107,7 +91,7 @@ function Rolled({ value, format, name }: { value: number | undefined; format: (v
 
 function Flag({ text, x, y, cw }: { text: string; x: number; y: number; cw: number }) {
   const w = text.length * cw + 10;
-  return <g className="flag"><rect x={x - w / 2} y={y - 9} width={w} height={18} rx={ROUND} /><text x={x} y={y + 4} textAnchor="middle">{text}</text></g>;
+  return <g className="flag"><rect x={x - w / 2} y={y - 9} width={w} height={18} rx={2} /><text x={x} y={y + 4} textAnchor="middle">{text}</text></g>;
 }
 
 function Overlay({ plot, target, ghost, now, nowLabel, same, under, instant }: { plot: Plot; target: Point | null; ghost: boolean; now: Point | null; nowLabel: string; same: boolean; under: boolean; instant: boolean }) {
@@ -129,17 +113,17 @@ function Overlay({ plot, target, ghost, now, nowLabel, same, under, instant }: {
       ))}
       {pos && now && d > 44 && <line className="course" x1={now.x + u.x * 12} y1={now.y + u.y * 12} x2={pos.x - u.x * 22} y2={pos.y - u.y * 22} />}
       {now && <g className="nowm" transform={`translate(${now.x.toFixed(1)} ${now.y.toFixed(1)})`}>
-        {!same && (LOOK === "c" ? <path d="M0-5.5L5.5 0L0 5.5L-5.5 0Z" /> : <circle r={4.5} />)}
+        {!same && <path d="M0-5.5L5.5 0L0 5.5L-5.5 0Z" />}
         <text y={same ? -24 : under ? 19 : -12} textAnchor="middle">{nowLabel}</text>
       </g>}
-      {target && LOOK === "c" && <circle key={`${target.x}:${target.y}`} className="ping" cx={target.x} cy={target.y} r={11} />}
+      {target && <circle key={`${target.x}:${target.y}`} className="ping" cx={target.x} cy={target.y} r={11} />}
       {pos && <>
         <line className="cross" x1={pos.x} x2={pos.x} y1={Math.min(pos.y + 18, H - pad.b)} y2={H - pad.b} />
         <line className="cross" x1={pad.l} x2={Math.max(pos.x - 18, pad.l)} y1={pos.y} y2={pos.y} />
         <g className="ret" data-chart-reticle data-ghost={ghost || undefined} transform={`translate(${pos.x.toFixed(1)} ${pos.y.toFixed(1)})`}>
-          <circle className="halo" r={16} />
+          <circle className="halo" r={19} />
           <circle className="ring" r={10.5} />
-          <circle className="core" r={5} />
+          <circle className="core" r={4.5} />
         </g>
         <Flag text={xText} x={fx} y={H - pad.b + (phone ? 12 : 15)} cw={cw} />
         <Flag text={((H - pad.b - pos.y) / (H - pad.t - pad.b) * YMAX).toFixed(1)} x={Math.max(yHalf + 1, pad.l - yHalf - 5)} y={pos.y} cw={cw} />
@@ -284,7 +268,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
   }
 
   return (
-    <div ref={root} className="model-chart" data-look={LOOK} data-phone={phone || undefined} data-short={(!phone && size.rh > 0 && size.rh <= 800) || undefined} data-mid={(!phone && size.rw > 0 && size.rw <= 1240) || undefined}>
+    <div ref={root} className="model-chart" data-phone={phone || undefined} data-short={(!phone && size.rh > 0 && size.rh <= 800) || undefined} data-mid={(!phone && size.rw > 0 && size.rw <= 1240) || undefined}>
       <header className="chart-top">
         <h2 className="chart-title">{t("model.choose")}</h2>
         <span className="chart-now" data-chart-now>
@@ -373,14 +357,14 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
         <div ref={plotRef} className="chart-plot">
           <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={t("model.chart.aria")} onPointerOut={() => setTip(null)}>
             {[20, 40, 60].map((v) => <line key={v} className="grid" x1={px(pad.l)} x2={px(W - pad.r)} y1={px(Y(v))} y2={px(Y(v))} />)}
-            {DECADES.map((v) => <line key={v} className="grid" data-v x1={px(X(v))} x2={px(X(v))} y1={px(pad.t)} y2={px(H - pad.b)} />)}
-            {LOOK === "c" && <path className="plus" d={DECADES.flatMap((v) => [20, 40, 60].map((score) => `M${px(X(v)) - 4} ${px(Y(score))}h8M${px(X(v))} ${px(Y(score)) - 4}v8`)).join("")} />}
+            {DECADES.map((v) => <line key={v} className="grid" x1={px(X(v))} x2={px(X(v))} y1={px(pad.t)} y2={px(H - pad.b)} />)}
+            <path className="plus" d={DECADES.flatMap((v) => [20, 40, 60].map((score) => `M${px(X(v)) - 4} ${px(Y(score))}h8M${px(X(v))} ${px(Y(score)) - 4}v8`)).join("")} />
             <path className="axis" d={`M${px(pad.l)} ${px(H - pad.b)}H${px(W - pad.r)}`} />
-            <path className="axis" data-y d={`M${px(pad.l)} ${px(pad.t)}V${px(H - pad.b)}`} />
-            {LOOK !== "a" && <path className="ticks" d={[
+            <path className="axis" d={`M${px(pad.l)} ${px(pad.t)}V${px(H - pad.b)}`} />
+            <path className="ticks" d={[
               ...[20, 40, 60].map((v) => `M${px(pad.l) - 5} ${px(Y(v))}H${px(pad.l)}`),
               ...[0.001, ...DECADES].flatMap((decade) => [1, 2, 3, 4, 5, 6, 7, 8, 9].map((step) => [decade * step, step] as const)).filter(([v]) => v > XMIN && v < XMAX).map(([v, step]) => `M${px(X(v))} ${px(H - pad.b)}v${step === 1 ? 5 : 3}`),
-            ].join("")} />}
+            ].join("")} />
             <g className="cap">
               <path d={`M${pad.l + 4} ${capY}v${-arrow}m${-arrow * 0.4} ${arrow * 0.4}l${arrow * 0.4} ${-arrow * 0.4}l${arrow * 0.4} ${arrow * 0.4}`} />
               <text x={pad.l + 4 + arrow} y={capY}>{t("model.chart.smarter")}</text>
@@ -394,7 +378,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
               const points = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
               return (
                 <g key={id} className="mdl" data-sel={item === line || undefined} data-lab={rank(item) === 1 || undefined} data-hov={tip?.id === id || undefined}>
-                  {item === line && LOOK === "c" && <polyline className="glow" points={points} />}
+                  {item === line && <polyline className="glow" points={points} />}
                   <polyline points={points} />
                   {pts.map((p, k) => <circle key={k} className="dot" cx={p.x} cy={p.y} r={4} />)}
                 </g>
@@ -412,7 +396,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
               return (
                 <g className="tip">
                   <circle cx={tip.x} cy={tip.y} r={8} />
-                  <rect x={x - w / 2} y={y} width={w} height={42} rx={Math.min(ROUND, 8)} />
+                  <rect x={x - w / 2} y={y} width={w} height={42} rx={2} />
                   <text className="name" x={x} y={y + 17} textAnchor="middle">{name}</text>
                   <text x={x} y={y + 33} textAnchor="middle">{detail}</text>
                 </g>
