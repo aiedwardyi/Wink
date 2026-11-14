@@ -205,7 +205,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     {team && <div className="map-tree-team">
       <div className="map-tree-legend">{ordered.map(worker => <span key={worker.id} data-now={worker.id === current?.worker || undefined}><i style={tint(color(worker.id))} />{worker.nick}<em>{worker.files.length}</em></span>)}</div>
       {clashes.slice(0, clashes.length > CLASHES ? CLASHES - 1 : CLASHES).map(clash => <div key={clash.path} className="map-tree-clash" title={clash.path}><Clash same={clash.same} /><code>{name(clash.path)}</code><span>{clash.ids.map(nick).join(" + ")} · {clash.same ? labels.same : labels.different}</span></div>)}
-      {clashes.length > CLASHES && <div className="map-tree-clash" title={clashes.slice(CLASHES - 1).map(clash => clash.path).join("\n")}><span>{labels.more(clashes.length - CLASHES + 1)}</span></div>}
+      {clashes.length > CLASHES && <div className="map-tree-clash" title={clashes.slice(CLASHES - 1).map(clash => clash.path).join("\n")}><svg className="map-tree-x" aria-hidden="true" /><span>{labels.more(clashes.length - CLASHES + 1)}</span></div>}
     </div>}
     <div ref={view} className="map-tree" data-team={team || undefined} style={{ height: layout.height }}>
       <svg className="map-tree-lines" aria-hidden="true"><path ref={lines} /><path ref={hot} className="map-tree-hot" style={team && current ? { stroke: color(current.worker) } : undefined} /></svg>
