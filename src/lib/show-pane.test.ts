@@ -71,8 +71,17 @@ it("does not open again after a close in the same turn, and does on the next tur
     { messages: [...turn, deck] },
     { messages: [...turn, deck], closed: true },
     { messages: [...turn, deck, page] },
-    { messages: [...turn, deck, page, user("u2"), bot("b4", "[again.png](C:\\work\\again.png)")] },
-  ])).toEqual([null, "C:\\work\\launch-deck.pdf", null, null, "C:\\work\\again.png"]);
+    { messages: [...turn, deck, page, user("u2"), bot("b4", "[again.html](C:\\work\\again.html)")] },
+  ])).toEqual([null, "C:\\work\\launch-deck.pdf", null, null, "C:\\work\\again.html"]);
+});
+
+it("never opens a picture on its own, and opens the page or PDF handed over with one", () => {
+  const turn = [user("u1")];
+  const dog = bot("b5", "Here: [dog.png](C:\\work\\dog.png)");
+  const both = bot("b6", "[deck.pdf](C:\\work\\deck.pdf) and [dog.jpg](C:\\work\\dog.jpg)");
+  expect(walk([{ messages: turn }, { messages: [...turn, dog] }, { messages: [...turn, dog, both] }])).toEqual([null, null, "C:\\work\\deck.pdf"]);
+  expect(walk([{ messages: turn }, { messages: [...turn, page, dog] }])).toEqual([null, "C:\\work\\sync-flow.html"]);
+  expect(walk([{ messages: turn }, { messages: [...turn, page] }, { messages: [...turn, page, dog] }])).toEqual([null, "C:\\work\\sync-flow.html", null]);
 });
 
 let host: HTMLElement;
