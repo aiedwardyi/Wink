@@ -107,6 +107,15 @@ describe("Picker style strip", () => {
     expect(picker()).toBeNull();
   });
 
+  it("opens the strip with Alt+T from the local-model search box", async () => {
+    await mount("list");
+    await tap('button[aria-expanded="false"]:not([data-picker-style-button])');
+    const search = document.querySelector<HTMLInputElement>(".model-cross-custom input")!;
+    expect(search).not.toBeNull();
+    expect((await altT(search)).defaultPrevented).toBe(true);
+    expect(strip()).not.toBeNull();
+  });
+
   it("ignores Alt+S and Alt+Shift+S in the picker", async () => {
     await mount();
     for (const shift of [false, true]) expect((await altKey("KeyS", shift)).defaultPrevented).toBe(false);
@@ -122,15 +131,6 @@ describe("Picker style strip", () => {
     const text = document.querySelector(row)!.textContent!.replace(/[\s+]/g, "");
     expect(text).toContain("AltTStyle");
     expect(text).not.toMatch(/AltS|Shift|Next/);
-  });
-
-  it("leaves Alt+T to the local model search", async () => {
-    await mount("list");
-    await tap('button[aria-expanded="false"]:not([data-picker-style-button])');
-    const search = document.querySelector("input")!;
-    search.focus();
-    expect((await altT(search)).defaultPrevented).toBe(false);
-    expect([shown(), strip()]).toEqual(["list", null]);
   });
 
   it("puts Theme first and on, and keeps a picked look until Theme is picked again", async () => {
@@ -169,11 +169,14 @@ describe("Picker style strip", () => {
     expect(picker()).toBeNull();
   });
 
-  it("keeps the saved Machine and the style keys to pickers with the dial", async () => {
+  it("opens the strip with Alt+T without the dial, keeping the saved Machine unapplied", async () => {
     await mount("machine", false);
-    await altT();
-    expect([document.querySelector(".model-machine"), document.querySelector("[data-picker-style-button]"), strip()]).toEqual([null, null, null]);
+    expect((await altT()).defaultPrevented).toBe(true);
+    expect([document.querySelector(".model-machine"), document.querySelector("[data-picker-style-button]")]).toEqual([null, null]);
+    expect(strip()).not.toBeNull();
     expect(localStorage.getItem("omb-model-picker-view")).toBe("machine");
+    await altT();
+    await closesWithFade();
   });
 
   it.each(["style", "look"] as const)("folds eight %s tiles to four plus More, keeping the pick up front", async (kind) => {

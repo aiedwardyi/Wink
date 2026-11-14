@@ -201,6 +201,37 @@ describe("terminal status line quota ticker", () => {
     expect(text(q("[data-term-ticker]"))).not.toMatch(/\[\d+\]/);
   });
 
+  it("names the main account on a multi-account line and stays bare on a single-account engine", async () => {
+    const claude = usageBoardFixture.engines.find((each) => each.engine === "claude")!;
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    expect(text(q("[data-term-account]"))).toBe("Claude 1");
+    expect(q("[data-term-account]")!.classList.contains("text-ink-secondary")).toBe(true);
+    await unmount();
+    const board = structuredClone(usageBoardFixture);
+    const boardClaude = board.engines.find((each) => each.engine === "claude")!;
+    boardClaude.mainId = claude.accounts[1]!.id;
+    boardClaude.accounts.forEach((each) => { each.main = each.id === boardClaude.mainId; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/usage/board")
+      ? new Response(JSON.stringify(board), { headers: { "content-type": "application/json" } })
+      : new Promise<Response>(() => {})));
+    await load(7.2);
+    await mount(botOn("claude"), instancesFor(board));
+    expect(text(q("[data-term-account]"))).toBe("Claude 2");
+    await unmount();
+    boardClaude.mainId = claude.accounts.find((each) => each.nickname)!.id;
+    await load(7.2);
+    await mount(botOn("claude"), instancesFor(board));
+    expect(text(q("[data-term-account]"))).toBe("Studio");
+    await unmount();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/usage/board")
+      ? new Response(JSON.stringify(usageBoardFixture), { headers: { "content-type": "application/json" } })
+      : new Promise<Response>(() => {})));
+    await load(7.2);
+    await mount(botOn("gemini"), instancesFor(usageBoardFixture));
+    expect(q("[data-term-ticker]"), "ticker").not.toBeNull();
+    expect(q("[data-term-account]")).toBeNull();
+  });
+
   it("keeps the Multiplexer bot tab and only the tightest window on a phone", async () => {
     await mount(botOn("claude"), instancesFor(usageBoardFixture), { skin: "multiplexer", phone: true });
     const status = q("[data-term-status]");
