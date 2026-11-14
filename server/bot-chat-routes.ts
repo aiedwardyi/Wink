@@ -15,6 +15,7 @@ import { callLinesSinceLastUserTurn, parseCallTag } from "./live-call.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
+import { switchHeld } from "./pending-model.ts";
 import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, requeueDroppedCall, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
@@ -147,7 +148,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     let recorded = false;
     let callRow: Message | undefined;
     let peerInput: ReturnType<typeof beginPeerUserReply>;
-    if (steersSend(adapter, bot.busy, after)) {
+    // a held switch: the adapter is still the old turn's engine, so this send queues for the chip's model
+    if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
         replyTo,
         messages: store.activePath(threadId),
@@ -361,7 +363,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           }
 
           const adapter = instanceForBot(currentAtStart, threadId)?.adapter;
-          const steering = Boolean(currentAtStart.busy && steersSend(adapter, currentAtStart.busy, body.deliver === "after"));
+          const steering = Boolean(currentAtStart.busy && !switchHeld(currentAtStart) && steersSend(adapter, currentAtStart.busy, body.deliver === "after"));
           cancelUsageWait?.(bot.id, undefined, steering);
           // Claude can accept the message inside its live turn. A turn-start
           // claim also counts as active while prepareModelContext is running:
@@ -370,7 +372,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           if (currentAtStart.busy || botHasActiveTurn(bot.id, threadId)) {
             const after = body.deliver === "after";
             // a call order waited for a yes; it goes to the bot, never to Quick answers
-            if (!call?.order && quick && routesQuick({
+            if (!call?.order && quick && !switchHeld(currentAtStart) && routesQuick({
               bot: currentAtStart, threadId, text, instance: instanceForBot(currentAtStart, threadId), messages: store.activePath(threadId),
               deliverAfter: after, replyTo, queueId, room: Boolean(store.groupByThread(threadId)), accountReady: quick.accountReady(currentAtStart, threadId),
             })) {

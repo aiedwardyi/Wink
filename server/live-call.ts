@@ -43,7 +43,10 @@ type LiveCallDeps = {
   dataDir: string;
   fetch?: typeof fetch;
   now?: () => number;
+  catalog?: ModelCatalogLookup;
 };
+
+type ModelCatalogLookup = (instanceId: string) => { models: { options: readonly { id: string; label: string }[] } } | null | undefined;
 
 const lineSchema = z.object({ who: z.enum(["user", "voice"]), text: z.string(), at: z.number().finite().optional() });
 const linesSchema = z.object({ callId: z.string().regex(CALL_ID), lines: z.array(lineSchema).min(1).max(LINES_MAX) });
@@ -115,12 +118,15 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   return kept.join("\n");
 }
 
-export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE): Promise<string> {
+export async function buildBrief(bot: BotRecord, messages: Message[], userName: string, now: number, locale?: string, voice: LiveVoice = LIVE_VOICE, catalog?: ModelCatalogLookup): Promise<string> {
   const notes = loadMemory(bot.id);
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
   const tongue = `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`;
+  const shown = bot.pendingModelSelection ?? bot.modelSelection;
+  // the chip's label: catalogModelLabel in src/lib/model-chip.ts
+  const model = catalog?.(shown.instanceId)?.models.options.find((option) => option.id === shown.model)?.label ?? shown.model;
   const who = bot.description?.trim() ? `${bot.name}, ${bot.description.trim()}` : bot.name;
   return plainNames([
     `WHO: You are ${who}. Speak as I, never we or our. Never mention Gemini, a helper or a voice model.`,
@@ -133,7 +139,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
     `RECENT CHAT:\n${tail || "(none)"}`,
-    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id), false)}\nLocal time ${new Date(now).toString()}.`,
+    `STATUS:\n${callStatus(bot.name, Boolean(bot.busy), messages, hasQueuedSends(bot.id), false)}\nLocal time ${new Date(now).toString()}.\nYou run on ${model}, whatever chat says.`,
   ].join("\n\n"), bot.name);
 }
 
@@ -216,7 +222,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     if (cached?.botId === bot.id && now() - cached.at < BRIEF_TTL_MS) return cached;
     const app = locale === "ko" ? "ko" : "en";
     const voice = cfg.liveCall?.voice ?? LIVE_VOICE;
-    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, voice);
+    const brief = await buildBrief(bot, store.activePath(bot.threadId), cfg.profile?.name?.trim() || "User", now(), app, voice, deps.catalog);
     const entry = { botId: bot.id, brief, locale: app, voice, at: now() };
     briefs.delete(callId);
     briefs.set(callId, entry);
