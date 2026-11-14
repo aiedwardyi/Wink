@@ -150,14 +150,34 @@ describe("Picker style strip", () => {
     expect([backdrop().hasAttribute("data-light"), localStorage.getItem("omb-model-picker-look")]).toEqual([false, null]);
   });
 
+  it.each([["style", '[data-picker-style="list"]'], ["look", '[data-picker-look="light"]']])("closes after a %s tile pick, with the pick applied and focus back on the picker", async (_kind, tile) => {
+    await mount();
+    await altT();
+    await tap(tile);
+    expect([shown(), localStorage.getItem("omb-model-picker-view"), localStorage.getItem("omb-model-picker-look")].join()).toBe(tile.includes("list") ? "list,list," : "dial,dial,light");
+    await closesWithFade();
+    expect(document.activeElement?.closest("[data-model-picker-content]")).not.toBeNull();
+  });
+
+  it("leaves Enter and Space native on a focused tile, and its click closes the strip", async () => {
+    await mount();
+    await altT();
+    const tile = document.querySelector<HTMLElement>('[data-picker-look="atelier"]')!;
+    tile.focus();
+    // jsdom does not turn Enter or Space into a click; a browser does, so the strip must not swallow them.
+    for (const key of ["Enter", " "]) expect((await press(key, {}, tile)).defaultPrevented).toBe(false);
+    await act(async () => tile.click());
+    expect(localStorage.getItem("omb-model-picker-look")).toBe("atelier");
+    await closesWithFade();
+  });
+
   it("saves the Machine as a style, reopens on it, and closes the picker from its X", async () => {
     await mount();
     await altT();
     await tap('[data-picker-style="machine"]');
     for (let i = 0; i < 50 && !document.querySelector(".model-machine"); i++) await wait(5);
     expect([shown(), localStorage.getItem("omb-model-picker-view")]).toEqual(["machine", "machine"]);
-    expect(strip()?.hasAttribute("data-closing")).toBe(false);
-    await press("Escape");
+    await closesWithFade();
     expect(document.activeElement?.classList.contains("model-machine")).toBe(true);
     const enter = await press("Enter", {}, document.querySelector(".model-machine [data-picker-style-button]"));
     expect([enter.defaultPrevented, dispatch.mock.calls.length, picker() !== null]).toEqual([false, 0, true]);
@@ -176,18 +196,20 @@ describe("Picker style strip", () => {
     expect(localStorage.getItem("omb-model-picker-view")).toBe("machine");
   });
 
-  it.each(["style", "look"] as const)("folds eight %s tiles to four plus More, keeping the pick up front", async (kind) => {
+  it.each(["style", "look"] as const)("folds eight %s tiles to four plus More, keeping the pick up front; opening More picks nothing", async (kind) => {
     const tiles = Array.from({ length: 8 }, (_, i) => ({ id: `t${i + 1}`, label: `T${i + 1}`, mini: null }));
+    const onPick = vi.fn();
     const host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
     await act(async () => {
-      root.render(createElement(TileRow, { kind, title: kind, more: (count: number) => `More (${count})`, tiles, selected: "t7", onPick: () => undefined }));
+      root.render(createElement(TileRow, { kind, title: kind, more: (count: number) => `More (${count})`, tiles, selected: "t7", onPick }));
     });
     const names = () => [...host.querySelectorAll(`[data-picker-${kind}]`)].map((tile) => tile.textContent);
     expect(names()).toEqual(["T1", "T2", "T3", "T7"]);
     expect(host.querySelector(`[data-picker-more="${kind}"]`)?.textContent).toBe("More (4)");
     await tap(`[data-picker-more="${kind}"]`);
     expect(names()).toEqual(["T1", "T2", "T3", "T7", "T4", "T5", "T6", "T8"]);
+    expect(onPick).not.toHaveBeenCalled();
   });
 });

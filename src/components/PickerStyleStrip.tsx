@@ -226,9 +226,11 @@ type StripProps = {
   skin: SkinId;
   onStyle: (style: ModelPickerView) => void;
   onLook: (look: PickerLookChoice) => void;
+  /** A tile click is a commit: the pick is applied, then the strip closes. */
+  onDone: () => void;
 };
 
-export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle, onLook }: StripProps) {
+export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle, onLook, onDone }: StripProps) {
   const { t } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const look = shownPickerLook(picked, skin);
@@ -284,9 +286,9 @@ export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle
   return (
     <div ref={root} className="picker-style-strip animate-pop-in" data-picker-style-strip data-closing={closing || undefined} inert={closing} role="dialog" aria-label={t("model.style")} onKeyDown={onKeyDown}>
       <TileRow kind="style" title={t("model.style")} hint={<span className="pss-keys"><kbd>{altKeyLabel()}</kbd><kbd>T</kbd></span>} more={(count) => t("model.style.more", { count })}
-        tiles={styleTiles} selected={shown} onPick={onStyle} />
+        tiles={styleTiles} selected={shown} onPick={(style) => { onStyle(style); onDone(); }} />
       <TileRow kind="look" title={t("model.look")} hint={picked === "theme" && <small>{t("model.look.followsTheme")}</small>} more={(count) => t("model.look.more", { count })}
-        tiles={lookTiles} selected={picked} onPick={onLook} />
+        tiles={lookTiles} selected={picked} onPick={(choice) => { onLook(choice); onDone(); }} />
     </div>
   );
 }
