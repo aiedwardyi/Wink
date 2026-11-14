@@ -9,6 +9,7 @@ export interface ReplayMessage {
   speaker?: { botId: string; name: string };
 }
 
+// Voice-call provenance is not a chat engine switch.
 const REPLAY_ENGINE_NAMES = new Map([
   ["claudeAgent", "Claude"],
   ["codex", "Codex"],
