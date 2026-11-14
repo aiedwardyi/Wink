@@ -264,6 +264,8 @@ function fitChoices(card: HTMLDivElement | null) {
   const fit = () => {
     if (choices) {
       const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+      // the last fit's min-height would be read back as the text's own height
+      body.style.minHeight = "";
       const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
       body.style.minHeight = `${kept}px`;
       choices.style.maxHeight = choices.style.overflowY = "";

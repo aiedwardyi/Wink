@@ -184,7 +184,8 @@ describe("pinned ask_user question", () => {
     let tall = 262;
     let text = 88;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
-    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? text : 0; });
+    // a box is never shorter than its own min-height
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? Math.max(text, parseFloat(this.style.minHeight) || 0) : 0; });
     await mount({ bot: bot([question]) });
     const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
     expect(card()!.style.maxHeight).toBe("max(30dvh, 390px)");
