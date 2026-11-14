@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -175,9 +175,28 @@ describe("Grok allow rule for Wink's own tools", () => {
     expect(read(home)).toBe(`[ui]\r\ntheme = "x"\r\n\r\n[permission]\r\nallow = [\r\n  "Read",\r\n  "MCPTool(agents__*)",\r\n]\r\n`);
   });
 
-  it("leaves a file it cannot read safely alone", () => {
-    const home = scratchConfig(`[ui\ntheme = "x"\n`);
+  it("fills an empty allow array", () => {
+    const home = scratchConfig(`[permission]\nallow = []\n`);
+    startTurn(home);
+    expect(read(home)).toBe(`[permission]\n${RULE}\n`);
+  });
+
+  it.each([`[ui\ntheme = "x"\n`, `[permission]\n"all\\u006fw" = ["Read"]\n`])("leaves a file it cannot read safely alone: %s", (user) => {
+    const home = scratchConfig(user);
     unchanged(home, () => expect(startTurn(home)).toBe("grok-4.6"));
+  });
+
+  it("leaves a symlinked config alone", (ctx) => {
+    const target = scratchConfig(`[ui]\ntheme = "x"\n`);
+    const home = emptyHome();
+    try {
+      symlinkSync(configPath(target), configPath(home), "file");
+    } catch {
+      return ctx.skip();
+    }
+    startTurn(home);
+    expect(lstatSync(configPath(home)).isSymbolicLink()).toBe(true);
+    expect(read(target)).toBe(`[ui]\ntheme = "x"\n`);
   });
 
   it.each([

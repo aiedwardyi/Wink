@@ -3,7 +3,7 @@
 // (~/.grok/auth.json), NOT the xAI API key (that driver is drivers/grok.ts).
 // The generic protocol runtime lives in acp/core.ts; this file is only the
 // per-harness quirks. Verified against grok 1.0.0.
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -258,8 +258,11 @@ function scanToml(text: string) {
     const parts: string[] = [];
     for (;;) {
       space();
-      if ((text[i] === '"' || text[i] === "'") && !text.startsWith(text[i].repeat(3), i)) parts.push(str());
-      else {
+      if ((text[i] === '"' || text[i] === "'") && !text.startsWith(text[i].repeat(3), i)) {
+        const at = i;
+        parts.push(str());
+        if (text.slice(at, i).includes("\\")) fail();
+      } else {
         bare.lastIndex = i;
         const m = bare.exec(text) ?? fail();
         i = bare.lastIndex;
@@ -407,32 +410,31 @@ function withGrokAgentsAllowed(text: string): string | null {
 
 /** Config stamps already checked, so a turn start costs one stat. */
 const agentsAllowChecked = new Map<string, string>();
-const configStamp = (path: string) => {
+const configStat = (path: string) => {
   try {
-    const s = statSync(path);
-    return `${s.ino}:${s.mtimeMs}:${s.size}`;
+    return lstatSync(path);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw e;
   }
 };
+const stampOf = (s: Stats | null) => (s ? `${s.ino}:${s.mtimeMs}:${s.size}` : "missing");
 
 /** Grok's agent stdio ignores argv `--allow` (1.0.77); only this file's rule spares each Wink tool call its ask. */
 function ensureGrokAgentsAllowed(env: Record<string, string | undefined>): void {
   const path = join(grokHome(env), "config.toml");
   try {
-    const stamp = configStamp(path);
+    const before = configStat(path);
+    const stamp = stampOf(before);
     if (agentsAllowChecked.get(path) === stamp) return;
-    let mode = 0o600;
-    let raw = Buffer.alloc(0);
-    if (stamp !== "missing") {
-      raw = readFileSync(path);
-      mode = statSync(path).mode & 0o777;
+    // a rename over a symlink would replace the user's linked config with a plain file
+    const raw = before?.isSymbolicLink() ? null : before ? readFileSync(path) : Buffer.alloc(0);
+    const text = raw?.toString("utf8") ?? "";
+    const next = raw && Buffer.from(text, "utf8").equals(raw) ? withGrokAgentsAllowed(text) : null;
+    if (next !== null && next !== text && stampOf(configStat(path)) === stamp) {
+      writeFileAtomic(path, next, { mode: before ? before.mode & 0o777 : 0o600 });
     }
-    const text = raw.toString("utf8");
-    const next = Buffer.from(text, "utf8").equals(raw) ? withGrokAgentsAllowed(text) : null;
-    if (next !== null && next !== text && configStamp(path) === stamp) writeFileAtomic(path, next, { mode });
-    agentsAllowChecked.set(path, configStamp(path));
+    agentsAllowChecked.set(path, stampOf(configStat(path)));
   } catch {
     /* left alone: Grok keeps asking, as before */
   }
