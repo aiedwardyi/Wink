@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
-import { REMOTE_PANE_CEILING, remoteSlot } from "./terminal-remote.mjs";
+import { REMOTE_PANE_CEILING, remoteSlot, startingPanes } from "./terminal-remote.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
@@ -530,6 +530,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const pending = new Map();
   const paneReservations = new Map();
   const remoteOpens = new Set();
+  let loadingPanes = [];
   const deletedBots = new Set();
   const closedBotPanes = new Map();
   let reservedPanes = 0;
@@ -1791,12 +1792,17 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
       const floor = paneMemoryFloor(slot ? "" : input.command);
       const free = freeMemory();
-      if (free < floor) {
+      // A pane still loading is missing from the reading, so it holds its own floor until it shows or closes.
+      const loading = { at: now(), memory: floor };
+      loadingPanes = startingPanes(loadingPanes, loading.at).filter((pane) => !pane.session || (pane.session.exitCode === null && !pane.session.retired));
+      const needed = loadingPanes.reduce((sum, pane) => sum + pane.memory, floor);
+      if (free < needed) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
-        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(floor / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
+        throw new Error(`Not enough free memory for another terminal (${(free / 1024 ** 3).toFixed(1)} GB free, ${(needed / 1024 ** 3).toFixed(1)} GB needed).${openTerminals(names)} Close a finished pane with terminal_close or open it on another PC with host.`);
       }
       paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
+      loadingPanes.push(loading);
       if (slot) remoteOpens.add(slot);
       let session;
       let worker;
@@ -1847,6 +1853,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } finally {
         if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         remoteOpens.delete(slot);
+        if (session) loading.session = session;
+        else loadingPanes = loadingPanes.filter((pane) => pane !== loading);
         reservedPanes -= 1;
         const left = paneReservations.get(botId) - 1;
         if (left) paneReservations.set(botId, left);
