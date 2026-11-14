@@ -104,15 +104,19 @@ export function createMapPane(deps: MapPaneDeps) {
           else fresh.push(pane);
         }
         // New workers are read together and sent once: sent one by one, Map rebuilt its tree per worker as it opened.
-        const records = await Promise.all(fresh.map(async (pane): Promise<WatchedPane> => {
+        let failed = false;
+        const read = await Promise.all(fresh.map(async (pane): Promise<WatchedPane | undefined> => {
           const key = `${botId}:${pane.sessionId}`;
-          let base = pane.baseHead && /^[a-f0-9]{40,64}$/.test(pane.baseHead) ? pane.baseHead : fallback.get(key);
-          if (base === undefined) { base = await mapHead(pane.cwd); fallback.set(key, base); }
-          const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
-          return { pane, root, base, running: false, dirty: false,
-            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
+          try {
+            let base = pane.baseHead && /^[a-f0-9]{40,64}$/.test(pane.baseHead) ? pane.baseHead : fallback.get(key);
+            if (base === undefined) { base = await mapHead(pane.cwd); fallback.set(key, base); }
+            const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
+            return { pane, root, base, running: false, dirty: false,
+              worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
+          } catch { failed = true; return undefined; }
         }));
         if (closed) return;
+        const records = read.filter(record => record !== undefined);
         for (const record of records) {
           panes.set(record.pane.sessionId, record);
           if (!record.base) continue;
@@ -125,7 +129,7 @@ export function createMapPane(deps: MapPaneDeps) {
           record.watcher.on("error", () => send(true));
         }
         await Promise.all(records.map(record => refresh(record, true)));
-        send();
+        send(failed);
       } catch { send(true); }
       finally {
         syncing = false;
