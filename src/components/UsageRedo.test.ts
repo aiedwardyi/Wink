@@ -18,6 +18,7 @@ vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => ({ board: h.board
 vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typeof import("@/lib/usage-auto-refresh")>(), useAutoRefresh: () => {} }));
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { LIFT_SCALE } from "@/lib/use-touch-drag";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -706,23 +707,41 @@ it.each(["mouse", "touch"])("keeps the small card's scroll height while a %s dra
   await act(async () => void (pointer === "mouse" ? document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })) : touch(rows[0]!, "touchcancel")));
 });
 
-it("slows a dragged row into the small card's bottom edge, scale included, instead of stopping it dead", async () => {
+const dragSpots = async (row: number, pointer: number[]) => {
   await openQuick();
   const rows = [...quickRows()];
   stack(rows);
   const height = scroller(document.querySelector<HTMLElement>("[data-quick-scroll]")!, rows);
-  const at = (y: number) => {
-    document.dispatchEvent(mouse("pointermove", 40, y));
-    return parseFloat(rows[0]!.style.translate.split(" ")[1]!);
-  };
-  await act(async () => rows[0]!.dispatchEvent(mouse("pointerdown", 40, 40)));
-  const spots = [100, 160, 200, 300, 600].map(at);
-  expect(spots.slice(0, 2)).toEqual([60, 120]);
-  // room below the first row is 160, less half the 1.03 lift of its 80 px
-  for (const [index, spot] of spots.entries()) if (index) expect(spot).toBeGreaterThan(spots[index - 1]!);
-  expect(spots.at(-1)).toBeLessThanOrEqual(160 - 1.2);
-  expect(height()).toBe(240);
+  const start = row * 80 + 40;
+  await act(async () => rows[row]!.dispatchEvent(mouse("pointerdown", 40, start)));
+  const spots = pointer.map((y) => {
+    document.dispatchEvent(mouse("pointermove", 40, start + y));
+    return parseFloat(rows[row]!.style.translate.split(" ")[1]!);
+  });
   await act(async () => document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })));
+  return { spots, height: height() };
+};
+const grow = 80 * (LIFT_SCALE - 1) / 2;
+
+it("slows a dragged row into the small card's bottom edge, scale included, instead of stopping it dead", async () => {
+  const { spots, height } = await dragSpots(0, [60, 120, 160, 260, 560]);
+  expect(spots.slice(0, 2)).toEqual([60, 120]);
+  for (const [index, spot] of spots.entries()) if (index) expect(spot).toBeGreaterThan(spots[index - 1]!);
+  // 160 px below the first row, less half its lift
+  expect(spots.at(-1)).toBeLessThanOrEqual(160 - grow);
+  expect(height).toBe(240);
+});
+
+it("slows a dragged row into the small card's top edge instead of sliding under it", async () => {
+  const { spots } = await dragSpots(1, [-40, -70, -120, -400]);
+  expect(spots[0]).toBe(-40);
+  for (const [index, spot] of spots.entries()) if (index) expect(spot).toBeLessThan(spots[index - 1]!);
+  // the middle row sits 80 px below the top, less half its lift
+  expect(spots.at(-1)).toBeGreaterThanOrEqual(-80 + grow);
+});
+
+it("lifts a mouse-dragged row by the scale its travel counts", () => {
+  expect(usageCss).toContain(`scale: ${LIFT_SCALE};`);
 });
 
 it("picks a row up on a long press", async () => {

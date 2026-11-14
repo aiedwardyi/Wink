@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
-import { soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
+import { LIFT_SCALE, soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
 const CHANGE = "usage-order";
@@ -138,7 +138,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     if (reducedMotion() || !drag.node.animate) { finish(); return; }
     drag.node.style.removeProperty("translate");
     const animation = drag.node.animate([
-      { translate: `0 ${soften(drag.dy, drag.travel)}px`, scale: "1.03", boxShadow: getComputedStyle(drag.node).boxShadow, backgroundColor: getComputedStyle(drag.node).backgroundColor },
+      { translate: `0 ${soften(drag.dy, drag.travel)}px`, scale: String(LIFT_SCALE), boxShadow: getComputedStyle(drag.node).boxShadow, backgroundColor: getComputedStyle(drag.node).backgroundColor },
       { translate: `0 ${offset}px`, scale: "1", boxShadow: "none", backgroundColor: "transparent" },
     ], { duration: SWIPE_MOTION_MS, easing: SWIPE_SPRING, fill: "forwards" });
     animation.finished.then(() => { finish(); animation.cancel(); }, () => { clean(drag); active.current = null; });
