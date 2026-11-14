@@ -55,8 +55,9 @@ export function pinnedQuestion(messages: readonly Message[], visible: readonly M
 
 /** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
 export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  const at = messages.indexOf(question);
   const asker = question.from?.botId;
-  return messages.slice(messages.indexOf(question) + 1).some((message) =>
+  return at >= 0 && messages.slice(at + 1).some((message) =>
     message.role === "bot"
       ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
       : isSentByPerson(message) && !message.queueId);

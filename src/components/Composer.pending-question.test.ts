@@ -184,10 +184,10 @@ describe("pinned ask_user question", () => {
     let tall = 262;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
     await mount({ bot: bot([question]) });
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 342px)");
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 346px)");
     tall = 54;
     resized();
-    expect(card()!.style.maxHeight).toBe("max(30dvh, 134px)");
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 138px)");
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {

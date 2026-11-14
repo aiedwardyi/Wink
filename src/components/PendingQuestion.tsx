@@ -244,8 +244,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   );
 });
 
-// the card's frame, its heading and one line of the question, in px
-const CARD_REST = 80;
+// all of the card but its choices, in px: border 2 + padding 24 + heading 20 + gaps 16 + one line of the question 22
+const CARD_REST = 84;
 
 /** The card's cap gives way when its choices alone outgrow it, so they always show under a line of the question. */
 function fitChoices(card: HTMLDivElement | null) {
