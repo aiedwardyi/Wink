@@ -158,7 +158,7 @@ export const TOOLS = [
   {
     name: "terminal_spawn",
     description:
-      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 16 live panes per bot; a new pane needs up to 0.6 GB free. " +
+      "Open a labeled pane (a terminal-view tab) in cwd and type command plus Enter if given. Returns sessionId and generation. Max 128 live panes per bot; a new one needs up to 0.6 GB free. " +
       "Panes with host run claude on that PC: up to 64 per host, memory permitting. The shell is PowerShell on Windows. " +
       "To run a worker, call terminal_playbook first: it returns each engine's launch command, the model ids and the card rules. A worker launch is held until this session has read it.",
     inputSchema: {
