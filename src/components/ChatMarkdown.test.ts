@@ -769,7 +769,7 @@ describe("relative file links", () => {
     vi.stubGlobal("fetch", fetchFile);
     const host = document.createElement("div");
     const root = createRoot(host);
-    const file = "C:\\Users\\mredw\\Desktop\\donecheck-demo.mp4";
+    const file = "C:\\Users\\alice\\Desktop\\donecheck-demo.mp4";
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `[donecheck-demo.mp4](<${file}>)`, threadId: "t1" })));
       expect(host.textContent).toContain(message);
@@ -1061,7 +1061,7 @@ describe("relative file links", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push([this.getAttribute("href"), this.getAttribute("download")]); });
     const host = document.createElement("div");
     const root = createRoot(host);
-    const file = `C:/Users/mredw/Desktop/file.${ext}`;
+    const file = `C:/Users/alice/Desktop/file.${ext}`;
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `([file](${file}))`, threadId: "t1" })));
       const card = host.querySelector<HTMLButtonElement>("[data-show-card]")!;
@@ -1252,7 +1252,7 @@ describe("relative file links", () => {
     });
 
     it("a backslash folder link in angle brackets opens too", async () => {
-      const windows = String.raw`C:\Users\mredw\Desktop\Orbit-extras\showcase-1111`;
+      const windows = String.raw`C:\Users\alice\Desktop\projects\showcase-1111`;
       const { root } = await mount("en", files, `<${windows}>`);
       try {
         expect(fetch).toHaveBeenCalledWith(`/api/threads/t1/linked-folder?path=${encodeURIComponent(windows)}`);

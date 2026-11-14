@@ -3201,8 +3201,8 @@ for (const echo of ["none", "whole", "split"]) {
 }
 
 for (const [name, prompt, wrapped] of [
-  ["posh whole", " Orbit-cards ›  split  ", false],
-  ["posh wrapped", " Orbit-cards ›  split  ", true],
+  ["posh whole", " demo-folder ›  split  ", false],
+  ["posh wrapped", " demo-folder ›  split  ", true],
   ["bare >", "> ", false],
 ]) {
   test(`a wait loop ignores the prompt before its command echo: ${name}`, async (t) => {
@@ -3225,7 +3225,7 @@ for (const [name, prompt, wrapped] of [
   });
 }
 
-for (const prompt of [" Orbit-cards ›  split  ", "> "]) {
+for (const prompt of [" demo-folder ›  split  ", "> "]) {
   test(`a wait loop ignores prompt text and a partial command echo: ${prompt.trim()}`, async (t) => {
     const f = stallFixture({ commandEcho: false });
     t.after(() => f.host.dispose());
@@ -3256,7 +3256,7 @@ test("a command echo cleared by its first UI in the same chunk keeps the 2-minut
   t.after(() => f.host.dispose());
   const command = "Start-Sleep 300; codex go";
   await f.host.openForBot("bot-1", { label: "WAIT", command });
-  f.children[0].data(` Orbit-cards › split ${command}\r\n\x1b[2J\x1b[HOpenAI Codex\r\n› Explain this codebase\r\n`);
+  f.children[0].data(` demo-folder › split ${command}\r\n\x1b[2J\x1b[HOpenAI Codex\r\n› Explain this codebase\r\n`);
   await f.settle();
   await f.advance(120_000);
   assert.equal(f.notes.length, 1);

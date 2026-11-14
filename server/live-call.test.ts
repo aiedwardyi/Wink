@@ -243,7 +243,7 @@ describe("call token", () => {
 
   it("brief never names the app Orbit", async () => {
     const h = harness();
-    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-extras\notes" }, { seedMessages: false });
+    const bot = h.store.createBot({ name: "Teacher", description: "your project teacher for Orbit. Vault: C:\Orbit-docs\notes" }, { seedMessages: false });
     h.store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "is OpenMaus or MausBot in the Orbit build?" });
     await h.post("token", {}, bot.id);
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;

@@ -308,7 +308,7 @@ describe("harness playbook", () => {
 
   it("names no one user's machine or remotes", () => {
     for (const platform of ["win32", "linux"] as const) {
-      expect(loadHarnessPlaybook(undefined, join("D:", "wt"), platform)).not.toMatch(/checkpoint|origin|C:\\Users|mredw|orbit-wt/);
+      expect(loadHarnessPlaybook(undefined, join("D:", "wt"), platform)).not.toMatch(/checkpoint|origin|C:\\Users|orbit-wt/);
     }
   });
 

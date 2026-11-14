@@ -13,7 +13,7 @@
     },
     {
       "t": 405,
-      "data": "\u001b[?25l\u001b[2J\u001b[m\u001b[H\u001b]0;C:\\Users\\mredw\\AppData\\Local\\agy\\bin\\agy.EXE\u0007\u001b[?25h"
+      "data": "\u001b[?25l\u001b[2J\u001b[m\u001b[H\u001b]0;C:\\Users\\alice\\AppData\\Local\\agy\\bin\\agy.EXE\u0007\u001b[?25h"
     },
     {
       "t": 406,
@@ -97,7 +97,7 @@
     },
     {
       "t": 2155,
-      "data": "\u001b[HAccessing workspace:\r\n\u001b[K\r\nC:\\Users\\mredw\\AppData\\Local\\Temp\\wink-AGY-TRUST\\fresh-s13fQ4\r\n\u001b[K\r\nDo you trust the contents of this project?\r\n\u001b[K\r\nAntigravity CLI requires permission to read, edit, and execute files here.\r\n\u001b[K\r\n> Yes, I trust this folder\r\n  No, exit\u001b[K\r\n\u001b[K\r\n  ↑/↓ Navigate · enter Confirm\r\n◆ Gemini 3.8 Flash │ fresh-s13fQ4\r\n▰▰▰▰▰ 100%"
+      "data": "\u001b[HAccessing workspace:\r\n\u001b[K\r\nC:\\Users\\alice\\AppData\\Local\\Temp\\wink-AGY-TRUST\\fresh-s13fQ4\r\n\u001b[K\r\nDo you trust the contents of this project?\r\n\u001b[K\r\nAntigravity CLI requires permission to read, edit, and execute files here.\r\n\u001b[K\r\n> Yes, I trust this folder\r\n  No, exit\u001b[K\r\n\u001b[K\r\n  ↑/↓ Navigate · enter Confirm\r\n◆ Gemini 3.8 Flash │ fresh-s13fQ4\r\n▰▰▰▰▰ 100%"
     }
   ]
 }
