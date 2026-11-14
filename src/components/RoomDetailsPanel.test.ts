@@ -83,8 +83,8 @@ afterEach(async () => {
 
 describe("Room details", () => {
   it.each([
-    ["en", "Room Details", "People (2)", "Bots (1)", "Add instructions for every bot…", "+ Add bot"],
-    ["ko", "채팅방 세부 정보", "참여자 (2)", "봇 (1)", "모든 봇에게 줄 지침 추가…", "+ 봇 추가"],
+    ["en", "Group details", "People (2)", "Bots (1)", "Add instructions for every bot…", "+ Add bot"],
+    ["ko", "그룹 세부 정보", "참여자 (2)", "봇 (1)", "모든 봇에게 줄 지침 추가…", "+ 봇 추가"],
   ] as const)("reads top down like group info in %s: room, people, bots", async (locale, title, people, bots, placeholder, addBot) => {
     mock.state.bots = [bot("b1", "Wink"), bot("b2", "Ada")];
     await open({ group: shared([{ id: "p1", name: "Mina" }]) }, () => json({ code: "old-code" }), locale);
@@ -173,7 +173,7 @@ describe("Room details", () => {
     await open({ group });
     const head = host.querySelector("aside[data-room-details] > div")!;
     const buttons = [...head.querySelectorAll("button")];
-    expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(["Close Room Details"]);
+    expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(["Close group details"]);
     expect(head.lastElementChild).toBe(buttons[0]);
     expect(buttons[0]!.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "max-md:size-11"]));
     expect(buttons[0]!.querySelector("svg")!.getAttribute("width")).toBe("15");
@@ -322,7 +322,7 @@ describe("People", () => {
     await confirm("Remove");
     await settle();
     expect(mock.dispatched).toContainEqual({ type: "groupPatched", group: { id: "group-1", room: { ...room.room, people: [], removed: codeChanged ? [] : [{ id: "mina", name: "Mina" }] } } });
-    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The room code changed. Send the new one to your team." : undefined);
+    expect(section("people").querySelector('[role="status"]')?.textContent).toBe(codeChanged ? "The group code changed. Send the new one to your team." : undefined);
   });
 
   it("says Phone Access is off only after a tap on Invite, never on open", async () => {
