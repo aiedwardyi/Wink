@@ -46,7 +46,7 @@ function keepDevices(devices: DeviceItem[]) {
   }
 }
 
-/** `saved` starts from the last answer (null until one exists), so a list paints before the PC replies. */
+/** `saved` starts from the last answer (null until one exists), so a list paints before the PC replies. Every caller's answer is saved, whatever `saved` says: the sidebar's boot fetch keeps it fresh. */
 export function useDevices(enabled: boolean, watching = false, saved = false) {
   const [devices, setDevices] = useState<DeviceItem[] | null>(() => (saved ? savedDevices() : null));
   const live = useRef(true);
