@@ -24,7 +24,7 @@ import { probeLocalInjects } from "./drivers/local-inject.ts";
 import { PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import type { Message } from "./store.ts";
 import { lastUserInstruction } from "./task-recovery-flush.ts";
-import { REPLY_MARKER, buildResumeFallback, buildTurnContext } from "./turn-context.ts";
+import { REPLY_MARKER, buildResumeFallback, buildTurnContext, replayMessageText } from "./turn-context.ts";
 import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
@@ -2776,5 +2776,75 @@ describe("typed values block", () => {
     expect(summarize.mock.calls[0]![0]).toContain("<previous_summary>\ngood summary G\n</previous_summary>");
     expect(summarize.mock.calls[0]![0]).not.toContain(TYPED_VALUES_HEADER);
     expect(result.status === "ready" && result.compaction.summary).toBe(`repaired text\n\n${BLOCK}`);
+  });
+});
+
+describe("replay engine metadata", () => {
+  it.each([false, true])("keeps the engine without changing prepared text (speakers %s)", async (includeSpeakers) => {
+    const from = { botId: "alpha", name: "Alpha", color: "blue" };
+    const messages = [message("u1", "Make a dog image"), message("b2", "Generated a dog image", { role: "bot", engine: "antigravityAgent", from })];
+    const input = { messages, contextWindow: 200_000, taskRecordText: "", includeSpeakers };
+    const ready = await prepareModelContext(input);
+    const plain = await prepareModelContext({ ...input, messages: messages.map(({ engine: _engine, ...row }) => row) });
+    expect(ready.status).toBe("ready");
+    expect(plain.status).toBe("ready");
+    if (ready.status !== "ready" || plain.status !== "ready") return;
+    expect(ready.transcript.map((row) => row.text)).toEqual(plain.transcript.map((row) => row.text));
+    expect(ready.estimatedTokens).toBe(plain.estimatedTokens);
+    expect(ready.transcript[1]).toMatchObject({ engine: "antigravityAgent" });
+    const turn = buildTurnContext({ text: "Who made it?", transcript: ready.transcript, rewound: false, fresh: true, replaysNatively: false, driverKind: "museAgent" });
+    expect(turn.turnText).toContain("Assistant (on Gemini):");
+  });
+
+  it("tags only the reading bot's earlier-engine group lines", async () => {
+    const alpha = { botId: "alpha", name: "Alpha", color: "blue" };
+    const other = { ...alpha, botId: "other", name: "Other" };
+    const ready = await prepareModelContext({
+      messages: [
+        message("u1", "Make a dog image"),
+        message("b2", "Generated a dog image", { role: "bot", from: alpha, engine: "antigravityAgent" }),
+        message("b3", "Other reply", { role: "bot", from: other, engine: "antigravityAgent" }),
+        message("b4", "Current reply", { role: "bot", from: alpha, engine: "museAgent" }),
+        message("b5", "Legacy reply", { role: "bot", from: alpha }),
+      ],
+      contextWindow: 200_000, taskRecordText: "", includeSpeakers: true, userName: "Edward",
+    });
+    expect(ready.status).toBe("ready");
+    if (ready.status !== "ready") return;
+    const render = (driverKind: string) => ready.transcript.map((row) => replayMessageText(row, driverKind, "alpha")).join("\n");
+    expect(render("museAgent")).toBe("Edward: Make a dog image\nAlpha (on Gemini): Generated a dog image\nOther: Other reply\nAlpha: Current reply\nAlpha: Legacy reply");
+    const before = structuredClone(ready.transcript);
+    expect(ready.transcript.map((row) => replayMessageText(row, row.engine ?? "museAgent", "alpha"))).toEqual(ready.transcript.map((row) => row.text));
+    expect(ready.transcript).toEqual(before);
+  });
+
+  it("keeps summary prompts and records unchanged while preserving tail engines", async () => {
+    const messages = longHistory(205).map((row) => row.role === "bot" ? { ...row, engine: "antigravityAgent" } : row);
+    const prepare = async (rows: Message[]) => {
+      const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nEarlier work retained.");
+      const ready = await prepareModelContext({ messages: rows, contextWindow: 2_048, taskRecordText: "Goal: release", summarize });
+      return { ready, summarize };
+    };
+    const tagged = await prepare(messages);
+    const plain = await prepare(messages.map(({ engine: _engine, ...row }) => row));
+    expect(tagged.summarize).toHaveBeenCalled();
+    expect(tagged.summarize.mock.calls).toEqual(plain.summarize.mock.calls);
+    expect(tagged.ready.status).toBe("ready");
+    expect(plain.ready.status).toBe("ready");
+    if (tagged.ready.status !== "ready" || plain.ready.status !== "ready") return;
+    expect(tagged.ready.compaction).toEqual(plain.ready.compaction);
+    expect(tagged.ready.transcript.map((row) => row.text)).toEqual(plain.ready.transcript.map((row) => row.text));
+    expect(tagged.ready.transcript[0]?.engine).toBeUndefined();
+    expect(tagged.ready.transcript.slice(1).filter((row) => row.role === "assistant").every((row) => row.engine === "antigravityAgent")).toBe(true);
+    expect(tagged.ready.transcript.some((row) => row.engine === "antigravityAgent")).toBe(true);
+    const reused = await prepareModelContext({
+      messages: [...messages, compactionMessage("c206", "m204", tagged.ready.compaction!)],
+      contextWindow: 2_048, taskRecordText: "Goal: release",
+    });
+    expect(reused.status).toBe("ready");
+    if (reused.status === "ready") {
+      expect(reused.transcript).toEqual(tagged.ready.transcript);
+      expect(reused.compaction).toBeUndefined();
+    }
   });
 });
