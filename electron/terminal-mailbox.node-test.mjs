@@ -136,7 +136,7 @@ const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
 
 function runShDirect({ sh, env, args, input }) {
   return new Promise((resolve, reject) => {
-    const child = execFile(GIT_BASH, ["-c", 'exec "$0" "$@"', sh, ...args], { env, encoding: "utf8", timeout: 60_000 },
+    const child = execFile(GIT_BASH, ["-c", 'exec "$0" "$@"', sh, ...args], { env, encoding: "utf8", windowsHide: true, timeout: 60_000 },
       (error, stdout, stderr) => (error && error.code === "ENOENT" ? reject(error) : resolve({ status: error?.code ?? 0, stdout, stderr })));
     if (input !== undefined) child.stdin?.end(input);
   });

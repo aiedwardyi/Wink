@@ -2201,7 +2201,7 @@ PSConsoleHostReadLine
 Write-Error '' -ErrorAction Ignore
 prompt
 prompt`;
-    const stdout = await new Promise((resolve, reject) => execFile(shell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], (error, stdout) => error ? reject(error) : resolve(stdout)));
+    const stdout = await new Promise((resolve, reject) => execFile(shell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true }, (error, stdout) => error ? reject(error) : resolve(stdout)));
     assert.equal(stdout.split(finishedMark({ sessionId: "test-pane" }, 7)).length - 1, 3);
     assert.ok(stdout.includes(startedMark({ sessionId: "test-pane" }, "echo ok")));
     assert.match(stdout, /echo ok\r?\n/);

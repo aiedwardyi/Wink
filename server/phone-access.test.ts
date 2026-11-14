@@ -1041,7 +1041,7 @@ describe("dev boot", () => {
     ];
     for (const file of files) {
       const href = pathToFileURL(join(root, file)).href;
-      const run = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(href)});`], { encoding: "utf8" });
+      const run = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(href)});`], { encoding: "utf8", windowsHide: true });
       expect(run.status, `${file}: ${run.stderr}`).toBe(0);
     }
   });
@@ -1118,7 +1118,7 @@ describe("no relay configured", () => {
         await access.stop();
         console.log(JSON.stringify(loaded.filter((url) => /\\/phone-relay\\/(index|ingress)\\.ts$/.test(url))));
       `;
-      const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+      const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", windowsHide: true });
       expect(run.status, run.stderr).toBe(0);
       return z.array(z.string()).parse(JSON.parse(run.stdout));
     };
