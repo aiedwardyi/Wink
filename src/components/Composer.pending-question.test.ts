@@ -164,13 +164,30 @@ describe("pinned ask_user question", () => {
     expect(textarea()?.disabled).toBe(false);
   });
 
-  it("caps the card at a third of the chat and scrolls a long question inside it", async () => {
+  it("caps the card at a third of the chat and scrolls only a long question's text, with the choices under it", async () => {
     await mount({ bot: bot([ask({ subtitle: Array.from({ length: 40 }, (_, line) => `Line ${line}`).join("\n") })]) });
     expect(card()!.className).toContain("max-h-[30dvh]");
     const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
     expect(body.className).toContain("overflow-y-auto");
     expect(body.textContent).toContain("Line 39");
-    expect(body.querySelector("[data-term-choices]")).not.toBeNull();
+    expect(body.querySelector("[data-term-choices]")).toBeNull();
+    expect(body.className).toContain("min-h-[1lh]");
+    const choices = body.nextElementSibling!;
+    expect(choices.matches("[data-term-choices]")).toBe(true);
+    expect(choices.className).toContain("shrink-0");
+    expect([...choices.querySelectorAll("button")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
+  });
+
+  it("lets the cap give way when the choices alone outgrow it, so they never leave the card", async () => {
+    let resized = () => {};
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} });
+    let tall = 262;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : 0; });
+    await mount({ bot: bot([question]) });
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 342px)");
+    tall = 54;
+    resized();
+    expect(card()!.style.maxHeight).toBe("max(30dvh, 134px)");
   });
 
   it("shrinks to its row when the person starts typing, and stays shrunk", async () => {
@@ -194,12 +211,52 @@ describe("pinned ask_user question", () => {
     expect(row()).not.toBeNull();
   });
 
-  it("shrinks to its row when a new message lands after it", async () => {
+  it("shrinks to its row when the asking bot replies after it", async () => {
     await mount({ bot: bot([question]) });
     expect(row()).toBeNull();
     await rerender({ bot: bot([question, { id: "b2", role: "bot", kind: "text", at: 5, text: "Still checking the logs." }]) });
     expect(row()).not.toBeNull();
     expect(row()!.textContent).toContain("Ship to prod or staging?");
+  });
+
+  it("shrinks to its row when the person sends a message after it", async () => {
+    const open = ask({ staysOpen: true });
+    await mount({ bot: bot([open]) });
+    await rerender({ bot: bot([open, { id: "u1", role: "user", kind: "text", at: 5, text: "what's for lunch?" }]) });
+    expect(row()).not.toBeNull();
+  });
+
+  it.each([
+    ["a worker's note", { id: "n1", role: "bot", kind: "note", at: 5, text: "[pane 1a2b3c4d] [ALPHA] DONE ALPHA branch=fix/a sha=abc1234 dirty=0" }],
+    ["a tool run", { id: "a1", role: "bot", kind: "activity", at: 5, tool: { name: "Read file", ok: true } }],
+    ["a peer's line", { id: "p1", role: "user", kind: "text", at: 5, text: "From a peer", from: { botId: "peer", name: "Peer", color: "blue" } }],
+    ["a queued line landing by itself", { id: "u1", role: "user", kind: "text", at: 5, text: "also check the logs", queueId: "queue-1" }],
+  ] satisfies Array<[string, Message]>)("stays the full card when %s lands after it", async (_name, later) => {
+    const open = ask({ staysOpen: true });
+    await mount({ bot: bot([open]) });
+    await rerender({ bot: bot([open, later]) });
+    await settle();
+    expect(card()).not.toBeNull();
+    expect(row()).toBeNull();
+  });
+
+  it("in a room, stays the full card through another member's line and shrinks when its asker replies", async () => {
+    const asker = bot([]);
+    const other: Bot = { ...bot([]), id: "other", threadId: "other-thread", name: "Bea" };
+    const members = [asker, other];
+    const open: Message = { ...ask({ staysOpen: true }), from: { botId: asker.id, name: asker.name, color: asker.color } };
+    const line = (id: string, by: Bot): Message => ({ id, role: "bot", kind: "text", at: 5, text: "On it.", from: { botId: by.id, name: by.name, color: by.color } });
+    const room = (messages: Message[]): Group => ({
+      id: "room", threadId: "room-thread", name: "War room", memberIds: [asker.id, other.id], bulletin: "",
+      defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1, messages,
+    });
+    await mount({ group: room([open]), members });
+    await rerender({ group: room([open, line("b1", other)]), members });
+    await settle();
+    expect(card()).not.toBeNull();
+    expect(row()).toBeNull();
+    await rerender({ group: room([open, line("b1", other), line("b2", asker)]), members });
+    expect(row()).not.toBeNull();
   });
 
   it("shrinks to one row: the count, who asks, the question's first line, its choices and an x", async () => {
