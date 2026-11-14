@@ -68,6 +68,18 @@ it("keeps Coding, Commit, Push and the line up to the PR white-gray, with color 
   expect(css).toMatch(/:is\(\[data-k="code"\], \[data-k="commit"\], \[data-k="push"\]\)\[data-state\] > i \{ background: var\(--flow-ink\); \}/);
 });
 
+it("keeps the stops clear of the PR summary at every pane width, giving way from the far end", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  const columns = [...css.matchAll(/\.map-flow-list \{[^}]*grid-template-columns: ([^;]+);/g)].map(match => match[1]);
+  expect(columns).toHaveLength(3);
+  for (const each of columns) expect(each).toMatch(/ minmax\(min-content, 1fr\) auto$/);
+  expect(css).toMatch(/\.map-flow-list \{[^}]*overflow: hidden auto;/);
+  // measured in the pane beside a scrollbar: the full row needs 683px, the row with the short right side 553px
+  expect(css).toMatch(/@container map-pane \(max-width: 690px\) \{\s+\.map-flow-end > small, \.map-flow-clash \{ font-size: 0; \}/);
+  expect(css).toMatch(/@container map-pane \(max-width: 560px\) \{\s+\.map-flow-rows \{ padding-left: 10px;/);
+  expect(css).toMatch(/@container map-pane \(max-width: 372px\) \{ \.map-flow-clash \{ display: none; \} \}/);
+});
+
 it("puts a square per check in the checks box and the details in each stop's tip", async () => {
   flows.a = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }, { name: "vitest 1", state: "pending" }, { name: "lint", state: "fail" }, { name: "docs", state: "skip" }] }) });
   await render({ workers: [edited("src/a.ts")] });

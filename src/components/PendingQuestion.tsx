@@ -67,7 +67,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
-  /** a message landed after the question */
+  /** the person sent a message, or the asker replied, after the question */
   movedOn?: boolean;
   onPick: (choice: string) => void;
   onDismiss: () => void;
@@ -183,6 +183,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
       </Fold>
       <Fold open={!folded} className="mb-2">
         <div
+          ref={fitChoices}
           role="region"
           aria-label={t("ask.asks", { name: askerName })}
           data-pending-question={message.id}
@@ -233,17 +234,29 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
                 <X size={14} aria-hidden="true" />
               </button>
             </div>
-            {/* a long question scrolls here, so the card stays a third of the chat */}
-            <div tabIndex={0} data-question-body="" className="mt-1.5 min-h-0 overflow-y-auto">
-              <div className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">{card.subtitle}</div>
-              <AskChoices options={card.options} onPick={onPick} />
-            </div>
+            {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
+            <div tabIndex={0} data-question-body="" className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">{card.subtitle}</div>
+            <AskChoices options={card.options} onPick={onPick} />
           </div>
         </div>
       </Fold>
     </>
   );
 });
+
+// all of the card but its choices, in px: border 2 + padding 24 + heading 20 + gaps 16 + one line of the question 22
+const CARD_REST = 84;
+
+/** The card's cap gives way when its choices alone outgrow it, so they always show under a line of the question. */
+function fitChoices(card: HTMLDivElement | null) {
+  const choices = card?.querySelector<HTMLElement>("[data-term-choices]");
+  if (!card || !choices || typeof ResizeObserver === "undefined") return;
+  const fit = () => { card.style.maxHeight = `max(30dvh, ${choices.offsetHeight + CARD_REST}px)`; };
+  fit();
+  const watch = new ResizeObserver(fit);
+  watch.observe(choices);
+  return () => watch.disconnect();
+}
 
 /** The row's choices on one line: the ones past its width drop out, and a tap on the row still opens them all. */
 function RowChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
@@ -303,7 +316,7 @@ export function HiddenQuestionDot({ id, count }: { id: string; count: number }) 
 export function AskChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
   if (!options.length) return null;
   return (
-    <div data-term-choices className="mt-2.5 flex flex-wrap gap-2">
+    <div data-term-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2">
       {options.map((choice) => (
         <button
           key={choice}
