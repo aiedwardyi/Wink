@@ -303,6 +303,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         });
         return;
       }
+      if (e.altKey && !mod && e.code === "KeyT" && document.querySelector("[data-model-picker-content]")) return;
       if (e.altKey && !mod && e.shiftKey && e.code === "KeyT") {
         if (e.repeat || e.isComposing) return;
         e.preventDefault();

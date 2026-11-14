@@ -297,10 +297,10 @@
 @keyframes dial-wipe-b { from { transform: translateX(-100%); } }
 .dial-squiggle svg { display: block; width: 240px; height: 16px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 60%, transparent)); transform: translateX(var(--wave, 0)); transition: transform var(--t) var(--spring); }
 
-.dial-footer { position: absolute; left: var(--m); right: var(--m); bottom: 16px; display: flex; height: 40px; align-items: center; justify-content: space-between; border-top: 1px solid #ffffff10; color: var(--ink-3); font: 500 max(11px, var(--floor)) var(--mono); letter-spacing: .16em; }
+.dial-footer { position: absolute; left: var(--m); right: var(--m); bottom: 16px; display: flex; min-height: 40px; align-items: center; justify-content: space-between; border-top: 1px solid #ffffff10; color: var(--ink-3); font: 500 max(11px, var(--floor)) var(--mono); letter-spacing: .16em; }
 .dial-footer b { color: var(--accent-ink); font-weight: 500; }
-.dial-keys { display: flex; align-items: center; gap: 14px; letter-spacing: .02em; }
-.dial-keys span { display: inline-flex; align-items: center; gap: 6px; }
+.dial-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; letter-spacing: .02em; }
+.dial-keys span { display: inline-flex; flex: none; align-items: center; gap: 6px; white-space: nowrap; }
 
 /* Below the Windows caption strip, like the list's header. */
 html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height); }

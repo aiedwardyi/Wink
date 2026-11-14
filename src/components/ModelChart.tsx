@@ -320,8 +320,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
             <span><b>←→</b>{t("model.modelAxis")}</span>
             <span><b>1-{Math.min(rows.length, 5)}</b>{t("model.chart.lab")}</span>
             <span><b>↵</b>{t("model.chart.pick")}</span>
-            <span><b>{altKeyLabel()}+S</b>{t("model.style")}</span>
-            <span><b>{altKeyLabel()}+Shift+S</b>{t("model.style.next")}</span>
+            <span><b>{altKeyLabel()}+T</b>{t("model.style")}</span>
           </p>
         </div>
       </section>

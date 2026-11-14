@@ -177,7 +177,7 @@ export function PickerStyleButton({ shown, open, onToggle }: { shown: ModelPicke
   const { t } = useI18n();
   const { Icon } = STYLES.find((style) => style.id === shown) ?? STYLES[0]!;
   return (
-    <button type="button" className="picker-style-button" data-picker-style-button data-picker-view={shown} aria-haspopup="dialog" aria-expanded={open} aria-keyshortcuts="Alt+S Alt+Shift+S" aria-label={`${t("model.style")}: ${t(`settings.pickerStyle.${shown}`)}`} title={`${t("model.style")} (${altKeyLabel()}+S)`} onClick={onToggle}>
+    <button type="button" className="picker-style-button" data-picker-style-button data-picker-view={shown} aria-haspopup="dialog" aria-expanded={open} aria-keyshortcuts="Alt+T" aria-label={`${t("model.style")}: ${t(`settings.pickerStyle.${shown}`)}`} title={`${t("model.style")} (${altKeyLabel()}+T)`} onClick={onToggle}>
       <Icon size={13} aria-hidden /><span>{t(`settings.pickerStyle.${shown}`)}</span><ChevronDown size={12} aria-hidden />
     </button>
   );
@@ -283,7 +283,7 @@ export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle
 
   return (
     <div ref={root} className="picker-style-strip animate-pop-in" data-picker-style-strip data-closing={closing || undefined} inert={closing} role="dialog" aria-label={t("model.style")} onKeyDown={onKeyDown}>
-      <TileRow kind="style" title={t("model.style")} hint={<span className="pss-keys"><kbd>{altKeyLabel()}</kbd><kbd>S</kbd></span>} more={(count) => t("model.style.more", { count })}
+      <TileRow kind="style" title={t("model.style")} hint={<span className="pss-keys"><kbd>{altKeyLabel()}</kbd><kbd>T</kbd></span>} more={(count) => t("model.style.more", { count })}
         tiles={styleTiles} selected={shown} onPick={onStyle} />
       <TileRow kind="look" title={t("model.look")} hint={picked === "theme" && <small>{t("model.look.followsTheme")}</small>} more={(count) => t("model.look.more", { count })}
         tiles={lookTiles} selected={picked} onPick={onLook} />
