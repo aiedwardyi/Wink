@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -29,26 +30,64 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); applyLocale("en"); });
 
-it("draws each stage from the worker's git and PR and opens GitHub on click", async () => {
-  await render();
+const stops = () => [...host.querySelectorAll<HTMLElement>(".map-flow-row [data-k]")].map(stop => `${stop.dataset.k}:${stop.dataset.state ?? ""}`);
+const words = () => [...host.querySelectorAll<HTMLElement>(".map-flow-row [data-k] > small")].map(word => word.textContent);
+const edited = (...paths: string[]): MapWorker => ({ ...worker("a", "ALPHA"), files: paths.map(path => ({ path, added: 1, removed: 0 })) });
+const fresh = { commits: [], total: 0, pushed: 0, web: undefined, pr: null };
+
+it.each([
+  ["no commits", worker("a", "ALPHA"), flow(fresh), "", ["code:", "commit:", "push:", "pr:", "checks:", "review:", "merge:"], "-1", "no commits yet"],
+  ["coding", edited("src/a.ts"), flow(fresh), "", ["code:on", "commit:", "push:", "pr:", "checks:", "review:", "merge:"], "0", "no commits yet"],
+  ["committed, not pushed", edited("src/a.ts"), flow({ pushed: 0, pr: null }), "", ["code:on", "commit:on", "push:", "pr:", "checks:", "review:", "merge:"], "1", "2 commits"],
+  ["pushed", edited("src/a.ts"), flow({ pr: null }), "", ["code:on", "commit:on", "push:on", "pr:", "checks:", "review:", "merge:"], "2", "pushed 2 of 2"],
+  ["PR open, checks running", edited("src/a.ts"), flow({ pr: pr({ reviews: [], threads: 0 }) }), "1 running", ["code:on", "commit:on", "push:on", "pr:on", "checks:run", "review:", "merge:"], "4", "#1529 · 1 running"],
+  ["checks failing", edited("src/a.ts"), flow({ pr: pr({ reviews: [], threads: 0, checks: [{ name: "typecheck", state: "fail" }, { name: "lint", state: "pass" }] }) }), "1 fail", ["code:on", "commit:on", "push:on", "pr:on", "checks:bad", "review:", "merge:"], "4", "#1529 · 1 failing"],
+  ["checks passed, in review", edited("src/a.ts"), flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }] }) }), "passed", ["code:on", "commit:on", "push:on", "pr:on", "checks:ok", "review:half", "merge:"], "5", "#1529 · 2 open"],
+  ["changes asked", edited("src/a.ts"), flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }], decision: "changes", reviews: [{ login: "claude", state: "changes" }] }) }), "passed", ["code:on", "commit:on", "push:on", "pr:on", "checks:ok", "review:bad", "merge:"], "5", "#1529 · changes asked"],
+  ["approved", edited("src/a.ts"), flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }], decision: "approved", reviews: [{ login: "claude", state: "approved" }], threads: 0 }) }), "passed", ["code:on", "commit:on", "push:on", "pr:on", "checks:ok", "review:on", "merge:"], "5", "#1529 · approved"],
+  ["merged", worker("a", "ALPHA"), flow({ pr: pr({ state: "merged", checks: [{ name: "typecheck", state: "pass" }], decision: "approved", threads: 0 }) }), "passed", ["code:on", "commit:on", "push:on", "pr:on", "checks:ok", "review:on", "merge:merged"], "6", "#1529 merged"],
+  ["closed", worker("a", "ALPHA"), flow({ pr: pr({ state: "closed", checks: [], reviews: [], threads: 0 }) }), "", ["code:on", "commit:on", "push:on", "pr:on", "checks:", "review:", "merge:closed"], "3", "#1529 closed"],
+] as const)("draws %s as stops on one straight line", async (_name, who, state, status, expected, reach, label) => {
+  flows.a = state;
+  await render({ workers: [who] });
+  expect(stops()).toEqual(expected);
+  expect(words()).toEqual(["Coding", "Commit", "Push", "PR", "Review", state.pr?.state === "closed" ? "Closed" : "Merged"]);
+  expect(host.querySelector(".map-flow-box > b")?.textContent).toBe(`Checks${status}`);
+  const line = host.querySelector<HTMLElement>(".map-flow-stops")!;
+  expect(line.dataset.reach).toBe(reach);
+  expect(line.dataset.fill).toBe(+reach < 0 ? undefined : +reach < 3 ? "ink" : +reach < 6 ? "open" : "merged");
+  expect(line.querySelectorAll(":scope > i[data-on]").length).toBe(Math.max(0, +reach));
+  expect(host.querySelector(".map-flow-end > small")?.textContent).toBe(label);
+  expect(host.querySelector(".map-flow-dots, .map-flow-thread, .map-flow-rise, .map-flow-join, svg")).toBeNull();
+});
+
+it("keeps Coding, Commit, Push and the line up to the PR white-gray, with color only for status", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).not.toMatch(/#d97757|claude/i);
+  expect(css).toMatch(/--flow-ink: var\(--color-ink-secondary\)/);
+  expect(css).toMatch(/:is\(\[data-k="code"\], \[data-k="commit"\], \[data-k="push"\]\)\[data-state\] > i \{ background: var\(--flow-ink\); \}/);
+});
+
+it("puts a square per check in the checks box and the details in each stop's tip", async () => {
+  flows.a = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }, { name: "vitest 1", state: "pending" }, { name: "lint", state: "fail" }, { name: "docs", state: "skip" }] }) });
+  await render({ workers: [edited("src/a.ts")] });
   expect(calls()).toEqual(["/api/bots/bot/map/flow?worker=a"]);
-  const stages = [...host.querySelectorAll<HTMLElement>(".map-flow-stage")];
-  expect(stages.map(stage => [stage.dataset.k, stage.hasAttribute("data-on"), stage.dataset.tone ?? ""])).toEqual([
-    ["commit", true, ""], ["push", true, ""], ["pr", true, "open"], ["checks", false, "run"], ["review", true, "run"], ["merge", false, ""],
-  ]);
-  expect(stages.map(stage => stage.querySelector("b")?.textContent)).toEqual(["2 commits", "Pushed", "PR #1529", "Checks", "Review", "Merged"]);
-  expect(stages.map(stage => stage.querySelector("small")?.textContent)).toEqual(["1404479", "2 of 2", "open", "1 running", "claude · 2 open", "not yet"]);
-  const checks = host.querySelector<HTMLAnchorElement>('[data-k="checks"]')!;
-  expect(checks.getAttribute("href")).toBe("https://github.com/o/r/pull/1529/checks");
-  expect(checks.getAttribute("target")).toBe("_blank");
-  expect(checks.getAttribute("rel")).toBe("noreferrer");
-  await act(async () => { host.querySelector('[data-k="commit"]')!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); });
-  expect(host.querySelector(".map-flow-tip")?.textContent).toContain("1404479 fix: arrow points at its square");
+  expect([...host.querySelectorAll<HTMLElement>(".map-flow-box i")].map(check => check.dataset.state)).toEqual(["pass", "pending", "fail"]);
+  const hover = (key: string) => act(async () => { host.querySelector(`[data-k="${key}"]`)!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); });
+  await hover("commit");
+  expect(host.querySelector(".map-flow-tip")?.textContent).toBe("2 commits1404479 fix: arrow points at its square1137b98 fix: fold");
+  await hover("checks");
+  expect(host.querySelector(".map-flow-tip")?.textContent).toBe("Failing: lint");
+  await hover("code");
+  expect(host.querySelector(".map-flow-tip")?.textContent).toBe("1 file changed");
+  expect(host.querySelector(".map-flow-list .map-flow-tip")).toBeNull();
+  expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
+  expect(host.querySelector(".map-flow-row")?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
 });
 
 it("shows the detail on a long press without opening the link", async () => {
   await render();
-  const checks = host.querySelector<HTMLAnchorElement>('[data-k="checks"]')!;
+  const checks = host.querySelector<HTMLElement>('[data-k="checks"]')!;
   await act(async () => { checks.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); });
   await tick(500);
   expect(host.querySelector(".map-flow-tip")?.textContent).toContain("Running: vitest 1");
@@ -57,15 +96,24 @@ it("shows the detail on a long press without opening the link", async () => {
   expect(click.defaultPrevented).toBe(true);
 });
 
-it("ends at the last true stage when gh is signed out or there is no PR", async () => {
-  flows.a = flow({ pr: null });
+it("shows the row's details on keyboard focus", async () => {
   await render();
-  expect([...host.querySelectorAll<HTMLElement>(".map-flow-stage")].map(stage => stage.dataset.k)).toEqual(["commit", "push"]);
-  expect(host.querySelector(".map-flow-stage:last-child")?.hasAttribute("data-end")).toBe(true);
-  expect(host.textContent).not.toMatch(/error|could not|sign/i);
-  flows.a = flow({ pr: null, pushed: 0, web: undefined });
-  await tick(30_000);
-  expect([...host.querySelectorAll<HTMLElement>(".map-flow-stage")].map(stage => stage.dataset.k)).toEqual(["commit"]);
+  await act(async () => { host.querySelector<HTMLElement>(".map-flow-row")!.focus(); });
+  expect([...host.querySelectorAll(".map-flow-tip p")].map(line => line.textContent)).toEqual(["Running: vitest 1", "claude · commented", "2 open threads"]);
+  await act(async () => { host.querySelector<HTMLElement>(".map-flow-row")!.blur(); });
+  expect(host.querySelector(".map-flow-tip")).toBeNull();
+});
+
+it("counts the files another worker is also editing, hidden at 0", async () => {
+  flows.b = flow({ pr: null });
+  const a = { ...edited("src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"), id: "a", nick: "ALPHA" };
+  const b = { ...edited("src/a.ts", "src/b.ts", "src/c.ts"), id: "b", nick: "BETA" };
+  await render({ workers: [a, { ...b, files: [] }], all: true });
+  expect(host.querySelector(".map-flow-clash")).toBeNull();
+  await render({ workers: [a, b], all: true });
+  expect([...host.querySelectorAll(".map-flow-clash")].map(clash => clash.textContent)).toEqual(["⚠ 3 files", "⚠ 3 files"]);
+  await act(async () => { host.querySelector(".map-flow-clash")!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); });
+  expect(host.querySelector(".map-flow-tip")?.textContent).toBe("Also edited by BETAsrc/a.tssrc/b.tssrc/c.ts");
 });
 
 it("hides with no git", async () => {
@@ -96,7 +144,7 @@ it("polls every 30 s only while the tab is open and the PR is open", async () =>
   flows.a = flow({ pr: pr({ state: "merged", mergedAt: Date.parse("2026-11-12T19:14:03Z"), checks: [{ name: "typecheck", state: "pass" }] }) });
   await tick(30_000);
   expect(fetch).toHaveBeenCalledTimes(5);
-  expect(host.querySelector('[data-k="merge"] [data-join]') !== null).toBe(true);
+  expect(host.querySelector('[data-k="merge"]')?.getAttribute("data-state")).toBe("merged");
   await tick(120_000);
   expect(fetch).toHaveBeenCalledTimes(5);
 });
@@ -111,7 +159,9 @@ it("puts one row per worker in its color, failing CI first, in Korean too", asyn
   await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA"), worker("c", "GAMMA"), worker("d", "DELTA", false)], all: true });
   const rows = [...host.querySelectorAll<HTMLElement>(".map-flow-row")];
   expect(rows.map(row => row.querySelector("b")?.textContent)).toEqual(["BETA", "ALPHA", "GAMMA"]);
-  expect(rows.map(row => row.querySelector("small")?.textContent)).toEqual(["#1531 · 2개 실패", "#1529 병합됨", "2개 중 1개 푸시"]);
+  expect(rows.map(row => row.querySelector(".map-flow-end > small")?.textContent)).toEqual(["#1531 · 2개 실패", "#1529 병합됨", "2개 중 1개 푸시"]);
+  expect([...rows[0].querySelectorAll("[data-k] > small")].map(word => word.textContent)).toEqual(["코딩", "커밋", "푸시", "PR", "리뷰", "병합"]);
+  expect(rows[0].querySelector(".map-flow-box > b")?.textContent).toBe("체크2개 실패");
   expect(rows[0].style.getPropertyValue("--flow-line")).toMatch(/^light-dark\(/);
   expect(new Set(rows.map(row => row.style.getPropertyValue("--flow-line"))).size).toBe(3);
   expect(rows[0].getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
