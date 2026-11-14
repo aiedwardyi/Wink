@@ -106,8 +106,8 @@ export function resetRelay(): void {
   pending = null;
 }
 
-/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. */
-export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; pcs?: ReactNode }) {
+/** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. With no relay set up, the switch calls `onNoRelay`. */
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay?: () => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
@@ -115,7 +115,6 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   const [phones, setPhones] = useState<Phone[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [asking, setAsking] = useState(false);
-  const [askCode, setAskCode] = useState(false);
   const [invite, setInvite] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -210,12 +209,11 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       },
       setupError,
     );
-  const setUp = (then?: () => void) =>
+  const setUp = () =>
     run(
       async () => {
         setStatus(await request("/api/phone-relay/setup", { method: "POST", body: JSON.stringify({ code: code.trim() }) }));
         setCode("");
-        then?.();
       },
       setupError,
     );
@@ -234,7 +232,6 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   };
   const configured = status?.configured === true;
   const confirm = () => {
-    if (askCode) return void setUp(() => setAsking(false));
     setAsking(false);
     void save(true);
   };
@@ -292,8 +289,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
       disabled={busy || (!enabled && unavailable)}
       onClick={() => {
         if (enabled) return void save(false);
-        // Setup can fail after the PC saves the base, so the next poll must not drop the code field.
-        setAskCode(!configured);
+        // No relay: no one sent a setup code, so go to the other ways to connect.
+        if (!configured) return void onNoRelay?.();
         setAsking(true);
       }}
       className={cnSwitch(enabled)}
@@ -402,27 +399,13 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
           confirmLabel={t("settings.devices.turnOn")}
           cancelLabel={t("settings.phoneAccess.cancel")}
           danger={false}
-          confirmDisabled={busy || (askCode && !code.trim())}
+          confirmDisabled={busy}
           onConfirm={confirm}
           onCancel={() => {
             setAsking(false);
             setError(null);
           }}
-        >
-          {askCode ? (
-            <form
-              className="mt-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (code.trim()) confirm();
-              }}
-            >
-              <div className="flex">{codeField(code, setCode)}</div>
-              <p className="mt-2 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.phoneAccess.setup.help")}</p>
-              {error ? <p role="alert" className="mt-2 text-[12.5px] text-danger">{error}</p> : null}
-            </form>
-          ) : null}
-        </ConfirmDialog>
+        />
       ) : null}
     </>
   );

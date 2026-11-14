@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { onThisPc } from "@/lib/devices-setup";
@@ -20,6 +20,13 @@ export function PhoneLinkSettings() {
   const [paired, setPaired] = useState(0);
   const onPaired = useCallback(() => setPaired((count) => count + 1), []);
   const closePairing = useCallback(() => setPairOpen(false), []);
+  const otherWays = useRef<HTMLElement>(null);
+  // No relay on this PC: Connect from my devices opens the Tailscale QR here instead.
+  const showOtherWays = useCallback(() => {
+    setOthersOpen(true);
+    setTailscaleOpen(true);
+    otherWays.current?.scrollIntoView?.({ block: "start" });
+  }, []);
 
   if (!onThisPc()) {
     return <div data-phone-settings className="rounded-xl bg-card p-4"><ConnectDevices /></div>;
@@ -27,8 +34,8 @@ export function PhoneLinkSettings() {
 
   return (
     <div data-phone-settings className="usage-sections">
-      <PhoneAccessSettings refresh={paired} onEnabled={setOn} pcs={<YourPcs />} />
-      <section data-other-ways="" className="min-w-0">
+      <PhoneAccessSettings refresh={paired} onEnabled={setOn} onNoRelay={showOtherWays} pcs={<YourPcs />} />
+      <section ref={otherWays} data-other-ways="" className="min-w-0">
         <button type="button" aria-expanded={othersOpen} aria-controls="devices-other" onClick={() => setOthersOpen((open) => !open)}
           className="group flex items-center gap-2 text-[14px] font-semibold leading-5 text-ink">
           {t("settings.devices.otherWays")}
