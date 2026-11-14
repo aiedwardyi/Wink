@@ -390,7 +390,7 @@ describe("Store", () => {
     expect(colors.every((color) => color === "white")).toBe(true);
   });
 
-  it("repairs a live lead on membership change, then reload resets to everyone", () => {
+  it("repairs a lead on membership change and keeps it across reload", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
@@ -401,7 +401,7 @@ describe("Store", () => {
     expect(group.defaultResponder).toEqual({ kind: "member", botId: second.id });
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "everyone" });
+    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "member", botId: second.id });
   });
 
   it("persists a channel's context when it is created", () => {
@@ -430,7 +430,7 @@ describe("Store", () => {
     expect(channel.setupCompletedAt).toEqual(expect.any(Number));
     expect(new Store(selection).group(channel.id)).toMatchObject({
       bulletin: "Ship carefully.",
-      defaultResponder: { kind: "everyone" },
+      defaultResponder: { kind: "mentions" },
       setupCompletedAt: channel.setupCompletedAt,
     });
   });

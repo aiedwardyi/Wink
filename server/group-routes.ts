@@ -283,9 +283,10 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const existing = store.group(m[1]);
       if (!existing) return json(res, 404, { error: "no such room" });
+      // who answers is read when a message starts, so it may change mid-turn
       if (
         channelTaskBlocked(existing) &&
-        (body.memberIds !== undefined || body.defaultResponder !== undefined || body.bulletin !== undefined)
+        (body.memberIds !== undefined || body.bulletin !== undefined)
       ) {
         return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
       }
