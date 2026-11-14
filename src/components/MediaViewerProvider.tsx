@@ -64,7 +64,8 @@ export function useMediaViewer() {
   return useContext(MediaContext);
 }
 
-export function ReadableImage({ src, alt = "", ...props }: { src?: string; alt?: string; className?: string; loading?: "lazy"; "data-phone-media"?: string }) {
+/** `onOpen` takes the click in place of the viewer; `badge` is drawn over the picture, inside its button. */
+export function ReadableImage({ src, alt = "", onOpen, badge, ...props }: { src?: string; alt?: string; className?: string; loading?: "lazy"; "data-phone-media"?: string; onOpen?: () => void; onError?: () => void; badge?: ReactNode }) {
   const { t } = useI18n();
   const viewer = useMediaViewer();
   const ref = useRef<HTMLButtonElement>(null);
@@ -81,10 +82,11 @@ export function ReadableImage({ src, alt = "", ...props }: { src?: string; alt?:
   }, [viewer, image, linked]);
   if (!image || linked) return <img src={src} alt={alt} {...props} style={chatImageBox(src)} onLoad={rememberChatImage} />;
   return <>
-    <button ref={ref} type="button" style={CHAT_IMAGE} className="inline-block rounded-lg text-left focus-visible:outline-2 focus-visible:outline-accent"
+    <button ref={ref} type="button" style={CHAT_IMAGE} className={`${badge ? "relative " : ""}inline-block rounded-lg text-left focus-visible:outline-2 focus-visible:outline-accent`}
       aria-label={t("viewer.open", { name: image.name })}
-      onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setSelected(true); } }}>
+      onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (onOpen) onOpen(); else if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setSelected(true); } }}>
       <img src={src} alt={alt} {...props} style={chatImageBox(src)} onLoad={rememberChatImage} />
+      {badge}
     </button>
     {selected && <MediaViewer image={image} onClose={() => setSelected(false)} />}
   </>;
