@@ -170,6 +170,11 @@ export function runHiddenVerify(input) {
       notChecked.add(`fonts (${tile})`);
     }
     if (input.frame) {
+      // A hidden window paints when captured, and that capture still holds its last paint, maybe the loading screen: capture once, then wait for the paint.
+      if (page.capturePage) await race(Promise.race([page.capturePage().catch(() => {}), new Promise(resolve => setTimeout(resolve, SHOT_MS))]));
+      await race(cdp.ev("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")).catch(error => {
+        if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+      });
       casts[tile] = startCast({ cdp, page, tile, started, frame: input.frame });
       casts[tile].readerStop();
     }

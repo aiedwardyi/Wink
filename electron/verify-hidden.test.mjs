@@ -361,6 +361,18 @@ it("records a picture of every new scroll stop before moving on, even on a fast 
   expect(order.indexOf("frame")).toBeLessThan(order.indexOf("checks"));
 });
 
+it("records the settled page, not the last picture the hidden window painted", async () => {
+  const i = input(), frames = [];
+  for (const page of Object.values(i.pages)) {
+    let painted = false;
+    page.capturePage = vi.fn(async () => { const jpeg = Buffer.from([255, 216, painted ? 2 : 1, 255, 217]); painted = true; return { resize: () => ({ toJPEG: () => jpeg }) }; });
+  }
+  i.frame = frame => frames.push(frame);
+  expect((await runHiddenVerify(i).done).errorCode).toBeUndefined();
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.map(frame => Buffer.from(frame.data, "base64")[2])).not.toContain(1);
+});
+
 it("does not let a hung capture fail the run", async () => {
   vi.useFakeTimers();
   const i = input();
