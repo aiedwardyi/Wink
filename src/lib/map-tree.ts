@@ -90,8 +90,8 @@ export function treeOrder(index: TreeIndex, changed: ReadonlySet<string>): strin
   return order;
 }
 
-function build(index: TreeIndex, o: TreeOptions) {
-  const small = index.size <= SMALL;
+function build(index: TreeIndex, o: TreeOptions, crowded: boolean) {
+  const small = !crowded && index.size <= SMALL;
   const visible = small ? null : o.changed;
   const open = new Set([""]);
   const lit = new Set<string>();
@@ -175,8 +175,8 @@ function measureStack(it: TreeItem, o: TreeOptions, maxStack: number): [number, 
   return [Math.min(maxStack, Math.ceil(w + 36)), it.files!.length * LINE + (it.hidden ? LINE - 2 : 0) + 4];
 }
 
-export function treeLayout(index: TreeIndex, o: TreeOptions) {
-  const { rows, small, lit } = build(index, o);
+export function treeLayout(index: TreeIndex, o: TreeOptions, crowded = false) {
+  const { rows, small, lit } = build(index, o, crowded);
   const W = o.width;
   let maxStack = o.phone ? 160 : 230;
   const width = (row: TreeItem[]) => row.reduce((sum, it) => sum + it.w, 0) + GAP * (row.length - 1);
@@ -203,10 +203,10 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
         }
         more.dirs!++; more.count! += last.dir!.total; more.changed ||= lit.has(last.dir!.path); more.folds!.push(last.dir!.path);
         const loose = row.find(it => it.id === "f:");
-        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; more.filesOf = ""; }
+        if (loose) { row.splice(row.indexOf(loose), 1); more.count! += loose.count!; more.filesOf = ""; more.changed ||= loose.changed; }
         measure(more, o, maxStack);
       }
-      if (o.team && width(row) > W) for (const id of ["m:", "f:"]) { const it = row.find(it => it.id === id); if (it && width(row) > W) row.splice(row.indexOf(it), 1); }
+      if (o.team && width(row) > W) for (const id of ["m:", "f:"]) { const it = row.find(it => it.id === id); if (it && !it.changed && width(row) > W) row.splice(row.indexOf(it), 1); }
       parent.kids = row.filter(it => it.parent === parent);
     }
     const group = () => {
@@ -251,6 +251,8 @@ export function treeLayout(index: TreeIndex, o: TreeOptions) {
   });
   // Branches that cannot sit side by side fold the way a phone does: only the current file's path stays open.
   if (tight && !o.phone && o.current) return treeLayout(index, { ...o, phone: true });
+  // A small project too wide to open every folder lays out like a big one: changed branches only.
+  if (tight && small) return treeLayout(index, o, true);
   return { items, height: y - VGAP + 2, lit };
 }
 
@@ -330,7 +332,7 @@ export function treeAlong(points: readonly Point[], k: number): Point {
   return points.at(-1)!;
 }
 
-export interface MapClash { path: string; a: string; b: string; same: boolean }
+export interface MapClash { path: string; ids: string[]; same: boolean }
 
 // Ranges within 3 lines count as the same lines: that is where a merge stops for a person.
 const near = (a: readonly [number, number][], b: readonly [number, number][]) => a.some(([s, e]) => b.some(([t, u]) => s <= u + 3 && t <= e + 3));
@@ -342,9 +344,7 @@ export function mapClashes(workers: readonly MapWorker[]): MapClash[] {
     if (list) list.push({ id: worker.id, ranges: file.ranges }); else owners.set(file.path, [{ id: worker.id, ranges: file.ranges }]);
   }
   const clashes: MapClash[] = [];
-  for (const [path, list] of owners) for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
-    const [a, b] = [list[i], list[j]];
-    clashes.push({ path, a: a.id, b: b.id, same: !!a.ranges && !!b.ranges && near(a.ranges, b.ranges) });
-  }
+  for (const [path, list] of owners) if (list.length > 1) clashes.push({ path, ids: list.map(owner => owner.id),
+    same: list.some((a, i) => list.some((b, j) => j > i && !!a.ranges && !!b.ranges && near(a.ranges, b.ranges))) });
   return clashes.sort((x, y) => Number(y.same) - Number(x.same) || byPath(x.path, y.path));
 }

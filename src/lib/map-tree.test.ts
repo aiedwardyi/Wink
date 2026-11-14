@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { MapWorker } from "../../shared/map-pane";
 import { mapClashes, treeIndex, treeLayout } from "./map-tree";
 
 it("keeps boxes in a row apart when every worker's branches cannot fit side by side", () => {
@@ -87,7 +88,7 @@ it("keeps a changed root file reachable when the phone's top row folds it away",
 });
 
 it("lists a file many workers share as one clash", () => {
-  const workers = Array.from({ length: 10 }, (_, i) => ({ id: `w${i}`, nick: `W${i}`, git: true, editedAt: i, files: [{ path: "src/lib/i18n-catalog.ts", added: 1, removed: 0, ranges: [[i * 100, i * 100 + 1]] as [number, number][] }] }));
+  const workers: MapWorker[] = Array.from({ length: 10 }, (_, i) => ({ id: `w${i}`, nick: `W${i}`, git: true, editedAt: i, files: [{ path: "src/lib/i18n-catalog.ts", added: 1, removed: 0, ranges: [[i * 100, i * 100 + 1]] }] }));
   workers[9].files[0].ranges = [[1, 2]];
   expect(mapClashes(workers)).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.map(worker => worker.id), same: true }]);
   expect(mapClashes(workers.slice(1, 9))).toEqual([{ path: "src/lib/i18n-catalog.ts", ids: workers.slice(1, 9).map(worker => worker.id), same: false }]);
