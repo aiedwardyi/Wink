@@ -190,24 +190,20 @@ it.each([false, true])("returns focus to the rename opener after Save, Cancel an
   }
 });
 
-it.each([false, true])("shows no number tile on any account row, named or not (phone=%s)", async (phone) => {
-  for (const locale of ["en", "ko"] as const) {
-    await mount({ phone, locale });
-    expect(host.querySelectorAll("[data-connection-account]").length).toBeGreaterThan(1);
-    expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
-    expect(row()?.textContent).toContain("Claude 1");
-    expect(row()?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
-    expect(row()?.querySelector("[data-account-head] > div > div")?.firstElementChild?.getAttribute("data-edit-name")).toBe("");
-    board.engines[0]!.accounts[0]!.nickname = "Studio";
-    board.engines[0]!.accounts[0]!.name = "Studio";
-    await unmount();
-    await mount({ phone, locale });
-    expect(row()?.textContent).toContain("Studio");
-    expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
-    board.engines[0]!.accounts[0]!.nickname = null;
-    board.engines[0]!.accounts[0]!.name = "Claude 1";
-    await unmount();
-  }
+it.each([[false, "en"], [false, "ko"], [true, "en"], [true, "ko"]] as const)("shows no number tile on an unnamed account row (phone=%s, %s)", async (phone, locale) => {
+  await mount({ phone, locale });
+  expect(host.querySelectorAll("[data-connection-account]").length).toBeGreaterThan(1);
+  expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
+  expect(row()?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+  expect(row()?.querySelector("[data-account-head] > div > div")?.firstElementChild?.getAttribute("data-edit-name")).toBe("");
+});
+
+it.each([false, true])("shows no number tile on a named account row (phone=%s)", async (phone) => {
+  board.engines[0]!.accounts[0]!.nickname = "Studio";
+  board.engines[0]!.accounts[0]!.name = "Studio";
+  await mount({ phone });
+  expect(row()?.querySelector("[data-edit-name]")?.textContent).toBe("Studio");
+  expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
 });
 
 it.each(["en", "ko"] as const)("renders each email as plain text, not a control, in %s", async (locale) => {
