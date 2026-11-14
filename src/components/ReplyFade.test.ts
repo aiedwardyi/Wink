@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { REPLY_STYLE_KEY } from "@/lib/reply-style";
 import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
 import { ChatView } from "./ChatView";
 import { GroupView } from "./GroupView";
@@ -89,6 +90,8 @@ async function mount(room = false, history: Message[] = [user]) {
 }
 
 describe("paragraph reply reveal", () => {
+  beforeEach(() => localStorage.setItem(REPLY_STYLE_KEY, "paragraphs"));
+
   it.each([false, true])("shows finished blocks once through the settled swap, room=%s", async (room) => {
     const host = await mount(room);
     await emit(started);
