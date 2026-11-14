@@ -59,7 +59,7 @@ import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.t
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostSend } from "./rooms/send.ts";
+import { hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -1917,7 +1917,7 @@ function publicGroupState(group: GroupRecord) {
     working: groupIsWorking(group),
     waitingBotIds: group.hosted ? queuedRoomBotIds(group.id, group.threadId) : [],
     taskState: store.taskPacket(group.threadId) ?? undefined,
-    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
+    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice), botChain: liveBotChain(group as HostedGroup) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -6454,6 +6454,7 @@ const guestClient: GuestClient = new GuestClient({
   onBotLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
   onStop: (roomId) => myRoomBotTurns.stop(roomId),
   botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
+  botChain: (roomId) => myRoomBotTurns.chain(roomId),
   alert: roomAlert,
 });
 bus.subscribe((event: RuntimeEvent) => {

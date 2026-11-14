@@ -151,7 +151,7 @@ describe("hosted thread seams", () => {
 
   it("reports a restored room's missing data on the group", () => {
     const state = load("publicGroupState", {
-      store, groupClears: () => ({}), groupIsWorking: () => false, queuedRoomBotIds: () => [], wireGroupTask: (task: unknown) => task, hostedRoomView,
+      store, groupClears: () => ({}), groupIsWorking: () => false, queuedRoomBotIds: () => [], wireGroupTask: (task: unknown) => task, hostedRoomView, liveBotChain: () => 0,
     });
     expect(state(hosted).room).toEqual({ missing: true });
     expect("room" in state(plain)).toBe(false);

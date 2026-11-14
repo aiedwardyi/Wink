@@ -187,6 +187,8 @@ export interface Group {
   /** True while a member turn or queued room operation is in flight. */
   working?: boolean;
   waitingBotIds?: string[];
+  /** A team room's live bot handoff: bot lines since a person spoke. */
+  botChain?: number;
   messages: Message[];
   /** The server holds older messages than `messages` starts with. */
   hasMore?: boolean;
