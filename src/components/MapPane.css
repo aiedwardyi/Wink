@@ -11,43 +11,8 @@
 .map-where { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
 .map-where b { color: var(--color-ink); font-weight: 600; }
 .map-where span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.map-squares { position: relative; display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr); gap: 6px 14px; }
-.map-squares:not([data-near]) { grid-template-columns: minmax(0, 1fr); }
-.map-near, .map-far { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.map-d > header, .map-sub > header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px; font: 10px var(--font-sans, sans-serif); color: var(--color-ink-secondary); }
-.map-d > header span:first-child, .map-sub > header span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.map-d > header span, .map-sub > header span { position: relative; z-index: 1; background: var(--color-panel); box-shadow: 0 0 0 2px var(--color-panel); }
-.map-d:not([data-far]) > header span:first-child, .map-sub:not([data-quiet]) > header span:first-child { color: var(--color-ink); font-weight: 600; }
-.map-sub { margin: 0 0 5px 8px; }
-.map-sub:last-child { margin-bottom: 0; }
-.map-cells { display: flex; flex-wrap: wrap; gap: var(--gap); }
-.map-cells i { width: var(--cell); height: var(--cell); background: color-mix(in oklab, var(--color-ink) 17%, transparent); }
-.map-sub[data-quiet] .map-cells i { background: color-mix(in oklab, var(--color-ink) 9%, transparent); }
-.map-d[data-far] .map-cells i { width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); background: color-mix(in oklab, var(--color-ink) 10%, transparent); }
-.map-cells i[data-on] { position: relative; z-index: 1; background: var(--color-accent); cursor: pointer; animation: map-pop 700ms ease-out; }
-.map-cells i[data-on]::after { content: ""; position: absolute; inset: -3px; }
-@keyframes map-pop { 30% { transform: scale(2.2); } }
-.map-trail { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.map-trail path { fill: none; stroke: var(--color-accent); stroke-width: 1; shape-rendering: crispEdges; }
-.map-trail path[data-new] { animation: map-draw 550ms cubic-bezier(.4,0,.2,1) both; }
-@keyframes map-draw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
-.map-blip { position: absolute; z-index: 2; width: calc(var(--cell) + 7px); height: calc(var(--cell) + 7px); margin: calc(var(--cell) / -2 - 3.5px) 0 0 calc(var(--cell) / -2 - 3.5px); border: 1px solid var(--color-accent); pointer-events: none; transition: left 500ms cubic-bezier(.4,0,.2,1), top 500ms cubic-bezier(.4,0,.2,1); }
-.map-blip::before { content: ""; position: absolute; inset: -1px; border: 1px solid var(--color-accent); animation: map-ring 2s ease-out infinite; }
-@keyframes map-ring { from { transform: scale(1); opacity: .9; } to { transform: scale(2.6); opacity: 0; } }
-.map-file-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 4px; font-size: 11px; color: var(--color-ink-secondary); }
-.map-file-label span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.map-files { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
-.map-file { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 24px; padding: 0 5px 0 23px; border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 50%, transparent); text-align: left; color: var(--color-ink-secondary); scroll-margin-bottom: 12px; }
-.map-file i { position: absolute; left: 7px; top: calc(50% - 3.5px); width: 5px; height: 5px; border: 1px solid var(--color-accent); background: var(--color-accent); }
-.map-file[aria-current="true"] { color: var(--color-ink); background: var(--color-raised); }
-.map-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--font-mono, monospace); }
-.map-folder { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--font-sans, sans-serif); }
-.map-delta { flex-shrink: 0; font: 10px var(--font-mono, monospace); color: var(--color-success); }
-.map-pin { position: absolute; left: 0; top: 0; z-index: 3; width: 17px; height: 18px; pointer-events: none; transition: transform 500ms cubic-bezier(.4,0,.2,1); }
-.map-pin svg { width: 17px; height: 18px; fill: var(--color-accent); stroke: var(--color-panel); stroke-width: 1; }
 @media (hover: hover) {
   .map-menu button:hover { background: var(--color-raised); color: var(--color-accent-text); }
-  .map-file:hover { background: var(--color-raised); }
   button.map-gap:hover { color: var(--color-ink); }
 }
 .map-crumbs { display: flex; align-items: center; gap: 7px; flex-shrink: 0; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
@@ -77,8 +42,6 @@
 .map-gap { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0; padding: 0 16px 0 56px; color: var(--color-ink-secondary); font-size: 11px; }
 .map-gap::after { content: ""; flex: 1; border-top: 1px dashed var(--color-hairline); }
 .map-empty { padding: 20px 16px; color: var(--color-ink-secondary); font: 13px/1.5 var(--font-sans, sans-serif); }
-.map-top .map-empty { padding: 4px 0; }
 .map-empty button { text-decoration: underline; }
-@container map-pane (max-width: 520px) { .map-files, .map-squares { grid-template-columns: minmax(0, 1fr); } }
-@container map-pane (max-width: 380px) { .map-head, .map-top, .map-crumbs, .map-step { padding-left: 10px; padding-right: 10px; } .map-file { height: 28px; } }
-@media (prefers-reduced-motion: reduce) { .map-pin, .map-blip { transition: none; } .map-cells i[data-on], .map-trail path[data-new], .map-blip::before, .map-step > * { animation: none; } }
+@container map-pane (max-width: 380px) { .map-head, .map-top, .map-crumbs, .map-step { padding-left: 10px; padding-right: 10px; } }
+@media (prefers-reduced-motion: reduce) { .map-step > * { animation: none; } }

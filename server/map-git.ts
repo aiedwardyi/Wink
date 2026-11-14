@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { open, realpath, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -8,6 +8,8 @@ import type { MapDiff, MapDiffLine, MapFile } from "../shared/map-pane.ts";
 const LIMIT = 512 * 1024;
 export const MAP_LINE_LIMIT = 500;
 const WHOLE_LIMIT = 5_000;
+const WALK_LIMIT = 5_000;
+const RANGE_LIMIT = 64;
 
 export function mapGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((done, fail) => {
@@ -58,26 +60,94 @@ async function addedFile(cwd: string, path: string): Promise<MapFile> {
   return result;
 }
 
-export async function mapFiles(cwd: string, base: string): Promise<MapFile[]> {
-  const [numstat, untracked] = await Promise.all([
+export async function mapFiles(cwd: string, base: string, common?: string): Promise<MapFile[]> {
+  const [numstat, untracked, { ranges }] = await Promise.all([
     mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
     mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    mapRanges(cwd, [base], RANGE_LIMIT),
   ]);
+  // Workers launched at different commits compare on one: each range moves onto the common launch commit's lines.
+  const shift = common && common !== base && ranges.size ? await mapRanges(cwd, [common, base], Infinity, [...ranges.keys()]) : undefined;
   const files: MapFile[] = [];
   for (const line of numstat.split("\0").filter(Boolean)) {
     const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(line);
     if (match) {
       const file: MapFile = { path: match[3], added: Number(match[1]) || 0, removed: Number(match[2]) || 0 };
       if (match[1] === "-") file.binary = true;
+      const lines = ranges.get(file.path)?.map(launch);
+      const moved = shift?.ranges.get(file.path);
+      // A failed or cut-off move would publish launch lines as common ones.
+      if (lines && !file.binary && shift?.complete !== false) file.ranges = moved ? lines.map(([start, end]) => [onto(start, moved, false), onto(end, moved, true)]) : lines;
       files.push(file);
     }
   }
   for (const path of untracked.split("\0").filter(Boolean)) {
     try {
-      files.push(await addedFile(cwd, path));
+      const file = await addedFile(cwd, path);
+      if (!file.binary) file.ranges = [[1, Math.max(1, file.added)]];
+      files.push(file);
     } catch {}
   }
   return files;
+}
+
+type Hunk = [start: number, count: number, at: number, length: number];
+
+const launch = ([start, count]: Hunk): [number, number] => [start, count ? start + count - 1 : start];
+
+function onto(line: number, hunks: Hunk[], end: boolean) {
+  let shift = 0;
+  for (const [start, count, at, length] of hunks) {
+    if (line < (length ? at : at + 1)) break;
+    if (line < at + length) return end && count ? start + count - 1 : start;
+    shift += count - length;
+  }
+  return line + shift;
+}
+
+async function mapRanges(cwd: string, revs: string[], limit: number, paths: string[] = []): Promise<{ ranges: Map<string, Hunk[]>; complete: boolean }> {
+  let patch = "";
+  let complete = true;
+  try { patch = await mapGit(cwd, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", ...revs, "--", ...paths]); }
+  catch (error) {
+    complete = false;
+    const partial = z.object({ code: z.literal("ERR_CHILD_PROCESS_STDIO_MAXBUFFER"), stdout: z.string() }).safeParse(error);
+    if (partial.success) patch = partial.data.stdout;
+  }
+  const ranges = new Map<string, Hunk[]>();
+  let file: Hunk[] | undefined;
+  let old = "";
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) { file = undefined; old = ""; continue; }
+    if (line.startsWith("--- ")) { old = line.slice(4).replace(/\t$/, ""); continue; }
+    if (line.startsWith("+++ ")) {
+      const path = (line.slice(4) === "/dev/null" ? old : line.slice(4)).replace(/\t$/, "");
+      file = /^[ab]\//.test(path) ? [] : undefined;
+      if (file) ranges.set(path.slice(2), file);
+      continue;
+    }
+    // Launch-side lines, so two workers off one base compare; a pure insert sits after its line.
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? /.exec(line);
+    if (hunk && file && file.length < limit) file.push([Number(hunk[1]), hunk[2] === undefined ? 1 : Number(hunk[2]), Number(hunk[3]), hunk[4] === undefined ? 1 : Number(hunk[4])]);
+  }
+  return { ranges, complete };
+}
+
+export async function mapWalkFiles(cwd: string, limit = WALK_LIMIT): Promise<string[]> {
+  const paths: string[] = [];
+  const queue = [""];
+  let seen = 0;
+  while (queue.length && seen < limit) {
+    const dir = queue.shift()!;
+    const entries = (await readdir(resolve(cwd, dir), { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of entries) {
+      if (++seen > limit) break;
+      const path = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isFile() || entry.isSymbolicLink()) paths.push(path);
+      else if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules") queue.push(path);
+    }
+  }
+  return paths;
 }
 
 export async function mapRepoFiles(cwd: string): Promise<string[]> {

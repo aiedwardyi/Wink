@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
-import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead, mapRepoFiles } from "./map-git.ts";
+import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead, mapRepoFiles, mapWalkFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
@@ -65,7 +65,7 @@ export function createMapPane(deps: MapPaneDeps) {
       if (record.running) { record.dirty = true; return; }
       record.running = true;
       try {
-        const files = await mapFiles(record.root, record.base);
+        const files = await mapFiles(record.root, record.base, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed) return;
         const latest = record.path && files.some(file => file.path === record.path)
           ? { path: record.path, at: Date.now() } : await latestMapFile(record.root, files);
@@ -143,8 +143,8 @@ export function createMapPane(deps: MapPaneDeps) {
     const path = url.searchParams.get("path") ?? "";
     const record = [...(readers.get(botId) ?? [])].map(panes => panes.get(sessionId)).find(Boolean);
     if (route === "repo") {
-      if (!record?.base) return json(res, 404, { error: "No such worker" });
-      try { return json(res, 200, { name: basename(record.root), paths: await mapRepoFiles(record.root) }); }
+      if (!record) return json(res, 404, { error: "No such worker" });
+      try { return json(res, 200, { name: basename(record.root), paths: record.base ? await mapRepoFiles(record.root) : await mapWalkFiles(record.root) }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
     }
     const file = record?.worker.files.find(file => file.path === path);
