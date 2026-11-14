@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
-import { linkedFileSrc, paneKind, showItem, showKind } from "@/lib/show-pane";
+import { linkedFileSrc, paneKind, saveFile, showItem, showKind, showName } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
@@ -147,7 +147,7 @@ function remarkCardParens() {
   return walk;
 }
 
-// A card is a block, so one named mid-line split its sentence; those draw as a chip, and a file alone on its line keeps the card.
+// A card is a block, so one named mid-line split its sentence; those draw as a plain link, and a file alone on its line keeps the card.
 function remarkFileChips() {
   const walk = (node: MdNode) => {
     if (node.type !== "paragraph" && node.type !== "heading" && node.type !== "tableCell") return void node.children?.forEach(walk);
@@ -531,10 +531,10 @@ function DesktopFileLink({ filePath, base, threadId, card, chip, pictured, child
 
   return (
     <>
-      {card && threadId ? <ShowCard threadId={threadId} path={filePath} chip={chip} bare={pictured} onOpen={() => void (paneKind(filePath) ? show(threadId) : open())} /> : <button
+      {card && threadId && !chip ? <ShowCard threadId={threadId} path={filePath} bare={pictured} onOpen={() => void (paneKind(filePath) ? show(threadId) : open())} /> : <button
         ref={ref}
         type="button"
-        onClick={() => void open()}
+        onClick={() => void (card && threadId && paneKind(filePath) ? show(threadId) : open())}
         onContextMenu={menu}
         title={filePath}
         data-file-link
@@ -641,7 +641,15 @@ function PhoneFile({
     return <ReadableImage src={src} alt="" data-phone-media="image" className="rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} chip={chip} bare={pictured} />;
+  if (showKind(filePath) || (!kind && cardFile(filePath))) {
+    if (!chip) return <ShowCard threadId={threadId} path={filePath} bare={pictured} />;
+    const pane = paneKind(filePath);
+    return (
+      <button type="button" onClick={() => (pane ? showItem({ threadId, path: filePath, kind: pane }) : saveFile(src, showName(filePath), filePath))} title={filePath} data-file-link className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
+        {children}
+      </button>
+    );
+  }
   if (!kind) {
     return (
       <a href={src} download rel="noreferrer" className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
