@@ -706,6 +706,25 @@ it.each(["mouse", "touch"])("keeps the small card's scroll height while a %s dra
   await act(async () => void (pointer === "mouse" ? document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })) : touch(rows[0]!, "touchcancel")));
 });
 
+it("slows a dragged row into the small card's bottom edge, scale included, instead of stopping it dead", async () => {
+  await openQuick();
+  const rows = [...quickRows()];
+  stack(rows);
+  const height = scroller(document.querySelector<HTMLElement>("[data-quick-scroll]")!, rows);
+  const at = (y: number) => {
+    document.dispatchEvent(mouse("pointermove", 40, y));
+    return parseFloat(rows[0]!.style.translate.split(" ")[1]!);
+  };
+  await act(async () => rows[0]!.dispatchEvent(mouse("pointerdown", 40, 40)));
+  const spots = [100, 160, 200, 300, 600].map(at);
+  expect(spots.slice(0, 2)).toEqual([60, 120]);
+  // room below the first row is 160, less half the 1.03 lift of its 80 px
+  for (const [index, spot] of spots.entries()) if (index) expect(spot).toBeGreaterThan(spots[index - 1]!);
+  expect(spots.at(-1)).toBeLessThanOrEqual(160 - 1.2);
+  expect(height()).toBe(240);
+  await act(async () => document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })));
+});
+
 it("picks a row up on a long press", async () => {
   await mount();
   const row = q('[data-account-row="claude"]')!;

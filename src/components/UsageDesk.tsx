@@ -185,7 +185,6 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
         return (
           <button key={engine.base} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.base)}
             className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] py-1.5 text-left", phone ? "px-1.5" : "px-2",
-              " transition-colors duration-100 motion-reduce:transition-none",
               selected ? "bg-raised" : "hover:bg-raised-hover")}>
             <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{label}</span>
             <span className="flex w-full items-end justify-between gap-1">
@@ -205,7 +204,7 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
 const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
-const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
+const BUTTON = "border-hairline bg-raised text-ink hover:bg-raised-hover";
 export const ACCOUNT_ROW = "min-w-0 border-hairline/70 [&+&]:border-t";
 
 export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name, settings = false }: {
@@ -407,7 +406,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
         <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
         <span data-engine-name="" className="min-w-0 truncate">{label}</span>
-        <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-[color,transform] duration-150 ease-out group-hover:text-ink motion-reduce:transition-none", folded && "-rotate-90")} />
+        <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-transform group-hover:text-ink motion-reduce:transition-none", folded && "-rotate-90")} />
       </button>
       {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
