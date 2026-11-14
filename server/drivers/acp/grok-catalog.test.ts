@@ -197,6 +197,20 @@ describe("Grok allow rule for Wink's own tools", () => {
     unchanged(configured, () => startTurn(configured, true));
   });
 
+  it("writes the config a real signed-in Grok honored, and Grok's own rewrite keeps it", () => {
+    const { withoutRule, withRule } = JSON.parse(readFileSync("test/fixtures/recorded/grok/agents-allow-rule.json", "utf8")).reply;
+    expect(withoutRule.clientPermissionRequests).toEqual(["agents__ping"]);
+    expect(withRule.clientPermissionRequests).toEqual([]);
+    const useTool = withRule.events.find((e: { type: string; tool_name: string }) => e.type === "permission_resolved" && e.tool_name === "use_tool");
+    expect(useTool.wait_ms).toBeLessThan(100);
+
+    const home = scratchConfig(withoutRule.configAtStart);
+    startTurn(home);
+    expect(read(home)).toBe(withRule.configAtStart);
+    const rewritten = scratchConfig(withRule.configAfterGrok);
+    unchanged(rewritten, () => startTurn(rewritten));
+  });
+
   it("honors GROK_HOME", () => {
     const home = emptyHome();
     const grokHome = join(home, "elsewhere");
