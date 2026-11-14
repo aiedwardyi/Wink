@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export const ROW_BUTTON = "relative inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary transition-colors duration-100 not-disabled:hover:bg-raised-hover focus-visible:bg-raised-hover disabled:opacity-50 motion-reduce:transition-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0";
+export const ROW_BUTTON = "relative inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary not-disabled:hover:bg-raised-hover focus-visible:bg-raised-hover disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0";
 
 export function Card({
   title,

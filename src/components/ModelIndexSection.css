@@ -8,7 +8,7 @@
   --mi-xai: light-dark(#7d848e, #8b929c);
   --mi-meta: light-dark(#1f9d64, #43ce8b);
   --mi-other: light-dark(#b3b1ab, #5f5e5a);
-  --mi-ease: 560ms cubic-bezier(0.33, 1, 0.68, 1);
+  --mi-ease: 560ms var(--ease-standard);
 }
 
 .model-index [data-mi-move] {
@@ -30,22 +30,22 @@
   transition: transform var(--mi-ease), width var(--mi-ease);
 }
 .model-index [data-mi-pop] {
-  transition: transform 160ms ease-out;
+  transition: transform var(--motion-moderate) var(--ease-standard);
 }
 .model-index [data-mi-focus] {
-  transition: opacity 180ms ease-out;
+  transition: opacity var(--motion-moderate) var(--ease-standard);
 }
 .model-index [data-mi-focus="dim"] {
   opacity: 0.25;
 }
 .model-index [data-mi-leave] {
-  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 .model-index [data-mi-enter] {
-  animation: mi-fade 420ms ease-out 140ms backwards;
+  animation: mi-fade var(--motion-large) var(--ease-standard) backwards;
 }
 .model-index [data-mi-rise] {
-  animation: mi-rise 420ms ease-out 140ms backwards;
+  animation: mi-rise var(--motion-large) var(--ease-standard) backwards;
 }
 .model-index [data-mi-view] {
   animation: mi-rise var(--mi-ease);
