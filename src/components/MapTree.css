@@ -25,6 +25,7 @@ button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: p
 .map-tree-file[data-state="changed"] { color: var(--color-ink); cursor: pointer; }
 .map-tree-file[data-state="changed"] i { border-color: var(--c, var(--color-accent)); background: var(--c, var(--color-accent)); }
 .map-tree-file[data-now] span { font-weight: 600; }
+.map-tree-file[data-lit] i { box-shadow: 0 0 0 1px color-mix(in oklab, var(--c, var(--color-accent)) 45%, transparent), 0 0 9px color-mix(in oklab, var(--c, var(--color-accent)) 70%, transparent); }
 .map-tree-file .map-tree-x { margin-left: auto; }
 .map-tree-hidden { position: absolute; left: 14px; height: 15px; font: 10px/15px var(--font-sans, sans-serif); color: var(--color-ink-secondary); opacity: .8; white-space: nowrap; }
 .map-tree-sqs { position: absolute; left: 14px; top: 2px; display: flex; flex-wrap: wrap; gap: 2px; }

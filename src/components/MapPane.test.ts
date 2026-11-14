@@ -224,7 +224,7 @@ it("moves the one arrow to the file picked with Up, Down or a click, keeps it th
     const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
     const [, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
     const top = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
-    expect(Math.abs(numbers(host.querySelector<HTMLElement>(".map-tree-pin")!)[1] + 0.7 - top)).toBeLessThan(4);
+    expect(Math.abs(numbers(host.querySelector<HTMLElement>(".map-tree-pin")!)[1] + 0.7 - top - 4.5)).toBeLessThan(1);
   }, { timeout: 3000 });
   const key = (path: string, k: string) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
   const edits = [{ path: "README.md", added: 1, removed: 0 }, ...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }];
@@ -270,7 +270,7 @@ it("lights the picked file's square at once and sends the arrow a beat behind, s
   expect(lit()).toEqual(["src/manual.ts"]);
   step(100);
   expect(pin()).toBe(rest);
-  step(60);
+  step(300);
   expect(pin()).not.toBe(rest);
   for (let i = 0; i < 10; i++) step(200);
   const next = pin();
@@ -362,7 +362,9 @@ it("walks the arrow up out of a folding branch, across and down into the one ope
   expect(host.querySelector('.map-tree-file[aria-current="true"]')?.getAttribute("data-map-file")).toBe("server/f2.ts");
   expect(tip()).toEqual(before);
   expect(off("server/f2.ts")).toBeGreaterThan(20);
-  step(150);
+  step(115);
+  expect(tip()).toEqual(before);
+  step(35);
   const first = tip();
   expect(Math.hypot(first.x - before.x, first.y - before.y)).toBeGreaterThan(1);
   let top = first.y;

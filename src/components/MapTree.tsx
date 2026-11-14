@@ -23,6 +23,8 @@ interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y:
 
 // The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
 const TIP = { x: 1.4, y: 0.7 };
+// It rests 1px off the bottom-right corner of the row's 7px square, so its halo clears the square.
+const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
 export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -170,9 +172,9 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
     if (focus && (focus !== hop.current.to || stamp !== hop.current.at)) {
       const from = fresh ? undefined : hop.current.to;
-      // Across a fold the arrow is already one frame along when the files swap, so they never change under a still arrow.
       const start = from && from !== focus && spot.current && !treeClimb(layout.items, from, at) ? spot.current : undefined;
-      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : start ? now - 1000 / 60 : now + 50, start };
+      // The target square lights at once and the arrow sets off a beat later, so it reads as heading there.
+      hop.current = { from, to: focus, at: stamp, t0: fresh || still || held.current ? 0 : now + 135, start };
       scroll = follow;
     }
     const tick = () => {
@@ -196,13 +198,14 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
       hot.current?.setAttribute("d", climb ? "M" + climb.map(point => `${half(point.x)} ${half(point.y)}`).join("L") : "");
       hot.current?.style.setProperty("opacity", String(1 - (1 - shown) ** 3));
       if (pin.current) {
-        const k = start ? 1 - (1 - Math.min(1, (t - t0) / 450)) ** 3 : ease((t - t0) / 750);
-        const route = climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
-        const point = route ? treeAlong(route, k) : climb?.[0];
+        const k = start ? 1 - (1 - Math.min(1, Math.max(0, (t - t0) / 450))) ** 3 : ease((t - t0) / 750);
+        const trail = climb && from && from !== to && k < 1 ? start ? foldRoute(layout.items, start, from, to!, at) : treeRoute(layout.items, from, to!, at) : null;
+        const route = trail && [...start ? [] : [corner(trail[0])], ...trail, corner(trail.at(-1)!)];
+        const point = route ? treeAlong(route, k) : climb ? corner(climb[0]) : undefined;
         if (route) moving = true;
         spot.current = point;
         pin.current.style.opacity = point ? "1" : "0";
-        if (point) pin.current.style.transform = `translate(${(point.x - 2 - TIP.x).toFixed(1)}px, ${(point.y - 3 - TIP.y).toFixed(1)}px)`;
+        if (point) pin.current.style.transform = `translate(${(point.x - TIP.x).toFixed(1)}px, ${(point.y - TIP.y).toFixed(1)}px)`;
       }
       if (moving && !document.hidden) frame.current = requestAnimationFrame(tick);
       else if (scroll) { scroll = false; found.get(to ?? "")?.scrollIntoView?.({ block: "nearest" }); }
@@ -215,7 +218,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const row = (it: TreeItem, path: string, index: number) => {
     const changed = layout.changed.has(path);
     const clash = clashBy.get(path);
-    const props = { className: "map-tree-file", "data-tree-row": path, "data-now": path === current?.path || undefined, title: path,
+    const props = { className: "map-tree-file", "data-tree-row": path, "data-now": path === current?.path || undefined, "data-lit": path === focus || undefined, title: path,
       style: { top: 2 + (it.squaresHeight ?? 0) + index * TREE.LINE, ...tint(team ? fill(path) : undefined) } };
     const body = <><i /><span>{name(path)}</span>{clash && <Clash same={clash.same} />}</>;
     return changed
