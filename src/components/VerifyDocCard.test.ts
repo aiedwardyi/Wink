@@ -183,7 +183,7 @@ it("shows a check that could not finish as not checked in the watch, live and re
   }
 });
 
-it("keeps the leading cursor in view on every frame of a long replay", async () => {
+it.each([0, 32])("keeps cursor visibility exceptions narrow with a %i ms animation start delay", async delay => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
@@ -192,6 +192,7 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     chunk(0, { runId: "run-123456", site: "ADEMARK.md", page: "" }),
     chunk(2, { ms: 0, kind: "doc-text", lines, pageStarts: [] }),
     chunk(2, { ms: 24, kind: "doc-chunk", from: 1, to: n, state: "start" }),
+    chunk(2, { ms: 3_000, kind: "doc-finding", finding: { kind: "spelling", line: 190, page: 1, quote: "Line 190", fix: "x" } }),
     chunk(2, { ms: 16_008, kind: "doc-chunk", from: 1, to: n, state: "done" }),
     chunk(2, { ms: 19_960, kind: "doc-finding", finding: { kind: "names", line: 5, page: 1, quote: "Line 5", fix: "x" } }),
     chunk(3, { status: "completed", ms: 19_960, issues: [], notChecked: [] }),
@@ -215,11 +216,12 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     if (el.classList.contains("verify-doc-line")) return rect((Number(el.dataset.n) - 1) * LINE - scrolled(), LINE);
     return rect(-scrolled(), n * LINE);
   });
-  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number }>(), leaving = new Set<Element>();
+  const drawn = new Map<Element, { frames: Keyframe[]; at: number; ms: number; line?: string; fromLine?: string }>(), leaving = new Set<Element>();
   Element.prototype.animate = function (this: Element, frames: Keyframe[], ms: number | KeyframeAnimationOptions) {
-    if (frames[0]?.transform) drawn.set(this, { frames, at: performance.now(), ms: typeof ms === "number" ? ms : Number(ms.duration) });
+    const at = performance.now() + delay;
+    if (frames[0]?.transform) drawn.set(this, { frames, at, ms: typeof ms === "number" ? ms : Number(ms.duration), line: (this as HTMLElement).dataset.line, fromLine: drawn.get(this)?.line });
     if (frames.at(-1)?.opacity === 0) leaving.add(this);
-    return {} as Animation;
+    return { get currentTime() { return Math.max(0, performance.now() - at); } } as Animation;
   };
   const yOf = (transform: unknown) => Number(/,(-?[\d.]+)px\)/.exec(String(transform))![1]);
   const host = document.createElement("div");
@@ -237,23 +239,35 @@ it("keeps the leading cursor in view on every frame of a long replay", async () 
     if (options.behavior === "smooth") glide = { from: scrolled(), to, at: performance.now() };
     else stage.scrollTop = to;
   }) as typeof stage.scrollTo;
-  let reading = 0, out = 0, named = 0;
+  let reading = 0, out = 0, named = 0, above = 0, returned = 0, bodyOut = 0, previous = 0;
   for (let ms = 0; ms < 6_000; ms += 16) {
     await act(async () => { await vi.advanceTimersByTimeAsync(16); });
-    const readers = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => el.dataset.kind !== "numbering" && !leaving.has(el));
-    if (!readers.length) continue;
-    const lead = Math.max(...readers.map(el => {
-      const glide = drawn.get(el), k = glide ? Math.min(1, (performance.now() - glide.at) / glide.ms) * (glide.frames.length - 1) : 0;
+    const cursors = [...host.querySelectorAll<HTMLElement>(".verify-watch-cursor")].filter(el => !leaving.has(el));
+    if (!cursors.length) continue;
+    expect(scrolled()).toBeGreaterThanOrEqual(previous);
+    previous = scrolled();
+    const positions = cursors.map(el => {
+      const glide = drawn.get(el), k = glide ? Math.max(0, Math.min(1, (performance.now() - glide.at) / glide.ms)) * (glide.frames.length - 1) : 0;
       if (!glide || k >= glide.frames.length - 1) return yOf(el.style.transform);
       const i = Math.floor(k), a = yOf(glide.frames[i]!.transform), b = yOf(glide.frames[i + 1]!.transform);
       return a + (b - a) * (k - i);
-    }));
+    });
     reading++;
-    if (readers.some(el => el.dataset.line === "5" && el.dataset.kind === "names")) named++;
-    if (lead < scrolled() || lead + 21 > scrolled() + VIEW) out++;
+    if (cursors.some(el => el.dataset.line === "5" && el.dataset.kind === "names")) named++;
+    const behind = cursors.every(el => yOf(el.style.transform) < scrolled());
+    const only = cursors[0]!, flight = drawn.get(only), target = yOf(only.style.transform);
+    // A sole cursor returning from an earlier finding must not pull the view back up.
+    const returning = cursors.length === 1 && positions[0]! < scrolled() && flight && yOf(flight.frames[0]!.transform) < scrolled() && target >= scrolled() && target + 21 <= scrolled() + VIEW && !!host.querySelector(`[data-n="${flight.fromLine}"][data-hit]`);
+    if (ms < 3_500 && !positions.some(y => y >= scrolled() && y + 21 <= scrolled() + VIEW)) bodyOut++;
+    if (behind) above++;
+    else if (returning) returned++;
+    else if (!positions.some(y => y >= scrolled() && y + 21 <= scrolled() + VIEW)) out++;
   }
   expect(reading).toBeGreaterThan(150);
   expect(named).toBeGreaterThan(0);
+  expect(above).toBeGreaterThan(0);
+  expect(returned).toBeGreaterThan(0);
+  expect(bodyOut).toBe(0);
   expect(out).toBe(0);
   expect(host.querySelector(".verify-watch-again")).not.toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
