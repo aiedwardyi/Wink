@@ -44,7 +44,7 @@ describe("+ menu room items", () => {
     await act(async () => root.unmount());
   });
 
-  it.each([["en", "You host this room. It's open now."], ["ko", "내가 호스트인 채팅방이에요. 지금 열었어요."]] as const)("opens this PC's own room instead of joining it, in %s", async (locale, note) => {
+  it.each([["en", "You host this group. It's open now."], ["ko", "내가 호스트인 그룹이에요. 지금 열었어요."]] as const)("opens this PC's own room instead of joining it, in %s", async (locale, note) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "own-room", groupId: "g-tk" }), { status: 409 })));
     localStorage.setItem("omb-locale", locale);
