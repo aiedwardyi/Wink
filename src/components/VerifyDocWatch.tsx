@@ -81,7 +81,7 @@ function linesInView(stage: HTMLElement): [number, number] | null {
 
 /** The checkers' cursors: plain elements moved by transform, outside React, so a glide costs no render. `glide`: a camera moves the view. */
 function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, follows: (cursor: DocCursor) => boolean, glide: boolean) {
-  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean; find: boolean }>(), fading = new Set<ReturnType<typeof setTimeout>>();
+  const shown = new Map<string, { el: HTMLElement; x: number; y: number; from: number; at: number; ms: number; band: number; lead: boolean; find: boolean; animation?: Animation }>(), fading = new Set<ReturnType<typeof setTimeout>>();
   let offset = 0;
   return {
     move(c: DocCursor) {
@@ -116,14 +116,17 @@ function docCursors(stage: HTMLElement, tag: (kind: VerifyDocKind) => string, fo
       label.style.transform = `translate(${spot.x}px,${spot.y}px)`;
       el.dataset.line = String(c.line);
       el.style.transform = `translate(${x}px,${y}px)`;
-      if (c.duration) el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration);
-      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead, find: c.quote !== undefined });
+      const animation = c.duration ? el.animate?.(EASE.map(e => ({ transform: `translate(${fx + (x - fx) * e}px,${fy + (y - fy) * e}px)` })), c.duration) : undefined;
+      Object.assign(cursor, { x, y, from: cursor.y, at: performance.now(), ms: c.duration, lead, find: c.quote !== undefined, animation });
     },
     /** The furthest-down reader of the chunk being read and the names cursor, in the stage's scroll space. */
     view(now: number): DocView {
       const seen: DocView = {};
       for (const c of shown.values()) {
-        const y = offset + c.from + (c.y - c.from) * glideEase(Math.min(1, (now - c.at) / Math.max(1, c.ms)));
+        // A browser glide can start a frame later than the timer that requested it.
+        const time = c.animation?.currentTime, elapsed = typeof time === "number" ? time : time === null ? 0 : now - c.at;
+        const k = Math.min(1, Math.max(0, elapsed / Math.max(1, c.ms))) * (EASE.length - 1), i = Math.min(EASE.length - 2, Math.floor(k));
+        const ease = EASE[i]! + (EASE[i + 1]! - EASE[i]!) * (k - i), y = offset + c.from + (c.y - c.from) * ease;
         if (c.band === 0 && !(c.lead && c.find)) seen.stop = Math.min(seen.stop ?? Infinity, y);
         else if (c.lead) seen.lead = { y: Math.max(seen.lead?.y ?? -Infinity, y), to: Math.max(seen.lead?.to ?? -Infinity, offset + c.y) };
       }
