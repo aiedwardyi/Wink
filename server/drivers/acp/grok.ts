@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import type { ModelCatalog } from "../../contracts.ts";
 import { writeFileAtomic } from "../../atomic.ts";
+import { grokAgentsAllowState, saveGrokAgentsAllowState } from "../../grok-agents-allow-state.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
@@ -345,6 +346,7 @@ function ruleReachesAgents(rule: string, structured = false): boolean {
     if (!pattern.includes("__") && !pattern.includes("*")) pattern += "__*";
   }
   if (pattern === undefined) return false;
+  pattern = pattern.trim();
   const glob = pattern.search(/[*?[]/);
   if (glob < 0) return pattern.startsWith("agents__");
   const prefix = pattern.slice(0, glob);
@@ -418,21 +420,30 @@ const configStat = (path: string) => {
     throw e;
   }
 };
-const stampOf = (s: Stats | null) => (s ? `${s.ino}:${s.mtimeMs}:${s.size}` : "missing");
+const stampOf = (s: Stats | null) => (s ? `${s.ino}:${s.mtimeMs}:${s.ctimeMs}:${s.size}:${s.mode}` : "missing");
 
 /** Grok's agent stdio ignores argv `--allow` (1.0.77); only this file's rule spares each Wink tool call its ask. */
 function ensureGrokAgentsAllowed(env: Record<string, string | undefined>): void {
-  const path = join(grokHome(env), "config.toml");
+  const path = resolve(grokHome(env), "config.toml");
   try {
+    const saved = grokAgentsAllowState(path);
+    if (saved === "written") return;
     const before = configStat(path);
     const stamp = stampOf(before);
-    if (agentsAllowChecked.get(path) === stamp) return;
+    if (saved === stamp || agentsAllowChecked.get(path) === stamp) return;
+    agentsAllowChecked.set(path, stamp);
     // a rename over a symlink would replace the user's linked config with a plain file
     const raw = before?.isSymbolicLink() ? null : before ? readFileSync(path) : Buffer.alloc(0);
     const text = raw?.toString("utf8") ?? "";
     const next = raw && Buffer.from(text, "utf8").equals(raw) ? withGrokAgentsAllowed(text) : null;
     if (next !== null && next !== text && stampOf(configStat(path)) === stamp) {
-      writeFileAtomic(path, next, { mode: before ? before.mode & 0o777 : 0o600 });
+      // Persist the intent first so a crash cannot restore a rule the user later removes.
+      saveGrokAgentsAllowState(path, "written");
+      try {
+        writeFileAtomic(path, next, { mode: before ? before.mode & 0o777 : 0o600 });
+      } catch {
+        saveGrokAgentsAllowState(path, stamp);
+      }
     }
     agentsAllowChecked.set(path, stampOf(configStat(path)));
   } catch {
