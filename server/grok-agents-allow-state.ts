@@ -6,16 +6,21 @@ import { DATA_DIR } from "./config.ts";
 
 const path = join(DATA_DIR, "grok-agents-allow.json");
 let saved: Record<string, string> | undefined;
+let loadError: unknown;
 const keyOf = (configPath: string) => process.platform === "win32" ? configPath.toLowerCase() : configPath;
 
 function state(): Record<string, string> {
   if (saved) return saved;
+  if (loadError) throw loadError;
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some((v) => typeof v !== "string")) throw new Error("invalid allow state");
     saved = Object.assign(Object.create(null), value);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      loadError = e;
+      throw e;
+    }
     saved = Object.create(null) as Record<string, string>;
   }
   return saved!;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GrokAgentDriver, grokSupport, readGrokModelCatalog, STATIC_GROK_MODELS } from "./grok.ts";
+import { DATA_DIR } from "../../config.ts";
 
 const scratchDirs: string[] = [];
 
@@ -196,6 +197,7 @@ describe("Grok allow rule for Wink's own tools", () => {
     expect(read(home)).toBe(user);
   });
 
+  // Windows chmod toggles read-only; POSIX rename can replace a read-only file.
   it.skipIf(process.platform !== "win32")("tries a read-only config once per file state", async () => {
     const home = scratchConfig(`[ui]\ntheme = "x"\n`);
     chmodSync(configPath(home), 0o444);
@@ -233,6 +235,25 @@ describe("Grok allow rule for Wink's own tools", () => {
     expect(() => statSync(configPath(first))).toThrow();
     startTurn(second);
     expect(read(second)).toContain(RULE);
+  });
+
+  it("leaves configs alone after a state read failure until restart", async () => {
+    startTurn(emptyHome());
+    const home = scratchConfig(`[ui]\ntheme = "x"\n`);
+    const statePath = join(DATA_DIR, "grok-agents-allow.json");
+    const saved = readFileSync(statePath);
+    try {
+      writeFileSync(statePath, "{");
+      vi.resetModules();
+      const restarted = await import("./grok.ts");
+      const run = () => restarted.grokSupport.resolveTurnModel?.("grok-4.6", { HOME: home }, { cli: "grok", fullAuto: false });
+      unchanged(home, run);
+      writeFileSync(statePath, saved);
+      unchanged(home, run);
+    } finally {
+      writeFileSync(statePath, saved);
+      vi.resetModules();
+    }
   });
 
   it("leaves non-UTF-8 bytes alone", () => {
