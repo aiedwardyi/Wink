@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
 import { DATA_DIR } from "../config.ts";
 import type { Message } from "../store.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, type JoinedEntry } from "./joined.ts";
@@ -342,6 +343,40 @@ describe("a room bot's @ to this PC's bot", () => {
     expect(turns.chain(ROOM)).toBe(0);
     line({ kind: "person", id: "p2", name: "Mina" }, "go on", now());
     line(edbot, "@Mini back to it", now());
+    expect(turns.chain(ROOM)).toBe(1);
+  });
+
+  it("drops a handoff to a bot on another PC once it's no longer pending, and republishes then", () => {
+    const turns = new MyRoomBotTurns(deps);
+    line(edbot, "@Mini your turn", { at: Date.now() - CHAIN_PENDING_MS });
+    expect(turns.chain(ROOM)).toBe(0);
+    line(mini, "@EdBot your turn", { at: Date.now() - CHAIN_PENDING_MS });
+    expect(turns.chain(ROOM)).toBe(0);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      line(mini, "@EdBot back to you", now());
+      expect(turns.chain(ROOM)).toBe(3);
+      deps.changed.mockClear();
+      vi.advanceTimersByTime(CHAIN_PENDING_MS);
+      expect(deps.changed).toHaveBeenCalledWith(ROOM);
+      expect(turns.chain(ROOM)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a stopped handoff hidden after a restart", () => {
+    line(mini, "@EdBot your turn", { at: Date.now() - 1000 });
+    new MyRoomBotTurns(deps).stop(ROOM);
+    expect(new MyRoomBotTurns(deps).chain(ROOM)).toBe(0);
+  });
+
+  it("counts a handoff to this PC's bot while it works, however old", async () => {
+    Object.assign(deps, { busy: () => true });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(edbot, "@Pete-Coder over to you", { at: Date.now() - 10 * 60_000 }));
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
     expect(turns.chain(ROOM)).toBe(1);
   });
 

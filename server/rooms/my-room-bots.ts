@@ -1,7 +1,7 @@
 // This PC's own bots in rooms it joined. This PC's person wakes one by @name
 // or a reply to its line, and a room bot by @name; it works here in one hidden
 // task per room and its answer goes back through the door under its room name.
-import { botChain, CHAIN_LINES } from "../../shared/bot-chain.ts";
+import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
@@ -59,6 +59,9 @@ export class MyRoomBotTurns {
   private readonly stopped = new Set<string>();
   /** Turns the owner stopped while their files were still downloading. */
   private readonly cancelled = new Set<Waiting>();
+  /** This run's start: a handoff line from before it is no longer pending. */
+  private readonly boot = Date.now();
+  private readonly lapses: ChainLapses = new Map();
   private readonly deps: MyRoomBotDeps;
 
   constructor(deps: MyRoomBotDeps) {
@@ -106,7 +109,11 @@ export class MyRoomBotTurns {
     const lines = joinedEntries(roomId, CHAIN_LINES);
     const last = lines.at(-1);
     if (!state || !last || this.halted(roomId, last.seq)) return 0;
-    return botChain(lines, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)]);
+    // only this PC's own bots are seen working; the rest count while their line is pending
+    const working = (id: string) => (this.turn(roomId, id)?.working || this.turn(roomId, id)?.waiting ? true : null);
+    const turn = botChain(lines, [...state.bots, ...(state.teamBots ?? [])], [state.host, ...state.people.map((person) => person.name)], { working, since: this.boot });
+    if (turn) republishWhenLapsed(this.lapses, roomId, last.at, () => this.deps.changed(roomId));
+    return turn;
   }
 
   /** The owner's Stop: this PC's asks in the room end here; the host's bots are never touched. */
