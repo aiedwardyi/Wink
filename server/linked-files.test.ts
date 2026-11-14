@@ -351,6 +351,31 @@ describe("linked files", () => {
     }
   });
 
+  it("serves a picture the user attached by path, but not another file type or an unattached picture", async () => {
+    const root = temp("linked-attached-", process.cwd());
+    const picture = join(root, "image (3).png");
+    const notes = join(root, "notes.txt");
+    const other = join(root, "other.png");
+    for (const file of [picture, notes, other]) writeFileSync(file, "pixels");
+    const tag = (path: string) => `<attached-file path="${path.replaceAll("&", "&amp;")}" name="${basename(path)}" size="6" />`;
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "user", text: `look\n\n${tag(picture)}\n${tag(notes)}\n[other](${other})` }],
+      writerDeviceId: () => null, rootsFor: () => [],
+    }));
+    try {
+      const open = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`);
+      const shown = await open(picture);
+      expect(shown.status).toBe(200);
+      expect(shown.headers.get("content-type")).toBe("image/png");
+      expect(await shown.text()).toBe("pixels");
+      expect((await open(notes)).status).toBe(404);
+      expect((await open(other)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves linked HTML and its folder assets without exposing siblings or symlink escapes", async () => {
     const root = temp("linked-html-");
     const site = join(root, "site");

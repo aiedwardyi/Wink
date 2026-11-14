@@ -330,10 +330,12 @@ describe("Grok warm leases (recorded transport)", () => {
   });
 
   it("counts a no-shape handshake without creating a session", async () => {
+    const priority = vi.spyOn(procs, "setCliPriority");
     await start();
     await instance.prepare!();
     expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
     expect(methods(peers[0])).toEqual(["initialize", "authenticate"]);
+    expect(priority.mock.calls).toEqual([[peers[0].child, "low"]]);
   });
 
   it("Stop aborts authentication waits before any child exists", async () => {

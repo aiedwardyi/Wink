@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startUpload, UploadError, uploadErrorKey } from "./big-upload";
+import { forgetUpload, queueUpload, startUpload, uploadJobs, UploadError, uploadErrorKey } from "./big-upload";
 
 const ID = "0f0e0d0c-0b0a-4000-8000-000000000001";
 
@@ -119,5 +119,31 @@ describe("startUpload", () => {
       Reflect.deleteProperty(navigator, "wakeLock");
       Reflect.deleteProperty(document, "visibilityState");
     }
+  });
+});
+
+describe("queueUpload", () => {
+  it("saves a big picture whole and its smaller copy, and hands back both paths", async () => {
+    vi.stubGlobal("OffscreenCanvas", class {});
+    vi.stubGlobal("Worker", class {
+      onmessage: ((event: { data: Blob }) => void) | null = null;
+      postMessage() {
+        queueMicrotask(() => this.onmessage?.({ data: new Blob([new Uint8Array(3)], { type: "image/webp" }) }));
+      }
+      terminate() {}
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/uploads") return Response.json({ id: ID, offset: 0, chunkBytes: 16 }, { status: 201 });
+      if (url === "/api/attachments") {
+        expect(new Headers(init?.headers).get("content-type")).toBe("image/webp");
+        return Response.json({ path: "/data/attachments/small.webp", mime: "image/webp", bytes: 3 }, { status: 201 });
+      }
+      return Response.json({ offset: 10, done: true, path: "/Downloads/Wink/big.png", name: "big.png", size: 10, type: "image/png" });
+    }));
+    const save = vi.fn();
+    queueUpload("chip", new File([new Uint8Array(10)], "big.png", { type: "image/png" }), undefined, save, true);
+    await vi.waitFor(() => expect(uploadJobs().get("chip")?.phase).toBe("done"));
+    expect(save).toHaveBeenCalledWith({ path: "/Downloads/Wink/big.png", name: "big.png", size: 10, type: "image/png", preview: "/data/attachments/small.webp" }, ID);
+    forgetUpload("chip");
   });
 });

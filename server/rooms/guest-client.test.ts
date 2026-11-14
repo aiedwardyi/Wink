@@ -489,6 +489,21 @@ describe("room alerts on a teammate", () => {
     expect(alert.mock.calls).toEqual([ping("second")]);
   });
 
+  it("stays quiet for a bot handing off to a bot and pings the closing line", async () => {
+    const state = { ...STATE, people: [...STATE.people, { id: "p2", name: "JJ" }], bots: [{ id: "b1", name: "Rando", color: "blue" }], teamBots: [{ id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", color: "", owner: "p2" }] };
+    const rando = { kind: "bot" as const, id: "b1", name: "Rando" };
+    const star = { kind: "bot" as const, id: "tb-AAAAAAAAAAAAAAAA", name: "스타줌", owner: "p2" };
+    route = stream([[0, `data: ${JSON.stringify({ kind: "state", state })}
+
+`], [100, entry(1, rando, "@스타줌 what works for JJ?")], [250, entry(2, star, "@Rando Sat after 7")], [400, entry(3, star, "Done: Sat 7:30. @Edward @JJ")]]);
+    const alert = vi.fn();
+    const c = guest({ alert, timing: { alertMs: 50 } });
+    await c.join(CODE);
+    await until(() => c.room("r1")?.entries.length === 3);
+    await sleep(200);
+    expect(alert.mock.calls).toEqual([[{ chat: "joined:r1", threadId: "joined:r1", room: "Team", name: "스타줌", text: "Done: Sat 7:30. @Edward @JJ" }]]);
+  });
+
   it("pings a reconnect replay once with its latest line, then live lines again", async () => {
     const replay = Array.from({ length: 60 }, (_, index): [number, string] => [0, entry(index + 1, edward, `line ${index + 1}`)]);
     route = stream([...replay, [300, entry(61, edward, "live")]]);

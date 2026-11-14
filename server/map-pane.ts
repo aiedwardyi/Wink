@@ -3,12 +3,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
-import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead, mapRepoFiles } from "./map-git.ts";
+import { latestMapFile, mapFileDiff, mapFiles, mapGit, mapHead, mapRepoFiles, mapWalkFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
 import { parsePaneNote } from "../shared/pane-note.ts";
 import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
+import { createMapFlow, type MapGh } from "./map-pr.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -35,14 +36,15 @@ interface WatchedPane {
 
 export interface MapPaneDeps {
   panes(botId: string): Promise<MapPaneRecord[]>;
-  title(botId: string): string;
   reason?(botId: string, pane: MapPaneRecord, editedAt: number): string | undefined;
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
+  gh?: MapGh;
 }
 
 export function createMapPane(deps: MapPaneDeps) {
   const fallback = new Map<string, string | null>();
   const readers = new Map<string, Set<Map<string, WatchedPane>>>();
+  const flows = createMapFlow(deps.gh);
 
   function live(res: ServerResponse, botId: string) {
     const panes = new Map<string, WatchedPane>();
@@ -66,7 +68,7 @@ export function createMapPane(deps: MapPaneDeps) {
       if (record.running) { record.dirty = true; return; }
       record.running = true;
       try {
-        const files = await mapFiles(record.root, record.base);
+        const files = await mapFiles(record.root, record.base, [...panes.values()].find(value => value.base)?.base ?? undefined);
         if (closed) return;
         const latest = record.path && files.some(file => file.path === record.path)
           ? { path: record.path, at: Date.now() } : await latestMapFile(record.root, files);
@@ -105,7 +107,7 @@ export function createMapPane(deps: MapPaneDeps) {
           if (closed) return;
           const root = base ? (await mapGit(pane.cwd, ["rev-parse", "--show-toplevel"])).trim() : pane.cwd;
           const record: WatchedPane = { pane, root, base, running: false, dirty: false,
-            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), task: deps.title(botId), git: base !== null, files: [], editedAt: 0 } };
+            worker: { id: pane.sessionId, nick: pane.label?.split("|")[0].trim() || pane.sessionId.slice(0, 8), git: base !== null, files: [], editedAt: 0 } };
           if (closed) return;
           panes.set(pane.sessionId, record);
           if (base) {
@@ -144,15 +146,20 @@ export function createMapPane(deps: MapPaneDeps) {
     const path = url.searchParams.get("path") ?? "";
     const record = [...(readers.get(botId) ?? [])].map(panes => panes.get(sessionId)).find(Boolean);
     if (route === "repo") {
-      if (!record?.base) return json(res, 404, { error: "No such worker" });
-      try { return json(res, 200, { name: basename(record.root), paths: await mapRepoFiles(record.root) }); }
+      if (!record) return json(res, 404, { error: "No such worker" });
+      try { return json(res, 200, { name: basename(record.root), paths: record.base ? await mapRepoFiles(record.root) : await mapWalkFiles(record.root) }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
+    }
+    if (route === "flow") {
+      if (!record?.base) return json(res, 404, { error: "No such worker" });
+      try { return json(res, 200, await flows.flow(record.root, record.base)); }
+      catch { return json(res, 503, { error: "Could not read git" }); }
     }
     const file = record?.worker.files.find(file => file.path === path);
     if (!record?.base || !file) return json(res, 404, { error: "No such changed file" });
     const inside = relative(record.root, resolve(record.root, path));
     if (inside.startsWith("..") || isAbsolute(inside)) return json(res, 403, { error: "File is outside the working folder" });
-    try { return json(res, 200, await mapFileDiff(record.root, record.base, file)); }
+    try { return json(res, 200, await mapFileDiff(record.root, record.base, file, url.searchParams.get("whole") === "1")); }
     catch { return json(res, 503, { error: "Could not read the diff" }); }
   }
 
@@ -169,10 +176,6 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
       if (snapshot.status !== 200) throw new Error("Worker panes unavailable");
       const panes = snapshot.body.panes;
       return paneSchema.array().parse(panes ?? []);
-    },
-    title: botId => {
-      const bot = store.bot(botId);
-      return bot?.tasks?.find(task => task.threadId === bot.threadId)?.title ?? "";
     },
     reason: (botId, pane, editedAt) => {
       const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");

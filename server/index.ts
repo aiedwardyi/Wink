@@ -59,7 +59,7 @@ import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.t
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
-import { hostSend } from "./rooms/send.ts";
+import { hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
@@ -124,6 +124,7 @@ import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
@@ -163,7 +164,8 @@ import {
   type PushTarget,
 } from "./web-push.ts";
 import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
-import { warmEngines } from "./engine-warm.ts";
+import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
+import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -178,7 +180,7 @@ import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.t
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
-import "./message-db.ts";
+import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
@@ -806,11 +808,24 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
 const automaticAvailability = new Map<string, boolean>();
 const providerSnapshots = new Map<string, Awaited<ReturnType<typeof registry.describe>>[number]["snapshot"]>();
 
+const requestQuiet = createRequestQuiet();
+const warmGates = {
+  instance: (id: string) => registry.get(id),
+  busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
+  settled: requestQuiet.settled,
+  admit: (driverKind: string) => warmPool.idleWarmAllowed(driverKind),
+};
+const warmRouted = (id: string) => botAccounts.routedAccount(id) ?? id;
+const warmWanted = (fallback: string) => oneEngine(store.bots.map((bot) => ({ instanceId: warmRouted(bot.modelSelection.instanceId), at: lastMessageAt(bot.threadId) })), warmRouted(fallback));
+const signInWarm = createSignInWarm({ ...warmGates, wanted: async () => warmWanted((await defaultSelection()).instanceId) });
+
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
   for (const entry of entries) {
+    if (entry.snapshot.state === "checking") continue;
     automaticAvailability.set(entry.instanceId, entry.snapshot.state === "available");
     providerSnapshots.set(entry.instanceId, entry.snapshot);
   }
+  void signInWarm.observe(entries);
 }
 
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
@@ -1915,7 +1930,7 @@ function publicGroupState(group: GroupRecord) {
     working: groupIsWorking(group),
     waitingBotIds: group.hosted ? queuedRoomBotIds(group.id, group.threadId) : [],
     taskState: store.taskPacket(group.threadId) ?? undefined,
-    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice) } : {}),
+    ...(group.hosted ? { room: hostedRoomView(group.hosted, group.notice), botChain: liveBotChain(group as HostedGroup) } : {}),
   };
   if (group.dm) return next;
   return { ...next, tasks: store.groupTasks(group.id).map(wireGroupTask) };
@@ -3083,6 +3098,7 @@ const accountUpdates = createAccountUpdates({
   usage: createAccountUsage({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
+const instanceChecks = createInstanceChecks(registry, (rows) => broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(rows))) }));
 
 function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
   rememberAutomaticAvailability(instances);
@@ -4675,7 +4691,7 @@ const SHOW_IMAGE_GUIDANCE =
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
   " When reporting after time away, in a summary or wrap-up, or after workers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never a vague 'we', and call a cause likely until you reproduce it. Quote a number only from a source you opened, and say which run, file or date it came from. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. Judge the user's ideas on merit and say plainly when one is wrong or low value; when you change your mind, name what convinced you. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself or your next step there (like 'Now the tests.', 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so give your full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, write at most one short line on what you are doing, never the answer itself, so the final message never repeats it. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a worker, CI, the user), never a vague 'we', and call a cause likely until you reproduce it. Quote a number only from a source you opened, and say which run, file or date it came from. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. Judge the user's ideas on merit and say plainly when one is wrong or low value; when you change your mind, name what convinced you. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -6451,6 +6467,7 @@ const guestClient: GuestClient = new GuestClient({
   onBotLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
   onStop: (roomId) => myRoomBotTurns.stop(roomId),
   botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
+  botChain: (roomId) => myRoomBotTurns.chain(roomId),
   alert: roomAlert,
 });
 bus.subscribe((event: RuntimeEvent) => {
@@ -7410,7 +7427,7 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     gemini: { configured: Boolean(cfg.gemini?.apiKey), introSeen: callIntro.seen() },
-    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE, language: cfg.liveCall?.language ?? "auto" },
+    liveCall: { voice: cfg.liveCall?.voice ?? LIVE_VOICE },
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key) },
     composio: {
       configured: composio.configured(cfg),
@@ -7670,6 +7687,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
     // and Origin and a phone session, and never reaches local-only routes.
@@ -8435,7 +8453,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const counts = await terminalPaneCountsResponse(terminalBridgeAccess);
       return json(res, counts.status, counts.body);
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo|flow)$/);
     if (m) {
       if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
@@ -8725,7 +8743,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Windows never pushes PATH changes into a live process, so without
       // this a re-probe answers from the boot PATH.
       if (probe !== "cached") resetPathCache();
-      const instances = withRateLimits(await describeInstances(probe));
+      const instances = withRateLimits(await (probe === "cached" ? instanceChecks.describe() : describeInstances(probe)));
       rememberAutomaticAvailability(instances);
       return json(res, 200, { instances: botAccounts.pickerInstances(botAccounts.accountInstances(instances)) });
     }
@@ -9132,12 +9150,8 @@ startupTiming.afterPaint("probes", async () => {
     })
     .then(({ sel, instances }) => {
       bootSelection = sel;
-      void warmEngines({
-        rows: instances,
-        wanted: new Set([sel.instanceId, ...store.bots.map((bot) => bot.modelSelection.instanceId)]),
-        instance: (id) => registry.get(id),
-        busy: () => turnStartClaims.size > 0 || store.bots.some((bot) => botHasActiveTurn(bot.id)),
-      }).catch(() => {});
+      signInWarm.arm(instances);
+      void warmEngines({ ...warmGates, rows: instances, wanted: warmWanted(sel.instanceId) }).catch(() => {});
     })
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);

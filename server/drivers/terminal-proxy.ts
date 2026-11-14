@@ -75,7 +75,9 @@ const REPORT_TEXT = workerReportText(process.platform);
 
 // Kept here, not imported from antigravity.ts: this proxy runs as its own light process.
 export const WORKER_GEMINI_FAMILIES = [
+  { name: "Gemini 4 Carbon", id: "gemini-4-carbon" },
   { name: "Gemini 4 Argon", id: "gemini-4-argon" },
+  { name: "Gemini 4 Hydrogen", id: "gemini-4-hydrogen" },
   { name: "Gemini 3.8 Flash", id: "gemini-3.8-flash" },
 ];
 export const WORKER_GEMINI_EFFORTS = ["high", "medium", "low"];

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
-import { mapFileDiff, mapFiles, mapHead, mapDiffLines, MAP_LINE_LIMIT } from "./map-git.ts";
+import { mapFileDiff, mapFiles, mapHead, mapDiffLines, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
 import { createMapPane, type MapPaneRecord } from "./map-pane.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { watchMapPanes } from "./map-events.ts";
@@ -39,7 +39,7 @@ it("keeps committed, staged, unstaged and untracked edits against launch HEAD", 
   git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "edit");
   writeFileSync(join(root, "new.ts"), "new\nfile\n");
   const files = await mapFiles(root, base);
-  expect(files).toEqual(expect.arrayContaining([{ path: "file.ts", added: 1, removed: 1 }, { path: "new.ts", added: 2, removed: 0 }]));
+  expect(files).toEqual(expect.arrayContaining([{ path: "file.ts", added: 1, removed: 1, ranges: [[1, 1]] }, { path: "new.ts", added: 2, removed: 0, ranges: [[1, 2]] }]));
   expect((await mapFileDiff(root, base, files[0])).lines).toEqual(expect.arrayContaining([
     expect.objectContaining({ kind: "remove", text: "const before = 1;" }),
     expect.objectContaining({ kind: "add", text: "const after = 2;" }),
@@ -95,9 +95,109 @@ it("keeps a deleted file diff separate from its replacement directory", async ()
   ]);
 });
 
+it("reads the whole file with its changes marked", async () => {
+  const { root, git } = repo();
+  const text = (six: string) => Array.from({ length: 12 }, (_, index) => index === 5 ? six : `line ${index + 1}`).join("\n") + "\n";
+  writeFileSync(join(root, "file.ts"), text("line 6"));
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "long");
+  writeFileSync(join(root, "file.ts"), text("line six"));
+  const base = git("rev-parse", "HEAD");
+  const [file] = await mapFiles(root, base);
+  expect((await mapFileDiff(root, base, file)).lines.map(line => line.kind)).toEqual(["fold", ...Array(3).fill("context"), "remove", "add", ...Array(3).fill("context"), "fold"]);
+  const whole = await mapFileDiff(root, base, file, true);
+  expect(whole.lines.map(line => line.kind)).toEqual([...Array(5).fill("context"), "remove", "add", ...Array(6).fill("context")]);
+  expect(whole.lines.at(-1)).toEqual({ kind: "context", text: "line 12", line: 12 });
+});
+
+it("keeps each changed file's launch line ranges for clash checks", async () => {
+  const { root, git } = repo();
+  const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+  writeFileSync(join(root, "file.ts"), lines.join("\n") + "\n");
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "long");
+  const base = git("rev-parse", "HEAD");
+  const edited = lines.toSpliced(18, 0, "inserted").toSpliced(10, 2).with(2, "three");
+  writeFileSync(join(root, "file.ts"), edited.join("\n") + "\n");
+  writeFileSync(join(root, "new.ts"), "a\nb\n");
+  const files = await mapFiles(root, base);
+  expect(files.find(file => file.path === "file.ts")?.ranges).toEqual([[3, 3], [11, 12], [18, 18]]);
+  expect(files.find(file => file.path === "new.ts")?.ranges).toEqual([[1, 2]]);
+});
+
+it("maps a worker's ranges onto another worker's launch commit so the same original line compares", async () => {
+  const { root, git } = repo();
+  const lines = Array.from({ length: 200 }, (_, index) => `line ${index + 1}`);
+  const write = (text: string[]) => writeFileSync(join(root, "file.ts"), text.join("\n") + "\n");
+  const commit = (text: string[]) => { write(text); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "step"); return git("rev-parse", "HEAD"); };
+  const common = commit(lines);
+  const shifted = lines.toSpliced(0, 0, ...Array.from({ length: 100 }, (_, index) => `top ${index}`)).toSpliced(160, 1, "gone");
+  const base = commit(shifted);
+  write(shifted.with(149, "edited"));
+  expect((await mapFiles(root, base)).find(file => file.path === "file.ts")?.ranges).toEqual([[150, 150]]);
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[50, 50]]);
+  write(shifted.with(160, "again").with(50, "inside").with(170, "after"));
+  expect((await mapFiles(root, base, common)).find(file => file.path === "file.ts")?.ranges).toEqual([[0, 0], [61, 61], [71, 71]]);
+});
+
+it("reads launch line ranges when user Git drops or renames the a/ and b/ prefixes", async () => {
+  for (const config of ["diff.noprefix", "diff.mnemonicPrefix"]) {
+    const { root, git, base } = repo();
+    git("config", config, "true");
+    writeFileSync(join(root, "file.ts"), "const changed = 2;\n");
+    expect((await mapFiles(root, base)).find(file => file.path === "file.ts")?.ranges).toEqual([[1, 1]]);
+  }
+});
+
+it("leaves out clash ranges when moving them onto the common launch commit fails or is cut off", async () => {
+  const { root, git, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const changed = 2;\n");
+  expect((await mapFiles(root, base, "0".repeat(40))).find(file => file.path === "file.ts")?.ranges).toBeUndefined();
+  const lines = Array.from({ length: 20_000 }, (_, index) => `line ${index + 1} ${"x".repeat(24)}`);
+  const commit = (text: string[]) => { writeFileSync(join(root, "file.ts"), text.join("\n") + "\n"); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "step"); return git("rev-parse", "HEAD"); };
+  const common = commit(lines);
+  const shifted = lines.map((line, index) => index % 2 ? line : `${line} moved`);
+  const launch = commit(shifted);
+  writeFileSync(join(root, "file.ts"), shifted.with(19_990, "edited").join("\n") + "\n");
+  expect((await mapFiles(root, launch)).find(file => file.path === "file.ts")?.ranges).toEqual([[19_991, 19_991]]);
+  expect((await mapFiles(root, launch, common)).find(file => file.path === "file.ts")?.ranges).toBeUndefined();
+});
+
+it("walks a folder without Git for its file names, skipping dependencies and capping entries", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(folder);
+  for (const dir of ["notes", "node_modules/pkg", ".git"]) mkdirSync(join(folder, dir), { recursive: true });
+  for (const file of ["b.txt", "a.txt", "notes/c.md", "node_modules/pkg/index.js", ".git/HEAD"]) writeFileSync(join(folder, file), "x\n");
+  const feature = createMapPane({ panes: async () => [{ sessionId: "pane-a", cwd: folder, label: "SCRIPT" }], subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    if (url.pathname === "/live") streams.push(res);
+    void feature.handle(req, res, "bot", url.pathname.slice(1), url);
+  });
+  servers.push(server);
+  const url = `http://127.0.0.1:${await listenLocal(server)}`;
+  const abort = new AbortController();
+  const reader = (await fetch(`${url}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("SCRIPT")) text += new TextDecoder().decode((await reader.read()).value);
+  expect(JSON.parse(text.slice(6, text.indexOf("\n\n"))).workers[0]).toMatchObject({ git: false, files: [] });
+  const listed = await fetch(`${url}/repo?worker=pane-a`).then(res => res.json());
+  abort.abort();
+  expect(listed).toEqual({ name: expect.stringMatching(/^wink-map-plain-/), paths: ["a.txt", "b.txt", "notes/c.md"] });
+  expect(await mapWalkFiles(folder, 3)).toEqual(["a.txt", "b.txt"]);
+});
+
+it("shows the whole file when only its mode changed", async () => {
+  const { root, git, base } = repo();
+  git("update-index", "--chmod=+x", "file.ts");
+  const [file] = await mapFiles(root, base);
+  expect(file).toEqual({ path: "file.ts", added: 0, removed: 0 });
+  expect((await mapFileDiff(root, base, file, true)).lines).toEqual([{ kind: "context", text: "const before = 1;", line: 1 }]);
+});
+
 it("folds unchanged runs between unified hunks and caps rendered lines", () => {
   const diff = mapDiffLines("@@ -20,1 +20,1 @@\n-old\n+new\n@@ -50,1 +50,1 @@\n-next\n+last\n");
-  expect(diff.lines.filter(line => line.kind === "fold").map(line => line.count)).toEqual([19, 29]);
+  expect(diff.lines.filter(line => line.kind === "fold").map(line => [line.line, line.count])).toEqual([[1, 19], [21, 29]]);
   expect(mapDiffLines("@@ -1,0 +1,1000 @@\n" + "+x\n".repeat(1000))).toMatchObject({ capped: true });
 });
 
@@ -107,12 +207,32 @@ it.each([1999, 2000, 2001])("caps tracked content at 2000 characters (%s)", leng
   expect(diff.capped).toBe(length > 2000);
 });
 
+it("never shows the bot's thread title as a worker's task", async () => {
+  const { root } = repo();
+  const deps = { panes: async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ENGINE-ROWS | opus" }, { sessionId: "pane-b", cwd: root, label: "BIG-PIC | sonnet" }], title: () => "Initialize as my Orbit teacher", subscribe: () => () => {} };
+  const feature = createMapPane(deps);
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", url);
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("BIG-PIC")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const { workers }: MapSnapshot = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim());
+  expect(workers.map(worker => worker.nick)).toEqual(["ENGINE-ROWS", "BIG-PIC"]);
+  expect(text).not.toContain("Initialize as my Orbit teacher");
+});
+
 it("does no work before opening, refreshes from real edit events, and stops on close", async () => {
   const { root, git } = repo();
   const read = vi.fn(async (): Promise<MapPaneRecord[]> => [{ sessionId: "pane-a", cwd: root, label: "ALPHA | script", main: false, exited: false }]);
   let listener: (() => void) | undefined;
   const unsub = vi.fn();
-  const feature = createMapPane({ panes: read, title: () => "Fix layout", subscribe: (_bot, next) => { listener = next; return unsub; } });
+  const feature = createMapPane({ panes: read, subscribe: (_bot, next) => { listener = next; return unsub; } });
   expect(read).not.toHaveBeenCalled();
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
@@ -161,7 +281,7 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   const againAbort = new AbortController();
   const again = await fetch(`${url}/live`, { signal: againAbort.signal });
   const first = new TextDecoder().decode((await again.body!.getReader().read()).value);
-  expect(JSON.parse(first.split("\n\n")[0].slice(6)).workers[0].files).toEqual([{ path: "file.ts", added: 1, removed: 1 }]);
+  expect(JSON.parse(first.split("\n\n")[0].slice(6)).workers[0].files).toEqual([{ path: "file.ts", added: 1, removed: 1, ranges: [[1, 1]] }]);
   againAbort.abort();
 });
 

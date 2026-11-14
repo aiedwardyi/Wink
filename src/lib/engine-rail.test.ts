@@ -78,6 +78,10 @@ describe("empty-engine first launch", () => {
       { snapshot: { state: "unavailable" } },
       { snapshot: { state: "unavailable" } },
     ])).toBe(true);
+    expect(isEmptyEngineLaunch([
+      { snapshot: { state: "unavailable" } },
+      { snapshot: { state: "checking" } },
+    ])).toBe(false);
   });
 
   it("stays empty when only retired engines claim to be available", () => {

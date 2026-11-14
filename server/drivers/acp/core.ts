@@ -20,7 +20,7 @@ import { canServeTurn, warmFingerprint, warmToolsKey, type WarmEligibilityInput 
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmPool, type WarmSession } from "../warm-pool.ts";
 
 import { applyCredentialAllowlist } from "../../config.ts";
-import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
+import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
@@ -701,6 +701,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             check();
             entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
+            if (!shape) setCliPriority(entry.connection.child, "low");
             entry.ready = holder.ready;
             await setup(entry, ctx.cliTurn, ctx.paths, lease.signal, () => check(entry), !shape,
               skipSubscriptionAuthForLocalInject(turn.model));
@@ -903,6 +904,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           check();
           entry ??= spawnCold();
+          setCliPriority(entry.connection.child, "normal");
           reused = !!entry.sessionId;
           handshakeReuse = !reused && !!entry.init;
           check(entry);

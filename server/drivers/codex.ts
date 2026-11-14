@@ -40,6 +40,7 @@ import {
   STATIC_CODEX_MODELS,
 } from "./codex-catalog.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
+import { codexDirect } from "./codex-direct.ts";
 import { forkCodex } from "./codex-fork.ts";
 import { augmentedPath } from "../env-path.ts";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
@@ -350,6 +351,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           cwd: turn.cwd ?? homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
+          direct: codexDirect,
         });
 
       child.once("spawn", () => endSpawn?.("spawned"));

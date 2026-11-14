@@ -24,7 +24,8 @@ vi.mock("@/state/store", async (importOriginal) => {
 });
 
 import { Composer } from "./Composer";
-import type { Bot } from "@/state/store";
+import type { Bot, Group } from "@/state/store";
+import { applyLocale } from "@/lib/i18n";
 
 const bot: Bot = {
   id: "stopper", threadId: "stopper-thread", name: "Stopper", title: "", description: "",
@@ -120,5 +121,37 @@ describe("composer stop on a call", () => {
     await act(async () => root!.render(createElement(Composer, { bot, call: () => createElement("button", { "aria-label": "End call" }) })));
     expect(host.querySelector('button[aria-label="End call"]')).not.toBeNull();
     expect(host.querySelector('button[aria-label="Stop this turn"]')).toBeNull();
+  });
+});
+
+describe("composer stop on a bot handoff", () => {
+  const room = { id: "g1", threadId: "g1-thread", name: "Team", memberIds: [], messages: [], hosted: { roomId: "r1" }, working: false } as unknown as Group;
+
+  async function mountRoom(group: Group) {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(Composer, { group, members: [] })));
+  }
+
+  afterEach(() => applyLocale("en"));
+
+  it.each([
+    ["en", "Bots are working it out · turn 3"],
+    ["ko", "봇끼리 맞추는 중 · 3턴"],
+  ] as const)("shows the %s strip with a room Stop while no host bot works", async (locale, text) => {
+    applyLocale(locale);
+    await mountRoom({ ...room, botChain: 3 });
+    const strip = host!.querySelector<HTMLElement>("[data-bot-chain]")!;
+    expect(strip.textContent).toBe(text);
+    expect(strip.className).toContain("text-[12px]");
+    await act(async () => host!.querySelector<HTMLElement>("[data-orbit-composer-stop]")!.click());
+    expect(dispatch.mock.calls.map(([action]) => action)).toContainEqual({ type: "interruptGroup", groupId: "g1" });
+  });
+
+  it("shows no strip or Stop once the handoff ends", async () => {
+    await mountRoom(room);
+    expect(host!.querySelector("[data-bot-chain]")).toBeNull();
+    expect(host!.querySelector("[data-orbit-composer-stop]")).toBeNull();
   });
 });

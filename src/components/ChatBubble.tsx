@@ -382,7 +382,7 @@ const Bubble = memo(function Bubble({
               <AttachedImageGallery paths={attachedImages.images} className="ml-3 max-w-[min(42rem,78%)] justify-start pl-3" />
             )}
             <PeerMessageBody text={visibleText} />
-            {attachedImages && <FileAttachmentRows files={attachedImages.files} className="mt-2 ml-3 max-w-[min(42rem,78%)] pl-3" />}
+            {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className="mt-2 ml-3 max-w-[min(42rem,78%)] pl-3" />}
           </div>
           {!message.placeholder && <ReactionChips threadId={threadId} message={message} members={members} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
         </div>
@@ -482,7 +482,7 @@ const Bubble = memo(function Bubble({
               <div className={cn(collapsible && USER_FOLD_CLASS)}>
                 <LinkedText text={visibleText} />
               </div>
-              {attachedImages && <FileAttachmentRows files={attachedImages.files} className={cn(visibleText && "mt-2")} />}
+              {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
               {message.steered && (
                 <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
                   {t("chat.sentMidTurn")}

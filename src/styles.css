@@ -5105,7 +5105,9 @@ button:disabled.bg-danger {
   box-shadow:
     0 0 0 1.5px color-mix(in oklab, var(--color-accent) 92%, transparent),
     0 0 14px 3px color-mix(in oklab, var(--color-accent) 60%, transparent);
-  animation: needs-you-pulse 2s ease-in-out infinite;
+  opacity: 1;
+  /* Ends mid-pulse on the held ring: an endless pulse repaints the window every frame. */
+  animation: needs-you-pulse 2s ease-in-out 3.5;
 }
 
 @keyframes needs-you-pulse {
@@ -5363,7 +5365,7 @@ button:disabled.bg-danger {
   will-change: transform;
 }
 
-/* Paused in the background. The needs-you pulse stays. */
+/* Paused in the background. The needs-you pulse stays on blur. */
 html[data-orbit-idle] :is(
   .orbit-mark-rings,
   .mascot-avatar .mascot-idle,
@@ -5378,6 +5380,10 @@ html[data-orbit-idle] :is(
 
 html[data-orbit-idle] [data-orbit-composer-frame]:focus-within > [data-orbit-rainbow] > span,
 html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] > [data-orbit-rainbow] > span {
+  animation-play-state: paused;
+}
+
+html[data-orbit-idle="hidden"] .needs-you-glow::after {
   animation-play-state: paused;
 }
 

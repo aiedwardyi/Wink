@@ -1,0 +1,53 @@
+.map-tree { position: relative; flex-shrink: 0; width: 100%; min-height: 60px; overflow: hidden; }
+.map-tree-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.map-tree-lines path { fill: none; stroke: var(--color-hairline); stroke-width: 1; }
+.map-tree-lines .map-tree-hot { stroke: var(--color-accent); stroke-width: 1.5; }
+.map-tree-n { position: absolute; left: 0; top: 0; }
+.map-tree-box { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 26px; padding: 0 9px; border: 1px solid var(--color-hairline); background: var(--color-panel); white-space: nowrap; }
+.map-tree-box b { font: 500 11.5px/1 var(--font-sans, sans-serif); color: var(--color-ink); }
+.map-tree-box b i { font-style: normal; color: var(--color-ink-secondary); }
+.map-tree-box span { font: 10px/1 var(--font-sans, sans-serif); color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; }
+.map-tree-n[data-kind="root"] .map-tree-box { background: var(--color-raised); }
+.map-tree-n[data-kind="root"] .map-tree-box b { font-weight: 600; font-size: 12.5px; }
+.map-tree-n[data-kind="box"] .map-tree-box { background: transparent; }
+.map-tree-n[data-kind="box"] .map-tree-box b { color: var(--color-ink-secondary); font-weight: 400; }
+.map-tree-box[data-changed] { border-color: var(--color-accent); }
+.map-tree[data-team] .map-tree-box[data-changed] { border-color: color-mix(in oklab, var(--color-ink-secondary) 60%, transparent); }
+button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.map-tree-box.map-tree-more { justify-content: center; border-style: dashed; background: transparent; }
+.map-tree-box.map-tree-more b { color: var(--color-ink-secondary); font-weight: 400; }
+.map-tree-ticks { position: absolute; left: -1px; right: -1px; bottom: -1px; height: 3px; }
+.map-tree-files { position: absolute; left: 0; right: 0; }
+.map-tree-file { position: absolute; left: 14px; right: 0; display: flex; align-items: center; gap: 6px; height: 17px; padding-right: 4px; font: 11px/1 var(--font-mono, monospace); color: var(--color-ink-secondary); text-align: left; white-space: nowrap; }
+.map-tree-file i { flex: none; width: 7px; height: 7px; border: 1px solid color-mix(in oklab, var(--color-ink-secondary) 75%, transparent); }
+.map-tree-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.map-tree-file[data-state="changed"] { color: var(--color-ink); cursor: pointer; }
+.map-tree-file[data-state="changed"] i { border-color: var(--c, var(--color-accent)); background: var(--c, var(--color-accent)); }
+.map-tree-file[data-now] span { font-weight: 600; }
+.map-tree-file[aria-current="true"] { background: var(--color-raised); }
+.map-tree-file .map-tree-x { margin-left: auto; }
+.map-tree-hidden { position: absolute; left: 14px; height: 15px; font: 10px/15px var(--font-sans, sans-serif); color: var(--color-ink-secondary); opacity: .8; white-space: nowrap; }
+.map-tree-sqs { position: absolute; left: 14px; top: 2px; display: flex; flex-wrap: wrap; gap: 2px; }
+.map-tree-sq { position: relative; width: 7px; height: 7px; background: var(--c); }
+.map-tree-sq::after { content: ""; position: absolute; inset: -1px; }
+.map-tree-sq[aria-current="true"] { outline: 1px solid var(--color-ink); outline-offset: 1px; }
+.map-tree-pin { position: absolute; left: 0; top: 0; z-index: 3; width: 13px; height: 14px; opacity: 0; pointer-events: none; }
+.map-tree-pin svg { display: block; width: 13px; height: 14px; fill: var(--color-accent); stroke: var(--color-panel); stroke-width: 1.2; }
+.map-tree-team { display: flex; flex-direction: column; gap: 2px; }
+.map-tree-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-bottom: 3px; font: 500 10.5px/16px var(--font-sans, sans-serif); color: var(--color-ink-secondary); }
+.map-tree-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.map-tree-legend span[data-now] { color: var(--color-ink); }
+.map-tree-legend i { flex: none; width: 8px; height: 8px; background: var(--c); }
+.map-tree-legend em { font: 400 10px/1 var(--font-sans, sans-serif); font-style: normal; font-variant-numeric: tabular-nums; opacity: .75; }
+.map-tree-clash { display: flex; align-items: center; gap: 7px; min-width: 0; font: 11px/17px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
+.map-tree-clash code { font: 500 11px/1 var(--font-mono, monospace); color: var(--color-ink); }
+.map-tree-clash span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.map-tree-x { flex: none; width: 13px; height: 10px; overflow: visible; }
+.map-tree-x rect { fill: none; stroke: var(--color-warning); stroke-width: 1; }
+.map-tree-x path { fill: var(--color-warning); }
+@media (hover: hover) { .map-tree-file[data-state="changed"]:hover, button.map-tree-box:hover { background: var(--color-raised); } }
+@container map-pane (max-width: 503px) {
+  .map-tree-box b { font-size: 11px; }
+  .map-tree-n[data-kind="root"] .map-tree-box b { font-size: 12px; }
+  .map-tree-file { font-size: 10.5px; }
+}

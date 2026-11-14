@@ -5,6 +5,7 @@ import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { spawnCli } from "../procs.ts";
 import { awaitDyingAppServers, codexHome, decodeCodexSelection, retireAppServer } from "./codex-catalog.ts";
+import { codexDirect } from "./codex-direct.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 
@@ -76,7 +77,7 @@ export function createCodexText(cli: string, childEnv: () => Record<string, stri
           "-c", "tools.experimental_request_user_input.enabled=false",
           "-c", "features.default_mode_request_user_input=false",
           "-c", "project_doc_max_bytes=0",
-        ], { cwd, env, stdio: ["pipe", "pipe", "pipe"], ...(account ? { account, accountDriver: "codex" } : {}) });
+        ], { cwd, env, stdio: ["pipe", "pipe", "pipe"], direct: codexDirect, ...(account ? { account, accountDriver: "codex" } : {}) });
         let settled = false;
         let nextId = 0;
         let buffer = "";

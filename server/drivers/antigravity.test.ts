@@ -55,9 +55,14 @@ const FOREIGN_CREDENTIALS = [
 ];
 
 describe("readAntigravityModelCatalog", () => {
-  it("lists the three Gemini 4 Argon tiers first, then 3.8 Flash ahead of older Flash entries", () => {
+  it("lists the three Gemini 4 Carbon tiers first, then Argon, then 3.8 Flash ahead of older Flash entries", () => {
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     expect(STATIC_ANTIGRAVITY_MODELS.options.slice(0, 3)).toEqual([
+      { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)", contextWindow: 1_048_576 },
+      { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon (Low)", contextWindow: 1_048_576 },
+    ]);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.slice(3, 6)).toEqual([
       { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)", contextWindow: 1_048_576 },
       { id: "gemini-4-argon-low", label: "Gemini 4 Argon (Low)", contextWindow: 1_048_576 },
@@ -81,6 +86,7 @@ describe("readAntigravityModelCatalog", () => {
       "gemini-3.6-flash-low",
     ]));
     expect(ids.some((id) => /^gemini-3\.8-pro/.test(id))).toBe(false);
+    expect(STATIC_ANTIGRAVITY_MODELS.options.filter((option) => option.id.startsWith("gemini-4-hydrogen-")).map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(ids.indexOf("gemini-4-argon-high")).toBeLessThan(ids.indexOf("gemini-3.8-flash-high"));
     expect(ids.indexOf("gemini-3.8-flash-high")).toBeLessThan(ids.indexOf("gemini-3.7-flash-high"));
   });
@@ -89,9 +95,17 @@ describe("readAntigravityModelCatalog", () => {
   // Update this list only after re-running `agy models` and pasting the output —
   // PR #86 shipped a bare gemini-3.8-flash because nobody did.
   const AGY_MODELS_OUTPUT_1_3_5 = [
+    // Carbon tiers from `agy models` on 1.5.8.
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
+    // Hydrogen tiers from `agy models` on 1.5.5.
+    "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-low",
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",

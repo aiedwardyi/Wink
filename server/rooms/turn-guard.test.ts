@@ -209,6 +209,8 @@ describe("room Stop on a hosted room", () => {
       flushInterruptedTask: vi.fn(),
       closeOpenApprovals: vi.fn(),
       releaseInterruptedBot,
+      broadcast: vi.fn(),
+      publicGroupState: (group: unknown) => group,
     } as unknown as Parameters<typeof createGroupRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };
     const stopped = routes.interrupt(Readable.from([]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);

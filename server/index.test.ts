@@ -3358,6 +3358,9 @@ describe("harness HTTP API", () => {
       expect(immediate.groups.find((group: { id: string }) => group.id === room.id)?.working).toBe(true);
       expect((await api("POST", `/api/groups/${room.id}/tasks`, { title: "Too soon" })).status).toBe(409);
       expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [first.id] })).status).toBe(409);
+      const picked = await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect(picked.status).toBe(200);
+      expect(picked.body.group.defaultResponder).toEqual({ kind: "mentions" });
 
       const interrupted = await api("POST", `/api/groups/${room.id}/interrupt`, {
         threadId: room.threadId,

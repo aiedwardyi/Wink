@@ -1,11 +1,12 @@
 // Every message into a team room: the host's through the normal send route,
 // a person's through the door. The host's line is only committed here: the
 // normal group turn answers it. A person's wakes one bot, at most, with an ask.
+import { botChain, CHAIN_LINES } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
 import { alertWhenUnread, roomLineText } from "./alerts.ts";
 import { broadcastDoorStop } from "./door-streams.ts";
-import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
+import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
 import { ownRoomFiles } from "./files.ts";
 import { writeRoomEntry, type LocalRow } from "./mirror.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
@@ -52,8 +53,11 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     }
     if (refusal) throw statusError(429, refusal);
   }
+  const ended = !person && liveBotChain(group) > 0;
   const { entry, message } = writeRoomEntry(store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}), ...(files.length ? { files } : {}) }, sendId, local);
   stopped.delete(roomId);
+  // the host's line ends a handoff; republish the group so its strip clears
+  if (ended) store.patchGroup(group.id, {});
   if (person) markPersonLine(group, person, entry, person.name);
   if (!bot || !person) return { entry, message, ask: null };
   const ask = createAsk({
@@ -70,18 +74,30 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
   return { entry, message, ask: askById(ask.id) };
 }
 
-function markPersonLine(group: HostedGroup, person: RoomPerson, entry: RoomEntry, name: string): void {
+function markPersonLine(group: HostedGroup, person: RoomPerson, entry: RoomEntry, name: string, ping = true): void {
   const { store, alert } = roomAskDeps();
   spend(group.hosted.roomId, person.id, "message");
   store.patchGroup(group.id, { unread: true });
   const line = { chat: group.id, threadId: group.threadId, room: group.name, name, text: roomLineText(entry.text, entry.files) };
-  alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert);
+  if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert);
 }
 
 /** Room Stop ends a bot chain here and on every joined PC. */
 export function stopBotChain(roomId: string): void {
   stopped.add(roomId);
   broadcastDoorStop(roomId);
+}
+
+/** Bot lines in the room's live handoff, for the strip; 0 when none is live or Stop ended it. */
+export function liveBotChain(group: HostedGroup): number {
+  const roomId = group.hosted.roomId;
+  if (stopped.has(roomId)) return 0;
+  try {
+    return botChain(recentRoomEntries(roomId, CHAIN_LINES), [...groupBots(group), ...teamBots(roomId)], [roomAskDeps().hostName(), ...roomPeople(roomId).map((person) => person.name)]);
+  } catch {
+    // group state goes out before room asks are configured, and for a missing room
+    return 0;
+  }
 }
 
 /** A teammate's bot answer from its owner's PC: counted as the owner's line. Its @ to a host bot asks under the owner. */
@@ -93,10 +109,12 @@ export function teamBotSend(group: HostedGroup, owner: RoomPerson, bot: TeamBot,
   if (refusal) throw statusError(429, refusal);
   const author: RoomAuthor = { kind: "bot", id: bot.id, name: bot.name, owner: owner.id };
   const { entry } = writeRoomEntry(roomAskDeps().store, group, { author, text, ...(quote ? { replyToId: quote.id } : {}) }, sendId);
-  markPersonLine(group, owner, entry, bot.name);
   const people = roomPeople(roomId);
   const bots = groupBots(group);
-  const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  const tagged = botLineResponder(entry.text, [...bots, ...teamBots(roomId)], [roomAskDeps().hostName(), ...people.map((person) => person.name)], bot.id);
+  // a handoff pings no one; the line that closes it does
+  markPersonLine(group, owner, entry, bot.name, !tagged);
+  const hit = stopped.has(roomId) || peopleOnlyRoom(roomId) ? null : tagged;
   const asked = bots.find((candidate) => candidate.id === hit?.id);
   if (asked && !sendRefusal(roomId, owner.id, "work", true)) {
     runAsk(createAsk({

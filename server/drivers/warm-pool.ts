@@ -115,6 +115,12 @@ export class WarmPool {
 
   setLiveTurns(probe: () => boolean) { this.liveTurns = probe; }
 
+  /** Boot and sign-in warms have no user intent: never on a small PC, and only with a free slot and RAM over the floor. */
+  idleWarmAllowed(engine: string): boolean { return !this.smaller() && this.freemem() >= this.floor() && this.admits(engine); }
+
+  /** A small PC holds its one slot for a click-warmed host only briefly. */
+  handshakeIdleMs(): number { return this.smaller() ? 60_000 : IDLE_TTL_MS; }
+
   /** The pool's own generation for an instance; Captured uses it when the account has none. */
   generation(key: Pick<WarmKey, "engine" | "instanceId">): number {
     return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0);

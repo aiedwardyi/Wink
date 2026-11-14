@@ -197,7 +197,7 @@ describe("sourced data", () => {
   it("charts 12 Design models with published page costs and confidence intervals", () => {
     const { points, missing } = indexView("design", PICKER_MODEL_IDS.map((model) => ({ provider: "other", model, label: model })));
     expect(new Set(points.map((e) => e.model)).size).toBe(12);
-    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
+    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
     for (const e of points) {
       expect([e.benchmark, e.costBenchmark, e.effort]).toEqual(["rams-index", "rams-index", "default"]);
       expect(e.costSource).toBe("https://www.rams.ai/index/data/models-v0.6.1.json");

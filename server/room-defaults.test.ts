@@ -24,10 +24,10 @@ describe("room defaults", () => {
   });
 
   it.each([
-    { kind: "member", botId: "lead" },
-    { kind: "mentions" },
-    undefined,
-  ] as const)("loads a saved %j room with everyone answering and mentions selecting one", (policy) => {
+    [{ kind: "member", botId: "lead" }, ["Kit"]],
+    [{ kind: "mentions" }, []],
+    [undefined, ["Ada", "Kit"]],
+  ] as const)("keeps a saved %j pick across reloads, everyone when none was saved", (policy, answering) => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
@@ -44,10 +44,9 @@ describe("room defaults", () => {
     const reloaded = new Store(selection);
     const loaded = reloaded.group(room.id)!;
     const members = loaded.memberIds.map((id) => reloaded.bot(id)!);
-    expect(roomResponders("hi", members, loaded.defaultResponder)).toEqual(members);
-    expect(roomResponders("@Kit hi", members, loaded.defaultResponder)).toEqual([members[1]]);
-    expect(loaded.defaultResponder).toEqual({ kind: "everyone" });
-    expect(new Store(selection).group(room.id)?.defaultResponder).toEqual({ kind: "everyone" });
+    expect(roomResponders("hi", members, loaded.defaultResponder).map((bot) => bot.name)).toEqual(answering);
+    expect(roomResponders("@Ada hi", members, loaded.defaultResponder)).toEqual([members[0]]);
+    expect(new Store(selection).group(room.id)?.defaultResponder).toEqual(loaded.defaultResponder);
   });
 
   it("keeps bot-to-bot channels mention-only across reloads", () => {
