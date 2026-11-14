@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import { MessageSquareReply, X } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -46,7 +46,7 @@ export function QuoteRow({
   icon: ReactNode;
   label: ReactNode;
   text: ReactNode;
-  jump?: ButtonHTMLAttributes<HTMLButtonElement>;
+  jump?: ComponentProps<"button">;
   onClear?: () => void;
   clearLabel?: string;
 } & Omit<HTMLAttributes<HTMLDivElement>, "children">) {

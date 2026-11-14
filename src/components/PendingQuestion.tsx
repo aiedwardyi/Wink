@@ -53,7 +53,25 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
-  const fold = (value: boolean) => mark(openQuestions, message.id, !value);
+  const rowButton = useRef<HTMLButtonElement>(null);
+  const foldButton = useRef<HTMLButtonElement>(null);
+  const moveFocus = useRef(false);
+  // the control you used unmounts, so focus follows to its counterpart
+  useEffect(() => {
+    if (!moveFocus.current) return;
+    moveFocus.current = false;
+    (open ? foldButton : rowButton).current?.focus();
+  }, [open]);
+  // a row that leaves mid-glow must not pulse again when it comes back
+  const fold = (value: boolean) => {
+    setGlowing(false);
+    moveFocus.current = true;
+    mark(openQuestions, message.id, !value);
+  };
+  const hide = () => {
+    setGlowing(false);
+    mark(hiddenQuestions, message.id, true);
+  };
   const card = message.card;
   if (!card || hidden) return null;
   return (
@@ -86,7 +104,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             if (!start || !end) return;
             const dx = end.clientX - start.x;
             if ((start.axis ?? lockAxis(dx, end.clientY - start.y)) !== "x") return;
-            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) mark(hiddenQuestions, message.id, true);
+            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) hide();
           }}
           onTouchCancel={(event) => {
             slide.current = null;
@@ -95,8 +113,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
           icon={<span className={BADGE}>{count}</span>}
           label={t("ask.asks", { name: askerName })}
           text={card.subtitle.trim().split(/\r?\n/, 1)[0]}
-          jump={{ onClick: () => fold(false), "aria-expanded": false, "aria-label": `${t("ask.expandQuestion")}: ${card.subtitle}` }}
-          onClear={() => mark(hiddenQuestions, message.id, true)}
+          jump={{ ref: rowButton, onClick: () => fold(false), "aria-expanded": false, "aria-label": `${t("ask.expandQuestion")}: ${card.subtitle}` }}
+          onClear={hide}
           clearLabel={t("ask.hideQuestion")}
         />
       </Fold>
@@ -130,6 +148,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
               </span>
               <button
                 type="button"
+                ref={foldButton}
                 onClick={() => fold(true)}
                 aria-label={t("ask.foldQuestion")}
                 aria-expanded={true}

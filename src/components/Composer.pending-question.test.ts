@@ -149,6 +149,17 @@ describe("pinned ask_user question", () => {
     expect(row()!.classList.contains("arrival-glow")).toBe(false);
   });
 
+  it("drops a glow cut short, so the row does not pulse again when it comes back", async () => {
+    await mount({ bot: bot([question]) });
+    expect(row()!.classList.contains("arrival-glow")).toBe(true);
+    await act(async () => pinButton("Hide question").click());
+    await act(async () => dot()!.click());
+    expect(row()!.classList.contains("arrival-glow")).toBe(false);
+    await expand();
+    await act(async () => pinButton("Fold question").click());
+    expect(row()!.classList.contains("arrival-glow")).toBe(false);
+  });
+
   it("plays the arrival glow once at about 1.2s, never looping", async () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
     expect(css).toMatch(/\.arrival-glow::before \{[^}]*animation: arrival-glow-once 2s ease-in-out 1;/);
@@ -163,9 +174,11 @@ describe("pinned ask_user question", () => {
     expect(pin()?.textContent).toContain("Ship to prod or staging?\nStaging has last week's data.");
     expect(pinButton("Prod")).toBeTruthy();
     expect(pinButton("Staging")).toBeTruthy();
+    expect(document.activeElement).toBe(pinButton("Fold question"));
     await act(async () => pinButton("Fold question").click());
     expect(row()).not.toBeNull();
     await settle();
+    expect(document.activeElement).toBe(row()!.querySelector("button[aria-expanded]"));
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
   });
 
