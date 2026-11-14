@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,8 +24,8 @@ describe("video cards", () => {
   let host: HTMLElement;
   let root: Root;
   const card = () => host.querySelector<HTMLButtonElement>("[data-show-card]")!;
-  const mount = (path: string) => act(async () => root.render(createElement(MediaViewerProvider, { threadId: "t1", messages: [],
-    children: createElement(ChatMarkdown, { text: `Here it is: [${path.split("\\").pop()}](<${path}>)`, threadId: "t1" }) })));
+  const mount = (path: string) => act(async () => root.render(createElement(StrictMode, null, createElement(MediaViewerProvider, { threadId: "t1", messages: [],
+    children: createElement(ChatMarkdown, { text: `Here it is: [${path.split("\\").pop()}](<${path}>)`, threadId: "t1" }) }))));
 
   beforeEach(() => {
     frame = () => "blob:poster";
@@ -74,6 +74,9 @@ describe("video cards", () => {
     expect(video.controls).toBe(true);
     expect(document.querySelector("[data-media-viewer] img")).toBeNull();
     expect(window.ogb!.openFile).not.toHaveBeenCalled();
+    document.querySelector<HTMLElement>("[data-media-viewer] a[download]")!.focus();
+    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(video);
   });
 
   it("keeps the file icon and opens the file the old way when no frame can be made", async () => {

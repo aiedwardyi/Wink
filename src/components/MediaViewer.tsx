@@ -49,11 +49,14 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   const src = attempt ? `${image.src}${image.src.includes("?") ? "&" : "?"}retry=${attempt}` : image.src;
 
   // a removed video keeps its decoder and connection until collected, so let go of both now
-  const release = useCallback((video: HTMLVideoElement) => () => {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-  }, []);
+  const play = useCallback((video: HTMLVideoElement) => {
+    video.setAttribute("src", src);
+    return () => {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [src]);
 
   const close = () => {
     if (closed.current || callbacks.current.closing) return;
@@ -182,7 +185,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
         wake();
       } else if (event.key === "Tab") {
         wake();
-        const controls = [...root.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')].filter((el) => getComputedStyle(el).display !== "none");
+        const controls = [...root.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), video')].filter((el) => getComputedStyle(el).display !== "none");
         const index = controls.indexOf(document.activeElement as HTMLElement);
         if (index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
           event.preventDefault();
@@ -363,7 +366,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
           <ImageOff size={34} /><p>{t("viewer.unavailable")}</p>
           {image.caption && <p className="max-w-prose px-4 text-center text-[13px]">{image.caption}</p>}
           <button className="rounded-lg bg-white/15 px-4 py-3 text-white hover:bg-white/25" onClick={() => { setFailed(false); setLoading(true); setAttempt((n) => n + 1); }}>{t("viewer.retry")}</button>
-        </div> : image.video ? <video ref={release} key={image.src} src={src} controls autoPlay playsInline data-viewer-video=""
+        </div> : image.video ? <video ref={play} key={image.src} controls autoPlay playsInline data-viewer-video=""
           className="absolute inset-0 size-full object-contain" onLoadedData={() => setLoading(false)} onError={() => setFailed(true)} />
         : <img ref={imgRef} key={image.src} src={src} alt={image.name} draggable={false}
           className="absolute left-0 top-0 h-full w-full max-w-none object-contain" style={{ transformOrigin: "0 0", maxWidth: "none" }}
