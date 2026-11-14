@@ -24,6 +24,7 @@ import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
+import { createWorkerHostClient } from "./worker-host-client.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
 import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
@@ -332,6 +333,9 @@ async function paneMailbox() {
 }
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
 const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
+const ptyModule = () => require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty");
+// The runtime lives outside the install folder, so an update can replace the app while the host keeps running.
+const workerHost = createWorkerHostClient({ root: path.join(app.getPath("userData"), "worker-host"), runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), app.isPackaged ? "Wink" : "Wink-dev", "worker-host"), ptyModule, log: slog });
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
@@ -348,9 +352,8 @@ const terminalHost = createTerminalHost({
   processes: paneProcesses,
   paneCleanup: createPaneCleanupWorker({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
-  loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
-    require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
-  ) }),
+  loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(ptyModule(), shell, args, options) }),
+  hostPty: workerHost.spawn,
   async resolveCwd(botId) {
     if (app.isPackaged && !serverToken) throw new Error("Server is not ready");
     const port = app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT);
@@ -2170,6 +2173,7 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && !verifyProbe) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
+  if (!verifyProbe) void workerHost.prewarm();
   if (!verifyProbe) void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the

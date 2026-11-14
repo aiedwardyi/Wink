@@ -520,7 +520,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, remote = null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, remote = null, hostPty = null }) {
   const sessions = new Map();
   const mapEvents = createMapEvents();
   const watchedOwners = new WeakSet();
@@ -1211,15 +1211,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } catch {}
     }
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
-    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [], {
-      name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
-    });
+    const shellArgs = platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [];
+    const options = { name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32" };
+    const local = () => loadPty().spawn(shell, shellArgs, options);
+    // A bot pane runs in the worker host when one is connected; it never waits for one.
+    const spawn = () => (botPane && hostPty?.({ id, tag: input.botId, shell, args: shellArgs, options }, local)) || local();
     let pty;
     try {
       pty = await spawn();
     } catch (cause) {
       throw errorValue(cause);
     }
+    return awaitSession(createSession({ id, key, event, input, folder, cwd, botPane, worker, managed, workerSession, baseHead, paneEnv, shell, pty, spawn, mail }), cancelPromise);
+  };
+  const createSession = ({ id, key, event, input, folder, cwd, botPane, worker, managed, workerSession, baseHead, paneEnv, shell, pty, spawn, mail }) => {
     const session = {
       id, key, botId: input.botId, botPane, workerSession, baseHead, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0, viewers: new Set(),
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
@@ -1267,6 +1272,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     sessions.set(session.id, session);
     watchOwner(event.sender);
     attach(session);
+    return session;
+  };
+  const awaitSession = async (session, cancelPromise) => {
+    const { pty, botPane } = session;
     try {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may expose readiness only when worker-backed.
       const ready = pty.ready && typeof pty.ready.then === "function"
