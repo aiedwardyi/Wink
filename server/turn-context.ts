@@ -9,22 +9,25 @@ export interface ReplayMessage {
   speaker?: { botId: string; name: string };
 }
 
+// Voice-call provenance is not a chat engine switch.
 const REPLAY_ENGINE_NAMES = new Map([
   ["claudeAgent", "Claude"],
   ["codex", "Codex"],
   ["antigravityAgent", "Gemini"],
-  ["geminiAgent", "Gemini"],
   ["grokAgent", "Grok"],
   ["museAgent", "Muse"],
 ]);
 
-export function replayEngineTag(engine?: string, driverKind?: string): string {
-  return engine && driverKind && engine !== driverKind ? ` (on ${REPLAY_ENGINE_NAMES.get(engine) ?? engine})` : "";
+export function replayEngineTag(engine?: string, driverKind?: string, model?: string): string {
+  const name = engine && REPLAY_ENGINE_NAMES.get(engine);
+  // Box selects its engine by model; its driver kind only names the runner.
+  const currentEngine = driverKind === "boxAgent" ? (model?.startsWith("gpt") ? "codex" : "claudeAgent") : driverKind;
+  return name && currentEngine && engine !== currentEngine ? ` (on ${name})` : "";
 }
 
-export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string): string {
+export function replayMessageText(message: ReplayMessage, driverKind: string, botId?: string, model?: string): string {
   if (message.role !== "assistant" || (botId && message.speaker?.botId !== botId)) return message.text;
-  const tag = replayEngineTag(message.engine, driverKind);
+  const tag = replayEngineTag(message.engine, driverKind, model);
   if (!tag) return message.text;
   const speaker = message.speaker?.name;
   const prefix = speaker ? `${speaker}: ` : "";
@@ -33,8 +36,8 @@ export function replayMessageText(message: ReplayMessage, driverKind: string, bo
     : `${tag.trimStart()} ${message.text}`;
 }
 
-function replayLine(message: ReplayMessage, driverKind?: string): string {
-  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind)}`}: ${message.text}`;
+function replayLine(message: ReplayMessage, driverKind?: string, model?: string): string {
+  return `${message.role === "user" ? "User" : `Assistant${replayEngineTag(message.engine, driverKind, model)}`}: ${message.text}`;
 }
 
 // Building the text a driver actually receives. Three situations force an
@@ -52,6 +55,7 @@ export interface TurnContextInput {
   /** settled text turns on the active branch, oldest first, capped upstream */
   transcript: ReplayMessage[];
   driverKind?: string;
+  model?: string;
   /** the visible branch changed (edit / version switch) */
   rewound: boolean;
   /** this driver instance has no session cursor for this thread */
@@ -615,6 +619,7 @@ export function buildResumeFallback(input: {
   text: string;
   transcript: ReplayMessage[];
   driverKind?: string;
+  model?: string;
   taskRecord?: TaskRecordContext;
   taskRecordText?: string;
 }): string {
@@ -624,7 +629,7 @@ export function buildResumeFallback(input: {
     record ? "" : null,
     RESUME_FALLBACK_PREAMBLE,
     "",
-    ...input.transcript.map((message) => replayLine(message, input.driverKind)),
+    ...input.transcript.map((message) => replayLine(message, input.driverKind, input.model)),
     "",
     REPLY_MARKER,
     "",
@@ -669,7 +674,7 @@ export function buildTurnContext(input: TurnContextInput): {
       record ? "" : null,
       replayPreamble(input),
       "",
-      ...transcript.map((message) => replayLine(message, input.driverKind)),
+      ...transcript.map((message) => replayLine(message, input.driverKind, input.model)),
       "",
       REPLY_MARKER,
       "",

@@ -1204,14 +1204,32 @@ describe("replay engine provenance", () => {
     expect(buildTurnContext({ ...input, fresh: false, transcript: replay })).toEqual({ turnText: "Continue", resume: true });
   });
 
+  it.each(["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent", "boxAgent"])("leaves call lines untagged for %s", (driverKind) => {
+    const messages = [
+      { role: "user" as const, text: "What did we discuss?" },
+      { role: "assistant" as const, text: "Spoken answer", engine: "geminiAgent" },
+    ];
+    const plain = messages.map(({ role, text }) => ({ role, text }));
+    const input = { text: "Continue", driverKind, rewound: false, fresh: true, replaysNatively: false };
+    expect(buildTurnContext({ ...input, transcript: messages })).toEqual(buildTurnContext({ ...input, transcript: plain }));
+    expect(buildResumeFallback({ ...input, transcript: messages })).toBe(buildResumeFallback({ ...input, transcript: plain }));
+    expect(replayMessageText(messages[1]!, driverKind)).toBe("Spoken answer");
+  });
+
+  it.each(["boxAgent", "localModel"])("never prints the unknown engine id %s", (engine) => {
+    const message = { role: "assistant" as const, text: "Earlier answer", engine };
+    const input = { text: "Continue", transcript: [message], driverKind: "museAgent", rewound: false, fresh: true, replaysNatively: false };
+    expect(buildTurnContext(input).turnText).toContain("Assistant: Earlier answer");
+    expect(buildResumeFallback(input)).toContain("Assistant: Earlier answer");
+    expect(replayMessageText(message, "museAgent")).toBe(message.text);
+  });
+
   it.each([
     ["claudeAgent", "Claude"],
     ["codex", "Codex"],
     ["antigravityAgent", "Gemini"],
-    ["geminiAgent", "Gemini"],
     ["grokAgent", "Grok"],
     ["museAgent", "Muse"],
-    ["localModel", "localModel"],
   ])("tags %s history for inline and native replay", (engine, label) => {
     const driverKind = engine === "museAgent" ? "codex" : "museAgent";
     const message = { role: "assistant" as const, text: "Generated a dog image", engine };
