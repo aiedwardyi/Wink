@@ -24,6 +24,7 @@ const READY_TIMEOUT_MS = 5_000;
 const WINDOWS_READY_TIMEOUT_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 500;
 const QUIT_PANE_MS = 1_000;
+const KEEP_IDLE_MS = 2 * 60_000;
 export const TERMINAL_ACTIVITY_COALESCE_MS = 750;
 export const TERMINAL_ACTIVITY_ACK_COOLDOWN_MS = 3_000;
 export const TERMINAL_STALL_MS = 120_000;
@@ -972,12 +973,34 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
   };
+  // Finished work still ends at quit; only a hosted pane in the middle of a run carries over to the next start.
+  const carriesOver = (session) => {
+    if (!session.botPane || session.retired || session.exitCode !== null) return false;
+    const text = session.screen.text();
+    const finished = session.reportAt > 0 && session.reportAt >= session.stallArmedAt && !AGENT_BUSY_RE.test(text) && !agentJobsRunning(text)
+      && now() - Math.max(session.stallChangedAt, session.reportAt, session.userInputAt) >= KEEP_IDLE_MS;
+    return session.adopting || (session.shellExecuting && !finished);
+  };
+  // The worker host keeps running the pane: nothing of it is stopped, and its record tells the next start to take it back. False = the pane ends here.
+  const leave = (session) => {
+    if (!carriesOver(session) || session.pty.detach?.() !== true) return false;
+    session.retired = true;
+    clearActivityTimer(session);
+    clearTimeout(session.claudeTrustTimer);
+    if (active.get(session.key) === session.id) active.delete(session.key);
+    endViewers(session);
+    exitNotes.delete(session);
+    sessions.delete(session.id);
+    paneRuns?.kept(session.id);
+    return true;
+  };
   const watchOwner = (owner) => {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
     if (typeof owner.once !== "function" || watchedOwners.has(owner)) return;
     watchedOwners.add(owner);
     owner.once("destroyed", () => {
-      for (const live of sessions.values()) if (live.owner === owner) retireQuietly(live, true);
+      // Closing the window ends the app on Windows, and this runs before dispose() does.
+      for (const live of [...sessions.values()]) if (live.owner === owner && !leave(live)) retireQuietly(live, true);
     });
   };
   const reclaimExited = () => {
@@ -1130,7 +1153,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (parsed.bell && session.activityArmed) reportAttention(session, "bell");
       if (!parsed.bell && echo.text.trim()) scheduleActivity(session);
       const seq = ++session.seq;
-      emit(session, "terminal:data", { id: session.id, data, seq });
+      if (!session.adopting) emit(session, "terminal:data", { id: session.id, data, seq });
       if (session.viewers.size) fanOut(session, { seq, data });
     });
     pty.onExit(({ exitCode }) => { if (session.pty === pty) reportExit(session, exitCode); });
@@ -1342,7 +1365,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.contextCompactPending = false;
         watchStalls(session);
       }
-      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run });
+      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run,
+        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote } });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1659,10 +1683,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return labels;
     },
-    liveWorkerCount() {
+    /** `closing` counts only the workers a quit would stop: one the worker host keeps is not lost. */
+    liveWorkerCount({ closing = false } = {}) {
       let count = 0;
       for (const session of sessions.values()) {
-        if (session.botPane && !session.retired && session.exitCode === null && active.get(session.key) === session.id) count++;
+        if (session.botPane && !session.retired && session.exitCode === null && active.get(session.key) === session.id && !(closing && session.pty.hosted?.())) count++;
       }
       return count;
     },
@@ -1888,6 +1913,38 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       paneRuns?.closed(session.id);
       return retire(session, true).then(() => { void paneCleanup?.closed(session, keep); });
     },
+    /** Takes back a pane the worker host kept through a quit, under its old id. `pty` must not have handed on any output yet. */
+    adoptPane(run, pane, { pty, replayed }, mail = null) {
+      const sender = paneOwner();
+      if (disposed || sessions.has(run.id) || deletedBots.has(run.botId) || !sender || sender.isDestroyed?.()) return null;
+      const managed = Boolean(run.account);
+      const session = createSession({
+        id: run.id, key: `${sender.id}:${run.botId}:pane:${randomUUID()}`, event: { sender }, input: { botId: run.botId, label: run.label ?? undefined, cols: pane.cols, rows: pane.rows }, folder: { teacher: run.teacher }, cwd: run.cwd, botPane: true,
+        worker: managed ? { kind: "managed", account: run.account, executable: run.executable } : null, managed, workerSession: run.session ? { auth: randomUUID(), env: {}, run: { ...run.session } } : null, baseHead: run.baseHead ?? null,
+        paneEnv: { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${run.id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${run.id}`) }, shell: run.shell, pty, spawn: null, mail,
+      });
+      // Old output only rebuilds the screen: no keys are typed at it, no note is sent for it and the window does not see it twice.
+      Object.assign(session, { adopting: true, respawned: true, exitReported: true, startedAt: pane.start, spawnedAt: run.spawnedAt, label: run.label ?? undefined, resizedAt: Infinity, reportAt: Infinity });
+      if (run.remote) session.remote = run.remote;
+      return replayed.then(() => {
+        if (session.retired) return null;
+        const at = now();
+        const running = session.exitCode === null && (pane.mark?.value.startsWith(`${run.id};`) ? pane.mark.kind === "C" : session.shellExecuting);
+        const reported = run.state === "reported";
+        Object.assign(session, { adopting: false, workerReady: true, exitReported: session.exitCode !== null, resizedAt: -Infinity, reportAt: reported ? at : 0, stallArmedAt: at, stallChangedAt: at, engine: run.engine ?? null, agentSeen: true, claudeTrustAnswered: true, shellExecuting: running, workerFinished: !running });
+        if (running && run.engine) watchStalls(session);
+        if (session.exitCode === null) paneCleanup?.opened(session);
+        active.set(session.key, session.id);
+        paneRuns?.adopted(run.id);
+        // A run that ended while the app was away is told once; its record must not bring it back again.
+        if (!running) paneRuns?.ended(run.id);
+        emit(session, "terminal:opened", { id: session.id, botId: run.botId, label: run.label ?? null, generation: session.generation });
+        // A pane that ended while the app was away gets its row first, so the row shows as ended.
+        if (session.exitCode !== null) emit(session, "terminal:exit", { id: session.id, exitCode: session.exitCode });
+        const text = session.screen.text();
+        return { sessionId: session.id, running, busy: AGENT_BUSY_RE.test(text) || agentJobsRunning(text), exitCode: session.exitCode, reported };
+      });
+    },
     dispose() {
       if (disposal) return disposal;
       disposed = true;
@@ -1896,6 +1953,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       active.clear();
       const stopping = [...sessions.values()];
       const stops = stopping.map((session) => {
+        if (leave(session)) return undefined;
         session.retired = true;
         return retire(session);
       });

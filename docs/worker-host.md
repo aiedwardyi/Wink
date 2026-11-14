@@ -1,8 +1,8 @@
 # Worker host
 
 Bot terminals on Windows run inside a small hidden process, the worker host, instead of inside the Wink app.
-The host is the base for keeping workers alive through an app update. Today nothing changes for users: quitting
-Wink still closes every pane. macOS and Linux keep the in-app terminal path.
+A pane in the middle of a run stays in the host when Wink quits, updates or crashes, and the next start takes it
+back with its process, its screen and its bot. macOS and Linux keep the in-app terminal path.
 
 ## Shape
 
@@ -14,6 +14,7 @@ Wink still closes every pane. macOS and Linux keep the in-app terminal path.
 | `electron/worker-host-runtime.mjs` | Copies the runtime out of the install folder and starts the host from the copy. |
 | `electron/worker-host-identity.mjs` | The lock file that says a host is alive, and its record files. |
 | `electron/spawn-gate.mjs` | Keeps the host's launch out of the moment a terminal starts. |
+| `electron/worker-host-adopt.mjs` | At start: takes kept panes back before anything is restarted, and words the bot's note about them. |
 
 The host knows nothing about bots, accounts, mail, cleanup or the phone. Those stay in `terminal-host.mjs`, which
 treats a hosted pane like any other terminal: the handle has the same members as `terminal-pty.mjs` plus `detach()`.
@@ -21,8 +22,9 @@ The only seam is the `hostPty` option of `createTerminalHost`.
 
 ## Start and stop
 
-- The app calls `prewarm()` once the server is up. Opening a pane never waits for the host: a pane asked for
-  before the host is connected opens in the app as before.
+- The app calls `adoptWorkers()` once the server is up; it connects to a host that is already there, or starts
+  one in the background. Opening a pane never waits for the host: a pane asked for before the host is connected
+  opens in the app as before.
 - The host runs from `%LOCALAPPDATA%\Wink\worker-host` (`Wink-dev` for an unpackaged app): `bin-*` holds the renamed
   executable and node-pty, `js-*` holds the five scripts. A layer is copied once, in a worker thread, and reused
   until its key changes. The host refuses to start from inside the install folder, which an update replaces.
@@ -46,8 +48,38 @@ and input travel as binary frames with the pane id, and output carries a sequenc
 - One controller at a time. A newer one fences the older, whose requests then fail.
 - `attach` takes the last sequence number the app saw and replays the ring after it, then streams live output. The
   reply says when older output was already dropped.
-- A controller that did not send the `adopt` capability takes its panes with it when it leaves. The app does not
-  send `adopt` yet.
+- A controller that did not send the `adopt` capability takes its panes with it when it leaves. The app sends
+  `adopt`, so its panes stay when it leaves or dies.
+
+## Keeping panes
+
+At quit (`dispose()`, or the window going away) a bot pane stays in the host when the host runs it and a command
+is still running in it. It closes as before when it is local, has exited, sits at a prompt, or has reported and
+then stayed quiet for two minutes with nothing busy on screen. A kept pane is not stopped, its leftover processes
+are not swept, and its record in `pane-runs.json` gets `kept: true`. A killed app marks nothing; its records are
+still `running`, which is enough.
+
+At start `adoptWorkers()` runs before any worker is restarted:
+
+| It finds | It does |
+|---|---|
+| A host it can talk to | Attaches each pane that has a record and rebuilds it with `adoptPane()` under its old id. Old output only rebuilds the screen, in slices of 8 ms: no keys are typed at it, no note is sent for it, the window does not get it twice. |
+| A pane with no record | Stops it and has the host forget it. It never becomes a row. |
+| A pane whose bot is not in the bot list | Leaves it alone for ten minutes, looks once more, then stops it. |
+| A record with no pane | The restart path of `worker-resume.mjs`, as before. |
+| A host it cannot talk to | Adopts, stops and restarts nothing. The bot gets one note and the check repeats every 30 s. |
+| No host | The restart path, as before. |
+
+Nothing is taken twice: `attach` refuses an id that is already bound and `adoptPane()` refuses an id that has a
+session. Each bot gets one note for all its panes, in the same note as the restart lines:
+
+- `KEPT RUNNING: <label> [pane <id>] (<engine or script>) still working`
+- `FINISHED WHILE WINK WAS DOWN: <label> [pane <id>] reported (report above)`, or `command ended, no report: read
+  it, then close it`
+- `WORKERS UNAVAILABLE: ...` for a host it cannot talk to
+
+A pane that finished and had reported closes once the note is delivered; one with no report waits for its bot.
+The close prompt counts only the workers a quit would stop (`liveWorkerCount({ closing: true })`).
 
 ## Fallback
 
@@ -62,11 +94,13 @@ error, as it does today when its terminal thread dies.
 node --test electron/worker-host.node-test.mjs
 node --test electron/worker-host-runtime.node-test.mjs
 node --test electron/worker-host-panes.node-test.mjs
+node --test electron/worker-host-adopt.node-test.mjs
 ```
 
 They start real hosts and real shells under a temp folder and check that every host ends by itself.
 
 ## Not built yet
 
-Keeping panes through a quit or an update, finding them again at start, and removing the runtime copy on
-uninstall. `attach()` on the client and `createSession()` in `terminal-host.mjs` are the entry points for that work.
+- A report sent while Wink is closed is lost; the pane is then listed as ended without a report.
+- A host that dies takes its panes with it; they end with an error and are not restarted.
+- Closing finished panes without the bot, removing old runtime layers, and removing the runtime copy on uninstall.

@@ -22,7 +22,7 @@ function recoveryNote(panes, results) {
   return [text, note].filter(Boolean).join("\n");
 }
 
-export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () => {}, wait = sleep, staggerMs = 2000, polls = 90, settleMs = 1000, retryMs, tries }) {
+export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () => {}, wait = sleep, staggerMs = 2000, polls = 90, settleMs = 1000, retryMs, tries, kept }) {
   const results = new Map();
   const pending = [];
   let attempted = false;
@@ -62,5 +62,5 @@ export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () 
     }
   }
   await Promise.all(pending);
-  await notifyRestartedPanes({ runs, mailbox, notePane, warn, retryMs, tries, noteText: (panes) => recoveryNote(panes, results) });
+  await notifyRestartedPanes({ runs, mailbox, notePane, warn, retryMs, tries, kept, noteText: (panes) => recoveryNote(panes, results) });
 }
