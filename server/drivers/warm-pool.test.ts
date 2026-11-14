@@ -238,6 +238,19 @@ describe("warm pool", () => {
     expect(second.child.close).toHaveBeenCalledTimes(1);
   });
 
+  it("a small PC drops a kept host while a turn runs", () => {
+    let live = false;
+    const small = fixture({ liveTurns: () => live });
+    small.mem.total = 6 * GiB;
+    small.mem.free = 3 * GiB;
+    const { child: made } = ready(small.reserve("t1", "museAgent", "kept"));
+    small.pass(60_000);
+    expect(made.close).not.toHaveBeenCalled();
+    live = true;
+    small.pass(60_000);
+    expect(made.close).toHaveBeenCalledTimes(1);
+  });
+
   it("yieldToWorker closes idle and cancels pending without awaiting", () => {
     const { pool, reserve } = fixture();
     const idle = ready(reserve("t1"));
