@@ -46,6 +46,22 @@ export function asksForChange(question: string): boolean {
   return CHANGE_EN.test(question) || CHANGE_KO.test(question);
 }
 
+const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
+// Korean puts the verb last, so the lookup has to end the order: "검색해서 나온 파일은 지워줘" deletes.
+const LOOKUP_KO = /(?:(?:검색|조사)(?:\s?좀)?\s?해|(?:찾아|알아)\s?(?:봐|보세요|볼래|줘|주세요|줄래))(?:\s?(?:봐|보세요|볼래|줘|주세요|줄래))*요?[\s.!?~]*$/;
+const MORE = new RegExp(`\\b(?:and|then|${CHANGES})\\b`, "i");
+
+/** A plain lookup changes nothing, so it needs no yes; a second step or a change word makes it an order. */
+export function looksUp(order: string): boolean {
+  return (LOOKUP_EN.test(order) || LOOKUP_KO.test(order)) && !MORE.test(order) && !CHANGE_KO.test(order);
+}
+
+/** A question already asked, said again in other words: every word of it is in the order. */
+export function restates(order: string, asked: Iterable<string>): boolean {
+  const words = new Set(order.split(" "));
+  return [...asked].some((was) => was.split(" ").every((word) => words.has(word)));
+}
+
 const RECAP = /^\s*(?:(?:so|and|okay|ok|hey)[,\s]+)?(?:did|have|has|had)\s+(?:you|we|they|it|he|she)\b|\bwhat\b[^.!?]*\b(?:did|have|has|had|got|was|were)\b|\b(?:recap|so far|summary|summarize)\b|뭐 했|한 일|했어\s*\??\s*$|했나요|했니|됐어\s*\?|됐나요/i;
 
 /** A question about work already done, so its answer recounts the past. */
@@ -62,16 +78,19 @@ export function asksToRepeat(heard: string): boolean {
 
 // The whole line is the command, give or take a name, a softener or a polite ending: "영어로 말하지 마" and "stop talking about X" are not.
 const QUIET_EN = /(?:be quiet|keep quiet|stay quiet|quiet down|quiet|silence|stop talking|shut up|hush|shh+|zip it|(?:that'?s )?enough|no more (?:updates|talking))/.source;
-const QUIET_KO = /(?:조용(?:해|히\s?(?:좀\s?)?해|히\s?있어)?|그만\s?말해(?:도\s?(?:돼|되))?|말하지\s?마|닥쳐|쉿|시끄러워)\s?(?:요|줘|봐|라|세요|주세요)?/.source;
+const QUIET_KO = /(?:조용(?:해|히(?:\s?좀)?(?:\s?(?:해|하세요|있어))?)?|(?:말\s?)?그만(?:\s?(?:해|하세요|말해(?:도\s?(?:돼|되))?))?|말하지\s?마|닥쳐|쉿|시끄러(?:워)?|입\s?다물어)\s?(?:요|줘|봐|라|세요|주세요|줄래)?/.source;
 const SOFT = /please|just|ok(?:ay)?|now|wait|hold on|hey|(?:can|could|would|will) you|좀|이제|그만|잠깐(?:만)?|헤이/.source;
 const FOR_A_BIT = /for (?:a|one) (?:second|sec|minute|min|moment|bit|while)/.source;
 
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// How speech-to-text spells a shown voice name. A whole word only: "Jenkins" and "에디터" are not names.
+const SPELLED: Record<string, string> = { Jenn: "Jen|젠|제니퍼", Eddie: "Eddy|에디" };
+const spelled = (aliases: readonly string[]) => aliases.flatMap((alias) => SPELLED[alias] ? [`(?:${SPELLED[alias]})(?:야|아)?(?![a-z0-9가-힣])`] : []);
 
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
 export function asksForQuiet(heard: string, name = "", aliases: readonly string[] = []): boolean {
   // The shown name may run on: "Jenn" is called "Jennifer" too.
-  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`)].filter(Boolean).join("|");
+  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`), ...spelled(aliases)].filter(Boolean).join("|");
   const lead = `(?:(?:${SOFT}${own && `|(?:${own})(?:야|아)?`})[\\s,]*)*`;
   const tail = `(?:[\\s,]+(?:please|now|for now|${FOR_A_BIT}${own && `|${own}`}))*`;
   return new RegExp(`^${lead}(?:${QUIET_EN}${tail}|${QUIET_KO})[\\s~….,!?]*$`, "i").test(heard.trim());
@@ -80,6 +99,6 @@ export function asksForQuiet(heard: string, name = "", aliases: readonly string[
 /** Talking to the voice again: its name, the name the picker shows for its voice, or a "hey". */
 export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
   // Whole name only, though a Korean particle may follow it ("Nova야"); the shown name may run on ("Jennifer").
-  const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, ...aliases.map((alias) => `${escaped(alias)}[a-z]*(?![0-9])`)].filter(Boolean).join("|");
+  const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, ...aliases.map((alias) => `${escaped(alias)}[a-z]*(?![0-9])`), ...spelled(aliases)].filter(Boolean).join("|");
   return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])(?:${own})`, "iu").test(heard));
 }
