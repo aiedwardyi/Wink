@@ -6,6 +6,10 @@
 }
 .whats-new-head { display: flex; align-items: center; gap: 8px; }
 .whats-new-head h2 { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; }
+.whats-new-head p { flex: 1; min-width: 0; }
+/* The picker's tile as a still at icon size: laid out at tile size, shrunk to one line of the row's text. */
+.whats-new-mini { flex-shrink: 0; align-self: flex-start; width: 30px; height: 18px; overflow: hidden; border-radius: 3px; box-shadow: 0 0 0 1px var(--whats-new-line); }
+.whats-new-mini > [data-skin] { width: 130px; transform: scale(calc(18 / 78)); transform-origin: 0 0; }
 .whats-new-x { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 26px; height: 26px; margin: -4px -6px -4px 0; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; }
 @media (hover: hover) { .whats-new-x:hover { background: var(--color-control); color: var(--color-ink); } }
 .whats-new-x:focus-visible { background: var(--color-control); color: var(--color-ink); }

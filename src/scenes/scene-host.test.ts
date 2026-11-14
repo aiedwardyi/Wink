@@ -104,6 +104,26 @@ describe("chat scene host", () => {
     expect(other.drawn).toHaveLength(3);
   });
 
+  it("reads the skin where it is told to and still rests with the window", async () => {
+    const look = document.createElement("div");
+    look.dataset.skin = "snow";
+    root.dataset.skin = "precision";
+    let skin = "";
+    const module: SceneModule = {
+      pauseOnBlur: false,
+      create: (api) => ({ frame: () => true, event: () => ((skin = api.skin()), api.wake()), dispose: () => undefined }),
+    };
+    host = startScene(document.createElement("div"), module, root, look);
+    host.emit({ name: "loop" });
+    delete root.dataset.skin;
+    expect(skin).toBe("snow");
+    flush(1);
+    expect(host.running()).toBe(true);
+    root.setAttribute("data-orbit-idle", "hidden");
+    await Promise.resolve();
+    expect(host.running()).toBe(false);
+  });
+
   it("never starts a loop under reduced motion", () => {
     reduce = true;
     const { drawn, seen } = scene();
