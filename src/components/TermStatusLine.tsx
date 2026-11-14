@@ -118,7 +118,7 @@ function TermTicker({ hidden, identity, instance, instanceId, tightest, phone }:
         className={reading?.stale ? "text-ink-secondary hover:text-accent-text" : "hover:text-accent-text"}>
         {reading && !phone && <><span id={ageId} className="text-ink-secondary">{reading.label(t)}</span><span aria-hidden="true" className="text-ink-secondary"> · </span></>}
         {reading && phone && <span id={ageId} className="sr-only">{reading.label(t)}</span>}
-        {multi && <span aria-hidden="true" className="text-ink-secondary">[{target.account.number}] </span>}
+        {multi && !target.account.nickname && <span aria-hidden="true" className="text-ink-secondary">[{target.account.number}] </span>}
         {SHOW_SPARK && <span data-glyphs={brailleFits() ? "braille" : "block"} className="inline-flex align-baseline">
           <UsageSpark series={series} tone={tone} terminal />
         </span>}
