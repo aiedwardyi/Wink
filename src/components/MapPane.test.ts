@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -204,6 +205,41 @@ it("hops the pointer to the file just edited without covering its name, and show
   expect(host.querySelector(".map-step h3")?.textContent).toBe("b.ts");
   expect(host.querySelector(".map-step p")).toBeNull();
   expect(host.querySelector(".map-step time")?.getAttribute("datetime")).toBe("2026-11-13T01:16:07.000Z");
+});
+
+it("moves the one arrow to the file picked with Up, Down or a click, keeps it there off Follow, and draws no box", async () => {
+  const css = ["MapTree.css", "MapPane.css"].map(file => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
+  expect(css).not.toMatch(/aria-current/);
+  expect(css).toMatch(/\.map-tree :focus-visible \{ outline: none; \}/);
+  const numbers = (element: HTMLElement) => element.style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const pointsAt = (path: string) => vi.waitFor(() => {
+    const row = host.querySelector<HTMLElement>(`.map-tree-file[title="${path}"]`)!;
+    const [, y] = numbers(row.closest<HTMLElement>(".map-tree-n")!);
+    const top = y + parseFloat(row.parentElement!.style.top) + parseFloat(row.style.top) + 17 / 2;
+    expect(Math.abs(numbers(host.querySelector<HTMLElement>(".map-tree-pin")!)[1] + 0.7 - top)).toBeLessThan(4);
+  }, { timeout: 3000 });
+  const key = (path: string, k: string) => act(async () => { host.querySelector(`[data-map-file="${path}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+  const edits = [{ path: "README.md", added: 1, removed: 0 }, ...workers[0].files, { path: "src/z.ts", added: 3, removed: 0 }];
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: edits }]);
+  await pointsAt("src/a.ts");
+  await key("src/a.ts", "ArrowDown");
+  await pointsAt("src/manual.ts");
+  await key("src/manual.ts", "ArrowDown");
+  await pointsAt("src/z.ts");
+  expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-map-file")).toBe("src/z.ts");
+  await click('[data-map-file="README.md"]');
+  await pointsAt("README.md");
+  await emit([{ ...workers[0], files: edits, editedAt: 5, path: "src/manual.ts" }]);
+  await act(() => new Promise(done => setTimeout(done, 900)));
+  await pointsAt("README.md");
+  await click(".map-follow");
+  await pointsAt("src/manual.ts");
+  await emit([{ ...workers[0], editedAt: 6 }, workers[1]]);
+  expect(host.querySelectorAll(".map-tree-pin")).toHaveLength(1);
+  await pointsAt("src/a.ts");
+  await click('[data-map-file="b.ts"]');
+  await pointsAt("b.ts");
 });
 
 it("keeps the step title, breadcrumb and diff on one file through every hop", async () => {

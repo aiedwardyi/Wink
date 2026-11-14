@@ -64,6 +64,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
   const motion = useRef(new Map<string, Motion>());
   const rows = useRef(new Set<string>());
   const hop = useRef<{ from?: string; to?: string; at?: number; t0: number }>({ t0: 0 });
+  const edit = useRef<MapTreeProps["current"]>(undefined);
   const frame = useRef(0);
   const [width, setWidth] = useState(0);
   const W = width || 560;
@@ -124,10 +125,13 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     for (const [path, row] of found) if (!rows.current.has(path) && nodes.current.has(row.closest<HTMLElement>(".map-tree-n")?.dataset.node ?? "")) fade(row);
     rows.current = new Set(found.keys());
     let scroll = false;
-    if (current && (current.path !== hop.current.to || current.at !== hop.current.at)) {
-      hop.current = { from: fresh ? undefined : hop.current.to, to: current.path, at: current.at, t0: fresh || still ? 0 : now + 50 };
-      const row = found.get(current.path);
-      if (!fresh && !still) row?.animate?.([{ backgroundColor: "transparent" }, { backgroundColor: "color-mix(in oklab, var(--c, var(--color-accent)) 22%, transparent)", offset: 0.3 }, { backgroundColor: "transparent" }], { duration: 1600, easing: "ease-out" });
+    if (current && (current.path !== edit.current?.path || current.at !== edit.current.at)) {
+      edit.current = current;
+      if (!fresh && !still) found.get(current.path)?.animate?.([{ backgroundColor: "transparent" }, { backgroundColor: "color-mix(in oklab, var(--c, var(--color-accent)) 22%, transparent)", offset: 0.3 }, { backgroundColor: "transparent" }], { duration: 1600, easing: "ease-out" });
+    }
+    const stamp = focus === current?.path ? current?.at : 0;
+    if (focus && (focus !== hop.current.to || stamp !== hop.current.at)) {
+      hop.current = { from: fresh ? undefined : hop.current.to, to: focus, at: stamp, t0: fresh || still ? 0 : now + 50 };
       scroll = follow;
     }
     const at = (it: TreeItem): Point => motion.current.get(it.id) ?? it;
@@ -165,7 +169,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     cancelAnimationFrame(frame.current);
     tick();
     return () => cancelAnimationFrame(frame.current);
-  }, [layout, current, follow]);
+  }, [layout, current, follow, focus]);
 
   const row = (it: TreeItem, path: string, index: number) => {
     const changed = layout.changed.has(path);
@@ -216,7 +220,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
           {it.hidden ? <span className="map-tree-hidden" style={{ top: 2 + it.files.length * TREE.LINE }}>{labels.files(it.hidden)}</span> : null}
         </div>}
       </div>)}
-      {!team && <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>}
+      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>
     </div>
   </>;
 });
