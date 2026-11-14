@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
-import { FileText, Globe, PanelRight, Play } from "lucide-react";
+import { FileText, Globe, Image as ImageIcon, PanelRight, Play } from "lucide-react";
 
+import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useThumb } from "@/lib/media-thumbs";
-import { linkedFileSrc, saveFile, showItem, showKind, showName, useShowItem } from "@/lib/show-pane";
+import { linkedFileSrc, paneKind, saveFile, showItem, showKind, showName, useShowItem } from "@/lib/show-pane";
 
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
 import { useMediaViewer } from "./MediaViewerProvider";
@@ -23,11 +24,12 @@ function useSeen(ref: RefObject<HTMLElement | null>, watch: boolean): boolean {
   return seen;
 }
 
-/** A bot's file in chat; lit while the pane shows it, a tap shows it again. A clip with a frame plays in the viewer; one it can't show saves, or opens via `onOpen`. */
-export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: string; onOpen?: () => void }) {
+/** A bot's file in chat; lit while the pane shows it, a tap shows it again. A clip with a frame plays in the viewer; one it can't show saves, or opens via `onOpen`. `chip` is the one-line form inside a sentence; `bare` leaves out a picture the chat already shows. */
+export function ShowCard({ threadId, path, onOpen, chip = false, bare = false }: { threadId: string; path: string; onOpen?: () => void; chip?: boolean; bare?: boolean }) {
   const { t } = useI18n();
   const shown = useShowItem();
-  const kind = showKind(path);
+  const kind = paneKind(path);
+  const named = showKind(path);
   const name = showName(path);
   const lit = shown?.threadId === threadId && shown.path === path;
   const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
@@ -37,6 +39,7 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
   const seen = useSeen(box, Boolean(clip));
   const thumb = useThumb(clip, true, !clip || !seen);
   const poster = clip && thumb !== clip ? thumb : undefined;
+  const icon = chip ? 13 : 18;
   const menu = (event: MouseEvent<HTMLElement>) => {
     if (!window.ogb?.openFile) return;
     event.preventDefault();
@@ -48,6 +51,7 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
       <button
         type="button"
         data-show-card
+        data-chip={chip || undefined}
         data-showing={lit || undefined}
         aria-pressed={kind ? lit : undefined}
         aria-label={t(kind ? "show.card" : "show.openCard", { name })}
@@ -59,23 +63,30 @@ export function ShowCard({ threadId, path, onOpen }: { threadId: string; path: s
           else saveFile(linkedFileSrc(threadId, path), name, path);
         }}
         onContextMenu={menu}
-        className="my-0.5 flex w-full max-w-[320px] min-w-0 items-center gap-2.5 rounded-xl border border-hairline/40 bg-raised/50 p-1.5 pr-2.5 text-left align-middle hover:bg-raised data-showing:border-accent/70 data-showing:bg-raised data-showing:ring-1 data-showing:ring-accent/40"
+        className={cn(
+          "border border-hairline/40 bg-raised/50 text-left align-middle hover:bg-raised data-showing:border-accent/70 data-showing:bg-raised data-showing:ring-1 data-showing:ring-accent/40",
+          chip
+            ? "mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md px-1.5 text-[13px] leading-4 font-medium text-ink"
+            : "my-0.5 flex w-full max-w-[320px] min-w-0 items-center gap-2.5 rounded-xl p-1.5 pr-2.5",
+        )}
       >
-        <span ref={box} className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-inset text-ink-secondary">
-          {kind === "image" ? <img src={linkedFileSrc(threadId, path)} alt="" loading="lazy" className="size-full object-cover" />
+        <span ref={box} className={cn("relative flex shrink-0 items-center justify-center overflow-hidden text-ink-secondary", chip ? "size-4 rounded-[3px]" : "size-10 rounded-lg bg-inset")}>
+          {named === "image" && !bare ? <img src={linkedFileSrc(threadId, path)} alt="" loading="lazy" className="size-full object-cover" />
             : poster ? <>
               <img src={poster} alt="" decoding="async" className="size-full object-cover" />
-              <span data-play-badge className="absolute flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+              {!chip && <span data-play-badge className="absolute flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
                 <Play size={9} aria-hidden="true" className="ml-px fill-current" />
-              </span>
+              </span>}
             </>
-            : kind === "page" ? <Globe size={18} /> : <FileText size={18} />}
+            : named === "page" ? <Globe size={icon} /> : named === "image" ? <ImageIcon size={icon} /> : <FileText size={icon} />}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-ink">{name}</span>
-          <span className="block text-[11.5px] text-ink-secondary">{kind ? t(`show.kind.${kind}`) : name.slice(name.lastIndexOf(".") + 1).toUpperCase()}</span>
-        </span>
-        {kind && <PanelRight data-show-icon size={15} aria-hidden="true" className="shrink-0 text-ink-secondary" />}
+        {chip ? <span className="min-w-0 truncate">{name}</span> : <>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-ink">{name}</span>
+            <span className="block text-[11.5px] text-ink-secondary">{named ? t(`show.kind.${named}`) : name.slice(name.lastIndexOf(".") + 1).toUpperCase()}</span>
+          </span>
+          {kind && <PanelRight data-show-icon size={15} aria-hidden="true" className="shrink-0 text-ink-secondary" />}
+        </>}
       </button>
       <FileMenu at={menuAt} path={path} onOpen={() => void window.ogb?.openFile?.(path).catch(() => {})} onClose={() => setMenuAt(null)} />
     </>

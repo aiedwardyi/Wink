@@ -25,7 +25,7 @@ describe("video cards", () => {
   let root: Root;
   const card = () => host.querySelector<HTMLButtonElement>("[data-show-card]")!;
   const mount = (path: string) => act(async () => root.render(createElement(StrictMode, null, createElement(MediaViewerProvider, { threadId: "t1", messages: [],
-    children: createElement(ChatMarkdown, { text: `Here it is: [${path.split("\\").pop()}](<${path}>)`, threadId: "t1" }) }))));
+    children: createElement(ChatMarkdown, { text: `Here it is:\n[${path.split("\\").pop()}](<${path}>)`, threadId: "t1" }) }))));
 
   beforeEach(() => {
     frame = () => "blob:poster";

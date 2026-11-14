@@ -19,7 +19,7 @@ import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
-import { linkedFileSrc, showItem, showKind } from "@/lib/show-pane";
+import { linkedFileSrc, paneKind, showItem, showKind } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
@@ -131,7 +131,7 @@ const cardLink = (href: string) => {
   return Boolean(path && (showKind(path) || cardFile(path)));
 };
 
-type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[]; data?: { hProperties?: Record<string, unknown> } };
 
 // A bot often wraps a file link in "( )", which left lone parens above and below its card.
 function remarkCardParens() {
@@ -144,6 +144,33 @@ function remarkCardParens() {
     }
     walk(child);
   });
+  return walk;
+}
+
+// A card is a block, so one named mid-line split its sentence; those draw as a chip, and a file alone on its line keeps the card.
+function remarkFileChips() {
+  const walk = (node: MdNode) => {
+    if (node.type !== "paragraph" && node.type !== "heading" && node.type !== "tableCell") return void node.children?.forEach(walk);
+    let cards: MdNode[] = [];
+    let worded = false;
+    const endLine = () => {
+      if (worded) for (const card of cards) card.data = { ...card.data, hProperties: { ...card.data?.hProperties, dataChip: "" } };
+      cards = [];
+      worded = false;
+    };
+    const read = (child: MdNode) => {
+      if (child.type === "link" && child.url && cardLink(child.url)) cards.push(child);
+      else if (child.type === "break") endLine();
+      else if (child.children) child.children.forEach(read);
+      else if (child.type !== "text") worded = true;
+      else child.value?.split("\n").forEach((part, i) => {
+        if (i) endLine();
+        if (part.trim()) worded = true;
+      });
+    };
+    node.children?.forEach(read);
+    endLine();
+  };
   return walk;
 }
 
@@ -266,7 +293,7 @@ export function streamBlocks(text: string): string[] {
   return blocks;
 }
 
-const REMARK = [remarkGfm, remarkWindowsPaths, remarkCardParens, remarkWebLinks];
+const REMARK = [remarkGfm, remarkWindowsPaths, remarkCardParens, remarkFileChips, remarkWebLinks];
 
 /** Parses a scrap at idle, so the first reply doesn't pay the parser's compile. */
 export function warmMarkdown() {
@@ -435,7 +462,7 @@ const FILE_LINK_MESSAGES = new Map<string, MessageKey>([
 // (http://127.0.0.1:8799<path>, a second chat UI in the browser), and an
 // <a href="file://…"> would still reach setWindowOpenHandler on a middle or
 // modifier click. The shell decides whether to open or only reveal the file.
-function DesktopFileLink({ filePath, base, threadId, card, children }: { filePath: string; base?: string; threadId?: string; card?: boolean; children?: ReactNode }) {
+function DesktopFileLink({ filePath, base, threadId, card, chip, pictured, children }: { filePath: string; base?: string; threadId?: string; card?: boolean; chip?: boolean; pictured?: boolean; children?: ReactNode }) {
   const { t } = useI18n();
   const [reason, setReason] = useState("");
   const [onPc, setOnPc] = useState("");
@@ -499,12 +526,12 @@ function DesktopFileLink({ filePath, base, threadId, card, children }: { filePat
   const show = async (thread: string) => {
     const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
     if (res && !res.ok && res.status !== 416) await open();
-    else showItem({ threadId: thread, path: filePath, kind: showKind(filePath)! });
+    else showItem({ threadId: thread, path: filePath, kind: paneKind(filePath)! });
   };
 
   return (
     <>
-      {card && threadId ? <ShowCard threadId={threadId} path={filePath} onOpen={() => void (showKind(filePath) ? show(threadId) : open())} /> : <button
+      {card && threadId ? <ShowCard threadId={threadId} path={filePath} chip={chip} bare={pictured} onOpen={() => void (paneKind(filePath) ? show(threadId) : open())} /> : <button
         ref={ref}
         type="button"
         onClick={() => void open()}
@@ -527,11 +554,15 @@ function PhoneFile({
   filePath,
   threadId,
   kind,
+  chip,
+  pictured,
   children,
 }: {
   filePath: string;
   threadId: string;
   kind: PhoneKind | null;
+  chip?: boolean;
+  pictured?: boolean;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -606,11 +637,11 @@ function PhoneFile({
       </>
     );
   }
-  if (kind === "image") {
+  if (kind === "image" && !chip && !pictured) {
     return <ReadableImage src={src} alt="" data-phone-media="image" className="rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} />;
+  if (showKind(filePath) || (!kind && cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} chip={chip} bare={pictured} />;
   if (!kind) {
     return (
       <a href={src} download rel="noreferrer" className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
@@ -625,16 +656,20 @@ function LocalFileLink({
   filePath,
   base,
   threadId,
+  chip,
+  pictured,
   children,
 }: {
   filePath: string;
   base?: string;
   threadId?: string;
+  chip?: boolean;
+  pictured?: boolean;
   children?: ReactNode;
 }) {
   const streaming = useContext(StreamingContext);
-  if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
-  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))}>{children}</DesktopFileLink>;
+  if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)} chip={chip} pictured={pictured}>{children}</PhoneFile>;
+  return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))} chip={chip} pictured={pictured}>{children}</DesktopFileLink>;
 }
 
 // Spoiler spans: GFM parses ~~text~~ to <del>; in bot messages that content
@@ -686,6 +721,7 @@ function ChatMarkdownComponent({
   baseDir,
   threadId,
   localLinks = true,
+  pictured = false,
 }: {
   text: string;
   streaming?: boolean;
@@ -694,6 +730,8 @@ function ChatMarkdownComponent({
   threadId?: string;
   /** False for text written on another PC: its file paths mean nothing here. */
   localLinks?: boolean;
+  /** The chat already shows this reply's picture, so its file links draw none. */
+  pictured?: boolean;
 }) {
   const text = useMemo(() => unwrapUserTags(source), [source]);
   const style = useReplyStyle();
@@ -762,15 +800,16 @@ function ChatMarkdownComponent({
         <code className="rounded bg-inset px-1 py-px text-[13px]">{children}</code>
       );
     },
-    a({ href, children }: { href?: string; children?: ReactNode }) {
+    a({ href, children, "data-chip": chip }: { href?: string; children?: ReactNode; "data-chip"?: string }) {
       // a stripped target (javascript:, empty) would open the app origin
       if (!href) return <>{children}</>;
       const localPath = localFilePath(href);
       if (!localLinks && (localPath || isRelativeHref(href))) return <>{children}</>;
-      if (localPath) return <LocalFileLink filePath={localPath} threadId={threadId}>{children}</LocalFileLink>;
+      const file = { threadId, chip: chip !== undefined, pictured };
+      if (localPath) return <LocalFileLink filePath={localPath} {...file}>{children}</LocalFileLink>;
       if (isRelativeHref(href)) {
         const resolved = resolveRelativePath(href, baseDir);
-        return resolved ? <LocalFileLink filePath={resolved} base={baseDir ?? undefined} threadId={threadId}>{children}</LocalFileLink> : <>{children}</>;
+        return resolved ? <LocalFileLink filePath={resolved} base={baseDir ?? undefined} {...file}>{children}</LocalFileLink> : <>{children}</>;
       }
       return (
         <a
@@ -833,7 +872,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId, localLinks]);
+  }), [baseDir, threadId, localLinks, pictured]);
   return (
     <StreamingContext.Provider value={streaming}>
       <div ref={root} className="chat-md min-w-0 [&>*+*]:mt-2">

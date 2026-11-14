@@ -47,10 +47,11 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
-import { buffersForTurn, currentTurnId, turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import { buffersForTurn, currentTurnId, hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
@@ -689,6 +690,7 @@ const MessagesList = memo(function MessagesList({
     }
     return replies;
   }, [transcript, streamingMessage]);
+  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -854,6 +856,7 @@ const MessagesList = memo(function MessagesList({
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}
                   streaming={m === streamingMessage}
+                  pictured={pictured.has(m.id)}
                   dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
@@ -1234,7 +1237,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     noReply?.label,
   );
   const waiting = modelSwitch.active || !reveal?.ended && turnPresenceWaiting({
-    busy: bot.busy,
+    busy: hydrationTurnThread(bot, state.groups) === bot.threadId,
     turnActive: turnSignal !== undefined,
     activity: bot.activity,
     lastMessage,

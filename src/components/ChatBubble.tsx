@@ -265,6 +265,7 @@ const Bubble = memo(function Bubble({
   editing,
   isLastBotText,
   streaming = false,
+  pictured = false,
   dock,
   sendsNext = false,
   sendsAfterSync = false,
@@ -284,6 +285,7 @@ const Bubble = memo(function Bubble({
   editing: boolean;
   isLastBotText: boolean;
   streaming?: boolean;
+  pictured?: boolean;
   dock?: ReplyDock;
   sendsNext?: boolean;
   sendsAfterSync?: boolean;
@@ -492,7 +494,7 @@ const Bubble = memo(function Bubble({
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
-              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
+              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
             </MessageBoundary>
           ) : null}
         </div>

@@ -4,10 +4,15 @@ import { localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
+export type PaneKind = ShowKind | "text";
+
+/** What a click shows in the pane: the kinds that open on their own, and plain text. */
+export const paneKind = (path: string): PaneKind | null => showKind(path) ?? (/[^\\/]\.txt$/i.test(path) ? "text" : null);
+
 export interface ShowItem {
   threadId: string;
   path: string;
-  kind: ShowKind;
+  kind: PaneKind;
   /** a room file's own URL; a bot's file goes through linked-file */
   src?: string;
 }
@@ -106,6 +111,25 @@ export function useMapThread(): string | null {
 }
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
+
+/** Replies in a turn whose bot already put a picture in the chat, so their file links don't draw it again. */
+export function picturedReplies(messages: readonly Message[]): Set<string> {
+  const pictured = new Set<string>();
+  let shown = new Set<string>();
+  let replies: Message[] = [];
+  const close = () => {
+    for (const reply of replies) if (shown.has(reply.from?.botId ?? "")) pictured.add(reply.id);
+    shown = new Set();
+    replies = [];
+  };
+  for (const message of messages) {
+    if (message.role === "user") close();
+    else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
+    else if (message.kind === "text") replies.push(message);
+  }
+  close();
+  return pictured;
+}
 
 export interface AutoShow {
   threadId?: string;
