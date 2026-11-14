@@ -17,7 +17,7 @@ import { Fold } from "./Fold";
 import { useEngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
-import { ACCOUNT_ROW, AccountGroup, Tile } from "./UsageDesk";
+import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
 
 const LINE = "flex min-h-7 items-center";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
@@ -100,7 +100,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
 }) {
   const { t } = useI18n();
   const phone = useIsPhone();
-  const terminal = isTerminalSkin(useSkin());
   const id = useId();
   const [menu, setMenu] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -137,7 +136,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
-  const tile = name && !name.nickname && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
   const draining = account.drain && account.drain.phase !== "failed";
   const signInRow = !ready && !account.drain;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
@@ -148,13 +146,12 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
       {(name || !signInRow) && <AccountHead control={control} email={!signInRow && label} name={<>
-        {tile}
         {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
           onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
           : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
             className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
       </>} />}
-      {named?.codexPromo && <p className="pb-2 pl-6 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
+      {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
       <Fold open={menu} id={`${id}-actions`}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>

@@ -185,9 +185,9 @@ describe("terminal status line quota ticker", () => {
     }
   });
 
-  it("prefixes [n] on a multi-account line only for an unnamed account", async () => {
+  it("never prefixes [n] on a multi-account line, named or not", async () => {
     await mount(botOn("claude"), instancesFor(usageBoardFixture));
-    expect(text(q("[data-term-ticker]"))).toContain("[1]");
+    expect(text(q("[data-term-ticker]"))).not.toMatch(/\[\d+\]/);
     await unmount();
     const board = structuredClone(usageBoardFixture);
     const claude = board.engines.find((each) => each.engine === "claude")!;

@@ -90,12 +90,6 @@ export function windowFacts(account: UsageBoardAccount, t: Translate) {
   return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
 }
 
-export function Tile({ number, terminal }: { number: number; terminal: boolean }) {
-  return terminal
-    ? <span data-tile="" className="usage-glyphs shrink-0 text-[12px] text-ink-secondary">[{number}]</span>
-    : <span data-tile="" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border border-hairline bg-raised text-[10.5px] leading-none text-ink">{number}</span>;
-}
-
 function ResetLine({ slot, window, account, clock }: { slot: "session" | "week" | "extra"; window?: UsageBoardWindow; account: UsageBoardAccount; clock: Clock }) {
   const { t } = clock;
   const label = slot === "extra" && window ? shortLabel(window, t) : t(slot === "session" ? "usage.limits.sessionShort" : "usage.limits.weeklyShort");
@@ -301,7 +295,6 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
     <section ref={ref} data-usage-hero="" data-stale={muse?.stale || undefined} aria-label={account.name} className="min-w-0">
       <div className="flex min-h-7 min-w-0 items-center gap-2">
         <ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} />
-        {accounts.length > 1 && !account.nickname && <Tile number={account.number} terminal={terminal} />}
         {accounts.length > 1
           ? <AccountPicker accounts={accounts} viewedId={account.id} select={select} />
           : <span data-hero-name="" className="min-w-0 truncate text-[13.5px] font-medium text-ink">{account.name}</span>}

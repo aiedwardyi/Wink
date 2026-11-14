@@ -159,7 +159,7 @@ it("keeps account identities inside Connections account rows", async () => {
 it("renames an account through the names API", async () => {
   await mount();
   expect(row()?.textContent ?? "").toContain("Claude 1");
-  expect(row()?.querySelector("[data-account-number]")?.textContent).toBe("1");
+  expect(row()?.querySelector("[data-tile]")).toBeNull();
   await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
   await input("  Studio  ");
   await click(button("Save"));
@@ -190,22 +190,24 @@ it.each([false, true])("returns focus to the rename opener after Save, Cancel an
   }
 });
 
-it.each(["en", "ko"] as const)("keeps the original number tile beside phone account names in %s", async (locale) => {
-  await mount({ phone: true, locale });
-  const tile = row()?.querySelector("[data-account-number]");
-  expect(tile?.textContent).toBe("1");
-  expect(tile?.parentElement?.className).toBe("flex min-w-0 items-center gap-2");
-  expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
-});
-
-it.each([false, true])("drops the number tile once an account has a nickname (phone=%s)", async (phone) => {
-  board.engines[0]!.accounts[0]!.nickname = "Studio";
-  board.engines[0]!.accounts[0]!.name = "Studio";
-  await mount({ phone });
-  expect(row()?.textContent).toContain("Studio");
-  expect(row()?.querySelector("[data-account-number]")).toBeNull();
-  const unnamed = host.querySelector('[data-connection-account]:not([data-connection-account="claude"])');
-  expect(unnamed?.querySelector("[data-account-number]")?.textContent).toBe("2");
+it.each([false, true])("shows no number tile on any account row, named or not (phone=%s)", async (phone) => {
+  for (const locale of ["en", "ko"] as const) {
+    await mount({ phone, locale });
+    expect(host.querySelectorAll("[data-connection-account]").length).toBeGreaterThan(1);
+    expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
+    expect(row()?.textContent).toContain("Claude 1");
+    expect(row()?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+    expect(row()?.querySelector("[data-account-head] > div > div")?.firstElementChild?.getAttribute("data-edit-name")).toBe("");
+    board.engines[0]!.accounts[0]!.nickname = "Studio";
+    board.engines[0]!.accounts[0]!.name = "Studio";
+    await unmount();
+    await mount({ phone, locale });
+    expect(row()?.textContent).toContain("Studio");
+    expect(host.querySelector("[data-tile], [data-account-number]")).toBeNull();
+    board.engines[0]!.accounts[0]!.nickname = null;
+    board.engines[0]!.accounts[0]!.name = "Claude 1";
+    await unmount();
+  }
 });
 
 it.each(["en", "ko"] as const)("renders each email as plain text, not a control, in %s", async (locale) => {
@@ -264,7 +266,7 @@ it.each([["grok", "grokAgent"], ["gemini", "geminiAgent"], ["muse", "museAgent"]
     accounts: [{ ...board.engines[0]!.accounts[0]!, id: id!, nickname: null, name: "Muse" }] });
   accounts = [{ ...accounts[0]!, instanceId: id!, accountOf: id!, driverKind: driverKind!, displayName: id! }];
   await mount();
-  expect(host.querySelector("[data-account-number]"), "the board row is present").not.toBeNull();
+  expect(host.querySelector("[data-edit-name]")?.textContent, "the board row is present").not.toBe("");
   expect(button("Name")).toBeUndefined();
   expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
 });
@@ -292,7 +294,7 @@ it("hides the name editor until the board holds the account", async () => {
   boardReply = () => new Promise(() => {});
   await mount();
   expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
-  expect(host.querySelector("[data-account-number]")).toBeNull();
+  expect(host.querySelector("[data-tile]")).toBeNull();
   expect(host.textContent).toContain(canary.address);
   await unmount();
   vi.resetModules();
@@ -302,7 +304,7 @@ it("hides the name editor until the board holds the account", async () => {
   boardReply = async () => Response.json({ error: "not found" }, { status: 404 });
   await mount();
   expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
-  expect(host.querySelector("[data-account-number]")).toBeNull();
+  expect(host.querySelector("[data-tile]")).toBeNull();
   await unmount();
   vi.resetModules();
   m.connections = await import("./AccountConnections");
@@ -312,7 +314,7 @@ it("hides the name editor until the board holds the account", async () => {
   board.engines[0]!.accounts = board.engines[0]!.accounts.slice(1);
   await mount();
   expect(row()?.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
-  expect(row()?.querySelector("[data-account-number]") ?? null).toBeNull();
+  expect(row()?.querySelector("[data-tile]") ?? null).toBeNull();
   expect(host.querySelector<HTMLButtonElement>(`[data-connection-account="${accounts[1]!.instanceId}"] [data-edit-name]`)?.disabled).toBe(false);
 });
 
@@ -351,7 +353,7 @@ it("keeps a signed-out account's editor on its name row", async () => {
   accounts[0]!.snapshot.authenticated = false;
   await mount();
   await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
-  const nameLine = row()!.querySelector("[data-account-number]")!.parentElement!;
+  const nameLine = row()!.querySelector("[data-account-name-editor]")!.parentElement!;
   expect(nameLine.querySelector("[data-account-name-editor] input")).not.toBeNull();
 });
 
