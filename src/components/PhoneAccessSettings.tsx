@@ -7,7 +7,7 @@ import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api } from "@/state/store";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DeviceRow, DevicesSection } from "./DeviceRows";
+import { DeviceRow, DevicesSection, PendingRow } from "./DeviceRows";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { trackFeature, trackSetting } from "@/lib/usage-stats";
 
@@ -64,17 +64,17 @@ const input = "min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py
 const note = "mt-2 break-words text-[12px] leading-relaxed text-ink-secondary";
 
 type Google = { state: string; email?: string };
-type Saved = { status: RelayStatus | null; google: Google | null };
+type Saved = { status: RelayStatus | null; google: Google | null; phones: Phone[] | null };
 const KEY = "omb-phone-relay";
 let last: Saved | null = null;
 let pending: Promise<unknown> | null = null;
 
 function saved(): Saved {
   if (last) return last;
-  last = { status: null, google: null };
+  last = { status: null, google: null, phones: null };
   try {
     const body = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null };
+    if (typeof body?.status?.enabled === "boolean") last = { status: body.status, google: body.google ?? null, phones: Array.isArray(body.phones) ? body.phones : null };
   } catch {
     /* A fresh fetch fills it in. */
   }
@@ -90,12 +90,13 @@ function keep(next: Partial<Saved>) {
   }
 }
 
-/** This PC's relay and Google state, fetched at idle so Devices paints them on its first open. */
+/** This PC's relay, Google state and signed-in phones, fetched at idle so Devices paints them on its first open. */
 export function warmRelay(): Promise<unknown> {
   if (!onThisPc()) return Promise.resolve();
   pending ??= Promise.all([
     api("/api/phone-relay/status").then((status: RelayStatus) => keep({ status }), () => {}),
     api("/api/google-account").then((google: Google) => keep({ google }), () => {}),
+    api("/api/phone/devices").then((body: { phones: Phone[] }) => keep({ phones: body.phones }), () => {}),
   ]).finally(() => { pending = null; });
   return pending;
 }
@@ -112,7 +113,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
   const [google, setGoogle] = useState<Google | null>(() => saved().google);
-  const [phones, setPhones] = useState<Phone[]>([]);
+  const [phones, setPhones] = useState<Phone[] | null>(() => saved().phones);
   const [now, setNow] = useState(() => Date.now());
   const [asking, setAsking] = useState(false);
   const [askCode, setAskCode] = useState(false);
@@ -159,7 +160,10 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
   useEffect(() => onEnabled?.(enabled), [enabled, onEnabled]);
   useEffect(() => {
     if (!enabled) return;
-    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => setPhones(body.phones), () => {});
+    const load = () => void request("/api/phone/devices").then((body: { phones: Phone[] }) => {
+      keep({ phones: body.phones });
+      setPhones(body.phones);
+    }, () => {});
     load();
     const timer = window.setInterval(load, STATUS_POLL_MS);
     return () => window.clearInterval(timer);
@@ -223,7 +227,8 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
     run(
       async () => {
         await request(`/api/phone/devices/${encodeURIComponent(phone.id)}`, { method: "DELETE" });
-        setPhones((list) => list.filter((candidate) => candidate.id !== phone.id));
+        keep({ phones: saved().phones?.filter((candidate) => candidate.id !== phone.id) ?? null });
+        setPhones((list) => list && list.filter((candidate) => candidate.id !== phone.id));
         trackFeature("phone.unpair");
       },
       () => t("settings.phoneAccess.removeError"),
@@ -380,7 +385,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, pcs
 
       {enabled ? (
         <DevicesSection title={t("settings.devices.signedInHere")} data-signed-in="">
-          {phones.length ? phones.map((phone) => (
+          {!phones ? <PendingRow sub /> : phones.length ? phones.map((phone) => (
             <DeviceRow
               key={phone.id}
               name={phone.name}
