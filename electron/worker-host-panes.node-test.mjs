@@ -12,11 +12,13 @@ const require = createRequire(import.meta.url);
 const windows = process.platform === "win32" ? {} : { skip: "the worker host ships on Windows first" };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// Windows lets go of an ended host's files a moment after its pid is gone, and only the async remove retries.
+const remove = (folder) => fs.promises.rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 // One copy of the runtime serves every test here; each test still starts its own host.
 const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-host-"));
 test.after(async () => {
   await sweepWorkerHostRuntime(runtimeRoot, []);
-  fs.rmSync(runtimeRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  await remove(runtimeRoot);
 });
 
 async function until(check, timeoutMs = 60_000) {
@@ -59,7 +61,7 @@ async function fixture(t, { client: clientOptions = {}, ...options } = {}) {
     await host.dispose();
     client.close();
     if (hostPid) await until(() => !alive(hostPid), 15_000);
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await remove(root);
   });
   return { root, host, client, owner, connected, lines, asked, seen, cleanup };
 }
@@ -104,9 +106,9 @@ test("closing a hosted pane stops a hidden process it started, and the pane has 
   const f = await fixture(t, { processes: paneProcesses, scratchRoot: path.join(os.tmpdir(), "wink-worker-host-scratch") });
   const scratch = path.join(os.tmpdir(), "wink-worker-host-scratch", "wink-LEFT-1");
   let sleeper = null;
-  t.after(() => {
+  t.after(async () => {
     if (sleeper && alive(sleeper)) process.kill(sleeper);
-    fs.rmSync(path.dirname(scratch), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await remove(path.dirname(scratch));
   });
   const command = `$p = Start-Process -FilePath '${process.execPath}' -ArgumentList '-e','setTimeout(()=>{},600000)' -WindowStyle Hidden -PassThru; Write-Output ('SLEEPER=' + $p.Id + ' SCRATCH=' + $env:ORBIT_SCRATCH + ' TEMP=' + $env:TEMP + ' END')`;
   const pane = await f.host.openForBot("bot-1", { label: "LEFT-1", command });

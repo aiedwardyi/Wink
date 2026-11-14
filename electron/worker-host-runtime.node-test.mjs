@@ -24,7 +24,7 @@ async function until(check, timeoutMs = 60_000) {
 
 function scratch(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wink-worker-host-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   return root;
 }
 
@@ -96,6 +96,9 @@ test("a host started from the copied runtime runs a pane and keeps its layers", 
   assert.match(lines[1], /^worker host ready pid=\d+ launch=\d+ms staged=none$/);
   next.close();
   await until(() => !alive(hosts[1]));
-  await sweepWorkerHostRuntime(runtimeRoot, []);
-  assert.deepEqual(layers(runtimeRoot), []);
+  // An ended host's exe cannot be deleted for a moment; the layer waits as trash for the next sweep.
+  await until(async () => {
+    await sweepWorkerHostRuntime(runtimeRoot, []);
+    return !layers(runtimeRoot).length;
+  }, 15_000);
 });

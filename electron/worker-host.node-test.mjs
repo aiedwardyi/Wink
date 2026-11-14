@@ -20,6 +20,8 @@ const entry = fileURLToPath(new URL("./worker-host-entry.mjs", import.meta.url))
 const shell = [path.join(process.env.ProgramFiles || "C:\\Program Files", "PowerShell", "7", "pwsh.exe"), path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")].find((file) => fs.existsSync(file));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// Windows lets go of an ended host's files a moment after its pid is gone, and only the async remove retries.
+const remove = (folder) => fs.promises.rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 const noLocal = () => { throw new Error("The pane fell back to a local terminal"); };
 
 async function until(check, timeoutMs = 60_000) {
@@ -62,7 +64,7 @@ function fixture(t, options = {}) {
     await until(() => hosts.every((pid) => !alive(pid)), 15_000).catch(() => {});
     const left = hosts.filter(alive);
     if (left.length && workerHostLock(path.join(slot, "host.lock")) === "alive") for (const pid of left) process.kill(pid);
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await remove(root);
     assert.deepEqual(left, [], "every host ends by itself");
   });
   const env = { ...terminalEnvironment(process.env), USERPROFILE: home, HOME: home, APPDATA: path.join(home, "Roaming"), LOCALAPPDATA: path.join(home, "Local"), POWERSHELL_TELEMETRY_OPTOUT: "1", POWERSHELL_UPDATECHECK: "Off", WINK_TEST_CANARY: "canary-value" };
