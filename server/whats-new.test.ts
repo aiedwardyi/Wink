@@ -126,6 +126,29 @@ describe("whats new", () => {
     expect(seenFile()).toEqual({ seen: "1.0.246" });
   });
 
+  it("remembers each animated theme whose row showed, apart from the release notes", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245" }));
+    const open = openWhatsNew(root, "1.0.247");
+    expect(open.themes()).toEqual([]);
+    for (const theme of [undefined, 7, "", "Lagoon!", "x".repeat(41)]) open.markTheme(theme);
+    expect(seenFile()).toEqual({ seen: "1.0.245" });
+    open.markTheme("lagoon");
+    open.markTheme("lagoon");
+    expect(seenFile()).toEqual({ seen: "1.0.245", themes: ["lagoon"] });
+    open.place("1.0.246", "m1");
+    open.markSeen("1.0.246");
+    open.markTheme("snow");
+    expect(seenFile()).toEqual({ seen: "1.0.246", themes: ["lagoon", "snow"] });
+    expect(openWhatsNew(root, "1.0.247").themes()).toEqual(["lagoon", "snow"]);
+    expect(open.pending()).toEqual({ release: "1.0.247", seen: "1.0.246" });
+  });
+
+  it("remembers a theme row without a version", () => {
+    openWhatsNew(root, "").markTheme("snow");
+    expect(openWhatsNew(root, "").themes()).toEqual(["snow"]);
+  });
+
   it("reads a record whose anchor it cannot parse", () => {
     writeFileSync(join(root, "bots.json"), "[]");
     writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245", anchor: "m1" }));

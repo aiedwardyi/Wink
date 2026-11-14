@@ -1379,6 +1379,7 @@ export const en = {
   "whatsNew.close": "Close what's new",
   "whatsNew.gotIt": "Got it",
   "whatsNew.showMe": "Show me",
+  "whatsNew.themeMoves": "{name} moves while your bot works. It costs 0 tokens.",
   "update.later": "Later",
   "update.download": "Download",
 
@@ -3204,6 +3205,7 @@ export const ko = {
   "whatsNew.close": "새 기능 닫기",
   "whatsNew.gotIt": "확인",
   "whatsNew.showMe": "바로 보기",
+  "whatsNew.themeMoves": "{name} 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요.",
   "update.later": "나중에",
   "update.download": "다운로드",
 

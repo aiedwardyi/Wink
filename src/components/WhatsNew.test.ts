@@ -13,7 +13,8 @@ vi.mock("@/lib/whats-new", () => ({
   unseenRelease: (release: string, seen: string | null) => (release === "1.0.248" && seen === "1.0.245" ? "1.0.246" : null),
 }));
 vi.mock("./WhatsNewCard", () => ({
-  default: ({ release, onClose }: { release: string; onClose: () => void }) => createElement("button", { className: "card", "data-release": release, onClick: onClose }),
+  default: ({ release, theme, onClose }: { release?: string; theme?: string; onClose: () => void }) =>
+    createElement("button", { className: "card", "data-release": release, "data-theme": theme, onClick: onClose }),
 }));
 
 const { WhatsNewSlot } = await import("./WhatsNew");
@@ -24,8 +25,8 @@ async function fresh() {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  const Chat = ({ last, thread }: { last?: string; thread?: string }) => createElement("div", { "data-anchor": String(mod.useWhatsNewAnchor()) }, createElement(mod.WhatsNewSlot, { last, thread }));
-  const render = (last?: string, thread?: string) => act(() => root.render(createElement(Chat, { last, thread })));
+  const Chat = ({ last, thread, hidden }: { last?: string; thread?: string; hidden?: boolean }) => createElement("div", { "data-anchor": String(mod.useWhatsNewAnchor()) }, createElement(mod.WhatsNewSlot, { last, thread, hidden }));
+  const render = (last?: string, thread?: string, hidden?: boolean) => act(() => root.render(createElement(Chat, { last, thread, hidden })));
   const settle = (ms = 1500) => act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
     await vi.dynamicImportSettled();
@@ -34,8 +35,13 @@ async function fresh() {
     act(() => root.unmount());
     host.remove();
   };
-  return { host, render, settle, done, anchor: () => host.querySelector("div")?.dataset.anchor, card: () => host.querySelector<HTMLButtonElement>(".card") };
+  return { mod, host, render, settle, done, anchor: () => host.querySelector("div")?.dataset.anchor, card: () => host.querySelector<HTMLButtonElement>(".card") };
 }
+
+const themeSeen = (theme: string) => {
+  const post = JSON.stringify(["/api/whats-new/seen", { method: "POST", body: JSON.stringify({ theme }) }]);
+  return api.mock.calls.filter((call) => JSON.stringify(call) === post);
+};
 
 describe("whats new slot", () => {
   afterEach(() => {
@@ -211,6 +217,114 @@ describe("whats new slot", () => {
     catchingUp = false;
     await chat.settle(CATCHING_UP_POLL_MS);
     expect(chat.anchor()).toBe("b2");
+    chat.done();
+  });
+
+  it("shows a picked animated theme's row in the visible chat and records it once the scene has played", async () => {
+    vi.useFakeTimers();
+    api.mockImplementationOnce(() => Promise.resolve({ release: null, themes: [] }));
+    const chat = await fresh();
+    chat.render("m2", undefined, true);
+    await chat.settle();
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    act(() => chat.mod.scenePlayed("lagoon"));
+    await chat.settle();
+    expect(chat.card()).toBeNull();
+    expect(themeSeen("lagoon")).toHaveLength(0);
+    chat.render("m2");
+    await chat.settle();
+    expect(chat.card()?.dataset.theme).toBe("lagoon");
+    expect(chat.card()?.dataset.release).toBeUndefined();
+    expect(chat.anchor()).toBe("m2");
+    expect(api.mock.calls.some(([path]) => path === "/api/whats-new/anchor")).toBe(false);
+    expect(themeSeen("lagoon")).toHaveLength(1);
+    act(() => chat.mod.scenePlayed("lagoon"));
+    chat.render("m4");
+    expect(themeSeen("lagoon")).toHaveLength(1);
+    expect(chat.card()?.dataset.theme).toBe("lagoon");
+    expect(chat.anchor()).toBe("m2");
+    chat.done();
+  });
+
+  it("keeps the row up, unrecorded, until its own scene plays", async () => {
+    vi.useFakeTimers();
+    api.mockImplementationOnce(() => Promise.resolve({ release: null, themes: [] }));
+    const chat = await fresh();
+    chat.render("m2");
+    await chat.settle();
+    expect(chat.card()).toBeNull();
+    act(() => chat.mod.offerThemeRow("snow"));
+    await chat.settle();
+    expect(chat.card()?.dataset.theme).toBe("snow");
+    act(() => chat.mod.scenePlayed("lagoon"));
+    expect(api.mock.calls.some(([path]) => path === "/api/whats-new/seen")).toBe(false);
+    act(() => chat.mod.scenePlayed("snow"));
+    expect(themeSeen("snow")).toHaveLength(1);
+    chat.done();
+  });
+
+  it("never shows the row of a theme that already showed on this PC, or one closed by its X", async () => {
+    vi.useFakeTimers();
+    api.mockImplementationOnce(() => Promise.resolve({ release: null, themes: ["snow"] }));
+    const chat = await fresh();
+    chat.render("m2");
+    await chat.settle();
+    act(() => chat.mod.offerThemeRow("snow"));
+    await chat.settle();
+    expect(chat.card()).toBeNull();
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    await chat.settle();
+    act(() => chat.card()!.click());
+    expect(themeSeen("lagoon")).toHaveLength(1);
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(chat.card()).toBeNull();
+    expect(chat.anchor()).toBe("undefined");
+    act(() => chat.mod.offerThemeRow(null));
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    await chat.settle();
+    expect(chat.card()).toBeNull();
+    chat.done();
+  });
+
+  it("holds the row behind the release card and drops it when another theme is picked", async () => {
+    vi.useFakeTimers();
+    const chat = await fresh();
+    chat.render("m2");
+    await chat.settle();
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    act(() => chat.mod.scenePlayed("lagoon"));
+    await chat.settle();
+    expect(chat.card()?.dataset.release).toBe("1.0.246");
+    expect(themeSeen("lagoon")).toHaveLength(0);
+    act(() => chat.card()!.click());
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await chat.settle();
+    expect(chat.card()?.dataset.theme).toBe("lagoon");
+    expect(themeSeen("lagoon")).toHaveLength(1);
+    act(() => chat.mod.offerThemeRow(null));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(chat.card()).toBeNull();
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    await chat.settle();
+    expect(chat.card()).toBeNull();
+    chat.done();
+  });
+
+  it("keeps the row back while fresh notes are held, so the notes still land under what the chat pulled", async () => {
+    vi.useFakeTimers();
+    catchingUp = true;
+    const chat = await fresh();
+    chat.render("m2", "t1");
+    await chat.settle();
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    await chat.settle(0);
+    expect(chat.card()).toBeNull();
+    expect(chat.anchor()).toBe("undefined");
+    chat.render("m6", "t1");
+    catchingUp = false;
+    await chat.settle(CATCHING_UP_POLL_MS);
+    expect(chat.card()?.dataset.release).toBe("1.0.246");
+    expect(chat.anchor()).toBe("m6");
     chat.done();
   });
 

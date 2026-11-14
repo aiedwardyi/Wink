@@ -4,6 +4,7 @@
 import type { SceneApi, SceneModule } from "./scene-host";
 
 const FALL_CAP_MS = 30000;
+const FLAKE_AREA = 4300;
 const CAPPED = "[data-orbit-message-content], [data-orbit-composer-frame]";
 
 type Flake = {
@@ -134,7 +135,7 @@ function create(api: SceneApi) {
 
   const seed = () => {
     rnd = mulberry32(1114);
-    const n = Math.round(Math.min(300, Math.max(100, (W * H) / 4300)));
+    const n = Math.round(Math.min(300, Math.max(100, (W * H) / FLAKE_AREA)));
     flakes = Array.from({ length: n }, () => spawn({}, true));
   };
 
@@ -163,10 +164,10 @@ function create(api: SceneApi) {
     g.globalAlpha = 1;
   };
 
+  // Layout size: a theme tile shrinks its layer with a transform.
   const resize = () => {
-    const r = api.layer.getBoundingClientRect();
-    const nw = Math.max(1, Math.round(r.width));
-    const nh = Math.max(1, Math.round(r.height));
+    const nw = Math.max(1, api.layer.clientWidth);
+    const nh = Math.max(1, api.layer.clientHeight);
     dpr = Math.min(2, devicePixelRatio || 1);
     const sx = W ? nw / W : 1;
     const sy = H ? nh / H : 1;
@@ -287,6 +288,14 @@ function create(api: SceneApi) {
           caps(true);
         }
         return;
+      }
+      if (event.name === "loop") {
+        // A small layer is seeded past its share of flakes, so the loop shows only its share; it never caps.
+        if (!W) resize();
+        scaleTarget = 1;
+        densityTarget = Math.min(1, (W * H) / FLAKE_AREA / flakes.length);
+        fallStarted = Infinity;
+        api.wake();
       }
       if (event.name === "send") {
         const r = api.rectIn(event.at);

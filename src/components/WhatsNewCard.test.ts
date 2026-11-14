@@ -153,6 +153,23 @@ describe("whats new card", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["en", "lagoon", "Lagoon moves while your bot works. It costs 0 tokens."],
+    ["en", "snow", "Snow moves while your bot works. It costs 0 tokens."],
+    ["ko", "lagoon", "라군 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "snow", "스노우 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+  ] as const)("shows an animated theme as one row in %s (%s), closed by its X", (locale, theme, line) => {
+    applyLocale(locale);
+    act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose })));
+    const row = host.querySelector(".whats-new-dock > .whats-new")!;
+    expect(row.textContent).toBe(line);
+    expect(row.querySelectorAll(".whats-new-tile, .whats-new-foot, .whats-new-done")).toHaveLength(0);
+    expect(row.querySelectorAll("button")).toHaveLength(1);
+    act(() => row.querySelector<HTMLButtonElement>(".whats-new-x")!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(api).not.toHaveBeenCalled();
+  });
+
   it("holds a still frame while the app is idle or motion is reduced", async () => {
     const seeAll = () =>
       act(() => {

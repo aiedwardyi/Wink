@@ -8434,9 +8434,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "POST" && path === "/api/bot-trash/empty") return json(res, 200, { emptied: botTrashActions.emptyNow() });
 
-    if (method === "GET" && path === "/api/whats-new") return json(res, 200, whatsNew.pending() ?? { release: null });
+    if (method === "GET" && path === "/api/whats-new") return json(res, 200, { ...(whatsNew.pending() ?? { release: null }), themes: whatsNew.themes() });
     if (method === "POST" && path === "/api/whats-new/seen") {
-      whatsNew.markSeen((await readBody(req))?.release);
+      const body = await readBody(req);
+      whatsNew.markSeen(body?.release);
+      whatsNew.markTheme(body?.theme);
       return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/call-intro/seen") {

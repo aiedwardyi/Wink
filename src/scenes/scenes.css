@@ -1,7 +1,7 @@
 /* The scene layer is main's first child: above its bg-app, under the transcript and composer. */
 main[data-scene] { isolation: isolate; }
 [data-chat-scene] { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; contain: strict; }
-[data-chat-scene] canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+:is([data-chat-scene], [data-mini-scene]) canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 /* Text straight on the scene gets a static halo in the scene's calm color; bubbles and the composer are opaque. */
 main[data-scene] { --scene-veil: var(--color-app); }
@@ -35,11 +35,11 @@ main[data-snow-still] [data-snowcap]::before { transition: none; }
 }
 
 /* A cool sky wash at the top of the chat; static, painted once by the compositor. */
-main[data-scene="snow"] > [data-chat-scene] {
-  background: radial-gradient(130% 75% at 50% -12%, color-mix(in srgb, #7d9be0 22%, var(--color-app)) 0%, transparent 72%);
+main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live] {
+  background-image: radial-gradient(130% 75% at 50% -12%, color-mix(in srgb, #7d9be0 22%, var(--color-app)) 0%, transparent 72%);
 }
-[data-skin="snow"] main[data-scene="snow"] > [data-chat-scene] {
-  background: linear-gradient(180deg, color-mix(in srgb, #8fa9d6 34%, var(--color-app)) 0%, color-mix(in srgb, #8fa9d6 10%, var(--color-app)) 38%, transparent 70%);
+[data-skin="snow"] main[data-scene="snow"] > [data-chat-scene], [data-skin="snow"] > [data-mini-thread] > [data-mini-scene][data-live] {
+  background-image: linear-gradient(180deg, color-mix(in srgb, #8fa9d6 34%, var(--color-app)) 0%, color-mix(in srgb, #8fa9d6 10%, var(--color-app)) 38%, transparent 70%);
 }
 
 /* The theme tile's thread shows a still of its scene. */
@@ -47,3 +47,11 @@ main[data-scene="snow"] > [data-chat-scene] {
 [data-skin="lagoon"] > [data-mini-thread] { background: url("./tiles/lagoon.jpg") center / cover; }
 [data-skin="snow-night"] > [data-mini-thread] { background: url("./tiles/snow-night.jpg") center / cover; }
 [data-skin="snow"] > [data-mini-thread] { background: url("./tiles/snow.jpg") center / cover; }
+
+/* While the theme picker is open the scene itself runs over that still: laid out at chat scale, shrunk to the tile. */
+[data-mini-scene] { position: absolute; top: 0; left: 0; z-index: -1; width: calc(100% / var(--mini-scale)); height: calc(100% / var(--mini-scale)); transform: scale(var(--mini-scale)); transform-origin: 0 0; overflow: hidden; contain: strict; pointer-events: none; }
+/* Without WebGL the tile keeps its still, not Lagoon's plain fallback. */
+[data-mini-scene="lagoon"] { --mini-scale: 0.45; background: none !important; }
+[data-mini-scene="snow"] { --mini-scale: 0.3; }
+/* Snow's flakes are see-through, so its running tile covers the still's own flakes. */
+[data-mini-scene="snow"][data-live] { background-color: var(--color-app); }
