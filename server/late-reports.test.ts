@@ -7,13 +7,14 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 
-import { installOrbitMsg } from "../electron/terminal-mailbox.mjs";
+import { installOrbitMsg, orbitBinFiles } from "../electron/terminal-mailbox.mjs";
 import { deliverMailboxOutbox } from "../electron/mailbox-outbox.mjs";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { mailboxGrant } from "./mailbox.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
+import type { MailboxIdentity } from "./mailbox.ts";
 
 const servers: Server[] = [];
 const reply = z.object({ id: z.string() });
@@ -22,7 +23,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await new Promise<void>(resolve => server.close(() => resolve()));
 });
 
-async function fixture() {
+async function fixture(auto: (scope: { pane: string; bot: string; teacher: string }, text: string, identity?: MailboxIdentity) => Promise<boolean> = async () => false) {
   const root = mkdtempSync(join(homedir(), "late-reports-"));
   const profile = join(root, "프로필");
   mkdirSync(profile);
@@ -42,7 +43,7 @@ async function fixture() {
     try {
       const result = await receiveMailboxPost(req, {
         secret, store, receipts, origin: "test-device",
-        label: async () => "LATE-REPORTS", auto: async () => false,
+        label: async () => "LATE-REPORTS", auto,
         attention: async () => { attention++; }, reported() {}, refresh() {},
         notify() { pings++; }, arrived() { arrived++; },
       });
@@ -73,6 +74,38 @@ async function fixture() {
     post: (payload: TestReport) => fetch(`${url}/api/mailbox`, { method: "POST", headers, body: JSON.stringify(payload) }),
   };
 }
+
+it("defers an auto post before storage and stores a plain note if the watcher is unavailable", async () => {
+  let available = true;
+  const f = await fixture(async () => available);
+  const payload = { text: "turn done", kind: "auto", messageId: randomUUID(), sentAt: Date.now() };
+  expect(await (await f.post(payload)).json()).toEqual({ ok: true, deferred: true });
+  expect(f.notes()).toHaveLength(0);
+  expect(f.counts()).toEqual({ pings: 0, attention: 0, arrived: 0 });
+  available = false;
+  expect((await f.post({ ...payload, messageId: randomUUID() })).status).toBe(200);
+  expect(f.notes()).toHaveLength(1);
+  expect(f.notes()[0]!.text).not.toContain("REPORT:");
+  expect(f.counts()).toEqual({ pings: 1, attention: 1, arrived: 1 });
+});
+
+it("keeps a deferred identity through watcher delivery, lost replies and a database restart", async () => {
+  let identity: MailboxIdentity | undefined;
+  const f = await fixture(async (_scope, _text, original) => { identity = original; return true; });
+  const payload = { text: "turn done", kind: "auto", messageId: randomUUID(), sentAt: Date.now(), queued: true as const };
+  expect(await (await f.post(payload)).json()).toEqual({ ok: true, deferred: true });
+  expect(identity).toEqual({ messageId: payload.messageId, sentAt: payload.sentAt, queued: true });
+  expect(f.notes()).toHaveLength(0);
+  f.loseNextReply();
+  await expect(f.post({ text: payload.text, ...identity })).rejects.toThrow();
+  const delivered = reply.parse(await (await f.post({ text: payload.text, ...identity })).json());
+  f.rebuild();
+  expect(reply.parse(await (await f.post(payload)).json())).toEqual(delivered);
+  expect(reply.parse(await (await f.post({ text: payload.text, ...identity })).json())).toEqual(delivered);
+  expect(f.notes()).toHaveLength(1);
+  expect(f.notes()[0]!.text).toMatch(/\(sent \d\d:\d\d while Wink was closed\)$/);
+  expect(f.counts()).toEqual({ pings: 1, attention: 1, arrived: 1 });
+});
 
 function run(bin: string, env: NodeJS.ProcessEnv, form = "ps1", text = "finished") {
   const file = join(bin, `orbit-msg${form === "sh" ? "" : `.${form}`}`);
@@ -185,6 +218,27 @@ it.skipIf(process.platform !== "win32")("uses the refreshed profile port only af
   writeFileSync(join(f.profile, "terminal-discovery.json"), JSON.stringify({ mailboxUrl: f.url }));
   expect((await run(f.bin, { ...f.env, ORBIT_URL: "http://127.0.0.1:1" })).code).toBe(0);
   expect(f.notes()).toHaveLength(1);
+});
+
+it.skipIf(process.platform !== "win32")("rereads discovery when the app publishes a new port during retry", async () => {
+  const f = await fixture();
+  let requests = 0;
+  const stale = createServer((_req, res) => { requests++; res.writeHead(503).end(); });
+  servers.push(stale);
+  await new Promise<void>(resolve => stale.listen(0, "127.0.0.1", resolve));
+  const address = z.object({ port: z.number() }).parse(stale.address());
+  const oldUrl = `http://127.0.0.1:${address.port}`;
+  writeFileSync(join(f.profile, "terminal-discovery.json"), JSON.stringify({ mailboxUrl: oldUrl }));
+  const sending = run(f.bin, { ...f.env, ORBIT_URL: oldUrl });
+  while (requests < 2) await new Promise(resolve => setTimeout(resolve, 50));
+  writeFileSync(join(f.profile, "terminal-discovery.json"), JSON.stringify({ mailboxUrl: f.url }));
+  expect((await sending).code).toBe(0);
+  expect(f.notes()).toHaveLength(1);
+}, 65_000);
+
+it("lets the notification hook finish the 45 second retry and queue write", () => {
+  const settings = JSON.parse(orbitBinFiles("C:/throwaway/bin").find(([name]) => name === "claude-worker.json")![1]);
+  expect(settings.hooks.Notification[0].hooks[0].timeout).toBeGreaterThanOrEqual(60);
 });
 
 it.skipIf(process.platform !== "win32")("the real shim retries a lost HTTP reply with the same ID", async () => {

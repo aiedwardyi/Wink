@@ -24,13 +24,15 @@ export const mailboxPostSchema = z.object({
   messageId: z.string().uuid().optional(), sentAt: z.number().int().min(0).max(8.64e15).optional(), queued: z.literal(true).optional(),
 });
 
-export async function deferMailboxAuto(access: TerminalBridgeAccess | null, scope: { bot: string; pane: string }, text: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+export type MailboxIdentity = Pick<z.infer<typeof mailboxPostSchema>, "messageId" | "sentAt" | "queued">;
+
+export async function deferMailboxAuto(access: TerminalBridgeAccess | null, scope: { bot: string; pane: string }, text: string, fetchImpl: typeof fetch = fetch, identity?: MailboxIdentity): Promise<boolean> {
   if (!access) return false;
   try {
     const response = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(scope.bot)}/terminal/attention`, {
       method: "POST",
       headers: { authorization: `Bearer ${terminalReadGrant(access.token, scope.bot)}`, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: scope.pane, kind: "auto", text }),
+      body: JSON.stringify({ sessionId: scope.pane, kind: "auto", text, identity }),
       signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) return false;

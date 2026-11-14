@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, readMailboxBody } from "./mailbox.ts";
 import type { createMailboxReceipts } from "./mailbox-receipts.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
+import type { MailboxIdentity } from "./mailbox.ts";
 
 type Scope = { pane: string; bot: string; teacher: string };
 type Kind = "report" | "auto" | "stall" | undefined;
@@ -11,7 +12,7 @@ type Dependencies = {
   receipts: ReturnType<typeof createMailboxReceipts>;
   origin: string;
   label: (scope: Scope) => Promise<string | null>;
-  auto: (scope: Scope, text: string) => Promise<boolean>;
+  auto: (scope: Scope, text: string, identity?: MailboxIdentity) => Promise<boolean>;
   attention: (scope: Scope, kind: Kind) => Promise<void>;
   reported: (scope: Scope, text: string) => void;
   refresh: (text: string) => void;
@@ -34,7 +35,8 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
   const result = await deps.receipts.accept(scope, input.messageId, async key => {
     deps.refresh(input.text);
     if (kind === "auto") {
-      if (await deps.auto(scope, input.text)) return { ok: true, deferred: true };
+      const identity = input.messageId ? { messageId: input.messageId, sentAt: input.sentAt, queued: input.queued } : undefined;
+      if (await deps.auto(scope, input.text, identity)) return { ok: true, deferred: true };
       kind = undefined;
     }
     const label = await deps.label(scope);
@@ -50,7 +52,7 @@ export async function receiveMailboxPost(req: IncomingMessage, deps: Dependencie
     const message = deps.store.appendMessage(source.threadId, row);
     accepted = true;
     return { ok: true, id: message.id };
-  }).catch(error => {
+  }, input.kind !== "auto").catch(error => {
     if (error.status === 400) return { error: "empty message" };
     throw error;
   });

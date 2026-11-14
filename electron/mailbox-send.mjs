@@ -44,7 +44,6 @@ $uris = @("$env:ORBIT_URL/api/mailbox")
 $direct = if ($PSVersionTable.PSVersion.Major -ge 6) { @{ NoProxy = $true } } else { [Net.WebRequest]::DefaultWebProxy = $null; @{} }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $failure = $null
-$discovered = $false
 $retryable = $true
 do {
   for ($i = 0; $i -lt $uris.Count; $i++) {
@@ -58,8 +57,7 @@ do {
       $status = if ($failure.Exception.Response) { [int]$failure.Exception.Response.StatusCode } else { 0 }
       $retryable = $status -eq 0 -or $status -eq 408 -or $status -eq 429 -or $status -ge 500
       if (-not $retryable) { break }
-      if (-not $discovered -and $env:ORBIT_URL -match '^http://127\.0\.0\.1:\d+$') {
-        $discovered = $true
+      if ($env:ORBIT_URL -match '^http://127\.0\.0\.1:\d+$') {
         $current = try { [IO.File]::ReadAllText([IO.Path]::Combine($orbitProfile, 'terminal-discovery.json')) | ConvertFrom-Json } catch { $null }
         if ($current.mailboxUrl -match '^http://127\.0\.0\.1:\d+$') { $uris += "$($current.mailboxUrl)/api/mailbox" }
         else { $uris += 'http://127.0.0.1:18799/api/mailbox', 'http://127.0.0.1:28799/api/mailbox' }

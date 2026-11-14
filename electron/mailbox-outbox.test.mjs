@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
+import { createPaneRuns } from "./pane-runs.mjs";
 
 const servers = [];
 afterEach(async () => {
@@ -53,6 +54,20 @@ it("keeps unacknowledged entries and their IDs for the next delivery", async () 
   const before = await fs.readFile(file, "utf8");
   expect((await deliverMailboxOutbox(f.profile, f.url)).delivered).toBe(0);
   expect(await fs.readFile(file, "utf8")).toBe(before);
+});
+
+it("retires only the acknowledged prior report before worker recovery", async () => {
+  const f = await fixture();
+  const ledger = path.join(f.profile, "pane-runs.json");
+  await fs.writeFile(ledger, JSON.stringify([
+    { id: "pane", botId: "bot", teacher: "bot", state: "running" },
+    { id: "other", botId: "bot", teacher: "bot", state: "running" },
+  ]));
+  await f.write(Date.now());
+  const runs = createPaneRuns(ledger);
+  await deliverMailboxOutbox(f.profile, f.url, runs);
+  expect(runs.restarted().get("bot").map(run => run.id)).toEqual(["other"]);
+  expect(createPaneRuns(ledger).restarted().get("bot").map(run => run.id)).toEqual(["other"]);
 });
 
 it("delivers after a sender crash leaves a fresh lock file", async () => {

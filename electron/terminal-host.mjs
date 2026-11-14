@@ -678,7 +678,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     note.tries += 1;
     note.retryAt = Infinity;
     const scope = { pane: session.id, bot: session.botId, teacher: session.teacher };
-    void Promise.resolve().then(() => notePane(session.mail, scope, text)).then(() => settle(true), () => {
+    void Promise.resolve().then(() => notePane(session.mail, scope, text, undefined, note.identity)).then(() => settle(true), () => {
       note.retryAt = now() + STALL_RETRY_MS;
       if (note.tries < STALL_TRIES) return;
       settle(false);
@@ -1717,7 +1717,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     resizeBot(botId, input) {
       return resizePane(inputSession(botId, input), input.cols, input.rows);
     },
-    attendBot(botId, sessionId, kind, text) {
+    attendBot(botId, sessionId, kind, text, identity) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       const session = botSessions(botId).find((candidate) => candidate.id === sessionId);
@@ -1733,7 +1733,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       } else if (session && kind === "stall") session.stallReceiptAt = now();
       else if (session) session.noteAt = now();
       if (session && session.exitCode === null && kind === "auto" && typeof text === "string") {
-        if (!session.autoReported && !session.autoDelivered && !session.autoNote?.tries) session.autoNote = { at: now(), text, tries: 0, retryAt: 0 };
+        if (!session.autoReported && !session.autoDelivered && !session.autoNote?.tries) session.autoNote = { at: now(), text, identity, tries: 0, retryAt: 0 };
         watchNotes();
         return true;
       }

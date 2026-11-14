@@ -59,6 +59,7 @@ function valid(entry) {
 async function drain(profile, url) {
   const files = await snapshot(profile);
   let delivered = 0;
+  const reports = [];
   for (const { file } of files) {
     const entry = await fs.readFile(file, "utf8").then(JSON.parse).catch(() => null);
     if (!valid(entry)) { await fs.unlink(file).catch(() => {}); continue; }
@@ -69,14 +70,18 @@ async function drain(profile, url) {
       });
       await response.arrayBuffer();
       if (!response.ok) continue;
+      if (entry.payload.kind === "report") {
+        const headers = Object.fromEntries(Object.entries(entry.headers).map(([key, value]) => [key.toLowerCase(), value]));
+        reports.push({ pane: headers["x-orbit-pane"], bot: headers["x-orbit-bot"], teacher: headers["x-orbit-teacher"] });
+      }
       await fs.unlink(file);
       delivered++;
     } catch {}
   }
-  return { delivered };
+  return { delivered, reports };
 }
 
-export function deliverMailboxOutbox(profile, url) {
+export function deliverMailboxOutbox(profile, url, runs) {
   if (!localUrl(url)) return Promise.reject(new Error("Mailbox delivery requires a loopback URL"));
   const key = path.resolve(profile);
   if (active.has(key)) return active.get(key);
@@ -87,6 +92,14 @@ export function deliverMailboxOutbox(profile, url) {
     worker.once("error", reject);
     worker.once("exit", code => code === 0 && result ? resolve(result) : reject(new Error(`Mailbox outbox worker exited ${code}`)));
     worker.unref();
+  }).then(result => {
+    if (runs) {
+      for (const report of result.reports) {
+        const prior = runs.restarted().get(report.bot)?.find(run => run.id === report.pane && (run.teacher ?? run.botId) === report.teacher);
+        if (prior) runs.closed(prior.id);
+      }
+    }
+    return result;
   }).finally(() => active.delete(key));
   active.set(key, pending);
   return pending;

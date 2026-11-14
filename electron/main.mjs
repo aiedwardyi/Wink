@@ -2172,12 +2172,10 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && !verifyProbe) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  if (!verifyProbe && serverReady) {
-    const mailboxUrl = `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`;
-    if (terminalBridgeAccess) await publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog);
-  }
   if (!verifyProbe) {
-    const reports = serverReady ? deliverMailboxOutbox(app.getPath("userData"), `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`).catch(slog) : Promise.resolve();
+    const mailboxUrl = `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`;
+    if (serverReady && terminalBridgeAccess) await publishTerminalDiscovery(app.getPath("userData"), terminalBridgeAccess, mailboxUrl).catch(slog);
+    const reports = serverReady ? deliverMailboxOutbox(app.getPath("userData"), mailboxUrl, paneRuns).catch(slog) : Promise.resolve();
     void reports.then(() => recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog })).catch(slog);
   }
   // The companion the user left on comes back without anyone finding the

@@ -32,11 +32,11 @@ export function maskMailboxGrants(text) {
 }
 
 /** Posts as the pane itself, so the note takes orbit-msg's route to the teacher. */
-export async function postPaneNote(mailbox, { pane, bot, teacher }, text, fetchImpl = fetch) {
+export async function postPaneNote(mailbox, { pane, bot, teacher }, text, fetchImpl = fetch, identity) {
   const response = await fetchImpl(`${mailbox.url}/api/mailbox`, {
     method: "POST",
     headers: { authorization: `Bearer ${mailboxGrant(mailbox.token, pane, bot, teacher)}`, "content-type": "application/json", "x-orbit-pane": pane, "x-orbit-bot": bot, "x-orbit-teacher": teacher },
-    body: JSON.stringify({ text, kind: text.startsWith("STALLED:") ? "stall" : undefined }),
+    body: JSON.stringify({ text, kind: text.startsWith("STALLED:") ? "stall" : undefined, messageId: identity?.messageId, sentAt: identity?.sentAt, queued: identity?.queued }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`Mailbox post failed: ${response.status}`);
@@ -451,7 +451,7 @@ function claudeWorkerSettings(dir) {
     permissions: { allow: ["Bash(orbit-clean:*)", "PowerShell(orbit-clean *)"] },
     statusLine: { type: "command", command: status },
     hooks: {
-      Notification: [{ matcher: "permission_prompt", hooks: [{ type: "command", command, timeout: 15 }] }],
+      Notification: [{ matcher: "permission_prompt", hooks: [{ type: "command", command, timeout: 90 }] }],
       SessionStart: [{ matcher: "compact", hooks: ["card", "progress"].map((part) => ({ type: "command", command: `${compact} ${part}`, timeout: 30 })) },
         { matcher: "startup|resume", hooks: [{ type: "command", command: workerSessionHook(dir), timeout: 15 }] }],
     },

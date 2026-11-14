@@ -304,7 +304,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         }
         if (req.method === "POST" && match[2] === "attention") {
           const note = await readJson(req);
-          return json(res, 200, { raised: host.attendBot(botId, note?.sessionId, note?.kind, note?.text) });
+          return json(res, 200, { raised: host.attendBot(botId, note?.sessionId, note?.kind, note?.text, note?.identity) });
         }
         if (req.method === "POST" && match[2]) {
           const input = await readJson(req);

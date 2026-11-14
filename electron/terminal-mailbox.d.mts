@@ -4,3 +4,4 @@ export function terminalPaneEnv(
   pane: { pane: string; bot: string; teacher?: string; mailbox?: { url: string; token: string; binDir: string | null } | null },
 ): Record<string, string | undefined>;
 export function installOrbitMsg(dir: string, platform?: NodeJS.Platform, profile?: string): Promise<string | null>;
+export function orbitBinFiles(dir: string, profile?: string): Array<[string, string]>;

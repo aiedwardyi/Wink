@@ -19,25 +19,28 @@ export function createMailboxReceipts(database: () => DatabaseSync = messageData
       seen.delete(key);
     }
   };
-  return {
-    async accept(scope: Scope, messageId: string | undefined, write: (key?: string) => Promise<Accepted>): Promise<Accepted> {
-      if (!messageId) return write();
-      prune();
-      const key = createHash("sha256").update(`${scope.pane}:${scope.bot}:${scope.teacher}:${messageId}`).digest("hex");
-      const existing = seen.get(key);
-      if (existing) return existing.result;
-      const inflight = pending.get(key);
-      if (inflight) return inflight;
-      const accepting = (async () => {
-        try {
-          const result = await write(key);
-          seen.set(key, { result, at: now() });
-          prune();
-          return result;
-        } finally { pending.delete(key); }
-      })();
-      pending.set(key, accepting);
-      return accepting;
-    },
+  const accept = async (scope: Scope, messageId: string | undefined, write: (key?: string) => Promise<Accepted>, finishDeferred = false): Promise<Accepted> => {
+    if (!messageId) return write();
+    prune();
+    const key = createHash("sha256").update(`${scope.pane}:${scope.bot}:${scope.teacher}:${messageId}`).digest("hex");
+    const inflight = pending.get(key);
+    if (inflight) {
+      const result = await inflight;
+      return finishDeferred && result.deferred ? accept(scope, messageId, write, true) : result;
+    }
+    const existing = seen.get(key);
+    if (existing && !(finishDeferred && existing.result.deferred)) return existing.result;
+    const accepting = (async () => {
+      try {
+        const result = await write(key);
+        seen.delete(key);
+        seen.set(key, { result, at: now() });
+        prune();
+        return result;
+      } finally { pending.delete(key); }
+    })();
+    pending.set(key, accepting);
+    return accepting;
   };
+  return { accept };
 }

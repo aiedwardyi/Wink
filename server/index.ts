@@ -2451,6 +2451,7 @@ function pageSize(raw: string | null): number | null | undefined {
 
 /** HTTP copy of a transcript row - bot-authored secrets are redacted; the stored row is unchanged. */
 function clientMessage(message: Message): Message {
+  if (message.mailbox) { const { mailbox: _mailbox, ...publicMessage } = message; message = publicMessage; }
   if (message.tool?.usageWait) {
     const wait = message.tool.usageWait;
     message = { ...message, tool: { ...message.tool, usageWait: { ...wait, cancelable: wait.ownerDeviceId === profileSyncSettings.deviceId && Boolean(limitWaits.store.get(wait.id)) } } };
@@ -7735,7 +7736,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const result = await receiveMailboxPost(req, {
         secret: MAILBOX_SECRET, store, receipts: mailboxReceipts, origin: profileSyncSettings.deviceId,
         label: scope => paneLabel(terminalBridgeAccess, scope.bot, scope.pane),
-        auto: (scope, text) => deferMailboxAuto(terminalBridgeAccess, scope, text),
+        auto: (scope, text, identity) => deferMailboxAuto(terminalBridgeAccess, scope, text, undefined, identity),
         attention: (scope, kind) => raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind),
         reported: (scope, text) => usageStats.workerReported(scope.pane, text),
         refresh: text => refreshCodexPromo(text, usageBoard.touch),

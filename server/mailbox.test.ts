@@ -234,6 +234,7 @@ describe("POST /api/mailbox", () => {
     expect(bodies[0]).toEqual(bodies[1]);
     const notes = (await transcript("stale-worker-thread")).filter(message => message.text?.includes(text));
     expect(notes).toHaveLength(1);
+    expect(notes[0]).not.toHaveProperty("mailbox");
     expect(notes[0]!.text).toMatch(/\(sent \d\d:\d\d while Wink was closed\)$/);
   });
 
