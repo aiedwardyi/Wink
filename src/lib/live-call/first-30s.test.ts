@@ -154,6 +154,14 @@ describe("1 no unasked speech", () => {
     expect(replies(engine())).toEqual(["[Wink] Chief of Staff replied: The login token expired."]);
   });
 
+  it("a message typed during the call keeps its reply when a worker note lands first", async () => {
+    const { call, engine } = await started();
+    engine().events.turnDone();
+    call.observe({ busy: false, messages: [...HISTORY, userRow("now", "What broke?"), paneNote("n1", "PICKER"), botRow("r", "The login token expired.")] });
+    await flush();
+    expect(replies(engine())).toEqual(["[Wink] Chief of Staff replied: The login token expired."]);
+  });
+
   it("a worker note while this call's order runs keeps the order's reply, and the bot's next line about the note is context", async () => {
     const { call, engine } = await started({ responses: { "/messages": ACCEPTED } });
     engine().events.turnDone();
@@ -299,6 +307,29 @@ describe("3 question manners", () => {
     call.observe({ busy: false, messages: [shipCard("q1")] });
     turn(engine(), "", "Is it OK to ship 1.0.263 now? Ship it, or wait?");
     engine().events.heard(line);
+    engine().events.answering();
+    await flush();
+    expect(sentToBot(posts)).toEqual([]);
+  });
+
+  it.each([["Friday.", 1], ["Hi, Jennifer.", 0], ["I was just saying hi to you.", 0], ["Okay, say that again.", 0], ["When is it due?", 0]] as const)("a card with no choices takes a plain answer: %s", async (line, sent) => {
+    const { call, engine, posts } = await started({ responses: { "/messages": ACCEPTED } });
+    engine().events.turnDone();
+    call.observe({ busy: false, messages: [shipCard("q1", 2_000, { subtitle: "Ship it when?", options: [] })] });
+    turn(engine(), "", "When should I ship it?");
+    engine().events.heard(line);
+    engine().events.answering();
+    await flush();
+    expect(sentToBot(posts)).toEqual(sent ? [`Re: “Ship it when?”
+${line}`] : []);
+  });
+
+  it("asking to hear the question again is not its answer, even with an okay in front", async () => {
+    const { call, engine, posts } = await started({ responses: { "/messages": ACCEPTED } });
+    engine().events.turnDone();
+    call.observe({ busy: false, messages: [shipCard("q1")] });
+    turn(engine(), "", "Is it OK to ship 1.0.263 now? Ship it, or wait?");
+    engine().events.heard("Okay, say that again.");
     engine().events.answering();
     await flush();
     expect(sentToBot(posts)).toEqual([]);
@@ -495,7 +526,16 @@ describe("5 the name it is shown by", () => {
     engine().events.heard(" Eddie?");
     expect(call.state().hushed).toBeUndefined();
     expect(callsVoice("Hi Jennifer", "Chief of Staff")).toBe(false);
-    expect(callsVoice("Hi Jennifer", "Chief of Staff", "Jenn")).toBe(true);
+    expect(callsVoice("Hi Jennifer", "Chief of Staff", ["Jenn"])).toBe(true);
+  });
+
+  it("the Korean picker label hushes and wakes it too", async () => {
+    const { call, engine } = await started({ voice: "Erinome" });
+    engine().events.turnDone();
+    turn(engine(), "아델, 조용해.", "네.");
+    expect(call.state().hushed).toBe(true);
+    engine().events.heard("아델, 이제 말해도 돼.");
+    expect(call.state().hushed).toBeUndefined();
   });
 });
 
@@ -521,7 +561,7 @@ describe("6 hush and wake", () => {
     expect(lines.filter((line) => !asksForQuiet(line, "Chief of Staff"))).toEqual([]);
     const talk = ["Stop talking about the tests.", "If I say be quiet, can you do that?", "That's enough money for now?", "Is it quiet in there?", "영어로 말하지 마."];
     expect(talk.filter((line) => asksForQuiet(line, "Chief of Staff"))).toEqual([]);
-    expect(asksForQuiet("Jenn, be quiet.", "Chief of Staff", "Jenn")).toBe(true);
+    expect(asksForQuiet("Jenn, be quiet.", "Chief of Staff", ["Jenn"])).toBe(true);
   });
 
   it("A05 a whole quiet line latches before the model has started answering", async () => {

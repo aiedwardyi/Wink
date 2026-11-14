@@ -69,17 +69,17 @@ const FOR_A_BIT = /for (?:a|one) (?:second|sec|minute|min|moment|bit|while)/.sou
 const escaped = (name: string) => name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** The person telling the voice to stop talking for now, which is not a no to a job. */
-export function asksForQuiet(heard: string, name = "", alias = ""): boolean {
+export function asksForQuiet(heard: string, name = "", aliases: readonly string[] = []): boolean {
   // The shown name may run on: "Jenn" is called "Jennifer" too.
-  const own = [escaped(name), alias.trim() && `${escaped(alias)}[a-z]*`].filter(Boolean).join("|");
+  const own = [escaped(name), ...aliases.map((alias) => `${escaped(alias)}[a-z]*`)].filter(Boolean).join("|");
   const lead = `(?:(?:${SOFT}${own && `|(?:${own})(?:야|아)?`})[\\s,]*)*`;
   const tail = `(?:[\\s,]+(?:please|now|for now|${FOR_A_BIT}${own && `|${own}`}))*`;
   return new RegExp(`^${lead}(?:${QUIET_EN}${tail}|${QUIET_KO})[\\s~….,!?]*$`, "i").test(heard.trim());
 }
 
 /** Talking to the voice again: its name, the name the picker shows for its voice, or a "hey". */
-export function callsVoice(heard: string, name: string, alias = ""): boolean {
+export function callsVoice(heard: string, name: string, aliases: readonly string[] = []): boolean {
   // Whole name only, though a Korean particle may follow it ("Nova야"); the shown name may run on ("Jennifer").
-  const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, alias.trim() && `${escaped(alias)}[a-z]*(?![0-9])`].filter(Boolean).join("|");
+  const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, ...aliases.map((alias) => `${escaped(alias)}[a-z]*(?![0-9])`)].filter(Boolean).join("|");
   return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])(?:${own})`, "iu").test(heard));
 }

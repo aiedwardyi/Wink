@@ -152,7 +152,7 @@ describe("call token", () => {
     expect(brief).not.toMatch(/Greet/);
   });
 
-  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
+  it.each([["Aoede", "Jenn"], ["Alnilam", "Eddie"], ["Erinome", "Adele or 아델"]] as const)("brief knows its shown name, the voice-change line and how quiet works (%s)", async (voice, shown) => {
     const h = harness({ liveCall: { voice } });
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;

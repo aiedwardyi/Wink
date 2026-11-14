@@ -197,7 +197,7 @@ export class LiveCall {
   private card?: { id: string; armed: boolean; options: string[]; prefix: string; passed?: true };
   private question?: Message | null;
   private toldCards = new Set<string>();
-  private alias = "";
+  private aliases: readonly string[] = [];
   private gap?: ReturnType<typeof setTimeout>;
   private cutHold?: "cut" | "heard" | "answering";
   private exchanged = false;
@@ -330,7 +330,7 @@ export class LiveCall {
       return null;
     }
     this.callId = posted.data.callId;
-    this.alias = LIVE_VOICE_NAMES[posted.data.voice as LiveVoice] ?? "";
+    this.aliases = LIVE_VOICE_NAMES[posted.data.voice as LiveVoice] ?? [];
     return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(resume && this.handle ? { handle: this.handle } : {}) };
   }
 
@@ -364,7 +364,7 @@ export class LiveCall {
         this.stir();
         this.heardBuf += text;
         this.caption("user", this.heardBuf);
-        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName, this.alias)) this.wake(0);
+        if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName, this.aliases)) this.wake(0);
         if (this.softCut && this.deps.audio.playing) {
           this.softCut = false;
           this.cutPlaying();
@@ -576,7 +576,7 @@ export class LiveCall {
     clearTimeout(this.settleTimer);
     this.settleTimer = setTimeout(() => {
       if (this.ended) return;
-      const quiet = !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.alias);
+      const quiet = !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.aliases);
       if (quiet || (this.pending && consentOf(spokenText(this.heardBuf)))) this.flushHeard();
     }, LIVE_VAD.silenceDurationMs);
   }
@@ -731,7 +731,7 @@ export class LiveCall {
   private flushHeard(ended = true) {
     const text = spokenText(this.heardBuf);
     // Only a whole line said since the last wake hushes, so a fragment that passes through "...말하지 마" never does.
-    const quiet = ended && !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.alias);
+    const quiet = ended && !this.snapshot.hushed && asksForQuiet(spokenText(this.heardBuf.slice(this.wokeAt)), this.deps.botName, this.aliases);
     this.heardBuf = "";
     this.wokeAt = 0;
     this.lineIds.user = 0;
@@ -826,8 +826,8 @@ export class LiveCall {
           replied = false;
           if ((row.call?.order || row.call?.ask) && row.call.id === this.callId) orders.push(row);
         } else if (BACKGROUND.has(row.kind)) {
-          // An order of this call still waiting keeps its reply; once answered, the bot's next line answers the note.
-          if (replied || !orders.length) {
+          // A request of this call still waiting keeps its reply; once answered, the bot's next line answers the note.
+          if (replied || (!orders.length && !(asked && asked.at >= startedAt))) {
             asked = undefined;
             orders = [];
           }
