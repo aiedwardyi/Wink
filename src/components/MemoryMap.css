@@ -227,7 +227,7 @@
 .mm-fold { position: relative; overflow: hidden; margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }
 
 /* light skins: a pearl badge, and a mist that pales toward the middle instead of deepening */
-:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .mm {
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="snow"], [data-skin="paper-tape"], [data-skin="dim-sand"]) .mm {
   --mm-grain: 0.6;
   --mm-live-ink: 70 82 210;
   --mm-badge: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%);
