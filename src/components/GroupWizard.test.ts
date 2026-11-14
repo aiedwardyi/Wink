@@ -101,6 +101,19 @@ function nameInputs(host: HTMLElement): HTMLInputElement[] {
   return [...host.querySelectorAll('input[id^="group-wizard-name-"]')] as HTMLInputElement[];
 }
 
+function menuTrigger(host: HTMLElement, label: string): HTMLButtonElement {
+  return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+}
+
+async function menuOptions(trigger: HTMLButtonElement) {
+  await act(async () => trigger.click());
+  return [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitemradio"]')];
+}
+
+async function closeMenu() {
+  await act(async () => document.querySelector('[role="menu"]:not([data-closing])')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+}
+
 async function toMembers(host: HTMLElement) {
   expect(host.querySelectorAll('button[role="checkbox"]').length).toBe(bots.filter((b) => !b.hidden).length);
 }
@@ -130,6 +143,23 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+  it("keeps the wizard open when Escape dismisses an engine menu", async () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onClose = vi.fn();
+    try {
+      await act(async () => root.render(createElement(GroupWizard, { onClose })));
+      await act(async () => button(document.body, "+ New bot").click());
+      await menuOptions(menuTrigger(document.body, "Switch engine"));
+      await closeMenu();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(document.activeElement).toBe(menuTrigger(document.body, "Switch engine"));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("opens over the screen with a card that fits a 360 px phone", async () => {
     const drawer = document.createElement("aside");
     document.body.append(drawer);
@@ -178,9 +208,10 @@ describe("GroupWizard members", () => {
     const { host, root } = await renderWizard();
     try {
       await act(async () => button(host, locale === "en" ? "+ New bot" : "+ 새 봇").click());
-      const select = host.querySelector("select")!;
-      expect([...select.options].map((option) => option.value)).toEqual(["claude", "codex"]);
-      expect(select.value).toBe("codex");
+      const trigger = host.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+      expect(trigger.textContent).toBe("Codex");
+      expect((await menuOptions(trigger)).map((option) => option.textContent)).toEqual(["Claude", "Codex"]);
+      await closeMenu();
       await act(async () => {
         const input = nameInputs(host)[0]!;
         Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "Research");
@@ -206,7 +237,7 @@ describe("GroupWizard members", () => {
         row: { key: 1, name: "Research", instanceId: copy.instanceId, model: null, saving: false, error: null },
         preferIndex: 0, instances: [copy, base], onPatch: () => undefined, onAdd,
       })));
-      expect(host.querySelector("select")!.value).toBe("codex");
+      expect(menuTrigger(host, "Switch engine").textContent).toBe("Codex");
       await act(async () => button(host, "Add bot").click());
       expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("codex");
     } finally {
@@ -451,10 +482,9 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "Add another").click();
       });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const selects = [...host.querySelectorAll('select[aria-label="Change model"]')] as HTMLSelectElement[];
-      expect(selects).toHaveLength(1);
-      expect(selects[0]!.value).toBe("muse-1-model");
+      const models = [...host.querySelectorAll('button[aria-label="Change model"]')];
+      expect(models).toHaveLength(1);
+      expect(models[0]!.textContent).toBe("Meta Muse Model");
       const [name2] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -637,18 +667,12 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the engine dropdown is the only select labelled Switch engine.
-      const engineSelect = host.querySelector('select[aria-label="Switch engine"]') as HTMLSelectElement;
-      expect([...engineSelect.options].map((o) => o.value)).toEqual(["codex-1", "muse-1"]);
-      expect(engineSelect.value).toBe("codex-1");
-      await act(async () => {
-        const native = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!;
-        native.call(engineSelect, "muse-1");
-        engineSelect.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
-      expect(modelSelect.value).toBe("muse-1-model");
+      const engineTrigger = menuTrigger(host, "Switch engine");
+      expect(engineTrigger.textContent).toBe("Codex");
+      const options = await menuOptions(engineTrigger);
+      expect(options.map((option) => option.textContent)).toEqual(["Codex", "Meta Muse"]);
+      await act(async () => options[1]!.click());
+      expect(menuTrigger(host, "Change model").textContent).toBe("Meta Muse Model");
       const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -694,19 +718,17 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the selector targets only the row model dropdowns rendered above.
-      const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
-      expect([...modelSelect.options].map((o) => o.value)).toEqual([
-        "gemini-4-carbon-low",
-        "gemini-4-argon-high",
-        "gemini-4-argon-low",
-        "gemini-4-hydrogen-medium",
-        "gemini-3.8-flash-high",
-        "gemini-3.8-flash-medium",
+      const modelTrigger = menuTrigger(host, "Change model");
+      expect((await menuOptions(modelTrigger)).map((option) => option.textContent)).toEqual([
+        "Gemini 4 Carbon Low",
+        "Gemini 4 Argon High",
+        "Gemini 4 Argon Low",
+        "Gemini 4 Hydrogen Medium",
+        "Gemini 3.8 Flash High",
+        "Gemini 3.8 Flash Medium",
       ]);
-      // The engine default (2.5) is not offered, so the select resolves to
-      // 3.8 Flash High even though Argon is listed first.
-      expect(modelSelect.value).toBe("gemini-3.8-flash-high");
+      expect(modelTrigger.textContent).toBe("Gemini 3.8 Flash High");
+      await closeMenu();
       const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
@@ -739,9 +761,7 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      // SAFETY: the engine dropdown is the only select labelled Switch engine.
-      const engineSelect = host.querySelector('select[aria-label="Switch engine"]') as HTMLSelectElement;
-      expect([...engineSelect.options].map((o) => o.value)).toEqual(["codex-1", "muse-1"]);
+      expect((await menuOptions(menuTrigger(host, "Switch engine"))).map((option) => option.textContent)).toEqual(["Codex", "Meta Muse"]);
     } finally {
       await act(async () => {
         root.unmount();
