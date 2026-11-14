@@ -299,7 +299,7 @@ describe("Team rooms for the host", () => {
     expect($('[data-joined-room-row] [data-sidebar-unread-count]')).toBeNull();
   });
 
-  it.each(["Join with code"])("Back closes %s first", async (label) => {
+  it.each(["Join group"])("Back closes %s first", async (label) => {
     const layers = new Map<string, () => void>();
     const layer = (event: CustomEvent<{ key: string; close?: () => void }>) => {
       if (event.detail.close) layers.set(event.detail.key, event.detail.close);
@@ -593,7 +593,7 @@ describe("Team rooms for a teammate", () => {
     });
     await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     const box = $<HTMLInputElement>('input[aria-label="Group code 1"]')!;
     expect(document.querySelectorAll('[role="dialog"] button')).toHaveLength(0);
     await paste(box, `  ${CODE}\n`);
@@ -618,7 +618,7 @@ describe("Team rooms for a teammate", () => {
       },
     });
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     const name = () => $<HTMLInputElement>('[role="dialog"] input[aria-label="Your name"]');
     expect(name()?.value).toBe("");
     expect(document.activeElement).toBe(name());
@@ -640,7 +640,7 @@ describe("Team rooms for a teammate", () => {
       },
     });
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     await paste($<HTMLInputElement>('input[aria-label="Group code 1"]'), CODE);
     await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')?.textContent).toBe("Add your name first."));
     expect($<HTMLInputElement>('[role="dialog"] input[aria-label="Your name"]')!.value).toBe("");
@@ -657,7 +657,7 @@ describe("Team rooms for a teammate", () => {
       },
     });
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     const name = $<HTMLInputElement>('[role="dialog"] input[aria-label="Your name"]');
     await type(name, " @ ");
     await paste($<HTMLInputElement>('input[aria-label="Group code 1"]'), CODE);
@@ -679,7 +679,7 @@ describe("Team rooms for a teammate", () => {
     });
     await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     expect($('[role="dialog"] input[aria-label="Your name"]')).toBeNull();
     await paste($<HTMLInputElement>('input[aria-label="Group code 1"]'), CODE);
     await vi.waitFor(() => expect(asked("POST", "/api/joined/join")).toHaveLength(1));
@@ -696,7 +696,7 @@ describe("Team rooms for a teammate", () => {
     });
     await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     const box = $<HTMLInputElement>('input[aria-label="Group code 1"]')!;
     await paste(box, "hello there");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("That code doesn't work.");
@@ -723,7 +723,7 @@ describe("Team rooms for a teammate", () => {
     });
     await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
-    await click(button("Join with code"));
+    await click(button("Join group"));
     await paste($<HTMLInputElement>('input[aria-label="Group code 1"]'), "ABCDEF");
     await vi.waitFor(() => expect($('[role="dialog"] [role="alert"]')).not.toBeNull());
     expect([...document.querySelectorAll<HTMLInputElement>("[data-join-boxes] input")].map((box) => box.value).join("")).toBe("ABCDEF");
@@ -826,7 +826,7 @@ describe("Team rooms for a teammate", () => {
     await act(async () => store.dispatch!({ type: "configStatus", config: { features: {}, profile: { name: "Mina" } } as never }));
     await openPlus();
     expect(button("새 팀 채팅방")).toBeUndefined();
-    await click(button("코드로 참여"));
+    await click(button("그룹 참여"));
     const box = $<HTMLInputElement>('input[aria-label="그룹 코드 1"]')!;
     await paste(box, "아무거나");
     expect($('[role="dialog"] [role="alert"]')!.textContent).toBe("사용할 수 없는 코드예요.");

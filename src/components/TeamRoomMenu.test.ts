@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("+ menu room items", () => {
-  it("gives Join with code the shared hover and focus surface", async () => {
+  it("gives Join group the shared hover and focus surface", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const host = document.createElement("div");
     document.body.append(host);
@@ -35,7 +35,7 @@ describe("+ menu room items", () => {
     } finally { act(() => root.unmount()); }
   });
 
-  it.each([["en", "Join with code"], ["ko", "코드로 참여"]] as const)("offers only Join with code in %s", async (locale, label) => {
+  it.each([["en", "Join group"], ["ko", "그룹 참여"]] as const)("offers only Join group in %s", async (locale, label) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     localStorage.setItem("omb-locale", locale);
     const root = createRoot(document.body.appendChild(document.createElement("div")));
