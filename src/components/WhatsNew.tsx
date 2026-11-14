@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { lazyView } from "@/lib/stale-build";
+import { CATCHING_UP_POLL_MS } from "@/lib/use-catching-up";
 import { usePresence } from "@/lib/use-presence";
 import { api, useStore } from "@/state/store";
 import { LazyView } from "./LazyView";
@@ -13,7 +14,14 @@ let asked: Promise<{ release: string; anchor?: string } | null> | undefined;
 let release: string | null = null;
 // The message the card sits after; null keeps it at the bottom of an empty chat.
 let anchor: string | null | undefined;
-const slots = new Map<symbol, { hidden: boolean; last?: string }>();
+// Fresh notes wait here while the visible chat still pulls what another PC wrote, so the card lands under all of it.
+let held: string | null = null;
+let checking = false;
+let recheck: ReturnType<typeof setTimeout> | undefined;
+// An offline PC never lists Drive, so "not listed yet" holds the notes only this long.
+const UNLISTED_MS = 60_000;
+let unlisted = 0;
+const slots = new Map<symbol, { hidden: boolean; last?: string; thread?: string }>();
 const owner = () => [...slots].find(([, slot]) => !slot.hidden)?.[0];
 const listeners = new Set<() => void>();
 const notify = () => {
@@ -23,7 +31,32 @@ const notify = () => {
     if (anchor) void api("/api/whats-new/anchor", { method: "POST", body: JSON.stringify({ release, id: anchor }) }).catch(() => {});
   }
   listeners.forEach((listener) => listener());
+  settle();
 };
+function settle() {
+  const at = owner();
+  if (!held || !at || checking || recheck) return;
+  const show = () => {
+    release = held;
+    held = null;
+    notify();
+  };
+  const thread = slots.get(at)!.thread;
+  if (!thread) return show();
+  checking = true;
+  void api(`/api/catching-up/${encodeURIComponent(thread)}`)
+    .then((body: { catchingUp: boolean | null }) => body.catchingUp ?? (unlisted += CATCHING_UP_POLL_MS) < UNLISTED_MS, () => false)
+    .then((pulling) => {
+      checking = false;
+      const now = owner();
+      // a chat opened while this was asked gets its own answer
+      if (!pulling && now && slots.get(now)!.thread === thread) return show();
+      recheck = setTimeout(() => {
+        recheck = undefined;
+        settle();
+      }, CATCHING_UP_POLL_MS);
+    });
+}
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
   return () => void listeners.delete(listener);
@@ -31,7 +64,7 @@ const subscribe = (listener: () => void) => {
 
 export const useWhatsNewAnchor = () => useSyncExternalStore(subscribe, () => anchor, () => undefined);
 
-export function WhatsNewSlot({ hidden = false, last }: { hidden?: boolean; last?: string }) {
+export function WhatsNewSlot({ hidden = false, last, thread }: { hidden?: boolean; last?: string; thread?: string }) {
   const { state } = useStore();
   const [me] = useState(() => Symbol());
   useEffect(() => () => {
@@ -39,9 +72,9 @@ export function WhatsNewSlot({ hidden = false, last }: { hidden?: boolean; last?
     notify();
   }, [me]);
   useEffect(() => {
-    slots.set(me, { hidden, last });
+    slots.set(me, { hidden, last, thread });
     notify();
-  }, [me, hidden, last]);
+  }, [me, hidden, last, thread]);
   const mine = useSyncExternalStore(subscribe, () => (owner() === me ? release : null), () => null);
   const shown = usePresence(mine);
   useEffect(() => {
@@ -56,8 +89,10 @@ export function WhatsNewSlot({ hidden = false, last }: { hidden?: boolean; last?
         .catch(() => null));
       void ask.then((next) => {
         if (asked !== ask || !next || release === next.release) return;
-        release = next.release;
         anchor = next.anchor;
+        // notes already placed keep their place; only a first showing waits
+        if (next.anchor === undefined) held = next.release;
+        else release = next.release;
         notify();
       });
     }, ASK_AFTER_MS);

@@ -266,6 +266,8 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
     }
     // not a load: main routes the 403 to refused(), and this commit can land on either side of it
     if (code === 403 && !String(target).startsWith("data:")) return;
+    // Tailscale Serve answers an empty 502 while Wink is closed on that PC, and it commits as a blank page; 401 belongs to the link page
+    if (code >= 400 && code !== 401 && !String(target).startsWith("data:")) return fail(`answered ${code}`);
     showingFailure = false;
     cancel();
     retries = 0;
