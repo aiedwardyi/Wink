@@ -144,14 +144,16 @@ describe("Account settings", () => {
     expect(host.querySelector("output")?.textContent).toBe("sync");
   });
 
-  it("lands the companion deep link on Devices and asks for a setup code only in the confirm", async () => {
+  it("lands the companion deep link on Devices and sends a PC with no relay to other ways, never a setup code", async () => {
     const pane = await render("companion");
     expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
     expect(pane.querySelector("[data-phone-settings]")).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
     expect(pane.querySelector("input")).toBeNull();
     await act(async () => pane.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
-    expect(document.querySelector('[role="dialog"] input[aria-label="Setup Code"]')).not.toBeNull();
+    expect(document.querySelector('input[aria-label="Setup Code"]')).toBeNull();
+    expect(pane.querySelector('[aria-controls="devices-other"]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(pane.querySelector("#devices-tailscale [data-devices-settings]")).not.toBeNull();
   });
 
   it("shows Devices even on a packaged PC without the legacy companion service", async () => {
