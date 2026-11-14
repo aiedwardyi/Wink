@@ -381,10 +381,32 @@ describe("his 15:56 call, replayed", () => {
   });
 
   it("B1 only a plain lookup skips the yes", () => {
-    const plain = ["search for information about Microtuber", "Look up Baji Kitchen.", "마이크로튜버에 대해 검색해줘.", "그 사람이 누군지 알아봐 줘", "로그 좀 찾아 주세요."];
+    const plain = ["search for information about Microtuber", "Look up Baji Kitchen.", "search if Edward E. Ford is associated with the MicroTuber cryptocurrency project", "마이크로튜버에 대해 검색해줘.", "그 사람이 누군지 알아봐 줘", "로그 좀 찾아 주세요."];
     expect(plain.filter((order) => !looksUp(order))).toEqual([]);
     const more = ["Search for the old logs and delete them.", "Look up the config and reset it.", "Search the logs, then email them.", "검색해서 나온 파일은 지워줘.", "검색창을 왼쪽으로 옮기자.", "찾아보고 삭제하자.", "Open the forecast page."];
     expect(more.filter((order) => looksUp(order))).toEqual([]);
+    const joined = ["Search the logs; email them to the team.", "Look up the server; shut it down.", "Look up the server. Shut it down.", "Search the logs, email them to the team.", "로그는 메일로 부치고 검색해줘.", "검색해줘. 그리고 서버도 내려."];
+    expect(joined.filter((order) => looksUp(order))).toEqual([]);
+  });
+
+  it("B1 a lookup takes the place of an order still waiting for a yes", async () => {
+    const { call, engine, posts, tick } = await live();
+    const e = engine();
+    e.events.heard("Delete the old logs.");
+    e.events.answering();
+    e.events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Delete the old logs." } }]);
+    await tick(10);
+    expect(call.state().pending?.order).toBe("Delete the old logs.");
+    e.events.turnDone();
+    e.events.heard("Search for the error message.");
+    e.events.answering();
+    e.events.toolCall([{ id: "p2", name: "propose_work", args: { order: "Search for the error message." } }]);
+    await tick(10);
+    expect(call.state().pending).toBeUndefined();
+    await call.answer(true);
+    await tick(10);
+    expect(sent(posts).map((body) => body.text)).toEqual(["Search for the error message."]);
+    expect(e.results).toEqual([{ id: "p1", result: "sent" }, { id: "p2", result: "sent" }]);
   });
 
   it("B2 an order already sent is not offered again, and his corrections reach the bot", async () => {

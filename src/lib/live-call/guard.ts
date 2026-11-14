@@ -49,9 +49,10 @@ export function asksForChange(question: string): boolean {
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
 // Korean puts the verb last, so the lookup has to end the order: "검색해서 나온 파일은 지워줘" deletes.
 const LOOKUP_KO = /(?:(?:검색|조사)(?:\s?좀)?\s?해|(?:찾아|알아)\s?(?:봐|보세요|볼래|줘|주세요|줄래))(?:\s?(?:봐|보세요|볼래|줘|주세요|줄래))*요?[\s.!?~]*$/;
-const MORE = new RegExp(`\\b(?:and|then|${CHANGES})\\b`, "i");
+// A second step: a list mark, a new sentence (an initial like "E." is not one), a 고 clause, "and", "then" or a change word.
+const MORE = new RegExp(`[;,:]|(?<!(?<![\\p{L}\\p{N}])\\p{L})[.!?]\\s+\\S|[가-힣]고\\s|\\b(?:and|then|${CHANGES})\\b`, "iu");
 
-/** A plain lookup changes nothing, so it needs no yes; a second step or a change word makes it an order. */
+/** A plain lookup changes nothing, so it needs no yes; a second step makes it an order. */
 export function looksUp(order: string): boolean {
   return (LOOKUP_EN.test(order) || LOOKUP_KO.test(order)) && !MORE.test(order) && !CHANGE_KO.test(order);
 }

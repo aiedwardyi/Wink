@@ -583,7 +583,8 @@ export class LiveCall {
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
     // A lookup he asked for changes nothing, so it goes with no yes; the one already sent, said in other words, does not go twice.
-    if (this.req.text && looksUp(order)) return this.req.accounted && restates(key, this.req.asks.keys()) ? this.toolResult(ids, "propose_work", order, "already sent") : this.query(order, ids, "propose_work");
+    const lookup = this.req.text !== "" && looksUp(order);
+    if (lookup && this.req.accounted && restates(key, this.req.asks.keys())) return this.toolResult(ids, "propose_work", order, "already sent");
     // Every result makes the voice speak, so a re-offer waits to be answered with the first one.
     if (this.pending && orderKey(this.pending.order) === key) return void this.pending.toolIds.push(...ids);
     // A newer offer answers for the old call too: a result of its own made the voice speak a turn that sounded like a yes.
@@ -593,6 +594,7 @@ export class LiveCall {
       this.clearPending();
       this.notSent(replaced.order, "replaced");
     }
+    if (lookup) return this.query(order, [...(replaced?.toolIds ?? []), ...ids], "propose_work");
     this.stats.orders.proposed += 1;
     // A yes to the voice's own question, before it said anything new, already confirms the order.
     const yes = !this.req.accounted && bareYes(this.req.text) && offered(this.lastSaid) && !spokenText(this.saidBuf) && !this.turnHadAudio;
@@ -797,7 +799,8 @@ export class LiveCall {
     this.justAnswered = false;
     const card = this.card;
     // A bare yes while his request is already running asks for nothing new.
-    const req = this.awaiting && this.req.accounted && !this.pending && !card?.armed && bareYes(text) && !offered(this.lastSaid) ? this.req : (this.req = request(text));
+    const same = this.awaiting > 0 && this.req.accounted && !this.pending && !card?.armed && bareYes(text) && !offered(this.lastSaid);
+    const req = same ? this.req : (this.req = request(text));
     // A clear answer to the card read out goes to the bot as one, quoting it so the next call sees it answered; anything else is talk.
     if (ended && !this.snapshot.hushed && !this.pending && card?.armed && !answersCard(text, card.options)) card.passed = true;
     else if (ended && !this.snapshot.hushed && !this.pending && card?.armed) {
@@ -876,7 +879,7 @@ export class LiveCall {
       let backs: Message[] = [];
       const carried = (row: Message) => Boolean(row.call?.order || row.call?.ask) && row.at >= startedAt - CARRY_MS;
       for (const row of input.messages) {
-        // Once he wrote or called again after a reply, he has moved on from it.
+        // A reply that landed before this call is no longer news once he wrote or called again after it.
         if (isVoiceLine(row) ? row.call?.id !== this.callId : isSentByPerson(row)) backs = backs.filter((back) => back.at >= startedAt);
         if (isSentByPerson(row) && !isVoiceLine(row) && row.quick?.state !== "asked" && !row.queued && row.text?.trim()) {
           if (!row.steered || !orders.length) {
