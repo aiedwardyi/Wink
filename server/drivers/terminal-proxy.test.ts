@@ -133,7 +133,8 @@ describe("terminal proxy", () => {
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
-    expect(workerModelsText().length).toBeLessThan(960);
+    expect(description).toContain("Muse Ember = muse-ember-1.0");
+    expect(workerModelsText().length).toBeLessThan(1000);
     expect(description).toContain("Gemini: Gemini 4 Carbon = gemini-4-carbon-<effort>, Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 4 Hydrogen = gemini-4-hydrogen-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
@@ -296,6 +297,7 @@ describe("terminal proxy", () => {
     expect(TOOLS[2].description).toContain("Max 128 live panes per bot");
     expect(TOOLS[2].description).not.toContain("--dangerously-skip-permissions");
     expect(TOOLS[2].description).not.toContain(workerModelsText());
+    expect(TOOLS.map((tool) => tool.description).join("\n")).not.toContain("muse-ember-1.0");
     expect(TOOLS[2].description.length).toBeLessThan(500);
   });
 
