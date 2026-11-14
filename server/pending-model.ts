@@ -30,6 +30,6 @@ export function applyPendingModel(bot: PendingModelBot): boolean {
 export function switchHeld(bot: Pick<PendingModelBot, "modelSelection" | "pendingModelSelection">): boolean {
   const next = bot.pendingModelSelection;
   if (!next) return false;
-  const now = bot.modelSelection;
-  return next.instanceId !== now.instanceId || next.model !== now.model || (next.mode ?? "pinned") !== (now.mode ?? "pinned");
+  const running = bot.modelSelection;
+  return next.instanceId !== running.instanceId || next.model !== running.model || (next.mode ?? "pinned") !== (running.mode ?? "pinned");
 }
