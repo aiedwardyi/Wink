@@ -107,7 +107,7 @@ export function resetRelay(): void {
 }
 
 /** This PC's relay switch, its link and the devices signed in to it, with `pcs` between. `refresh` reloads that list. With no relay set up, the switch calls `onNoRelay`. */
-export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay?: () => void; pcs?: ReactNode }) {
+export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onNoRelay, pcs }: { request?: typeof api; refresh?: number; onEnabled?: (on: boolean) => void; onNoRelay: () => void; pcs?: ReactNode }) {
   const { t, locale } = useI18n();
   const [status, setStatus] = useState<RelayStatus | null>(() => saved().status);
   const [refused, setRefused] = useState(false);
@@ -290,7 +290,7 @@ export function PhoneAccessSettings({ request = api, refresh = 0, onEnabled, onN
       onClick={() => {
         if (enabled) return void save(false);
         // No relay: no one sent a setup code, so go to the other ways to connect.
-        if (!configured) return void onNoRelay?.();
+        if (!configured) return void onNoRelay();
         setAsking(true);
       }}
       className={cnSwitch(enabled)}

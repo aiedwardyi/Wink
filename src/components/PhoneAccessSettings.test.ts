@@ -45,7 +45,7 @@ async function renderView(props: object = {}) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, ...props }))));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(PhoneAccessSettings, { request, onNoRelay: () => {}, ...props }))));
   return { host, root };
 }
 
