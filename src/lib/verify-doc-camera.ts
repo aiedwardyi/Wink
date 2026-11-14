@@ -20,11 +20,11 @@ export function cameraStep(cam: DocCamera, { lead, stop }: DocView, view: number
     if (cam.to !== undefined) speed = Math.max(0, cam.speed + ((lead.to - cam.to) * 1000 / dt - cam.speed) * (1 - Math.exp(-dt / SPEED_MS)));
     v = cam.v + (Math.max(0, speed + (lead.to - view / 3 - cam.x) * 1000 / CATCH_MS) - cam.v) * ease;
     const above = wall(lead.y), below = lead.y + BOTTOM - view - cam.x;
-    v = above < 0 ? above : Math.min(v, above, held);
+    v = Math.max(0, Math.min(v, above, held));
     if (below > 0) v = Math.max(v, below * 1000 / WALL_MS);
   }
-  const floor = lead ? lead.y + BOTTOM - view : 0, ceiling = lead ? lead.y - TOP : Infinity;
-  const x = Math.max(0, Math.min(max, ceiling, Math.max(cam.x + v * dt / 1000, floor)));
+  const floor = lead ? lead.y + BOTTOM - view : 0, ceiling = lead ? Math.max(cam.x, lead.y - TOP) : Infinity;
+  const x = Math.max(0, Math.min(max, ceiling, Math.max(cam.x, cam.x + v * dt / 1000, floor)));
   return { x, v: (x - cam.x) * 1000 / dt, speed, to: lead?.to };
 }
 
