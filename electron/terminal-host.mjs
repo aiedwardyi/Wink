@@ -979,10 +979,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const text = session.screen.text();
     const finished = session.reportAt > 0 && session.reportAt >= session.stallArmedAt && !AGENT_BUSY_RE.test(text) && !agentJobsRunning(text)
       && now() - Math.max(session.stallChangedAt, session.reportAt, session.userInputAt) >= KEEP_IDLE_MS;
-    return (session.adopting || (session.shellExecuting && !finished)) && session.pty.detach?.() === true;
+    return session.adopting || (session.shellExecuting && !finished);
   };
-  // The worker host keeps running the pane: nothing of it is stopped, and its record tells the next start to take it back.
+  // The worker host keeps running the pane: nothing of it is stopped, and its record tells the next start to take it back. False = the pane ends here.
   const leave = (session) => {
+    if (!carriesOver(session) || session.pty.detach?.() !== true) return false;
     session.retired = true;
     clearActivityTimer(session);
     clearTimeout(session.claudeTrustTimer);
@@ -991,6 +992,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     exitNotes.delete(session);
     sessions.delete(session.id);
     paneRuns?.kept(session.id);
+    return true;
   };
   const watchOwner = (owner) => {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
@@ -998,7 +1000,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     watchedOwners.add(owner);
     owner.once("destroyed", () => {
       // Closing the window ends the app on Windows, and this runs before dispose() does.
-      for (const live of [...sessions.values()]) if (live.owner === owner) carriesOver(live) ? leave(live) : retireQuietly(live, true);
+      for (const live of [...sessions.values()]) if (live.owner === owner && !leave(live)) retireQuietly(live, true);
     });
   };
   const reclaimExited = () => {
@@ -1951,7 +1953,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       active.clear();
       const stopping = [...sessions.values()];
       const stops = stopping.map((session) => {
-        if (carriesOver(session)) return leave(session);
+        if (leave(session)) return undefined;
         session.retired = true;
         return retire(session);
       });

@@ -11,7 +11,7 @@ function* pieces(text, size) {
   for (let start = 0; start < text.length;) {
     let end = Math.min(text.length, start + size);
     const last = text.charCodeAt(end - 1);
-    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--;
+    if (end < text.length && end - start > 1 && last >= 0xd800 && last <= 0xdbff) end--;
     yield text.slice(start, end);
     start = end;
   }

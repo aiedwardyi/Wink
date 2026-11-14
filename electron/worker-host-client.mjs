@@ -306,11 +306,15 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
     },
     /** What an earlier run of the app left: "kept" is a host this app can talk to, "unknown" one it cannot, "none" nothing. */
     left() {
-      if (platform !== "win32" || !fs.existsSync(root)) return "none";
+      if (platform !== "win32") return "none";
       const alive = (name) => fs.existsSync(path.join(root, name)) && workerHostLock(path.join(root, name, "host.lock"));
       const own = alive(path.basename(slot));
       if (own === "alive") return "kept";
-      return own === "unknown" || fs.readdirSync(root).some((name) => /^v\d+$/.test(name) && name !== path.basename(slot) && alive(name) === "alive") ? "unknown" : "none";
+      if (own === "unknown") return "unknown";
+      let names;
+      // Only a missing folder means nothing was left; one that cannot be listed may still hold a live host.
+      try { names = fs.readdirSync(root); } catch (error) { return error.code === "ENOENT" ? "none" : "unknown"; }
+      return names.some((name) => /^v\d+$/.test(name) && name !== path.basename(slot) && alive(name) === "alive") ? "unknown" : "none";
     },
     panes: () => peer ? peer.request("list") : Promise.resolve([]),
     /** Ends a kept pane nobody will take back: stops it if it still runs, then has the host forget it. */
