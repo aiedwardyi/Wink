@@ -23,6 +23,9 @@ import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
+const GROUP_BUSY = "this group is working or waiting on you - finish that turn first";
+const GROUP_WORKING = "this group is working - stop that turn first";
+
 type GroupRouteDeps = {
   store: Store;
   clientMessage: (message: Message) => Message;
@@ -208,7 +211,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -233,7 +236,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         return json(res, 200, { group: url.searchParams.get("messages") === "0" ? publicGroupState(view) : groupWithThread(view) });
       }
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const switched = store.switchGroupTask(group.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such channel task" });
@@ -250,7 +253,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -266,7 +269,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
       if (group.hosted) return json(res, 409, { error: "a team room keeps one conversation" });
       if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+        return json(res, 409, { error: GROUP_BUSY });
       }
       if (!store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such channel task" });
       lastReply.delete(m[2]);
@@ -283,12 +286,9 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const existing = store.group(m[1]);
       if (!existing) return json(res, 404, { error: "no such room" });
-      // who answers is read when a message starts, so it may change mid-turn
-      if (
-        channelTaskBlocked(existing) &&
-        (body.memberIds !== undefined || body.bulletin !== undefined)
-      ) {
-        return json(res, 409, { error: "this channel is working or waiting on you - finish that turn first" });
+      // who answers and who is in are read when a message starts, so they may change mid-turn
+      if (channelTaskBlocked(existing) && body.bulletin !== undefined) {
+        return json(res, 409, { error: GROUP_BUSY });
       }
       const patch: Record<string, unknown> = {};
       if (body.name !== undefined) {
@@ -374,6 +374,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
         if (typeof body.pinned !== "boolean") return json(res, 400, { error: "pinned must be a boolean" });
         patch.pinned = body.pinned;
       }
+      const leaving = existing.busyBotId;
+      if (leaving && Array.isArray(patch.memberIds) && !patch.memberIds.includes(leaving)) await stopMember(existing.threadId, leaving);
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
       if (existing.hosted && Array.isArray(patch.memberIds)) setPeopleOnly(existing.hosted.roomId, !patch.memberIds.length);
       const group = store.patchGroup(m[1], patch);
@@ -390,7 +392,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such room" });
       if (groupIsWorking(group)) {
-        return json(res, 409, { error: "this channel is working - stop that turn first" });
+        return json(res, 409, { error: GROUP_WORKING });
       }
       const threadIds = new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
       for (const threadId of threadIds) lastReply.delete(threadId);
@@ -423,6 +425,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       }
       const sendId = parseSendId(body.sendId);
       const replyTo = resolveReplyTarget(threadId, body.replyToId);
+      // nobody was asked to answer: no busy patch will come to end the sender's Thinking
+      const idle = () => !groupIsWorking(store.group(group.id) ?? group);
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
@@ -433,7 +437,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
               throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
             }
             if (accepted.kind === "match") {
-              return { ok: true as const, threadId, message: accepted.message };
+              return { ok: true as const, threadId, message: accepted.message, idle: idle() };
             }
           }
           const current = store.group(group.id);
@@ -448,7 +452,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
           // a Stop during the steer await hands the line back, as a 1:1 Send now
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
           const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId);
-          return { ok: true as const, threadId, message };
+          return { ok: true as const, threadId, message, idle: idle() };
         },
       );
       return json(res, 202, receipt);

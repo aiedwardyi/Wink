@@ -5,6 +5,8 @@
 export const en = {
   "errors.sendTaskChanged": "Not sent. The chat moved to another task. Send your message again.",
   "errors.stopTaskChanged": "Couldn't stop. The chat moved to another task. Try again.",
+  "errors.groupBusy": "This group is working or waiting on you. Finish that turn first.",
+  "errors.groupWorking": "This group is working. Stop that turn first.",
   "errors.memoryLimit": "Memory is full. Move some notes into separate memory files.",
   "errors.shell": "The terminal is unavailable right now. Trying again...",
   "errors.connection": "Can't reach Wink. Check your connection.",
@@ -1828,6 +1830,8 @@ export type MessageKey = keyof typeof en;
 export const ko = {
   "errors.sendTaskChanged": "전송되지 않았어요. 채팅이 다른 작업으로 바뀌었어요. 메시지를 다시 보내 주세요.",
   "errors.stopTaskChanged": "멈추지 못했어요. 채팅이 다른 작업으로 바뀌었어요. 다시 시도해 주세요.",
+  "errors.groupBusy": "이 그룹이 작업 중이거나 답을 기다리고 있어요. 그 턴을 먼저 끝내 주세요.",
+  "errors.groupWorking": "이 그룹이 작업 중이에요. 그 턴을 먼저 멈춰 주세요.",
   "errors.memoryLimit": "메모리가 가득 찼어요. 일부 내용을 별도의 메모리 파일로 옮겨 주세요.",
   "errors.shell": "지금은 터미널에 연결할 수 없어요. 다시 연결하고 있어요...",
   "errors.connection": "Wink에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.",

@@ -1267,6 +1267,27 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("tells the sender a line nobody was asked to answer starts no turn", async () => {
+    const alpha = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Mention room", memberIds: [alpha.id] })).body.group;
+    const working = async () =>
+      (await api("GET", "/api/bots?messages=0")).body.groups.find((candidate: { id: string }) => candidate.id === room.id).working;
+    try {
+      await api("PATCH", `/api/bots/${alpha.id}`, { name: "Alpha", modelSelection: { instanceId: "ghost", model: "ghost-1" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "go" })).body.idle).toBe(false);
+      await expect.poll(working).toBe(false);
+
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "hi" })).body).toMatchObject({ ok: true, idle: true });
+      expect(await working()).toBe(false);
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@Alpha hi" })).body.idle).toBe(false);
+      await expect.poll(working).toBe(false);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${alpha.id}`);
+    }
+  });
+
   it("creates, patches, and deletes a bot", async () => {
     const created = await api("POST", "/api/bots");
     expect(created.status).toBe(201);
@@ -3357,7 +3378,7 @@ describe("harness HTTP API", () => {
       const immediate = (await api("GET", "/api/bots?messages=0")).body;
       expect(immediate.groups.find((group: { id: string }) => group.id === room.id)?.working).toBe(true);
       expect((await api("POST", `/api/groups/${room.id}/tasks`, { title: "Too soon" })).status).toBe(409);
-      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [first.id] })).status).toBe(409);
+      expect((await api("PATCH", `/api/groups/${room.id}`, { bulletin: "Too soon" })).status).toBe(409);
       const picked = await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
       expect(picked.status).toBe(200);
       expect(picked.body.group.defaultResponder).toEqual({ kind: "mentions" });
