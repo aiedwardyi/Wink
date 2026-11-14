@@ -90,6 +90,7 @@ import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
+import { WakeChips } from "./WakeChips";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
@@ -1898,6 +1899,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
           />
         )}
+        <WakeChips botIds={[bot.id]} threadId={bot.threadId} />
         <Composer
           key={bot.threadId}
           bot={bot}

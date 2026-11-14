@@ -24,9 +24,18 @@ export interface Routine {
   enabled: boolean;
   schedule: RoutineSchedule;
   durationMinutes: number;
+  sourceThreadId?: string;
+  wake?: true;
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export function pendingWakesFor(routines: readonly Routine[], botIds: readonly string[], threadId: string) {
+  return routines
+    .filter((routine): routine is Routine & { nextRunAt: number } =>
+      Boolean(routine.wake) && routine.nextRunAt !== null && routine.sourceThreadId === threadId && botIds.includes(routine.botId))
+    .sort((a, b) => a.nextRunAt - b.nextRunAt);
 }
 
 export interface RoutineRun {

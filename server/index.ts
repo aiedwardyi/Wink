@@ -5692,7 +5692,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           : "";
       const credentialPrompt = canMessage ? ` ${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}` : "";
       const routinePrompt = canMessage
-        ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation."
+        ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation. For a one-off later step in this chat, call wake_me instead of a countdown in a terminal pane."
         : "";
       const taskStatePrompt = integrations.agents
         ? ` Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn. ${TASK_ASKS_PROMPT}`
@@ -7819,6 +7819,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return await internalRoutes.react(req, res);
       }
       // The set_keep_going tool; the switch row gets the change through the bot broadcast.
+      if (method === "POST" && path === "/api/internal/wake") {
+        return await internalRoutes.wake(req, res);
+      }
       if (method === "POST" && path === "/api/internal/keep-going") {
         return await internalRoutes.setKeepGoing(req, res);
       }

@@ -46,7 +46,7 @@ export function createTeamRoutes(deps: TeamRouteDeps) {
             authorName: profileName,
             bots: store.bots,
             groups: store.groups,
-            routines: routines!.listRoutines(),
+            routines: routines!.listRoutines().filter((routine) => !routine.wake),
           });
           return json(res, 200, {
             name: document.package.name,
