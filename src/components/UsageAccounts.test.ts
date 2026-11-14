@@ -8,10 +8,10 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { AccountPicker } from "./UsageAccounts";
 
 const accounts = [
-  { id: "acct-1", name: "Claude 1", number: 1 },
-  { id: "acct-2", name: "Claude 2", number: 2 },
-  { id: "acct-3", name: "Studio", number: 3 },
-  { id: "acct-4", name: "Claude 4", number: 4 },
+  { id: "acct-1", name: "Claude 1" },
+  { id: "acct-2", name: "Claude 2" },
+  { id: "acct-3", name: "Studio" },
+  { id: "acct-4", name: "Claude 4" },
 ];
 let root: Root;
 let host: HTMLDivElement;

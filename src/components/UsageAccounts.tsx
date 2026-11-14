@@ -34,7 +34,7 @@ export function EditableAccountName({ account, revision, editable }: { account: 
 
 /** Passive inspection: finds an account by name and number only, and never changes Main. */
 export function AccountPicker({ accounts, viewedId, select }: {
-  accounts: { id: string; name: string; number: number; main?: boolean }[];
+  accounts: { id: string; name: string; main?: boolean }[];
   viewedId: string;
   select: (id: string) => void;
 }) {
