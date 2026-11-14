@@ -51,7 +51,7 @@ import { picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
-import { buffersForTurn, currentTurnId, turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import { buffersForTurn, currentTurnId, hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
@@ -1237,7 +1237,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     noReply?.label,
   );
   const waiting = modelSwitch.active || !reveal?.ended && turnPresenceWaiting({
-    busy: bot.busy,
+    busy: hydrationTurnThread(bot, state.groups) === bot.threadId,
     turnActive: turnSignal !== undefined,
     activity: bot.activity,
     lastMessage,
