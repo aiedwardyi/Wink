@@ -1710,6 +1710,68 @@ describe("MSP warm host (recorded transport)", () => {
     await completed(await send({ resumeCursor: cursorOf(first) }));
     expect(peers).toHaveLength(2);
   });
+
+  describe("free RAM under the warm floor", () => {
+    let now: number;
+    let free: number;
+    let sweep: () => void;
+    const minutes = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 60_000;
+        sweep();
+      }
+    };
+    beforeEach(() => {
+      now = 0;
+      // This PC: 32 GB with 3.9 GB free, under the 4.8 GB (15%) floor.
+      free = 3.9 * 1024 ** 3;
+      sweep = () => {};
+      pool = createWarmPool({
+        totalmem: () => 32 * 1024 ** 3, freemem: () => free, cpus: () => 16, now: () => now,
+        timers: { setInterval: (fn) => { sweep = fn; return 1; }, clearInterval: () => {} },
+      });
+    });
+
+    it("keeps the host and session for the next turn on the thread", async () => {
+      await start();
+      const first = await send();
+      await completed(first);
+      minutes(1);
+      const second = await send({ resumeCursor: cursorOf(first) });
+      await completed(second);
+      expect(peers).toHaveLength(1);
+      expect(exited(peers[0])).toBe(false);
+      expect(methods(peers[0]).filter((m) => m === "session/start" || m === "session/resume")).toEqual(["session/start"]);
+      expect(stagesOf(second)).toEqual(["prompt-sent", "finishing"]);
+      expect(kept()).toBe(1);
+    });
+
+    it("still closes the kept host after the idle TTL", async () => {
+      await start();
+      await completed(await send());
+      minutes(9);
+      expect(kept()).toBe(1);
+      minutes(1);
+      expect(kept()).toBe(0);
+      await expect.poll(() => exited(peers[0])).toBe(true);
+    });
+
+    it("drops the kept host when free RAM falls under 1.5 GB", async () => {
+      await start();
+      await completed(await send());
+      free = 1024 ** 3;
+      minutes(1);
+      expect(kept()).toBe(0);
+    });
+
+    it("keeps at most two idle Muse hosts", async () => {
+      await start();
+      for (const threadId of ["t1", "t2", "t3"]) await completed(await send({ threadId }));
+      expect(peers).toHaveLength(3);
+      expect(kept()).toBe(2);
+      expect(exited(peers[2])).toBe(true);
+    });
+  });
   it("cachedCapture returns the probe's label hash and the registry incarnation", async () => {
     await start();
     expect(instance.cachedCapture!()).toBeNull();
