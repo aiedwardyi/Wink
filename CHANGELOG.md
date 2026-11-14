@@ -2,6 +2,19 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.267] - 2026-11-15
+
+### Changed
+- Muse bots answer sooner on a busy PC by keeping their engine ready between messages.
+- Muse turns report their token counts.
+
+### Fixed
+- Live Verify document replays glide down without jumping back up.
+- On a phone, a long question keeps three lines above its choices when there is room.
+- A worker with no pull request keeps its Git row summary in the Map.
+- A bot that never switched models no longer gets model tags in voice and cloud context.
+- Checking the Muse version no longer flashes a terminal window.
+
 ## [1.0.266] - 2026-11-15
 
 ### Changed
