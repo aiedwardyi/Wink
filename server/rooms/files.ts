@@ -396,7 +396,7 @@ export function fileHeaders(file: RoomFile, preview: boolean): Record<string, st
     "x-content-type-options": "nosniff",
     "x-content-sha256": file.sha256,
     "content-security-policy": "default-src 'none'; sandbox",
-    // A file id is never reused, so a room picture can paint from cache while the server is still busy booting.
+    // A file id is never reused, so any image preview can paint from cache while the server is still busy booting.
     "cache-control": preview ? IMMUTABLE_CACHE : "no-store",
   };
 }
