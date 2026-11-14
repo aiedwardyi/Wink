@@ -304,6 +304,31 @@ test("ignores a 403 from another origin", () => {
   assert.deepEqual(logs, []);
 });
 
+test("an error answer shows the unreachable page and keeps retrying, as a closed Wink behind Tailscale Serve gives", () => {
+  for (const code of [502, 500, 404]) {
+    const { webContents, logs, timers } = watched();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.deepEqual(webContents.loads, ["data:failure"]);
+    assert.deepEqual(logs, [`device window home.tail1234.ts.net: answered ${code}`]);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, code);
+    webContents.emit("did-navigate", {}, "data:failure", -1);
+    assert.ok(timers.tick);
+    assert.equal(logs.length, 1);
+    timers.tick();
+    webContents.emit("did-navigate", {}, URL_, 200);
+    assert.equal(timers.tick, null);
+  }
+});
+
+test("a 401 answer is left to the link page", () => {
+  const { webContents, logs } = watched();
+  webContents.emit("did-navigate", {}, URL_, 401);
+  assert.deepEqual(webContents.loads, []);
+  assert.deepEqual(logs, []);
+});
+
 test("retries every 10 s for 2 min, then stops", () => {
   const { webContents, timers } = watched();
   webContents.emit("did-fail-load", {}, -118, "ERR_CONNECTION_TIMED_OUT", URL_, true);
