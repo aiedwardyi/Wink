@@ -55,7 +55,7 @@ it.each([
   const line = host.querySelector<HTMLElement>(".map-flow-stops")!;
   expect(line.dataset.reach).toBe(reach);
   expect(line.dataset.fill).toBe(+reach < 0 ? undefined : +reach < 3 ? "claude" : +reach < 6 ? "open" : "merged");
-  expect(line.querySelectorAll("s[data-on]").length).toBe(Math.max(0, +reach));
+  expect(line.querySelectorAll(":scope > i[data-on]").length).toBe(Math.max(0, +reach));
   expect(host.querySelector(".map-flow-end > small")?.textContent).toBe(label);
   expect(host.querySelector(".map-flow-dots, .map-flow-thread, .map-flow-rise, .map-flow-join, svg")).toBeNull();
 });
@@ -72,6 +72,8 @@ it("puts a square per check in the checks box and the details in each stop's tip
   expect(host.querySelector(".map-flow-tip")?.textContent).toBe("Failing: lint");
   await hover("code");
   expect(host.querySelector(".map-flow-tip")?.textContent).toBe("1 file changed");
+  expect(host.querySelector(".map-flow-list .map-flow-tip")).toBeNull();
+  expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
   expect(host.querySelector(".map-flow-row")?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
 });
 
@@ -84,6 +86,14 @@ it("shows the detail on a long press without opening the link", async () => {
   const click = new MouseEvent("click", { bubbles: true, cancelable: true });
   await act(async () => { checks.dispatchEvent(click); });
   expect(click.defaultPrevented).toBe(true);
+});
+
+it("shows the row's details on keyboard focus", async () => {
+  await render();
+  await act(async () => { host.querySelector<HTMLElement>(".map-flow-row")!.focus(); });
+  expect([...host.querySelectorAll(".map-flow-tip p")].map(line => line.textContent)).toEqual(["Running: vitest 1", "claude · commented", "2 open threads"]);
+  await act(async () => { host.querySelector<HTMLElement>(".map-flow-row")!.blur(); });
+  expect(host.querySelector(".map-flow-tip")).toBeNull();
 });
 
 it("counts the files another worker is also editing, hidden at 0", async () => {

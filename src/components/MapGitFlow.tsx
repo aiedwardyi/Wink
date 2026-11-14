@@ -39,7 +39,7 @@ const PRESS = 450;
 // The line takes the color of the last stage reached: Claude orange before the PR, green from the PR on, purple once merged.
 const FILL = ["claude", "claude", "claude", "open", "open", "open", "merged"];
 type Stop = { key: keyof Copy["stops"]; state?: string; tip: string[] };
-type Tip = { id: string; lines: string[]; left?: number; right?: number };
+type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
 // Review bots by the names people call them.
 const BOTS: Record<string, string> = { "chatgpt-codex-connector": "codex", "copilot-pull-request-reviewer": "copilot" };
@@ -77,9 +77,8 @@ function useFlows(base: string | undefined, key: string, active: boolean) {
 }
 
 // Every row has the same seven stops; a stop has a state only once it has happened.
-function stops(item: MapWorker, flow: MapFlow, c: Copy): Stop[] {
+function stops(item: MapWorker, flow: MapFlow, stages: MapStage[], c: Copy): Stop[] {
   const pr = flow.pr;
-  const stages = mapFlowStages(flow);
   const at = (key: MapStage["key"]) => stages.find(stage => stage.key === key);
   const checks = at("checks");
   const review = at("review");
@@ -146,10 +145,14 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
   useEffect(() => () => clearTimeout(press.current.timer), []);
   if (!shown.length) return null;
 
+  // The tip sits outside the scrolling list, under the row, so the list never clips it.
   const show = (id: string, lines: string[], target: HTMLElement) => {
-    const box = target.offsetParent instanceof HTMLElement ? target.offsetParent.clientWidth : 0;
-    const right = target.offsetLeft + target.offsetWidth / 2 > box / 2;
-    setTip(right ? { id, lines, right: Math.max(0, box - target.offsetLeft - target.offsetWidth) } : { id, lines, left: target.offsetLeft });
+    const box = target.closest(".map-flow-rows")?.getBoundingClientRect();
+    const row = target.closest(".map-flow-row")?.getBoundingClientRect();
+    if (!box || !row) return;
+    const at = target.getBoundingClientRect();
+    const top = row.bottom - box.top - 2;
+    setTip(at.left + at.width / 2 - box.left > box.width / 2 ? { id, lines, top, right: Math.max(0, box.right - at.right) } : { id, lines, top, left: at.left - box.left });
   };
   const hide = (id: string) => setTip(current => current?.id === id ? null : current);
   const hover = (id: string, lines: string[]) => ({
@@ -174,22 +177,26 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
   const rows = shown.flatMap(item => flows[item.id] ? [{ item, flow: flows[item.id] }] : [])
     .toSorted((a, b) => Number(failing(b.flow)) - Number(failing(a.flow)));
   if (!rows.length) return null;
-  return <section className="map-flow-rows" aria-label={c.git}>
+  return <section className="map-flow-rows" aria-label={c.git}><div className="map-flow-list">
     {rows.map(({ item, flow }) => {
       const pr = flow.pr;
-      const list = stops(item, flow, c);
+      const stages = mapFlowStages(flow);
+      const list = stops(item, flow, stages, c);
       const reach = list.findLastIndex(stop => stop.state && stop.state !== "closed");
       const checks = pr?.checks.filter(check => check.state !== "skip") ?? [];
-      const box = mapFlowStages(flow).find(stage => stage.key === "checks");
+      const box = stages.find(stage => stage.key === "checks");
       const status = box?.fail ? c.fail(box.fail) : box?.pending ? c.running(box.pending) : box?.total ? c.passing : "";
       const clash = shared.get(item.id);
       const tone = rowTone(flow);
       const color = mapWorkerColor(slots.get(item.id) ?? 99);
-      return <a key={item.id} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`} {...link(pr?.url ?? mapFlowStages(flow).findLast(stage => stage.url)?.url)}>
+      // Keyboard focus on the row shows what the stops say on hover.
+      const lines = [...list.flatMap(stop => (pr ? stop.key === "checks" || stop.key === "review" : stop.key === "commit") ? stop.tip : []), ...clash ? [c.also([...clash.who].join(", "))] : []];
+      return <a key={item.id} className="map-flow-row" data-tone={tone} style={{ "--flow-line": color } as CSSProperties} aria-label={`${item.nick}, ${summary(flow, c)}`} {...link(pr?.url ?? stages.findLast(stage => stage.url)?.url)}
+        onFocus={event => { if (event.currentTarget.matches(":focus-visible")) show(`${item.id}:row`, lines, event.currentTarget); }} onBlur={() => hide(`${item.id}:row`)}>
         <i /><b>{item.nick}</b>
-        <span className="map-flow-stops" data-reach={reach} data-fill={FILL[reach]}>
+        <span className="map-flow-stops" data-reach={reach} data-fill={FILL[reach]} aria-hidden="true">
           {list.map((stop, index) => <Fragment key={stop.key}>
-            {index > 0 && <s data-on={index <= reach || undefined} />}
+            {index > 0 && <i data-on={index <= reach || undefined} />}
             {stop.key === "checks"
               ? <span className="map-flow-box" data-k={stop.key} data-state={stop.state} {...hover(`${item.id}:${stop.key}`, stop.tip)}>
                 <b>{c.stops.checks}<span>{status}</span></b>
@@ -204,8 +211,7 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
           <small data-tone={tone} data-short={pr ? `#${pr.number}` : ""}>{summary(flow, c)}</small>
           {clash && <em className="map-flow-clash" data-short={`⚠ ${clash.paths.size}`} {...hover(`${item.id}:clash`, [c.also([...clash.who].join(", ")), ...clash.paths])}>{c.clash(clash.paths.size)}</em>}
         </span>
-        {tip?.id.startsWith(`${item.id}:`) && <div className="map-flow-tip" role="tooltip" style={{ left: tip.left, right: tip.right }}>{tip.lines.map((line, at) => <p key={at}>{line}</p>)}</div>}
       </a>;
     })}
-  </section>;
+  </div>{tip && <div className="map-flow-tip" role="tooltip" style={{ top: tip.top, left: tip.left, right: tip.right }}>{tip.lines.map((line, at) => <p key={at}>{line}</p>)}</div>}</section>;
 }
