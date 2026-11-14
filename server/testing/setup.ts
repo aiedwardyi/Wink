@@ -21,7 +21,7 @@ delete process.env.OMB_DATA_DIR;
 delete process.env.HERMES_HOME;
 // A worker pane inherits its account's real login dirs; a test that writes
 // credentials would otherwise sign that account out.
-for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "CODEX_SQLITE_HOME"]) delete process.env[name];
+for (const name of ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "CODEX_SQLITE_HOME", "GROK_HOME"]) delete process.env[name];
 // The companion keeps its paired devices in its own directory, and resolves
 // it from homedir() the same way — so the redirect above already covers it.
 // Named explicitly all the same: the device tests delete this directory

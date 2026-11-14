@@ -3,13 +3,14 @@
 // (~/.grok/auth.json), NOT the xAI API key (that driver is drivers/grok.ts).
 // The generic protocol runtime lives in acp/core.ts; this file is only the
 // per-harness quirks. Verified against grok 1.0.0.
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import type { ModelCatalog } from "../../contracts.ts";
+import { writeFileAtomic } from "../../atomic.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
@@ -209,6 +210,236 @@ export function ensureGrokInjectSlug(
   return slug;
 }
 
+const AGENTS_ALLOW = "MCPTool(agents__*)";
+
+type TomlNode = { start: number; end: number } & (
+  | { kind: "string"; value: string }
+  | { kind: "array"; items: TomlNode[] }
+  | { kind: "table"; entries: Record<string, TomlNode> }
+  | { kind: "scalar" }
+);
+
+/** Headers and key/values of a TOML file with their offsets. Throws on anything outside the TOML it knows. */
+function scanToml(text: string) {
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const fail = (): never => { throw new Error(`config.toml: cannot read offset ${i}`); };
+  const space = () => { while (text[i] === " " || text[i] === "\t") i++; };
+  const comment = () => { if (text[i] === "#") while (i < text.length && text[i] !== "\n") i++; };
+  const gap = () => {
+    for (;;) {
+      space();
+      comment();
+      if (text.startsWith("\r\n", i)) i += 2;
+      else if (text[i] === "\n") i++;
+      else return;
+    }
+  };
+  const lineEnd = () => {
+    space();
+    comment();
+    if (text.startsWith("\r\n", i)) i += 2;
+    else if (text[i] === "\n") i++;
+    else if (i < text.length) fail();
+  };
+  const str = (): string => {
+    const q = text[i];
+    const fence = text.startsWith(q.repeat(3), i) ? q.repeat(3) : q;
+    i += fence.length;
+    let out = "";
+    for (;;) {
+      if (i >= text.length || (fence.length === 1 && text[i] === "\n")) fail();
+      if (text.startsWith(fence, i)) { i += fence.length; return out; }
+      if (q === '"' && text[i] === "\\") { out += text.slice(i, i + 2); i += 2; continue; }
+      out += text[i++];
+    }
+  };
+  const bare = /[A-Za-z0-9_-]+/y;
+  const key = (): string[] => {
+    const parts: string[] = [];
+    for (;;) {
+      space();
+      if ((text[i] === '"' || text[i] === "'") && !text.startsWith(text[i].repeat(3), i)) {
+        const at = i;
+        parts.push(str());
+        if (text.slice(at, i).includes("\\")) fail();
+      } else {
+        bare.lastIndex = i;
+        const m = bare.exec(text) ?? fail();
+        i = bare.lastIndex;
+        parts.push(m[0]);
+      }
+      space();
+      if (text[i] !== ".") return parts;
+      i++;
+    }
+  };
+  const scalar = /[0-9A-Za-z_+.:-]+(?: \d\d:[0-9:.+Z-]+)?/y;
+  const value = (): TomlNode => {
+    const start = i;
+    if (text[i] === '"' || text[i] === "'") return { kind: "string", value: str(), start, end: i };
+    if (text[i] === "[") {
+      i++;
+      const items: TomlNode[] = [];
+      for (gap(); text[i] !== "]"; gap()) {
+        items.push(value());
+        gap();
+        if (text[i] === ",") i++;
+        else if (text[i] !== "]") fail();
+      }
+      i++;
+      return { kind: "array", items, start, end: i };
+    }
+    if (text[i] === "{") {
+      i++;
+      const entries: Record<string, TomlNode> = Object.create(null);
+      for (space(); text[i] !== "}"; space()) {
+        const k = key().join(".");
+        if (text[i] !== "=") fail();
+        i++;
+        space();
+        entries[k] = value();
+        space();
+        if (text[i] === ",") i++;
+        else if (text[i] !== "}") fail();
+      }
+      i++;
+      return { kind: "table", entries, start, end: i };
+    }
+    scalar.lastIndex = i;
+    if (!scalar.exec(text)) fail();
+    i = scalar.lastIndex;
+    return { kind: "scalar", start, end: i };
+  };
+
+  const headers: Array<{ path: string[]; array: boolean; next: number }> = [];
+  const values: Array<{ path: string[]; node: TomlNode }> = [];
+  let table: string[] = [];
+  for (gap(); i < text.length; gap()) {
+    if (text[i] === "[") {
+      const array = text[i + 1] === "[";
+      i += array ? 2 : 1;
+      table = key();
+      if (!text.startsWith(array ? "]]" : "]", i)) fail();
+      i += array ? 2 : 1;
+      lineEnd();
+      headers.push({ path: table, array, next: i });
+      continue;
+    }
+    const path = [...table, ...key()];
+    if (text[i] !== "=") fail();
+    i++;
+    space();
+    values.push({ path, node: value() });
+    lineEnd();
+  }
+  return { headers, values };
+}
+
+/** Could this rule (`MCPTool(x)`, `mcp__x`, `*`) match any tool on the `agents` server? */
+function ruleReachesAgents(rule: string, structured = false): boolean {
+  const r = rule.trim();
+  if (r === "*" || r === "MCPTool") return true;
+  let pattern = structured ? r : /^MCPTool\((.*)\)$/.exec(r)?.[1];
+  if (!structured && pattern === undefined && r.startsWith("mcp__")) {
+    pattern = r.slice("mcp__".length);
+    if (!pattern.includes("__") && !pattern.includes("*")) pattern += "__*";
+  }
+  if (pattern === undefined) return false;
+  const glob = pattern.search(/[*?[]/);
+  if (glob < 0) return pattern.startsWith("agents__");
+  const prefix = pattern.slice(0, glob);
+  return "agents__".startsWith(prefix) || prefix.startsWith("agents__");
+}
+
+function entryReachesAgents(node: TomlNode): boolean {
+  if (node.kind !== "table") return true;
+  const field = (name: string) => {
+    const hit = node.entries[name];
+    return hit?.kind === "string" ? hit.value : hit ? null : undefined;
+  };
+  const action = field("action");
+  const tool = field("tool");
+  const pattern = field("pattern");
+  if (action !== "deny" && action !== "ask") return false;
+  if (tool === null || pattern === null) return true;
+  if (tool !== undefined && tool.toLowerCase() !== "mcp") return false;
+  return pattern === undefined || ruleReachesAgents(pattern, true);
+}
+
+/** The text with Wink's allow rule added, or null to leave the file alone (unreadable, or a user rule covers these tools). */
+function withGrokAgentsAllowed(text: string): string | null {
+  let doc: ReturnType<typeof scanToml>;
+  try {
+    doc = scanToml(text);
+  } catch {
+    return null;
+  }
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  const quoted = quoteToml(AGENTS_ALLOW);
+  const perm = (name: string) => doc.values.find((v) => v.path.length === 2 && v.path[0] === "permission" && v.path[1] === name)?.node;
+  if (doc.headers.some((h) => h.array && h.path[0] === "permission")) return null;
+  if (doc.values.some((v) => v.path.length === 1 && v.path[0] === "permission")) return null;
+  for (const name of ["deny", "ask"]) {
+    const node = perm(name);
+    if (node && (node.kind !== "array" || node.items.some((item) => item.kind !== "string" || ruleReachesAgents(item.value)))) return null;
+  }
+  const rules = perm("rules");
+  if (rules && (rules.kind !== "array" || rules.items.some(entryReachesAgents))) return null;
+
+  const allow = perm("allow");
+  if (allow) {
+    if (allow.kind !== "array") return null;
+    if (allow.items.some((item) => item.kind === "string" && item.value === AGENTS_ALLOW)) return text;
+    const last = allow.items.at(-1);
+    if (!last) return `${text.slice(0, allow.start + 1)}${quoted}${text.slice(allow.start + 1)}`;
+    const multiline = text.slice(allow.start, allow.end).includes("\n");
+    const lineStart = text.lastIndexOf("\n", last.start) + 1;
+    const indent = multiline ? /^[ \t]*/.exec(text.slice(lineStart))![0] : "";
+    return `${text.slice(0, last.end)},${multiline ? nl + indent : " "}${quoted}${text.slice(last.end)}`;
+  }
+  const line = `allow = [${quoted}]${nl}`;
+  const header = doc.headers.find((h) => !h.array && h.path.length === 1 && h.path[0] === "permission");
+  if (header) {
+    const at = header.next;
+    return `${text.slice(0, at)}${text.slice(0, at).endsWith("\n") ? "" : nl}${line}${text.slice(at)}`;
+  }
+  if (doc.values.some((v) => v.path[0] === "permission")) return null;
+  const lead = !text ? "" : text.endsWith("\n") ? nl : nl + nl;
+  return `${text}${lead}[permission]${nl}${line}`;
+}
+
+/** Config stamps already checked, so a turn start costs one stat. */
+const agentsAllowChecked = new Map<string, string>();
+const configStat = (path: string) => {
+  try {
+    return lstatSync(path);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+};
+const stampOf = (s: Stats | null) => (s ? `${s.ino}:${s.mtimeMs}:${s.size}` : "missing");
+
+/** Grok's agent stdio ignores argv `--allow` (1.0.77); only this file's rule spares each Wink tool call its ask. */
+function ensureGrokAgentsAllowed(env: Record<string, string | undefined>): void {
+  const path = join(grokHome(env), "config.toml");
+  try {
+    const before = configStat(path);
+    const stamp = stampOf(before);
+    if (agentsAllowChecked.get(path) === stamp) return;
+    // a rename over a symlink would replace the user's linked config with a plain file
+    const raw = before?.isSymbolicLink() ? null : before ? readFileSync(path) : Buffer.alloc(0);
+    const text = raw?.toString("utf8") ?? "";
+    const next = raw && Buffer.from(text, "utf8").equals(raw) ? withGrokAgentsAllowed(text) : null;
+    if (next !== null && next !== text && stampOf(configStat(path)) === stamp) {
+      writeFileAtomic(path, next, { mode: before ? before.mode & 0o777 : 0o600 });
+    }
+    agentsAllowChecked.set(path, stampOf(configStat(path)));
+  } catch {
+    /* left alone: Grok keeps asking, as before */
+  }
+}
+
 /** Candidate spellings for the reasoning-effort config option, most
  * specific first. LIVE-verified primary first: the grok CLI advertises
  * {id: "reasoning_effort", name: "Reasoning Effort"}; the rest keep
@@ -352,7 +583,10 @@ export const grokSupport: AcpSupport = {
   // Write the [model.slug] block with the instance HOME/GROK_HOME, then pass
   // the slug on argv. spawnArgs must not call ensureGrokInjectSlug itself —
   // that helper defaults to process.env and would miss the instance override.
-  resolveTurnModel: (model, env) => (model ? ensureGrokInjectSlug(model, env) : model),
+  resolveTurnModel: (model, env, config) => {
+    if (!config.fullAuto) ensureGrokAgentsAllowed(env);
+    return model ? ensureGrokInjectSlug(model, env) : model;
+  },
 
   // --permission-mode is a global grok flag. -m and --reasoning-effort are
   // agent flags: Grok 1.0.6 only applies them when they sit AFTER `agent`
