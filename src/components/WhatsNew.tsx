@@ -113,21 +113,24 @@ export function WhatsNewSlot({ hidden = false, last, thread }: { hidden?: boolea
   useEffect(() => {
     if (!state.hydrated) return;
     const timer = setTimeout(() => {
+      let themes: string[] | undefined;
       // The notes stay out of the startup bundle: they load only when an update may have some to show.
       const ask = (asked ??= api("/api/whats-new")
         .then(async (body: { release?: string | null; seen?: string | null; anchor?: { release: string; id: string }; themes?: string[] }) => {
-          taught = Array.isArray(body.themes) ? body.themes : [];
-          notify();
+          themes = Array.isArray(body.themes) ? body.themes : [];
           const shown = body.release ? (await import("@/lib/whats-new")).unseenRelease(body.release, body.seen ?? null) : null;
           return shown ? { release: shown, anchor: body.anchor?.release === shown ? body.anchor.id : undefined } : null;
         })
         .catch(() => null));
       void ask.then((next) => {
-        if (asked !== ask || !next || release === next.release) return;
-        anchor = next.anchor;
-        // notes already placed keep their place; only a first showing waits
-        if (next.anchor === undefined) held = next.release;
-        else release = next.release;
+        if (asked === ask && next && release !== next.release) {
+          anchor = next.anchor;
+          // notes already placed keep their place; only a first showing waits
+          if (next.anchor === undefined) held = next.release;
+          else release = next.release;
+        }
+        // in the same step as the answer's notes, so a row picked early cannot show or be recorded ahead of them
+        taught ??= themes;
         notify();
       });
     }, ASK_AFTER_MS);

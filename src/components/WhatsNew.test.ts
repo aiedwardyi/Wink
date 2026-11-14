@@ -328,6 +328,23 @@ describe("whats new slot", () => {
     chat.done();
   });
 
+  it("keeps a theme picked before the server answered behind that answer's notes", async () => {
+    vi.useFakeTimers();
+    const chat = await fresh();
+    chat.render("m2");
+    act(() => chat.mod.offerThemeRow("lagoon"));
+    act(() => chat.mod.scenePlayed("lagoon"));
+    await chat.settle();
+    expect(chat.card()?.dataset.release).toBe("1.0.246");
+    expect(themeSeen("lagoon")).toHaveLength(0);
+    act(() => chat.card()!.click());
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await chat.settle();
+    expect(chat.card()?.dataset.theme).toBe("lagoon");
+    expect(themeSeen("lagoon")).toHaveLength(1);
+    chat.done();
+  });
+
   it("leaves an empty chat's card at the bottom", async () => {
     vi.useFakeTimers();
     const chat = await fresh();

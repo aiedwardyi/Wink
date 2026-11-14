@@ -58,7 +58,9 @@ export function openWhatsNew(dataDir: string, version: string) {
     themes: () => themes ?? [],
     markTheme: (theme: unknown) => {
       if (typeof theme !== "string" || !/^[a-z-]{1,40}$/.test(theme) || themes?.includes(theme)) return;
-      writeSaved(dataDir, { seen, anchor, themes: (themes = [...(themes ?? []), theme]) });
+      const next = [...(themes ?? []), theme];
+      writeSaved(dataDir, { seen, anchor, themes: next });
+      themes = next;
     },
   };
 }

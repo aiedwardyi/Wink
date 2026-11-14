@@ -149,6 +149,17 @@ describe("whats new", () => {
     expect(openWhatsNew(root, "").themes()).toEqual(["snow"]);
   });
 
+  it("does not count a theme whose record failed to write", () => {
+    const dir = join(root, "data");
+    writeFileSync(dir, "");
+    const open = openWhatsNew(dir, "");
+    expect(() => open.markTheme("snow")).toThrow();
+    expect(open.themes()).toEqual([]);
+    rmSync(dir);
+    open.markTheme("snow");
+    expect(openWhatsNew(dir, "").themes()).toEqual(["snow"]);
+  });
+
   it("reads a record whose anchor it cannot parse", () => {
     writeFileSync(join(root, "bots.json"), "[]");
     writeFileSync(join(root, "whats-new.json"), JSON.stringify({ seen: "1.0.245", anchor: "m1" }));

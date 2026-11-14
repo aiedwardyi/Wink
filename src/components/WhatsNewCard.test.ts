@@ -163,6 +163,7 @@ describe("whats new card", () => {
     act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose })));
     const row = host.querySelector(".whats-new-dock > .whats-new")!;
     expect(row.textContent).toBe(line);
+    expect(row.getAttribute("aria-label")).toBe(line);
     expect(row.querySelectorAll(".whats-new-tile, .whats-new-foot, .whats-new-done")).toHaveLength(0);
     expect(row.querySelectorAll("button")).toHaveLength(1);
     act(() => row.querySelector<HTMLButtonElement>(".whats-new-x")!.click());

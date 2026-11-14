@@ -94,7 +94,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
   const { t, locale } = useI18n();
   const { dispatch } = useStore();
   const entry = release ? WHATS_NEW[release] : undefined;
-  const title = theme ? t(`settings.skin.${theme}`) : entry?.title[locale];
+  const title = theme ? t("whatsNew.themeMoves", { name: t(`settings.skin.${theme}`) }) : entry?.title[locale];
   const card = useRef<HTMLElement>(null);
   const visible = useSeen(card);
   useEffect(() => {
@@ -110,7 +110,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
     <div className="whats-new-dock">
       <section ref={card} className="whats-new" aria-label={title} data-closing={closing || undefined}>
         <div className="whats-new-head">
-          {theme ? <p>{t("whatsNew.themeMoves", { name: title })}</p> : <h2>{title}</h2>}
+          {theme ? <p>{title}</p> : <h2>{title}</h2>}
           <button type="button" className="whats-new-x" aria-label={t("whatsNew.close")} title={t("whatsNew.close")} onClick={onClose}>
             <X size={14} />
           </button>
