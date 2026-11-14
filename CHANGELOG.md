@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.266] - 2026-11-14
+
+### Changed
+- A file named mid-sentence is a plain underlined link, and a picture it links to appears under the reply. Click either to open it on the right.
+- New pictures open the side pane only when clicked. Pages and PDFs still open it automatically.
+- Gemini replies appear as they are written.
+- Codex bots stay warm between turns so their first words arrive sooner.
+- Grok bots run Wink's own tools without a permission wait, and a rule you remove from your Grok config stays removed.
+- The Model Index includes Gemini 4 Hydrogen and Carbon.
+
+### Fixed
+- Long questions keep their answer choices in sight.
+- The Map's Git row no longer overlaps the PR summary.
+- Hovering a Map folder's number explains how many files it counts.
+- What's New appears below messages synced from another PC.
+- The other-PC window explains connection failures instead of going black.
+- After a model switch, a bot credits earlier work to the model that wrote it.
+- A picture the bot already showed is not drawn a second time.
+- A bot's 1:1 chat stays quiet while it works in a group.
+
 ## [1.0.265] - 2026-11-14
 
 ### Added
