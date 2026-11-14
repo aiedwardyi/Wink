@@ -76,8 +76,6 @@ interface Run extends VerifyBridgeRun {
   streamEnd?: Record<string, unknown>;
   cancelled?: boolean;
   replySent?: Promise<void>;
-  /** No card yet: it is written with the run's first check. */
-  held?: boolean;
 }
 
 const within = (root: string, path: string) => {
@@ -307,12 +305,6 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const fixed = status === "completed" && issues && !issues.length && sameTurn ? prior!.problems : undefined;
     if (status === "completed" && issues?.length && episode && !sameTurn) found.set(key, { turnId: episode, problems: issues.length });
     else if (fixed || !sameTurn) found.delete(key);
-    const reply: VerifyToolReply = { status, runId: run.runId, ...(result ? { result } : {}), ...(errorCode ? { errorCode } : {}), text: verifyReplyText(status, run.site, { result, errorCode, counts }) };
-    if (run.held && !run.messageId && !counts?.completed && !issues?.length) {
-      if (run.recording) void Promise.resolve(run.stream).finally(() => { if (runs.get(run.runId) === run) runs.delete(run.runId); });
-      drop(run);
-      return reply;
-    }
     if (run.recording) {
       run.saved = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
         await run.replySent;
@@ -331,7 +323,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     } finally {
       drop(run);
     }
-    return reply;
+    return { status, runId: run.runId, ...(result ? { result } : {}), ...(errorCode ? { errorCode } : {}), text: verifyReplyText(status, run.site, { result, errorCode, counts }) };
   };
 
   const execute = async (run: Run, bridge: VerifyBridge, watch: boolean, signal: AbortSignal | null): Promise<VerifyToolReply> => {
@@ -353,9 +345,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const deadline = setTimeout(() => stop("timeout"), Math.max(1, ends - Date.now()));
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
-      run.card = { ...run.card, status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, fixed: undefined, endedAt: undefined };
-      run.held = !run.messageId;
-      if (!run.held) writeCard(run, {});
+      writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, fixed: undefined, endedAt: undefined });
       const started = await bridge.start(run, watch, aborter.signal);
       if (stopped) return finish(run, "blocked", { errorCode: stopped });
       if (started !== "started") return finish(run, "blocked", { errorCode: started });
@@ -382,7 +372,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
           const errorCode = state.result?.errorCode ?? (state.state === "blocked" ? state.errorCode ?? "internal" : undefined);
           return finish(run, errorCode ? "blocked" : "completed", { result: state.result, errorCode, counts });
         }
-        if (state.state === "running" && run.card.status !== "running" && (!run.held || counts?.completed)) {
+        if (state.state === "running" && run.card.status !== "running") {
           writeCard(run, { status: "running", counts: counts ?? undefined });
           if (run.recording) patchCard(run, { live: true });
         } else if (counts && Date.now() - sentAt >= COUNTS_EVERY_MS) {

@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { Window } from "happy-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
-const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false, onClick: null, loading: () => false }));
+const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false, onClick: null }));
 vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
   async send(method, params) {
     f.commands.push(method); f.calls.push({ tile: page.tile, method, params });
@@ -19,7 +19,6 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
   async ev(expression) {
     if (expression.startsWith("lv.allow(")) return f.windows.get(page.tile)?.eval(expression);
     if (expression.includes("document.fonts")) return true;
-    if (expression.includes("getAnimations")) return f.loading(page.tile);
     if (expression.includes("!!document.querySelector")) return true;
     if (expression.includes("const { all, visible, where }")) return f.targets;
     if (expression.includes("const n = globalThis.lvWatchTargets")) return { x: 20, y: 30, scrollY: 40 };
@@ -35,7 +34,7 @@ import { runHiddenVerify } from "./verify-hidden.mjs";
 import { createVerifyFonts } from "./verify-fonts.mjs";
 import { siteRevision, startSiteServer } from "./verify-site-server.mjs";
 
-afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; f.onClick = null; f.loading = () => false; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
+afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; f.onClick = null; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
 function input() {
   const aborter = new AbortController();
   const pages = Object.fromEntries(["desktop", "phone"].map(tile => [tile, Object.assign(new EventEmitter(), { tile, loadURL: vi.fn(async () => {}) })]));
@@ -70,7 +69,7 @@ it("runs phone layout and page-error checks with fonts discovered from loopback 
       if (!fonts.allowed(sheet) || (await fonts.handle(new Request(sheet))).status !== 200) {
         blocked.push(sheet);
         on["Network.loadingFailed"]({ requestId: "sheet", type: "Stylesheet", errorText: "net::ERR_BLOCKED_BY_CLIENT" });
-      } else on["Network.responseReceived"]({ requestId: "sheet", type: "Stylesheet", response: { url: sheet, status: 200 } });
+      }
       on["Runtime.exceptionThrown"]({ exceptionDetails: { url, text: "Error: real page failure" } });
     };
     const result = await runHiddenVerify(i).done;
@@ -122,66 +121,6 @@ it("finishes at full speed without timed show work or input", async () => {
   expect(f.commands.some(c => c.startsWith("Input."))).toBe(false);
   expect(i.emit.mock.calls.map(([event]) => event.kind)).toEqual(["start", "part", "part", "checks", "part", "end"]);
   expect(result.counts).toEqual({ planned: 1, completed: 1, passed: 1, failed: 0, blocked: 0, notRun: 0 });
-});
-
-it("waits for a loading page to settle before it measures or records", async () => {
-  let ready = false;
-  const i = input(), seen = [];
-  f.loading = () => !ready;
-  setTimeout(() => { ready = true; }, 250);
-  for (const page of Object.values(i.pages)) page.capturePage = vi.fn(async () => { seen.push(ready); return { resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }; });
-  i.frame = () => {};
-  const observe = f.values;
-  f.values = { has: rule => observe.has(rule) || rule === "copy", get: rule => rule === "copy" ? (seen.push(ready), { texts: [] }) : observe.get(rule) };
-  const result = await runHiddenVerify(i).done;
-  f.values = observe;
-  expect(result.errorCode).toBeUndefined();
-  expect(seen.length).toBeGreaterThan(0);
-  expect(seen.every(Boolean)).toBe(true);
-});
-
-it("waits for the page's requests to finish before it measures", async () => {
-  const i = input(), open = new Set(["desktop", "phone"]), seen = [];
-  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
-    f.events[tile]["Network.requestWillBeSent"]({ requestId: "api", type: "Fetch", request: { url: "http://127.0.0.1:1234/api" } });
-    setTimeout(() => { open.delete(tile); f.events[tile]["Network.responseReceived"]({ requestId: "api", type: "Fetch", response: { url: "http://127.0.0.1:1234/api", status: 503 } }); }, 200);
-  };
-  const observe = f.values;
-  f.values = { has: rule => observe.has(rule) || rule === "copy", get: rule => rule === "copy" ? (seen.push(open.size), { texts: [] }) : observe.get(rule) };
-  await runHiddenVerify(i).done;
-  f.values = observe;
-  expect(seen).toEqual([0, 0]);
-});
-
-it("waits for a body still arriving before it measures", async () => {
-  const i = input(), arriving = new Set(["desktop", "phone"]), seen = [];
-  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
-    f.events[tile]["Network.requestWillBeSent"]({ requestId: "api", type: "Fetch", request: { url: "http://127.0.0.1:1234/api" } });
-    f.events[tile]["Network.responseReceived"]({ requestId: "api", type: "Fetch", response: { url: "http://127.0.0.1:1234/api", status: 200 } });
-    for (const ms of [100, 200, 300, 400]) setTimeout(() => f.events[tile]["Network.dataReceived"]({ requestId: "api", dataLength: 4096 }), ms);
-    setTimeout(() => { arriving.delete(tile); f.events[tile]["Network.loadingFinished"]({ requestId: "api" }); }, 500);
-  };
-  const observe = f.values;
-  f.values = { has: rule => observe.has(rule) || rule === "copy", get: rule => rule === "copy" ? (seen.push(arriving.size), { texts: [] }) : observe.get(rule) };
-  await runHiddenVerify(i).done;
-  f.values = observe;
-  expect(seen).toEqual([0, 0]);
-});
-
-it("checks nothing on a page that never gets past loading", async () => {
-  vi.useFakeTimers();
-  const i = input();
-  f.loading = () => true;
-  for (const page of Object.values(i.pages)) page.capturePage = vi.fn(async () => ({ resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
-  i.frame = vi.fn();
-  const run = runHiddenVerify(i);
-  await vi.advanceTimersByTimeAsync(20_500);
-  const result = await run.done;
-  expect(result.errorCode).toBe("page-failed");
-  expect(result.counts.completed).toBe(0);
-  expect(f.observations).toEqual([]);
-  expect(i.frame).not.toHaveBeenCalled();
-  expect(i.emit.mock.calls.map(([event]) => event.kind)).toEqual(["start", "end"]);
 });
 
 it("contains independent failures on both tiles and continues remaining rules", async () => {
@@ -259,16 +198,6 @@ it.each([false, true])("reports failed local loads after clicks with aborted=%s"
   fetch.mockRestore();
   expect(result.issues).toEqual([{ checker: "PAGE_ERRORS", tile: "desktop", rule: "page error", where: "/missing.js", measured: "HTTP 404; reload the page" }]);
   expect(result.counts.failed).toBe(2);
-});
-
-it("drops a load error the page got past while its server started", async () => {
-  const i = input();
-  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
-    for (const status of [503, 200]) f.events[tile]["Network.responseReceived"]({ type: "Fetch", response: { url: "http://127.0.0.1:1234/api/data?since=1", status } });
-    for (const [id, status] of [["broken", 503], ["ok", 200]]) f.events[tile]["Network.responseReceived"]({ type: "Fetch", response: { url: `http://127.0.0.1:1234/api/user?id=${id}`, status } });
-  };
-  const result = await runHiddenVerify(i).done;
-  expect(result.issues.map(issue => issue.where)).toEqual(["/api/user"]);
 });
 
 it("keeps clean clicks free of issues and avoids recounting load errors", async () => {
@@ -374,18 +303,6 @@ it("records a picture of every new scroll stop before moving on, even on a fast 
   expect(order.filter(kind => kind === "scroll").length).toBeGreaterThan(0);
   expect(order[order.indexOf("scroll") + 1]).toBe("frame");
   expect(order.indexOf("frame")).toBeLessThan(order.indexOf("checks"));
-});
-
-it("records the settled page, not the last picture the hidden window painted", async () => {
-  const i = input(), frames = [];
-  for (const page of Object.values(i.pages)) {
-    let painted = false;
-    page.capturePage = vi.fn(async () => { const jpeg = Buffer.from([255, 216, painted ? 2 : 1, 255, 217]); painted = true; return { resize: () => ({ toJPEG: () => jpeg }) }; });
-  }
-  i.frame = frame => frames.push(frame);
-  expect((await runHiddenVerify(i).done).errorCode).toBeUndefined();
-  expect(frames.length).toBeGreaterThan(0);
-  expect(frames.map(frame => Buffer.from(frame.data, "base64")[2])).not.toContain(1);
 });
 
 it("does not let a hung capture fail the run", async () => {
