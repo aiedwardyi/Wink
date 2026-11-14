@@ -63,8 +63,7 @@ describe("model index data", () => {
   });
 
   it("charts only models from the picker", () => {
-    // Muse Ember has sourced rows ahead of joining the picker
-    const retired = ["gpt-5.6-terra", "muse-ember-1.0"];
+    const retired = ["gpt-5.6-terra"];
     for (const entry of MODEL_INDEX_ENTRIES) {
       expect([...CHARTED, ...retired], entry.model).toContain(entry.model);
     }
@@ -76,6 +75,16 @@ describe("model index data", () => {
     for (const index of MODEL_INDEXES.filter((index) => index !== "cost")) {
       const labels = new Set(MODEL_INDEX_ENTRIES.filter((e) => e.index === index).map((e) => `${e.benchmark}:${e.version}`));
       expect([...labels], index).toHaveLength(1);
+    }
+  });
+
+  it("charts every sourced Ember row without changing its values", () => {
+    expect(PICKER_MODEL_IDS).toContain("muse-ember-1.0");
+    for (const index of MODEL_INDEXES) {
+      const rows = MODEL_INDEX_ENTRIES.filter((entry) => entry.model === "muse-ember-1.0" && entry.index === index);
+      const points = indexView(index, []).points.filter((entry) => entry.model === "muse-ember-1.0");
+      expect(points, index).toHaveLength(rows.length);
+      for (const row of rows) expect(points, index).toContainEqual(expect.objectContaining(row));
     }
   });
 
@@ -198,7 +207,7 @@ describe("sourced data", () => {
   it("charts 12 Design models with published page costs and confidence intervals", () => {
     const { points, missing } = indexView("design", PICKER_MODEL_IDS.map((model) => ({ provider: "other", model, label: model })));
     expect(new Set(points.map((e) => e.model)).size).toBe(12);
-    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "grok-4.6", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
+    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "grok-4.6", "muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
     for (const e of points) {
       expect([e.benchmark, e.costBenchmark, e.effort]).toEqual(["rams-index", "rams-index", "default"]);
       expect(e.costSource).toBe("https://www.rams.ai/index/data/models-v0.6.1.json");

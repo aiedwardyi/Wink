@@ -313,6 +313,7 @@ describe("parseWorkerLabel", () => {
 
 describe("workerProvider", () => {
   it.each([
+    ["Meta Muse Ember", "museAgent"], ["Muse Ember", "museAgent"], ["muse-ember-1.0", "museAgent"], ["Ember", "museAgent"],
     ["Sonnet 5.5", "claudeAgent"], ["Opus 5.5", "claudeAgent"], ["Fable 5.1", "claudeAgent"],
     ["Opus5.5", "claudeAgent"], ["opus-5-5", "claudeAgent"], ["Sonnet5.5", "claudeAgent"], ["Haiku5", "claudeAgent"],
     ["GPT6.1", "codex"], ["gpt-6.1-sol", "codex"], ["Grok4.7", "grokAgent"], ["Gemini4", "geminiAgent"],
@@ -321,6 +322,7 @@ describe("workerProvider", () => {
     ["Grok 4.7", "grokAgent"], ["Gemini 3.8", "geminiAgent"], ["script", "script"], ["Mystery 2", null],
     ["solid", null], ["metadata", null], ["lunar", null], ["opuslike", null], ["megagpt6", null], ["geminiature", null],
     ["argonaut", null], ["flashy", null], ["hydrogenated", null], ["carbonara", null],
+    ["embers", null], ["remember", null],
   ])("maps %s to %s", (model, provider) => {
     expect(workerProvider(model)).toBe(provider);
   });
