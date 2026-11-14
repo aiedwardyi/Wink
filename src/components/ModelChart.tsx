@@ -94,7 +94,7 @@ function Flag({ text, x, y, cw }: { text: string; x: number; y: number; cw: numb
   return <g className="flag"><rect x={x - w / 2} y={y - 9} width={w} height={18} rx={2} /><text x={x} y={y + 4} textAnchor="middle">{text}</text></g>;
 }
 
-function Overlay({ plot, target, ghost, now, nowLabel, same, under, instant }: { plot: Plot; target: Point | null; ghost: boolean; now: Point | null; nowLabel: string; same: boolean; under: boolean; instant: boolean }) {
+function Overlay({ plot, target, mark, ghost, now, nowLabel, same, under, instant }: { plot: Plot; target: Point | null; mark: string; ghost: boolean; now: Point | null; nowLabel: string; same: boolean; under: boolean; instant: boolean }) {
   const pos = useTween(target, instant);
   const { W, H, pad, phone, cw } = plot;
   const X = (cost: number) => pad.l + Math.log(cost / XMIN) / Math.log(XMAX / XMIN) * (W - pad.l - pad.r);
@@ -116,7 +116,8 @@ function Overlay({ plot, target, ghost, now, nowLabel, same, under, instant }: {
         {!same && <path d="M0-5.5L5.5 0L0 5.5L-5.5 0Z" />}
         <text y={same ? -24 : under ? 19 : -12} textAnchor="middle">{nowLabel}</text>
       </g>}
-      {target && <circle key={`${target.x}:${target.y}`} className="ping" cx={target.x} cy={target.y} r={11} />}
+      {/* Keyed on the stop, not its pixels: the first measure or a resize must not remount it. */}
+      {target && <circle key={mark} className="ping" cx={target.x} cy={target.y} r={11} />}
       {pos && <>
         <line className="cross" x1={pos.x} x2={pos.x} y1={Math.min(pos.y + 18, H - pad.b)} y2={H - pad.b} />
         <line className="cross" x1={pad.l} x2={Math.max(pos.x - 18, pad.l)} y1={pos.y} y2={pos.y} />
@@ -183,7 +184,8 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
   const spot = (s: Stop | undefined): Point | null => charted(s) ? { x: X(s!.cost!), y: Y(s!.score!) } : null;
 
   const aim = anchor(line, level);
-  const target = line ? spot(line.stops[aim]) : null;
+  const aimed = line?.stops[aim];
+  const target = spot(aimed);
   const nowAim = anchor(now.line, now.level);
   const nowPos = now.line ? spot(now.line.stops[nowAim]) : null;
   const same = Boolean(target && nowPos && Math.hypot(target.x - nowPos.x, target.y - nowPos.y) < 1);
@@ -385,7 +387,7 @@ export function ModelChart({ rows, draft, current, canCommit, onDraft, onSave, h
               );
             })}
             {line && aim < 0 && <text className="none" x={W - pad.r - 14} y={H - pad.b - 16} textAnchor="end">{t("model.chart.noScore")}</text>}
-            <Overlay plot={plot} target={target} ghost={aim !== level} now={nowPos} nowLabel={t("model.chart.now")} same={same} under={under} instant={instant} />
+            <Overlay plot={plot} target={target} mark={`${aimed?.cost}:${aimed?.score}`} ghost={aim !== level} now={nowPos} nowLabel={t("model.chart.now")} same={same} under={under} instant={instant} />
             <g className="labels">{labels.map((label) => <text key={label.text} className="lbl" data-sel={label.sel || undefined} x={label.tx} y={label.y + 11} textAnchor={label.anchor}>{label.text}</text>)}</g>
             {tip && (() => {
               const name = `${tip.line.name}${tip.line.tag ? ` ${tip.line.tag}` : ""}${tip.stop.option ? ` · ${modelEffortLabel(tip.stop.label, t)}` : ""}`;
