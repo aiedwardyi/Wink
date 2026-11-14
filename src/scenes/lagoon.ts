@@ -127,7 +127,7 @@ function create(api: SceneApi) {
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       for (const name of UNIFORMS) U[name] = gl.getUniformLocation(prog, name);
       ready = true;
-    }
+    } else gl.deleteProgram(prog);
   }
   // No WebGL: a plain gradient in the theme's colors.
   if (!ready) api.layer.style.background = "linear-gradient(180deg, var(--color-app), var(--color-panel))";

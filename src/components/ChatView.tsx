@@ -77,7 +77,7 @@ import { RenameTitle } from "./RenameTitle";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
 import { CallCard } from "./CallCard";
-import { ChatScene, noteSceneSend, sceneOf } from "./ChatScene";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { lazyView } from "@/lib/stale-build";
 import { CHAT_IMAGE } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
@@ -1040,6 +1040,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
   const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
@@ -1498,7 +1499,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
     <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} />}
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} sendRef={sceneSend} />}
       {/* Call mode covers the thread while the bot is on the line */}
       {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
@@ -1907,7 +1908,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           composerRef={composerInputRef}
           onSend={() => {
             jumpToLatest();
-            noteSceneSend();
+            sceneSend.current?.();
           }}
           focusBlocked={focusComposerBlocked}
           replyTo={replyTo}

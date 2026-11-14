@@ -1,6 +1,6 @@
 // The animated backdrop of the scene themes. Each scene is its own lazy chunk,
 // so other themes load and run none of it.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { SkinId } from "@/lib/skins";
 import { startScene, type SceneHost, type SceneModule } from "@/scenes/scene-host";
 import "@/scenes/scenes.css";
@@ -15,13 +15,10 @@ const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
 
 export const sceneOf = (skin: SkinId): SceneId | undefined => SCENE_SKINS[skin];
 
-const sends = new Set<() => void>();
-/** The composer's send; the only trigger besides the turn ending. */
-export function noteSceneSend(): void {
-  for (const send of sends) send();
-}
+type Props = { scene: SceneId; skin: SkinId; working: boolean; threadId: string; sendRef: RefObject<(() => void) | null> };
 
-export function ChatScene({ scene, skin, working, threadId }: { scene: SceneId; skin: SkinId; working: boolean; threadId: string }) {
+/** sendRef is filled with this chat's send trigger; the only one besides the turn ending. */
+export function ChatScene({ scene, skin, working, threadId, sendRef }: Props) {
   const layer = useRef<HTMLDivElement>(null);
   const host = useRef<SceneHost | null>(null);
   const turn = useRef({ working, threadId });
@@ -44,13 +41,14 @@ export function ChatScene({ scene, skin, working, threadId }: { scene: SceneId; 
   useEffect(() => host.current?.emit({ name: "skin" }), [skin]);
 
   useEffect(() => {
-    const send = () => {
+    sendRef.current = () => {
       const frame = layer.current?.parentElement?.querySelector("[data-orbit-composer-frame]");
       if (frame) host.current?.emit({ name: "send", at: frame });
     };
-    sends.add(send);
-    return () => void sends.delete(send);
-  }, []);
+    return () => {
+      sendRef.current = null;
+    };
+  }, [sendRef]);
 
   useEffect(() => {
     const was = turn.current;
