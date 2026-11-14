@@ -11,10 +11,10 @@ const WHOLE_LIMIT = 5_000;
 const WALK_LIMIT = 5_000;
 const RANGE_LIMIT = 64;
 
-export function mapGit(cwd: string, args: string[]): Promise<string> {
+export function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
   return new Promise((done, fail) => {
     execFile("git", ["--literal-pathspecs", "-C", cwd, ...args], {
-      windowsHide: true, timeout: 5_000, maxBuffer: LIMIT,
+      windowsHide: true, timeout: 5_000, maxBuffer: limit,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
     }, (error, stdout) => error ? fail(Object.assign(error, { stdout })) : done(stdout));
   });
@@ -151,7 +151,7 @@ export async function mapWalkFiles(cwd: string, limit = WALK_LIMIT): Promise<str
 }
 
 export async function mapRepoFiles(cwd: string): Promise<string[]> {
-  return [...new Set((await mapGit(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean))];
+  return [...new Set((await mapGit(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], 32 * 1024 * 1024)).split("\0").filter(Boolean))];
 }
 
 interface MapLatest { path?: string; at: number }

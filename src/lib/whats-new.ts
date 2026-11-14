@@ -51,9 +51,9 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
       {
         clip: mapClip,
         lightClip: mapLightClip,
-        title: { en: "Watch every worker on the Map", ko: "Map에서 모든 워커 보기" },
+        title: { en: "Watch every worker on the Map", ko: "Map에서 모든 작업자 보기" },
         line: { en: "Your project as a family tree, live.", ko: "프로젝트를 가계도처럼 실시간으로." },
-        show: { en: "Open the side pane's Map tab while workers run.", ko: "워커가 일할 때 사이드 패널의 Map 탭을 열어 보세요." },
+        show: { en: "Open the side pane's Map tab while workers run.", ko: "작업자가 일할 때 사이드 패널의 Map 탭을 열어 보세요." },
       },
       {
         clip: hydrogenClip,
