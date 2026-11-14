@@ -5,6 +5,7 @@ import type { Message } from "@/state/store-types";
 import { asRequest, LiveCall, spokenText, told, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 import { asksForQuiet, callsVoice } from "./guard";
+import { GAP_MS } from "./manners";
 
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
@@ -44,7 +45,9 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
   };
 }
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+const flush = () => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Promise((resolve) => setTimeout(resolve, 0));
+/** The quiet a held line waits for after the voice talks. */
+const gap = () => vi.advanceTimersByTimeAsync(GAP_MS);
 
 function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio(), now = () => 1_000) {
   const engines: FakeEngine[] = [];
@@ -67,10 +70,12 @@ function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {},
   return { call, engines, posts, engine: () => engines.at(-1)! };
 }
 
+/** A call past its greeting: nothing else plays until the greeting's turn ends. */
 async function started(responses?: Record<string, Posted | (() => Promise<Posted>)>, audio?: CallAudioPort) {
   const s = setup(responses, audio);
   await s.call.start();
   s.engine().events.ready();
+  s.engine().events.turnDone();
   return s;
 }
 
@@ -314,6 +319,7 @@ describe("LiveCall", () => {
   });
 
   it("typed reply is spoken once the voice is quiet", async () => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine } = await started({}, audio);
     const rows = [{ id: "u", role: "user", kind: "text", text: "What broke?", at: 2_000 } as Message, botRow("r", "The login token expired.")];
@@ -325,6 +331,8 @@ describe("LiveCall", () => {
     audio.playing = false;
     engine().events.turnDone();
     call.observe({ busy: false, messages: rows });
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    await gap();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: The login token expired."]);
     expect(engine().contexts).toEqual([]);
   });
@@ -392,6 +400,7 @@ describe("LiveCall", () => {
   });
 
   it("keeps a later queued order pending after a shared turn settles", async () => {
+    vi.useFakeTimers();
     const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true } } });
     for (const order of ["Do A.", "Do B.", "Do C."]) {
       engine().events.toolCall([{ id: order, name: "propose_work", args: { order } }]);
@@ -409,6 +418,7 @@ describe("LiveCall", () => {
     call.observe({ busy: false, messages: rows });
     await flush();
     engine().events.turnDone();
+    await gap();
     expect(call.state().status).toBe("listening");
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: A and B done.", "[Wink] Nova replied: C done."]);
   });
@@ -467,6 +477,7 @@ describe("LiveCall", () => {
   });
 
   it("keeps held context through a reconnect", async () => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engines, engine } = await started({}, audio);
     audio.onStart();
@@ -479,11 +490,13 @@ describe("LiveCall", () => {
     audio.onIdle();
     await flush();
     engine().events.ready();
+    await gap();
     expect(engines[0]!.contexts).toEqual([]);
     expect(engine().contexts).toHaveLength(1);
   });
 
-  it("holds the report until the voice finishes its turn", async () => {
+  it("holds the report until the voice finishes its turn, then a quiet gap", async () => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine } = await started({ "/api/tts/prepare": { status: 200, data: { utterances: ["Fixed."] } } }, audio);
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix it." } }]);
@@ -497,6 +510,8 @@ describe("LiveCall", () => {
     expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
     audio.playing = false;
     audio.onIdle();
+    expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
+    await gap();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Fixed."]);
   });
 
@@ -521,7 +536,7 @@ describe("LiveCall", () => {
     expect(call.state().pending).toBeUndefined();
     await flush();
     const sends = posts.filter((p) => p.path === "/api/bots/b1/messages");
-    expect(sends.map((p) => p.body)).toEqual([{ text: "Yeah, that's better.", sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
+    expect(sends.map((p) => p.body)).toEqual([{ text: "Re: “Restart at 8:15 PM instead?”\nYeah, that's better.", sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
     expect(posts.some((p) => p.path.endsWith("/call/lines") && p.body.lines[0].who === "user")).toBe(false);
     engine().events.heard("Also open my Desktop folder.");
     engine().events.answering();
@@ -1196,7 +1211,7 @@ describe("VOICE-SEND: cards", () => {
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “Restart at 8:15 PM?”\nYes."]);
     expect(linesOf(posts)).toEqual(["Hello?", "Nova asks if 8:15 works."]);
   });
 
@@ -1218,13 +1233,18 @@ describe("VOICE-SEND: cards", () => {
     expect(messagesOf(posts)).toHaveLength(1);
   });
 
-  it("relays a card already open when the call started", async () => {
+  it("relays a card already open when the call started, after the first exchange", async () => {
+    vi.useFakeTimers();
     const { call, engine } = await started();
     call.observe({ busy: false, messages: [cardRow("q1", 10)] });
+    expect(notices(engine())).toEqual([]);
+    turn(engine(), "Hi.", "Hi there.");
+    await gap();
     expect(engine().texts.at(-1)).toBe("[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer.");
   });
 
   it("a failed answer rearms the card and says so", async () => {
+    vi.useFakeTimers();
     const { call, engine, posts } = await started({ "/messages": { status: 409, data: { error: "busy" } } });
     call.observe({ busy: false, messages: [cardRow("q1")] });
     turn(engine(), "", "Nova asks if 8:15 works.");
@@ -1233,6 +1253,7 @@ describe("VOICE-SEND: cards", () => {
     await flush();
     call.observe({ busy: false, messages: [cardRow("q1")] });
     engine().events.turnDone();
+    await gap();
     expect(engine().texts.at(-1)).toBe(`[Wink] Not sent: their answer "Yes." did not reach Nova (busy). Say so plainly and ask them to answer again.`);
     engine().events.heard("Yes.");
     engine().events.answering();
@@ -1250,10 +1271,10 @@ describe("VOICE-SEND: cards", () => {
     engine().events.turnDone();
     expect(engine().texts.at(-1)).toBe("[Wink] Nova replied: Which one?");
     engine().events.turnDone();
-    engine().events.heard("Production.");
+    engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Deploy the site.", "Production."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Deploy the site.", "Re: “Restart at 8:15 PM?”\nYes."]);
   });
 
   it("two replies in a row are spoken one after the other", async () => {
@@ -1278,7 +1299,7 @@ describe("VOICE-SEND: cards", () => {
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “Restart at 8:15 PM?”\nYes."]);
     expect(linesOf(posts)).toContain(again);
   });
 
@@ -1411,6 +1432,7 @@ describe("VOICE-SEND: reconnect", () => {
   });
 
   it("a reconnect mid-voice does not stall a held reply", async () => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine } = await started({}, audio);
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Check the build." } }]);
@@ -1425,6 +1447,7 @@ describe("VOICE-SEND: reconnect", () => {
     engine().events.ready();
     audio.playing = false;
     audio.onIdle();
+    await gap();
     expect(engine().texts).toEqual(["[Wink] Nova replied: Red."]);
   });
 
@@ -1450,9 +1473,9 @@ const statusLines = (engine: FakeEngine) => engine.contexts.filter((t) => t.star
 
 describe("VOICE-KNOWS: cards aloud", () => {
   it.each([
-    ["en", cardRow("q1"), "[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer."],
-    ["ko", koCard("q1"), "[Wink] Nova asks: 8시 15분에 재시작할까요? Options: 네, 8시 15분; 아니요, 새벽 1시. Read it out with the options, then wait for their answer."],
-  ])("D10 speaks the card's question and options, and routes the answer only after it played (%s)", async (_lang, card, notice) => {
+    ["en", cardRow("q1"), "[Wink] Nova asks: Restart at 8:15 PM? Options: Yes; No. Read it out with the options, then wait for their answer.", "Restart at 8:15 PM?"],
+    ["ko", koCard("q1"), "[Wink] Nova asks: 8시 15분에 재시작할까요? Options: 네, 8시 15분; 아니요, 새벽 1시. Read it out with the options, then wait for their answer.", "8시 15분에 재시작할까요?"],
+  ])("D10 speaks the card's question and options, and routes the answer only after it played (%s)", async (_lang, card, notice, question) => {
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine, posts } = await started({}, audio);
     call.observe({ busy: false, messages: [card] });
@@ -1468,7 +1491,7 @@ describe("VOICE-KNOWS: cards aloud", () => {
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body)).toEqual([{ text: "Yes.", sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
+    expect(messagesOf(posts).map((p) => p.body)).toEqual([{ text: `Re: “${question}”\nYes.`, sendId: "send-1", call: { id: "c-0123456789ab", ask: true } }]);
   });
 
   it("a card with no options still reads its question", async () => {
@@ -1484,6 +1507,7 @@ describe("VOICE-KNOWS: cards aloud", () => {
   });
 
   it("a superseded card is never read; the newer one is, and takes the answer", async () => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine, posts } = await started({}, audio);
     audio.onStart();
@@ -1494,15 +1518,17 @@ describe("VOICE-KNOWS: cards aloud", () => {
     audio.playing = false;
     engine().events.turnDone();
     audio.onIdle();
+    await gap();
     expect(notices(engine())).toEqual([expect.stringContaining("8시 15분에 재시작할까요?")]);
     engine().events.turnDone();
     engine().events.heard("네.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["네."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “8시 15분에 재시작할까요?”\n네."]);
   });
 
-  it("an interrupted card is read again, and a line said over it is not its answer", async () => {
+  it("an interrupted card is read again once his line got its answer, and a line said over it is not its answer", async () => {
+    vi.useFakeTimers();
     const { call, engine, posts } = await started();
     call.observe({ busy: false, messages: [cardRow("q1")] });
     engine().events.heard("Wait, what?");
@@ -1510,18 +1536,24 @@ describe("VOICE-KNOWS: cards aloud", () => {
     engine().events.answering();
     engine().events.said("Sorry.");
     engine().events.turnDone();
+    expect(notices(engine())).toHaveLength(1);
+    await gap();
     expect(notices(engine())).toHaveLength(2);
     engine().events.turnDone();
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “Restart at 8:15 PM?”\nYes."]);
     expect(linesOf(posts)).toContain("Wait, what?");
   });
 
-  it("an old card from before the call is read with its question", async () => {
+  it("an old card from before the call is read with its question after the first exchange", async () => {
+    vi.useFakeTimers();
     const { call, engine } = await started();
     call.observe({ busy: false, messages: [{ ...koCard("q1"), at: 10 } as Message] });
+    expect(notices(engine())).toEqual([]);
+    turn(engine(), "안녕.", "안녕하세요.");
+    await gap();
     expect(notices(engine())).toEqual([expect.stringContaining("8시 15분에 재시작할까요?")]);
   });
 });
@@ -1976,7 +2008,7 @@ describe("AUDIT4B-VOICE", () => {
     engine().events.ready();
     turn(engine(), "Yes, 8:15.", "");
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes, 8:15."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “Restart at 8:15 PM?”\nYes, 8:15."]);
   });
 
   it("a notice clears once the person says something new", async () => {
@@ -2028,7 +2060,8 @@ describe("AUDIT5-FIX", () => {
     expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Restart it."]);
   });
 
-  it.each([true, false])("a card readout cut by echo is read again, and the next line is not its answer (audio started %s)", async (started_) => {
+  it.each([true, false])("a card readout cut by echo is read again once the room is quiet, and the next line is not its answer (audio started %s)", async (started_) => {
+    vi.useFakeTimers();
     const audio = { ...fakeAudio(), playing: false };
     const { call, engine, posts } = await started({}, audio);
     call.observe({ busy: false, messages: [cardRow("q1")] });
@@ -2041,6 +2074,8 @@ describe("AUDIT5-FIX", () => {
     engine().events.interrupted();
     audio.playing = false;
     audio.onIdle();
+    expect(notices(engine())).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(notices(engine())).toHaveLength(2);
     engine().events.heard("Yeah, go on.");
     engine().events.answering();
@@ -2074,7 +2109,7 @@ describe("AUDIT5-FIX", () => {
     engine().events.heard("Yes.");
     engine().events.answering();
     await flush();
-    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Yes."]);
+    expect(messagesOf(posts).map((p) => p.body.text)).toEqual(["Re: “Restart at 8:15 PM?”\nYes."]);
   });
 });
 
@@ -2110,16 +2145,18 @@ describe("LiveCall back from the background", () => {
   }
 
   it("heals the audio on return and relays the reply that finished while away", async () => {
+    vi.useFakeTimers();
     const audio = stalled([true]);
     const { call, engine } = await away(audio);
     call.hidden(false);
-    await flush();
+    await gap();
     expect(audio.heal).toHaveBeenCalledOnce();
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
     expect(call.state().status).toBe("listening");
   });
 
   it("waits for a tap when the phone blocks audio, then relays the reply", async () => {
+    vi.useFakeTimers();
     const audio = stalled([false, true]);
     const { call, engine } = await away(audio);
     call.hidden(false);
@@ -2127,7 +2164,7 @@ describe("LiveCall back from the background", () => {
     expect(call.state().status).toBe("paused");
     expect(engine().texts.some((t) => t.includes("replied"))).toBe(false);
     call.resume();
-    await flush();
+    await gap();
     expect(call.state().status).toBe("listening");
     expect(engine().texts.filter((t) => t.includes("replied"))).toEqual(["[Wink] Nova replied: Green."]);
   });
@@ -2273,7 +2310,7 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(audio.played).toBe(1);
     e.events.said("I'm here.");
     e.events.turnDone();
-    await vi.advanceTimersByTimeAsync(0);
+    await gap();
     expect(e.texts.slice(told)).toEqual([expect.stringMatching(/^\[Wink\] Nova asks:/)]);
   });
 
