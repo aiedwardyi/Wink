@@ -1,5 +1,5 @@
 /* one row per worker: the same seven stops in the same places, joined by one straight line; --flow-ease and 480ms are SWING (lib/motion-character.ts) */
-.map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--color-success); --flow-claude: #d97757; --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
+.map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--color-success); --flow-ink: var(--color-ink-secondary); --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
   position: relative; flex-shrink: 0; padding: 5px 12px 6px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
 .map-flow-list { display: grid; grid-template-columns: 8px minmax(40px, 76px) minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; max-height: 158px; overflow-y: auto; scrollbar-width: thin; }
 .map-flow-row { position: relative; display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 36px; color: inherit; text-decoration: none; -webkit-touch-callout: none; }
@@ -15,22 +15,25 @@
 /* each stop is a word over a square on the line; the line through a stop is two halves, so it runs square to square */
 @property --flow-fill { syntax: "<color>"; inherits: true; initial-value: transparent; }
 .map-flow-stops { --flow-fill: var(--flow-off); display: flex; align-items: flex-start; min-width: 0; height: 36px; padding-top: 5px; transition: --flow-fill 480ms var(--flow-ease); }
-.map-flow-stops[data-fill="claude"] { --flow-fill: var(--flow-claude); }
+.map-flow-stops[data-fill="ink"] { --flow-fill: var(--flow-ink); }
 .map-flow-stops[data-fill="open"] { --flow-fill: var(--flow-open); }
 .map-flow-stops[data-fill="merged"] { --flow-fill: var(--flow-merged); }
 .map-flow-stops > i, .map-flow-stops > span:not(.map-flow-box)::before, .map-flow-stops > span:not(.map-flow-box)::after {
   height: 2px; background: linear-gradient(var(--flow-fill), var(--flow-fill)) 0 0 / 0 100% no-repeat, linear-gradient(var(--flow-off), var(--flow-off)) 0 50% / 100% 1px no-repeat; transition: background-size 480ms var(--flow-ease); }
 .map-flow-stops > i { flex: 1 1 0; min-width: 4px; margin-top: 18px; }
 .map-flow-stops > i[data-on], .map-flow-stops > span:not(.map-flow-box)[data-line]::before, .map-flow-stops > span:not(.map-flow-box)[data-line="through"]::after { background-size: 100% 100%, 100% 1px; }
+/* the line up to the PR stays white-gray; from the PR on it takes the status color */
+.map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"]), .map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"]) + i, .map-flow-stops > [data-k="pr"]::before { --flow-fill: var(--flow-ink); }
 .map-flow-stops > span:not(.map-flow-box) { position: relative; isolation: isolate; flex: none; display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .map-flow-stops > span:not(.map-flow-box)::before, .map-flow-stops > span:not(.map-flow-box)::after { content: ""; position: absolute; z-index: -1; top: 18px; left: 0; right: 50%; }
 .map-flow-stops > span:not(.map-flow-box)::after { left: 50%; right: 0; }
 .map-flow-stops > span:first-child::before, .map-flow-stops > span:last-child::after { content: none; }
 .map-flow-stops small { font: 10px/12px var(--font-sans, sans-serif); color: var(--color-ink-secondary); white-space: nowrap; }
-/* Merged and Closed take the same room, so the stops stay in place */
-.map-flow-stops > [data-k="merge"] > small { min-width: 3.6em; text-align: center; }
+/* every stop word takes the same room (Merged and Closed too), so the squares sit evenly; the line next to the checks box gets the half slot a square would add */
+.map-flow-stops small { min-width: 3.6em; text-align: center; }
+.map-flow-stops > .map-flow-box + i, .map-flow-stops > i:has(+ .map-flow-box) { flex-basis: 14px; }
 .map-flow-stops > span > i { width: 8px; height: 8px; border-radius: 2px; background: var(--flow-off); transition: background 480ms var(--flow-ease), box-shadow 480ms var(--flow-ease); }
-.map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"])[data-state] > i { background: var(--flow-claude); }
+.map-flow-stops > :is([data-k="code"], [data-k="commit"], [data-k="push"])[data-state] > i { background: var(--flow-ink); }
 .map-flow-stops > :is([data-k="pr"], [data-k="review"])[data-state="on"] > i { background: var(--flow-open); }
 .map-flow-stops > [data-k="review"][data-state="half"] > i { background: linear-gradient(90deg, var(--flow-open) 50%, var(--color-panel) 50%); box-shadow: inset 0 0 0 1.5px var(--flow-open); }
 .map-flow-stops > [data-k="review"][data-state="bad"] > i { background: var(--color-danger); }
@@ -60,6 +63,9 @@
   .map-flow-list { grid-template-columns: 8px minmax(36px, 64px) minmax(0, 1fr) auto; column-gap: 6px; }
   .map-flow-stops small, .map-flow-box > b { font-size: 9.5px; }
   .map-flow-stops > i { min-width: 2px; }
+  .map-flow-stops small { min-width: 0; }
+  .map-flow-stops > [data-k="merge"] > small { min-width: 3.6em; }
+  .map-flow-stops > .map-flow-box + i, .map-flow-stops > i:has(+ .map-flow-box) { flex-basis: 0; }
   .map-flow-box { width: auto; padding: 3px 5px 4px; }
   .map-flow-box > span { width: 0; min-width: 100%; gap: 1px; }
   .map-flow-box > b > span { display: none; }

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -54,10 +55,17 @@ it.each([
   expect(host.querySelector(".map-flow-box > b")?.textContent).toBe(`Checks${status}`);
   const line = host.querySelector<HTMLElement>(".map-flow-stops")!;
   expect(line.dataset.reach).toBe(reach);
-  expect(line.dataset.fill).toBe(+reach < 0 ? undefined : +reach < 3 ? "claude" : +reach < 6 ? "open" : "merged");
+  expect(line.dataset.fill).toBe(+reach < 0 ? undefined : +reach < 3 ? "ink" : +reach < 6 ? "open" : "merged");
   expect(line.querySelectorAll(":scope > i[data-on]").length).toBe(Math.max(0, +reach));
   expect(host.querySelector(".map-flow-end > small")?.textContent).toBe(label);
   expect(host.querySelector(".map-flow-dots, .map-flow-thread, .map-flow-rise, .map-flow-join, svg")).toBeNull();
+});
+
+it("keeps Coding, Commit, Push and the line up to the PR white-gray, with color only for status", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).not.toMatch(/#d97757|claude/i);
+  expect(css).toMatch(/--flow-ink: var\(--color-ink-secondary\)/);
+  expect(css).toMatch(/:is\(\[data-k="code"\], \[data-k="commit"\], \[data-k="push"\]\)\[data-state\] > i \{ background: var\(--flow-ink\); \}/);
 });
 
 it("puts a square per check in the checks box and the details in each stop's tip", async () => {

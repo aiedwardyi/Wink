@@ -36,8 +36,8 @@ const copy = {
 type Copy = (typeof copy)["en"];
 const EVERY = 30_000;
 const PRESS = 450;
-// The line takes the color of the last stage reached: Claude orange before the PR, green from the PR on, purple once merged.
-const FILL = ["claude", "claude", "claude", "open", "open", "open", "merged"];
+// The line takes the color of the last stage reached: white-gray before the PR, green from the PR on, purple once merged.
+const FILL = ["ink", "ink", "ink", "open", "open", "open", "merged"];
 type Stop = { key: keyof Copy["stops"]; state?: string; tip: string[] };
 type Tip = { id: string; lines: string[]; top: number; left?: number; right?: number };
 const ended = (pr: MapPr | null) => pr?.state === "merged" || pr?.state === "closed";
