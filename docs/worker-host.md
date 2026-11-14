@@ -13,6 +13,7 @@ Wink still closes every pane. macOS and Linux keep the in-app terminal path.
 | `electron/worker-host-protocol.mjs` | Protocol 1: frames, the hello proof, the request and reply plumbing. |
 | `electron/worker-host-runtime.mjs` | Copies the runtime out of the install folder and starts the host from the copy. |
 | `electron/worker-host-identity.mjs` | The lock file that says a host is alive, and its record files. |
+| `electron/spawn-gate.mjs` | Keeps the host's launch out of the moment a terminal starts. |
 
 The host knows nothing about bots, accounts, mail, cleanup or the phone. Those stay in `terminal-host.mjs`, which
 treats a hosted pane like any other terminal: the handle has the same members as `terminal-pty.mjs` plus `detach()`.
@@ -23,8 +24,12 @@ The only seam is the `hostPty` option of `createTerminalHost`.
 - The app calls `prewarm()` once the server is up. Opening a pane never waits for the host: a pane asked for
   before the host is connected opens in the app as before.
 - The host runs from `%LOCALAPPDATA%\Wink\worker-host` (`Wink-dev` for an unpackaged app): `bin-*` holds the renamed
-  executable and node-pty, `js-*` holds the four scripts. A layer is copied once, in a worker thread, and reused
+  executable and node-pty, `js-*` holds the five scripts. A layer is copied once, in a worker thread, and reused
   until its key changes. The host refuses to start from inside the install folder, which an update replaces.
+- While a terminal starts, Windows marks its console pipes as inheritable for a few milliseconds. A process created
+  in that moment keeps a copy, and the terminal then never ends. `spawn-gate.mjs` makes the host's launch wait for
+  terminals that are starting, and makes a terminal wait for a launch in flight. The launch first runs the copied
+  executable once with `--version`, so the slow first start of a new copy is over before the gate is taken.
 - State lives in `<userData>\worker-host\v1`: `host.lock` (held while the host lives), `host.json` (pipe and
   secret), `panes.json` (id, pid, times, exit code and bot id per pane; no environment), `host-errors.log`.
 - The host exits half a second after its last pane is gone with no app connected.

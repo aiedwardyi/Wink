@@ -4,9 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { spawnGate, startProcess } from "./spawn-gate.mjs";
 import { writeWorkerHostRecord } from "./worker-host-identity.mjs";
 
-const SOURCES = ["worker-host-entry.mjs", "worker-host-protocol.mjs", "worker-host-identity.mjs", "terminal-pty.mjs"];
+const SOURCES = ["worker-host-entry.mjs", "worker-host-protocol.mjs", "worker-host-identity.mjs", "terminal-pty.mjs", "spawn-gate.mjs"];
 const STALE_STAGING_MS = 60 * 60_000;
 const digest = (parts) => createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 12);
 const complete = (layer) => fs.existsSync(path.join(layer, "complete.json"));
@@ -88,7 +89,7 @@ export async function sweepWorkerHostRuntime(root, keep) {
 export async function launchWorkerHost({ root, executable, ptyModule, slot, launch, env }) {
   const sources = await Promise.all(SOURCES.map(async (name) => [name, await fs.promises.readFile(fileURLToPath(new URL(name, import.meta.url)), "utf8")]));
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(import.meta.url), { workerData: { workerHostLaunch: { root, executable, ptyModule, slot, launch, env, sources } } });
+    const worker = new Worker(new URL(import.meta.url), { workerData: { workerHostLaunch: { root, executable, ptyModule, slot, launch, env, sources, gate: spawnGate } } });
     worker.once("message", (message) => message.error ? reject(new Error(message.error)) : resolve(message));
     worker.once("error", reject);
     worker.once("exit", () => reject(new Error("Worker host launch stopped")));
@@ -96,11 +97,13 @@ export async function launchWorkerHost({ root, executable, ptyModule, slot, laun
 }
 
 if (!isMainThread && workerData?.workerHostLaunch) {
-  const { root, slot, launch, env, ...input } = workerData.workerHostLaunch;
+  const { root, slot, launch, env, gate, ...input } = workerData.workerHostLaunch;
   try {
     const runtime = await stageWorkerHostRuntime({ root, ...input });
     writeWorkerHostRecord(path.join(slot, "launch.json"), { ...launch, ptyModule: runtime.ptyModule });
-    const child = spawn(runtime.executable, [runtime.entry, slot], { detached: true, windowsHide: true, stdio: "ignore", cwd: runtime.bin, env });
+    // A freshly copied exe takes seconds to start once; that run happens here, so no terminal waits for it at the gate.
+    await new Promise((resolve) => spawn(runtime.executable, ["--version"], { windowsHide: true, stdio: "ignore", cwd: runtime.bin, env }).once("exit", resolve).once("error", resolve));
+    const child = startProcess(gate, () => spawn(runtime.executable, [runtime.entry, slot], { detached: true, windowsHide: true, stdio: "ignore", cwd: runtime.bin, env }));
     await new Promise((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
