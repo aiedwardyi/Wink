@@ -218,3 +218,27 @@ describe("room echo", () => {
     expect(JSON.stringify(prepared)).not.toContain("waitlist");
   });
 });
+
+describe("room echo engine provenance", () => {
+  it("stores the replying engine and names it after a switch", () => {
+    const { store, rando, say } = world();
+    const room = store.createGroup("New group", [rando.id]);
+    say(room.threadId, "user", "Make a dog image");
+    const since = store.messagesFor(room.threadId).length;
+    say(room.threadId, "bot", "Generated a dog image", { engine: "antigravityAgent" });
+    const row = writeRoomEcho(store, rando, room, room.threadId, since, "Edward")!;
+    expect(row.engine).toBe("antigravityAgent");
+    const messages = store.activePath(rando.threadId);
+    const plain = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "antigravityAgent");
+    expect(plain).toEqual(roomEchoesSinceLastUserTurn(messages, new Set(), "Edward"));
+    const switched = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "museAgent").join("\n");
+    expect(switched).toContain('You (on Gemini) answered: "Generated a dog image"');
+    expect(row.text).toContain('You answered: "Generated a dog image"');
+  });
+
+  it("leaves legacy echoes untagged", () => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Legacy reply"', roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+  });
+});

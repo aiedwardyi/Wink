@@ -9,6 +9,7 @@ import {
   NATIVE_PROMPT_BUDGET_CAP,
   nativePromptBudget,
   nativeSessionTokenBudget,
+  replayMessageText,
   PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT,
   PRE_COMPACT_TOOL_ROUND_LIMIT,
   resumeSessionUnseeded,
@@ -1169,5 +1170,58 @@ describe("withTaskRecord", () => {
     expect(withTaskRecord("hi", "Goal: ship")).toBe("Goal: ship\n\nhi");
     expect(withTaskRecord("Goal: ship\n\nhi", "Goal: ship")).toBe("Goal: ship\n\nhi");
     expect(withTaskRecord("hi", "")).toBe("hi");
+  });
+});
+
+describe("replay engine provenance", () => {
+  const replay = [
+    { role: "user" as const, text: "Make a dog image" },
+    { role: "assistant" as const, text: "Generated a dog image", engine: "antigravityAgent" },
+    { role: "assistant" as const, text: "Current reply", engine: "museAgent" },
+    { role: "assistant" as const, text: "Legacy reply" },
+  ];
+
+  it.each(["fresh", "rewound", "recycled"] as const)("names the earlier engine on a %s replay", (boundary) => {
+    const out = buildTurnContext({ text: "Who made it?", transcript: replay, rewound: false, fresh: false, replaysNatively: false, driverKind: "museAgent", [boundary]: true });
+    expect(out.turnText).toContain("Assistant (on Gemini): Generated a dog image");
+    expect(out.turnText).toContain("Assistant: Current reply");
+    expect(out.turnText).toContain("Assistant: Legacy reply");
+  });
+
+  it("names the earlier engine when resuming fails", () => {
+    const text = buildResumeFallback({ text: "Who made it?", transcript: replay, driverKind: "museAgent" });
+    expect(text).toContain("Assistant (on Gemini): Generated a dog image");
+    expect(text).toContain("Assistant: Current reply");
+    expect(text).toContain("Assistant: Legacy reply");
+  });
+
+  it("keeps a single-engine replay byte-identical", () => {
+    const same = replay.map((message) => ({ ...message, engine: "museAgent" }));
+    const plain = same.map(({ role, text }) => ({ role, text }));
+    const input = { text: "Continue", rewound: false, fresh: true, replaysNatively: false, driverKind: "museAgent" };
+    expect(buildTurnContext({ ...input, transcript: same })).toEqual(buildTurnContext({ ...input, transcript: plain }));
+    expect(buildResumeFallback({ ...input, transcript: same })).toBe(buildResumeFallback({ ...input, transcript: plain }));
+    expect(buildTurnContext({ ...input, fresh: false, transcript: replay })).toEqual({ turnText: "Continue", resume: true });
+  });
+
+  it.each([
+    ["claudeAgent", "Claude"],
+    ["codex", "Codex"],
+    ["antigravityAgent", "Gemini"],
+    ["geminiAgent", "Gemini"],
+    ["grokAgent", "Grok"],
+    ["museAgent", "Muse"],
+    ["localModel", "localModel"],
+  ])("tags %s history for inline and native replay", (engine, label) => {
+    const driverKind = engine === "museAgent" ? "codex" : "museAgent";
+    const message = { role: "assistant" as const, text: "Generated a dog image", engine };
+    const expected = `Assistant (on ${label}): Generated a dog image`;
+    const input = { text: "Who made it?", transcript: [message], rewound: false, fresh: true, replaysNatively: false, driverKind };
+    expect(buildTurnContext(input).turnText).toContain(expected);
+    expect(buildResumeFallback(input)).toContain(expected);
+    expect(replayMessageText(message, driverKind)).toBe(`(on ${label}) Generated a dog image`);
+    expect(replayMessageText(message, engine)).toBe(message.text);
+    expect(replayMessageText({ ...message, engine: undefined }, driverKind)).toBe(message.text);
+    expect(replayMessageText({ ...message, role: "user" }, driverKind)).toBe(message.text);
   });
 });

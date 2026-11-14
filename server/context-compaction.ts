@@ -7,7 +7,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import { typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import type { Message, OptionCardData } from "./store.ts";
-import type { ResumeSeed, SessionPrompt } from "./turn-context.ts";
+import type { ReplayMessage, ResumeSeed, SessionPrompt } from "./turn-context.ts";
 import {
   CONTEXT_COMPACTION_VERSION,
   readContextCompaction,
@@ -57,11 +57,9 @@ const CARD_TEXT_CHARS = 200;
 const CARD_CHOICE_CHARS = 40;
 const CARD_CHOICES = 6;
 
-interface ReplayUnit {
+interface ReplayUnit extends ReplayMessage {
   id: string;
   pathIndex: number;
-  role: "user" | "assistant";
-  text: string;
   /** summarizer line prefix; a room line's text already names its speaker */
   label?: string;
   atomic?: boolean;
@@ -74,10 +72,7 @@ interface ReplayUnit {
   mailUpto?: number;
 }
 
-interface ModelContextMessage {
-  role: "user" | "assistant";
-  text: string;
-}
+type ModelContextMessage = ReplayMessage;
 
 interface TailSelection {
   old: ReplayUnit[];
@@ -94,7 +89,7 @@ export interface ApplicableCompaction {
 export type PreparedModelContext =
   | {
       status: "ready";
-      transcript: Array<{ role: "user" | "assistant"; text: string }>;
+      transcript: ReplayMessage[];
       budgetTokens: number;
       estimatedTokens: number;
       compacted: boolean;
@@ -580,14 +575,19 @@ function replayUnits(
       const body = transcriptText(message, messagesById, userName);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
-      return [{
+      const unit: ReplayUnit = {
         id: message.id,
         pathIndex,
         role: message.role === "user" ? "user" : "assistant",
         text: redactSecretsInText(includeSpeakers ? `${speaker}: ${text}` : text),
         label: message.role === "user" ? (includeSpeakers ? "User " : "User: ") : includeSpeakers ? "" : "Assistant: ",
-        ...(message.role === "user" ? { turn: true } : {}),
-      }];
+      };
+      if (message.role === "user") unit.turn = true;
+      if (message.role === "bot" && message.engine) {
+        unit.engine = message.engine;
+        if (includeSpeakers && message.from) unit.speaker = { botId: message.from.botId, name: message.from.name };
+      }
+      return [unit];
     }
     if (message.verify && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(message.text), label: "Assistant: ", card: true }];
@@ -655,6 +655,13 @@ function foldToolRuns(units: ReplayUnit[], includeSpeakers: boolean): ReplayUnit
   }
   flush();
   return folded;
+}
+
+function replayMessage({ role, text, engine, speaker }: ReplayUnit): ReplayMessage {
+  const message: ReplayMessage = { role, text };
+  if (engine) message.engine = engine;
+  if (speaker) message.speaker = speaker;
+  return message;
 }
 
 function compactionAt(
@@ -1078,7 +1085,7 @@ export function planCompaction(input: {
   );
   const currentTranscript = [
     ...(previous ? [summaryMessage(storedSummary, input.messages[previous.coveredIndex]!.at)] : []),
-    ...units.map(({ role, text }) => ({ role, text })),
+    ...units.map(replayMessage),
   ];
   const currentTokens = estimateContextTokens(currentTranscript);
   // Counting bot bubbles made compaction a function of the bot's chattiness;
@@ -1333,7 +1340,7 @@ export async function prepareModelContext(input: {
   }
 
   const record = compactionRecord(plan, summary);
-  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(({ role, text }) => ({ role, text }))];
+  const transcript = [summaryMessage(record.summary, coveredThrough.at), ...tail.map(replayMessage)];
   const estimatedTokens = estimateContextTokens(transcript);
   if (estimatedTokens > budgetTokens) {
     return failedContext("Context summarization could not fit the selected model window.", previous);
@@ -1381,7 +1388,7 @@ export async function buildCompaction(input: {
   if (segment.status === "too-large") return { status: "failed", result: "error" };
   if (segment.status === "error") return { status: "failed", result: segment.result };
   const record = compactionRecord(plan, segment.summary);
-  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(({ role, text }) => ({ role, text }))];
+  const transcript = [summaryMessage(record.summary, plan.coveredThrough.at), ...plan.tail.map(replayMessage)];
   if (estimateContextTokens(transcript) > plan.budgetTokens) return { status: "failed", result: "over-budget" };
   const validated = readContextCompaction({ value: record });
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };
