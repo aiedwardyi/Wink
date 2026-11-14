@@ -2,6 +2,31 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.264] - 2026-11-14
+
+### Added
+- Lagoon and Snow chat themes, each with Day and Night. The backdrop moves when you send and when a reply comes in, then rests.
+- The Map file viewer has an expand button that folds the tree away so the file fills the pane. Tap it again to get the tree back where you left it.
+- The Map's Git row reads as one straight line of named stops: Coding, Commit, Push, PR, Checks, Review and Merged.
+- Say it and hang up: tap Call and talk right away, and anything the call didn't answer goes to the bot as your message when you hang up.
+- Replies type live by default. A device where you picked Paragraphs keeps it.
+- A pinned question arrives as the full card, then shrinks to one row over the message box once the chat moves on. The row keeps the answer buttons.
+
+### Changed
+- Wink says "group" instead of "room" everywhere you see it, in English and Korean.
+- With two or more accounts on an engine, the status line names the account in use. Alt+T opens the Look strip from every picker.
+- Settings and phone setup buttons hover and move like the rest of the app.
+- Dragging a usage row no longer pushes the card into a scrollbar, and it slows into the ends instead of stopping dead.
+
+### Fixed
+- Codex bots keep write access when a chat continues, instead of asking for approval on every write.
+- Switching the model while a bot is replying sends your next message to the new model.
+- Voice calls read out only what you asked for, wait their turn, and ask a question once.
+- The Your PCs and Signed in here lists in Settings > Devices paint at once from the last answer.
+- The "Bots are working it out" strip hides when no bot is working.
+- Picking a style or look in the model picker closes the strip.
+- The Map tree fits small projects on a phone without overlapping boxes, and the clash list shows one row per file.
+
 ## [1.0.263] - 2026-11-14
 
 ### Added
