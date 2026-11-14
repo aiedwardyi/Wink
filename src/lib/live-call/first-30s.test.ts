@@ -38,6 +38,7 @@ function fakeAudio(): Audio {
     played: 0,
     playing: false,
     async capture(onFrame) { frame = onFrame; },
+    stopMic() {},
     async heal() { return true; },
     play() { this.played += 1; },
     flush() { this.flushed += 1; },

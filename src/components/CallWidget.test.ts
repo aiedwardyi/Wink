@@ -32,6 +32,7 @@ vi.mock("@/lib/live-call/audio", () => ({
     onIdle = () => {};
     onStart = () => {};
     async capture() {}
+    stopMic() {}
     play() {}
     flush() {}
     close() {}

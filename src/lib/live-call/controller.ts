@@ -9,6 +9,7 @@ import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
 import { asksAboutDone, asksForChange, asksForQuiet, callsVoice, claimOf } from "./guard";
 import { answersCard, GAP_MS } from "./manners";
+import { EarlyMic, OpenLines } from "./quick";
 
 export const MIC_BLOCKED = "Microphone blocked";
 export const MIC_MISSING = "Microphone missing";
@@ -35,6 +36,8 @@ export type CallState = {
 
 export type CallAudioPort = {
   capture(onFrame: (pcm: ArrayBuffer) => void): Promise<void>;
+  /** Mic off with the audio kept, so capture can run again. */
+  stopMic(): void;
   heal(): Promise<boolean>;
   play(pcm: Int16Array): void;
   flush(): void;
@@ -93,6 +96,9 @@ const RETRY_MS = 1_500;
 const STATUS_MS = 30_000;
 // Speech the voice never stirred at; counted only, since noise gets no answer either.
 const UNHEARD_MS = 8_000;
+// Speech this recent at hang-up may still be on its way back as words.
+const IN_FLIGHT_MS = 3_000;
+const HANG_UP_WAIT_MS = 1_000;
 const GREETING = "[Wink] The call just started. Busy? Nod to the job in a few words.";
 // What the bot wrote after these answers them, not the person.
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
@@ -236,6 +242,12 @@ export class LiveCall {
   private turnSent = false;
   private turnTtfa?: number;
   private status?: { told: string; at: number; next?: string; timer?: ReturnType<typeof setTimeout> };
+  private mic?: Promise<unknown>;
+  private early?: EarlyMic = new EarlyMic();
+  private open = new OpenLines();
+  private voiceAt = 0;
+  private draining?: LiveEngine;
+  private drained?: () => void;
 
   constructor(deps: Deps) {
     this.deps = deps;
@@ -282,31 +294,40 @@ export class LiveCall {
 
   async start() {
     this.set({ status: "starting", error: undefined });
+    // The mic opens on the tap, beside the token, so words said while the call connects are kept.
+    const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then(() => null, (error) => error ?? new Error("mic failed")));
     const session = await this.token(false);
-    if (!session) return;
-    try {
-      await this.deps.audio.capture((pcm) => {
-        this.frameAt = this.now();
-        this.micMisses = 0;
-        if (this.deps.audio.micLevel() > MIC_SILENT_RMS) {
-          this.soundAt = this.frameAt;
-          if (this.snapshot.micSilent) this.set({ micSilent: undefined });
-        }
-        if (!this.connected || this.snapshot.muted) return;
-        if (loud(pcm)) {
-          this.spokeAt = this.now();
-          this.loudAt ||= this.spokeAt;
-        }
-        this.engine?.sendAudio(pcm);
-      });
-    } catch (error) {
-      return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
+    if (!session) {
+      if (this.snapshot.status === "needsKey") {
+        this.mic = undefined;
+        void mic.then((error) => { if (!error && !this.mic && !this.ended) this.deps.audio.stopMic(); });
+      }
+      return;
     }
+    const error = await mic;
     if (this.ended) return;
+    if (error) return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
     this.frameAt = this.now();
     this.micTimer = setInterval(() => this.checkMic(), MIC_CHECK_MS);
     this.set({ startedAt: this.now() });
     this.connect(session);
+  }
+
+  private frame(pcm: ArrayBuffer) {
+    this.frameAt = this.now();
+    this.micMisses = 0;
+    if (this.deps.audio.micLevel() > MIC_SILENT_RMS) {
+      this.soundAt = this.frameAt;
+      if (this.snapshot.micSilent) this.set({ micSilent: undefined });
+    }
+    if ((!this.connected && !this.early) || this.snapshot.muted) return;
+    const speech = loud(pcm);
+    if (speech) {
+      this.spokeAt = this.voiceAt = this.now();
+      this.loudAt ||= this.spokeAt;
+    }
+    if (this.early) this.early.add(pcm, speech);
+    else this.engine?.sendAudio(pcm);
   }
 
   private async token(resume: boolean): Promise<LiveSession | null> {
@@ -338,6 +359,7 @@ export class LiveCall {
     const engine = this.deps.engine();
     this.engine = engine;
     const mine = () => this.engine === engine && !this.ended;
+    const draining = () => this.draining === engine;
     clearTimeout(this.readyTimer);
     this.readyTimer = setTimeout(() => { if (mine()) void this.reconnect(); }, READY_MS);
     const events: LiveEvents = {
@@ -351,7 +373,11 @@ export class LiveCall {
         this.reconnecting = 0;
         this.refresh();
         if (this.snapshot.status === "starting") this.set({ status: "listening" });
-        if (!resumed) this.held.unshift({ text: GREETING });
+        const early = this.early;
+        this.early = undefined;
+        for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
+        // Talking from the tap is a quick call: no greeting first, and none once he has spoken.
+        if (!resumed && !early?.spoke) this.held.unshift({ text: GREETING, valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
         this.release();
       },
       audio: (pcm) => {
@@ -360,6 +386,7 @@ export class LiveCall {
         if (!this.snapshot.hushed) this.deps.audio.play(pcm);
       },
       heard: (text) => {
+        if (draining()) return void (this.heardBuf += text);
         if (!mine()) return;
         this.stir();
         this.heardBuf += text;
@@ -409,6 +436,8 @@ export class LiveCall {
         if (this.cutHold === "answering") this.cutHold = undefined;
         if (spoke) {
           this.pause();
+          // A plain reply settles his lines; a promise, a refusal or an open offer leaves them for the hang-up.
+          if (this.replyTo && !this.pending && !this.req.nudged && !this.req.told && !this.req.failed) this.open.settle(this.replyTo);
           if (this.replyTo && !this.exchanged) {
             this.exchanged = true;
             this.offerCard();
@@ -468,6 +497,7 @@ export class LiveCall {
       usage: (total) => { this.stats.usage += total; },
       closed: (code, reason) => {
         if (this.stats.closeCodes.length < 32) this.stats.closeCodes.push(code);
+        if (draining()) return this.drained?.();
         if (this.engine !== engine || this.ended) return;
         if (QUOTA.test(reason)) return this.outOfVoice();
         this.connected = false;
@@ -646,7 +676,9 @@ export class LiveCall {
 
   private send(text: string, tag: { order: true } | { ask: true }, sendId = crypto.randomUUID()): Promise<string> {
     this.turnSent = true;
+    const upto = this.stats.userLines;
     const run = this.deliver(text, tag, sendId);
+    void run.then((result) => { if (reached(result)) this.open.settle(upto); });
     this.sends.add(run);
     void run.finally(() => this.sends.delete(run));
     return run;
@@ -751,6 +783,7 @@ export class LiveCall {
       card.armed = false;
       req.accounted = true;
       this.justAnswered = true;
+      this.open.settle(this.stats.userLines);
       const at = this.now();
       void this.send(`${card.prefix}${text}`, { ask: true }).then((result) => {
         if (reached(result)) {
@@ -769,9 +802,12 @@ export class LiveCall {
       return;
     }
     this.postLines([{ who: "user", text, at: this.now() }]);
+    // Talk while it was told to be quiet is not for it.
+    if (!this.snapshot.hushed) this.open.add(this.stats.userLines, text);
     if (!this.pending || !ended || this.snapshot.hushed) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;
+    if (consent) this.open.settle(this.stats.userLines);
     if (consent) void this.answer(consent === "yes", true);
   }
 
@@ -1107,34 +1143,57 @@ export class LiveCall {
     if (this.snapshot.status === "ended") return;
     if (this.snapshot.status !== "failed") {
       if (this.wasLive && !this.snapshot.muted) this.deps.audio.boop();
-      this.teardown();
+      this.teardown(true);
     }
     this.set({ status: "ended" });
   }
 
-  private teardown() {
+  private teardown(hangUp = false) {
     const engine = this.engine;
+    const live = this.connected;
     this.engine = null;
     this.connected = false;
-    // A yes said as the call hangs up still sends.
-    if (engine) {
-      this.flushHeard();
-      this.flushSaid(this.deps.audio.heardShare());
-    }
-    if (this.pending) {
-      clearTimeout(this.pending.timer);
-      this.stats.orders.dropped += 1;
-      this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at: this.now() }]);
-      this.pending = undefined;
-    }
+    const at = this.now();
+    const share = this.deps.audio.heardShare();
+    if (this.pending) clearTimeout(this.pending.timer);
     clearTimeout(this.status?.timer);
     clearTimeout(this.quietTimer);
     clearTimeout(this.settleTimer);
     clearTimeout(this.gap);
     clearInterval(this.micTimer);
     clearTimeout(this.readyTimer);
-    engine?.close();
     this.deps.audio.close();
+    const done = () => {
+      engine?.close();
+      void this.wrapUp(Boolean(engine), share, at, hangUp);
+    };
+    // His last words can still be on their way: the mic is off, the socket stays open for them a moment.
+    if (!hangUp || !engine || !live || this.snapshot.muted || !this.voiceAt || at - this.voiceAt > IN_FLIGHT_MS) return done();
+    this.draining = engine;
+    engine.audioPaused();
+    const timer = setTimeout(() => this.drained?.(), HANG_UP_WAIT_MS);
+    this.drained = () => {
+      clearTimeout(timer);
+      this.draining = this.drained = undefined;
+      done();
+    };
+  }
+
+  /** On hang-up, words nothing dealt with go to the bot as his message, so a quick call still gets its order done. */
+  private async wrapUp(heard: boolean, share: number, at: number, hangUp: boolean) {
+    // A yes said as the call hangs up still sends.
+    if (heard) {
+      this.flushHeard();
+      this.flushSaid(share);
+    }
+    if (hangUp) await Promise.all([...this.sends]);
+    const words = hangUp ? this.open.text() : "";
+    if (this.pending) {
+      this.stats.orders.dropped += 1;
+      if (!words) this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
+      this.pending = undefined;
+    }
+    if (words) void this.send(words, { order: true });
     if (!this.callId || this.snapshot.startedAt === undefined) return;
     const { ttfa, usage, ...counts } = this.stats;
     const body = {
@@ -1142,7 +1201,7 @@ export class LiveCall {
       stats: {
         ...counts,
         device: this.deps.device,
-        ms: this.now() - this.snapshot.startedAt,
+        ms: at - this.snapshot.startedAt,
         hangulShare: this.letters.all ? Math.round((this.letters.hangul / this.letters.all) * 100) / 100 : 0,
         ttfaMs: { p50: percentile(ttfa, 0.5), p90: percentile(ttfa, 0.9) },
         ackMs: { p50: percentile(this.ack, 0.5), p90: percentile(this.ack, 0.9) },

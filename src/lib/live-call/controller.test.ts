@@ -32,6 +32,7 @@ function fakeAudio(): CallAudioPort & { flushed: number; cues: string[] } {
     flushed: 0,
     playing: false,
     async capture() {},
+    stopMic() {},
     async heal() { return true; },
     play() {},
     flush() { this.flushed += 1; },
@@ -702,7 +703,8 @@ describe("LiveCall", () => {
     expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines"]);
     save();
     await flush();
-    expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines", "end"]);
+    // The question nobody answered goes to the bot after its line, before the end.
+    expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines", "messages", "end"]);
   });
 });
 
@@ -1659,6 +1661,8 @@ describe("VOICE-KNOWS: answers and stats", () => {
     engine().events.turnDone();
     await flush();
     call.end();
+    // Speech was this recent, so the hang-up holds the socket for late words until it closes.
+    engine().events.closed(1000, "");
     await flush();
     const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
     expect(stats.guard).toEqual({ nudges: 3, failLines: 0, promise: 1, cant: 1, unsure: 1 });
