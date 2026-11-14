@@ -5150,6 +5150,9 @@ button:disabled.bg-danger {
   .arrival-glow::before { animation: none; opacity: 0; }
 }
 
+/* A new question's row over the composer takes one quicker pulse. */
+[data-question-row].arrival-glow::before { animation-duration: 1.2s; }
+
 /* The phone menu sits flush with the chat title; pull its rings in so they never touch it. */
 [data-phone-menu].needs-you-glow::after,
 [data-phone-menu].arrival-glow::before {

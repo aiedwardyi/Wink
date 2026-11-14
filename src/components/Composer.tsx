@@ -60,7 +60,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { PendingQuestionPanel } from "./PendingQuestion";
+import { HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -84,7 +84,7 @@ import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
-import { pinnedQuestion } from "@/lib/open-question";
+import { openQuestionCount, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -257,6 +257,7 @@ export function Composer({
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval keeps its takeover and the pin waits behind it.
   const question = pinnedQuestion(group ? group.messages : (bot?.messages ?? []), threadMessages);
+  const questionCount = question ? openQuestionCount(group ? group.messages : (bot?.messages ?? [])) : 0;
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -1153,8 +1154,10 @@ export function Composer({
         )}
         {question && (
           <PendingQuestionPanel
+            key={question.id}
             message={question}
             askerName={questionAsker}
+            count={questionCount}
             onPick={(choice) => {
               if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
               else if (bot) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
@@ -1219,6 +1222,7 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
+          {question && <HiddenQuestionDot id={question.id} count={questionCount} />}
           <input
             ref={fileInput}
             disabled={sendBlocked}

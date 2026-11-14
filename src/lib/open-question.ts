@@ -3,7 +3,7 @@
 // Nothing extra is stored: the state is derived from the transcript, so the
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, scanQuestion, type AskState } from "../../shared/open-question";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
@@ -11,11 +11,13 @@ export { isAskUserCard, isSentByPerson };
 export interface NeedsYou {
   /** The chat's open ask_user card, if any. */
   question: Message | null;
+  /** How many ask_user cards still wait. */
+  questions: number;
   /** An approval or engine question card is still open. */
   request: boolean;
 }
 
-const NONE: NeedsYou = { question: null, request: false };
+const NONE: NeedsYou = { question: null, questions: 0, request: false };
 const cache = new WeakMap<readonly Message[], NeedsYou>();
 
 /** What in this chat is waiting on the person, memoized per message array. */
@@ -23,15 +25,25 @@ export function needsYou(messages: readonly Message[]): NeedsYou {
   if (!messages.length) return NONE;
   const cached = cache.get(messages);
   if (cached) return cached;
-  const question = scanQuestion(messages);
+  let question: Message | null = null;
+  let questions = 0;
+  for (const [card, status] of askStates(messages)) {
+    if (status.state !== "waiting") continue;
+    question = card;
+    questions += 1;
+  }
   const request = messages.some(isOpenRequest);
-  const result = question || request ? { question, request } : NONE;
+  const result = question || request ? { question, questions, request } : NONE;
   cache.set(messages, result);
   return result;
 }
 
 export function openQuestion(messages: readonly Message[]): Message | null {
   return needsYou(messages).question;
+}
+
+export function openQuestionCount(messages: readonly Message[]): number {
+  return needsYou(messages).questions;
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */
