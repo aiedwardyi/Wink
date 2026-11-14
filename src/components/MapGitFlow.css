@@ -1,7 +1,7 @@
 /* one row per worker: the same seven stops in the same places, joined by one straight line; --flow-ease and 480ms are SWING (lib/motion-character.ts) */
 .map-flow-rows { --flow-merged: light-dark(#7a45d3, #b48cff); --flow-open: var(--color-success); --flow-ink: var(--color-ink-secondary); --flow-off: color-mix(in srgb, var(--color-ink-secondary) 38%, transparent); --flow-ease: cubic-bezier(.25,.1,.25,1);
   position: relative; flex-shrink: 0; padding: 5px 12px 6px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
-.map-flow-list { display: grid; grid-template-columns: 8px minmax(40px, 76px) minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; max-height: 158px; overflow-y: auto; scrollbar-width: thin; }
+.map-flow-list { display: grid; grid-template-columns: 8px minmax(40px, 76px) minmax(min-content, 1fr) auto; column-gap: 8px; row-gap: 2px; max-height: 158px; overflow: hidden auto; scrollbar-width: thin; }
 .map-flow-row { position: relative; display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 36px; color: inherit; text-decoration: none; -webkit-touch-callout: none; }
 .map-flow-row > i { width: 8px; height: 8px; background: var(--flow-line); }
 .map-flow-row > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px var(--font-sans, sans-serif); letter-spacing: .02em; }
@@ -57,10 +57,15 @@
 .map-flow-tip p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/17px var(--font-sans, sans-serif); color: var(--color-ink); }
 .map-flow-tip p + p { color: var(--color-ink-secondary); }
 @media (hover: hover) { .map-flow-row:hover > b { color: var(--color-accent-text); } }
-/* narrow panes: the checks word takes the status color, the right side keeps the PR number and the conflict count */
-@container map-pane (max-width: 460px) {
+/* the row gives way from its far end: first the right side keeps only the PR number and the conflict count */
+@container map-pane (max-width: 690px) {
+  .map-flow-end > small, .map-flow-clash { font-size: 0; }
+  .map-flow-end > small::after, .map-flow-clash::after { content: attr(data-short); font-size: 10.5px; }
+}
+/* narrow panes: the checks word takes the status color */
+@container map-pane (max-width: 560px) {
   .map-flow-rows { padding-left: 10px; padding-right: 10px; }
-  .map-flow-list { grid-template-columns: 8px minmax(36px, 64px) minmax(0, 1fr) auto; column-gap: 6px; }
+  .map-flow-list { grid-template-columns: 8px minmax(36px, 64px) minmax(min-content, 1fr) auto; column-gap: 6px; }
   .map-flow-stops small, .map-flow-box > b { font-size: 9.5px; }
   .map-flow-stops > i { min-width: 2px; }
   .map-flow-stops small { min-width: 0; }
@@ -73,8 +78,7 @@
   .map-flow-box[data-state="bad"] > b { color: var(--color-danger); }
   .map-flow-box[data-state="ok"] > b { color: var(--flow-open); }
   .map-flow-end { gap: 5px; }
-  .map-flow-end > small, .map-flow-clash { font-size: 0; }
-  .map-flow-end > small::after, .map-flow-clash::after { content: attr(data-short); font-size: 10.5px; }
 }
-@container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(36px, 52px) minmax(0, 1fr) auto; } }
+@container map-pane (max-width: 380px) { .map-flow-list { grid-template-columns: 8px minmax(36px, 52px) minmax(min-content, 1fr) auto; } }
+@container map-pane (max-width: 372px) { .map-flow-clash { display: none; } }
 @media (prefers-reduced-motion: reduce) { .map-flow-stops, .map-flow-stops > i, .map-flow-stops > span::before, .map-flow-stops > span::after, .map-flow-stops > span > i, .map-flow-box i, .map-flow-tip { transition: none; animation: none; } }
