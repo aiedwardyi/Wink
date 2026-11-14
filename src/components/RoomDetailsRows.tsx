@@ -1,6 +1,6 @@
 // Room details' folder and who answers, the settings the setup page asked for, and a phone's way into find.
 import { useState } from "react";
-import { FolderOpen, Search } from "lucide-react";
+import { AtSign, FolderOpen, Search, Users } from "lucide-react";
 
 import { requestFind } from "@/lib/chat-find";
 import { cn } from "@/lib/cn";
@@ -12,6 +12,8 @@ import { api, useStore, type Bot, type Group, type GroupDefaultResponder } from 
 import { DETAILS_INPUT, DETAILS_ROW, DetailsLabel } from "./BotDetailsRows";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { ROW_BUTTON } from "./SettingsPrimitives";
+import { BotAvatar } from "./Avatar";
+import { AccountPicker } from "./UsageAccounts";
 
 /** The PATCH goes straight to the server: it checks the path, and a refused folder must not stick locally. */
 export function RoomFolderRow({ group }: { group: Group }) {
@@ -100,17 +102,16 @@ export function WhoAnswersRow({ group, bots }: { group: Group; bots: Bot[] }) {
     <div className={DETAILS_ROW}>
       <div className="flex items-center justify-between gap-3">
         <DetailsLabel label={t("room.whoAnswersTitle")} />
-        <select
-          data-who-answers
-          aria-label={t("room.whoAnswersTitle")}
-          value={responderValue(effectiveDefaultResponder(group, bots))}
-          onChange={(event) => dispatch({ type: "patchGroup", groupId: group.id, patch: { defaultResponder: pick(event.target.value) } })}
-          className="min-w-0 max-w-[60%] truncate rounded-lg bg-control px-2 py-1.5 text-[13px] text-ink"
-        >
-          <option value="everyone">{t("room.everyoneResponds")}</option>
-          {bots.map((bot) => <option key={bot.id} value={`member:${bot.id}`}>{bot.name}</option>)}
-          <option value="mentions">{t("room.onlyMentionedMembers")}</option>
-        </select>
+        <div data-who-answers className="min-w-0 max-w-[60%]">
+          <AccountPicker field label={t("room.whoAnswersTitle")}
+            viewedId={responderValue(effectiveDefaultResponder(group, bots))}
+            select={(value) => dispatch({ type: "patchGroup", groupId: group.id, patch: { defaultResponder: pick(value) } })}
+            accounts={[
+              { id: "everyone", name: t("room.everyoneResponds"), icon: <Users size={16} /> },
+              ...bots.map((bot) => ({ id: `member:${bot.id}`, name: bot.name, icon: <BotAvatar bot={bot} size={20} /> })),
+              { id: "mentions", name: t("room.onlyMentionedMembers"), icon: <AtSign size={16} /> },
+            ]} />
+        </div>
       </div>
       <p className="mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary">{groupResponseHint(group, bots, t)}</p>
     </div>

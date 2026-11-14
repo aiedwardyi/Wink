@@ -241,15 +241,14 @@ describe("Bots", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("[data-room-add-bot]")!.click());
     await act(async () => host.querySelector<HTMLButtonElement>("[data-manage-create-bot]")!.click());
     const name = host.querySelector<HTMLInputElement>('input[id^="group-wizard-name-"]')!;
-    const selects = [...host.querySelectorAll("select")];
     expect(host.querySelector(`label[for="${name.id}"]`)?.textContent).toBe(label);
     expect(name.placeholder).toBe(placeholder);
     await act(async () => {
       Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(name, "  research Desk v2 / Seoul HQ  ");
       name.dispatchEvent(new Event("input", { bubbles: true }));
-      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(selects[1], "codex-pro");
-      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${locale === "en" ? "Change model" : "모델 변경"}"]`)!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) button')].find((choice) => choice.textContent === "Codex Pro")!.click());
     const add = [...host.querySelectorAll("button")].find((each) => !each.hasAttribute("data-manage-create-bot") && !each.hasAttribute("data-room-add-bot") && (each.textContent?.includes("Add bot") || each.textContent?.includes("봇 추가")))!;
     await act(async () => add.click());
     await settle();
@@ -426,14 +425,13 @@ describe("room settings", () => {
   ] as const)("picks who answers from the Bots section in %s", async (locale, options) => {
     mock.state.bots = [bot("b1", "Kai"), bot("b2", "research Desk v2 / Seoul HQ")];
     await open({ group: kaiRay }, undefined, locale);
-    const pick = section("bots").querySelector<HTMLSelectElement>("select[data-who-answers]")!;
-    expect([...pick.options].map((option) => option.textContent)).toEqual(options);
-    expect(pick.value).toBe("everyone");
-    for (const [value, responder] of [["member:b2", { kind: "member", botId: "b2" }], ["mentions", { kind: "mentions" }]] as const) {
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!.call(pick, value);
-        pick.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+    const pick = section("bots").querySelector<HTMLButtonElement>("[data-who-answers] button")!;
+    expect(pick.textContent).toBe(options[0]);
+    for (const [index, responder] of [[2, { kind: "member", botId: "b2" }], [3, { kind: "mentions" }]] as const) {
+      await act(async () => pick.click());
+      const choices = [...document.querySelectorAll<HTMLButtonElement>('[role="menu"]:not([data-closing]) [role="menuitemradio"]')];
+      expect(choices.map((option) => option.textContent)).toEqual(options);
+      await act(async () => choices[index]!.click());
       expect(mock.dispatched).toContainEqual({ type: "patchGroup", groupId: "group-1", patch: { defaultResponder: responder } });
     }
   });
