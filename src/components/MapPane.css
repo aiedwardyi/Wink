@@ -8,6 +8,9 @@
 .map-menu button { display: block; width: 100%; padding: 8px 10px; border-radius: 6px; text-align: left; overflow-wrap: anywhere; }
 .map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
 .map-top { display: flex; flex-direction: column; gap: 8px; flex: 0 1 auto; min-height: 96px; max-height: 58%; overflow: auto; padding: 10px 12px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); scrollbar-width: thin; }
+.map-top, .map-pane > .map-flow-rows { transition: max-height var(--motion-moderate) var(--ease-standard), min-height var(--motion-moderate) var(--ease-standard), padding var(--motion-moderate) var(--ease-standard), border-width var(--motion-moderate) var(--ease-standard), visibility var(--motion-moderate); }
+.map-pane > .map-flow-rows { max-height: 100%; }
+.map-pane[data-expanded] > :is(.map-top, .map-flow-rows) { max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; visibility: hidden; }
 .map-where { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
 .map-where b { color: var(--color-ink); font-weight: 600; }
 .map-where span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -19,6 +22,7 @@
 .map-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10px var(--font-mono, monospace); color: var(--color-ink-secondary); }
 .map-path b { color: var(--color-ink); font-weight: 600; }
 .map-follow, .map-whole { display: flex; align-items: center; gap: 5px; flex-shrink: 0; height: 24px; padding: 3px 7px; border: 1px solid var(--color-hairline); border-radius: var(--radius-lg, 6px); font-size: 10px; white-space: nowrap; }
+.map-crumbs > .verify-watch-icon { width: 28px; height: 28px; }
 .map-follow[aria-pressed="false"] { border-color: var(--color-accent); color: var(--color-accent-text); }
 .map-follow[aria-pressed="false"] i { background: var(--color-hairline); }
 .map-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 9px; align-items: start; flex-shrink: 0; padding: 10px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); }
