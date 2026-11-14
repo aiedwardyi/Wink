@@ -178,7 +178,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
     const k = Math.min(2, Math.max(1, Math.round((window.devicePixelRatio || 1) / px * 4) / 4)), cw = Math.round(w * k), ch = Math.round(h * k);
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
-    if (k !== 1) ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.setTransform(k, 0, 0, k, 0, 0);
     ctx.imageSmoothingQuality = "high";
     const stored = show.frame();
     if (stored && bitmap.current?.jpeg !== stored.jpeg) {

@@ -8,20 +8,26 @@ export function startCast({ cdp, page, tile, started, frame }) {
   const timers = new Set();
   const { cssW, cssH, dpr } = VERIFY_GEOMETRY[tile], size = { maxWidth: cssW * dpr, maxHeight: cssH * dpr };
   const jpeg = image => {
-    const sized = image.resize({ width: size.maxWidth });
-    let bytes;
-    for (const quality of [80, 65, 50]) if ((bytes = sized.toJPEG(quality)).length <= FRAME_BYTES) break;
-    return bytes.toString("base64");
+    for (const width of [size.maxWidth, size.maxWidth / 2]) {
+      const sized = image.resize({ width });
+      for (const quality of [80, 65, 50]) {
+        const bytes = sized.toJPEG(quality);
+        if (bytes.length <= FRAME_BYTES) return bytes.toString("base64");
+      }
+    }
+    return null;
   };
   const emit = data => {
-    if (stopped || Date.now() - last < 250) return;
+    if (stopped || !data || Date.now() - last < 250) return;
     last = Date.now();
     frame({ tile, ms: Math.max(0, Date.now() - started), data });
   };
   const off = cdp.on("Page.screencastFrame", ({ data, sessionId }) => {
     if (stopped) return;
-    received = true;
-    try { emit(data); } catch {}
+    if (data.length <= FRAME_BYTES * 4 / 3) {
+      received = true;
+      try { emit(data); } catch {}
+    }
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (!stopped) void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
@@ -39,10 +45,10 @@ export function startCast({ cdp, page, tile, started, frame }) {
     },
     async shot() {
       if (stopped || !page.capturePage) return;
-      const image = await page.capturePage();
-      if (stopped) return;
+      const data = jpeg(await page.capturePage());
+      if (stopped || !data) return;
       last = Date.now();
-      frame({ tile, ms: Math.max(0, last - started), data: jpeg(image) });
+      frame({ tile, ms: Math.max(0, last - started), data });
     },
     stop() {
       stopped = true;
