@@ -288,6 +288,7 @@ describe("PhoneAccessSettings", () => {
     expect(remove).toHaveBeenCalledWith({ method: "DELETE" });
     expect(host.textContent).not.toContain("Pixel");
     expect(host.textContent).toContain("iPhone");
+    expect(JSON.parse(localStorage.getItem("omb-phone-relay")!).phones.map((phone: { name: string }) => phone.name)).toEqual(["iPhone"]);
     await act(async () => root.unmount());
   });
 
@@ -343,6 +344,47 @@ describe("This PC", () => {
     const { host, root } = await renderView();
     expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector("[data-relay-qr]")?.getAttribute("data-url")).toBe(`https://${HOST}/`);
+    await act(async () => root.unmount());
+  });
+
+  it("paints the last signed-in phones before the PC answers", async () => {
+    const pixel = { id: "p1", name: "Pixel", createdAt: Date.UTC(2026, 9, 1), lastSeenAt: Date.UTC(2026, 9, 6) };
+    localStorage.setItem("omb-phone-relay", JSON.stringify({ status: status(), phones: [pixel] }));
+    let answer = (_: unknown) => {};
+    serve({
+      "GET /api/phone-relay/status": () => new Promise(() => {}),
+      "GET /api/google-account": signedIn,
+      "GET /api/phone/devices": () => new Promise((resolve) => { answer = resolve; }),
+    });
+    const { host, root } = await renderView();
+    const list = () => [...host.querySelectorAll("[data-signed-in] [data-account-row]")];
+    expect(list().map((row) => row.querySelector("[data-device-name]")?.textContent)).toEqual(["Pixel"]);
+    const first = list()[0];
+    await act(async () => answer({ phones: [{ ...pixel, lastSeenAt: Date.UTC(2026, 9, 9) }] }));
+    expect(list()[0]).toBe(first);
+    expect(list()[0]?.textContent).toContain("Oct 9");
+    expect(JSON.parse(localStorage.getItem("omb-phone-relay")!).phones[0].lastSeenAt).toBe(Date.UTC(2026, 9, 9));
+    await act(async () => root.unmount());
+  });
+
+  it("holds a quiet row, not None, until the phones first answer", async () => {
+    localStorage.setItem("omb-phone-relay", JSON.stringify({ status: status() }));
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": signedIn, "GET /api/phone/devices": () => new Promise(() => {}) });
+    const { host, root } = await renderView();
+    const list = [...host.querySelectorAll("[data-signed-in] [data-account-row]")];
+    expect(list).toHaveLength(1);
+    expect(list[0]!.textContent!.trim()).toBe("");
+    expect(host.querySelector("[data-signed-in] .animate-pulse")).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("warms the signed-in phones with the relay state", async () => {
+    const pixel = { id: "p1", name: "Pixel", createdAt: Date.UTC(2026, 9, 1), lastSeenAt: Date.UTC(2026, 9, 6) };
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.includes("google") ? signedIn() : url.includes("phone/devices") ? { phones: [pixel] } : status())));
+    await warmRelay();
+    serve({ "GET /api/phone-relay/status": () => new Promise(() => {}), "GET /api/google-account": () => new Promise(() => {}), "GET /api/phone/devices": () => new Promise(() => {}) });
+    const { host, root } = await renderView();
+    expect(host.querySelector("[data-signed-in]")?.textContent).toContain("Pixel");
     await act(async () => root.unmount());
   });
 

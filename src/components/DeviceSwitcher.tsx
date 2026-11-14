@@ -26,9 +26,29 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
   device.laptop ? <Laptop size={size} className={cn("shrink-0", className)} /> : <Monitor size={size} className={cn("shrink-0", className)} />;
 
 const DEVICES_CHANGE = "orbit-devices-change";
+const SAVED = "omb-devices";
 
-export function useDevices(enabled: boolean, watching = false) {
-  const [devices, setDevices] = useState<DeviceItem[]>([]);
+function savedDevices(): DeviceItem[] | null {
+  try {
+    const body = JSON.parse(localStorage.getItem(SAVED) ?? "null");
+    return Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepDevices(devices: DeviceItem[]) {
+  try {
+    const text = JSON.stringify(devices);
+    if (localStorage.getItem(SAVED) !== text) localStorage.setItem(SAVED, text);
+  } catch {
+    /* The next open fetches again. */
+  }
+}
+
+/** `saved` starts from the last answer (null until one exists), so a list paints before the PC replies. Every caller's answer is saved, whatever `saved` says: the sidebar's boot fetch keeps it fresh. */
+export function useDevices(enabled: boolean, watching = false, saved = false) {
+  const [devices, setDevices] = useState<DeviceItem[] | null>(() => (saved ? savedDevices() : null));
   const live = useRef(true);
   const requested = useRef(0);
   const applied = useRef(0);
@@ -39,6 +59,7 @@ export function useDevices(enabled: boolean, watching = false) {
         .then((body: { devices: DeviceItem[] }) => {
           if (!live.current || request <= applied.current) return;
           applied.current = request;
+          keepDevices(body.devices ?? []);
           setDevices(body.devices ?? []);
         })
         .catch(() => {});
@@ -70,7 +91,7 @@ export function useDevices(enabled: boolean, watching = false) {
     return () => window.clearInterval(timer);
   }, [enabled, watching, load]);
 
-  return [devices, load] as const;
+  return [devices ?? [], load, devices !== null] as const;
 }
 
 type Navigate = (url: string) => void;
