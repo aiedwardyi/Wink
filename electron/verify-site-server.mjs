@@ -209,7 +209,8 @@ async function startLoopbackServer(root, site) {
         files.set(key, pending);
         pending.catch(err => { if (err.code !== "resource-limit" && files.get(key) === pending) files.delete(key); });
       }
-      const file = await files.get(key);
+      const pending = files.get(key), file = await pending;
+      if (file.status >= 500 && files.get(key) === pending) files.delete(key);
       reply(file.status, file.headers, file.bytes);
     };
     serve().catch(err => {
