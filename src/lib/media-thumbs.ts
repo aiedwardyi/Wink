@@ -145,6 +145,12 @@ function ready(src: string): string | undefined {
 }
 
 function want(src: string, clip: boolean, done: (url: string) => void): () => void {
+  // made while this one waited, so the pump would skip it
+  const now = ready(src);
+  if (now) {
+    done(now);
+    return () => {};
+  }
   if (clip) {
     clips.add(src);
     watchScroll();
@@ -163,9 +169,9 @@ function want(src: string, clip: boolean, done: (url: string) => void): () => vo
   };
 }
 
-/** Undefined while the preview is being made; a clip's preview is its first frame. */
-export function useThumb(src: string, clip = false): string | undefined {
+/** Undefined while the preview is being made or `wait`s; a clip's preview is its first frame. */
+export function useThumb(src: string, clip = false, wait = false): string | undefined {
   const [url, setUrl] = useState(() => ready(src));
-  useEffect(() => url === undefined ? want(src, clip, setUrl) : undefined, [src, clip, url]);
+  useEffect(() => url === undefined && !wait ? want(src, clip, setUrl) : undefined, [src, clip, url, wait]);
   return url;
 }
