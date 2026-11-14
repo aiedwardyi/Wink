@@ -15,7 +15,7 @@ export interface TreeIndex {
   size: number;
 }
 
-export type TreeFont = "root" | "dir" | "count" | "file";
+export type TreeFont = "root" | "dir" | "count" | "hidden" | "file";
 
 export interface TreeItem {
   id: string;
@@ -148,7 +148,8 @@ function build(index: TreeIndex, o: TreeOptions, crowded: boolean) {
 function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
   if (it.dir && it.kind !== "stack") {
     const label = it.kind === "root" ? it.dir.name : it.dir.name + "/";
-    it.bw = Math.ceil(o.measure(label, it.kind === "root" ? "root" : "dir") + o.measure(fmt(it.dir.total), "count") + 24);
+    // 28 is what .map-tree-box draws around the two: 9px padding and a 1px border each side, and an 8px gap.
+    it.bw = Math.ceil(o.measure(label, it.kind === "root" ? "root" : "dir") + o.measure(fmt(it.dir.total), "count") + 28);
     if (it.kind !== "col") { it.w = it.bw; it.h = BOX; return; }
     const [w, h] = measureStack(it, o, maxStack);
     it.w = Math.max(it.bw, w); it.h = BOX + SGAP + h;
@@ -164,7 +165,7 @@ function measure(it: TreeItem, o: TreeOptions, maxStack: number) {
 function measureStack(it: TreeItem, o: TreeOptions, maxStack: number): [number, number] {
   let w = 0;
   for (const file of it.files!) w = Math.max(w, o.measure(file.slice(file.lastIndexOf("/") + 1), "file") + (o.team?.marks.has(file) ? 26 : 0));
-  if (it.hidden) w = Math.max(w, o.measure(o.files(it.hidden), "count"));
+  if (it.hidden) w = Math.max(w, o.measure(o.files(it.hidden), "hidden"));
   if (it.squares) {
     w = Math.max(w, Math.min(it.squares.length, 10) * SQ - 2);
     const sw = Math.min(maxStack, Math.ceil(w + 36));
