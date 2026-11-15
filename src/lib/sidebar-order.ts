@@ -208,16 +208,17 @@ export type SidebarStartupGroup = {
   pinned?: boolean;
 };
 
-/** The id the sidebar renders first: chief tier, then pinned tier, then the
- * first regular item in section order. Mirrors Sidebar.tsx's render order. */
-export function preferredStartupSelectionId(
+/** Every listed chat in the order the sidebar renders it, before search or folded sections:
+ * chief tier, then pinned tier, then each section's regular items. Mirrors Sidebar.tsx. */
+export function sidebarOrderedItems(
   bots: readonly SidebarStartupBot[],
   groups: readonly SidebarStartupGroup[],
   order: SidebarOrder,
-): string {
+): { kind: SidebarItemKind; id: string }[] {
   const items = [
     ...listedGroups(groups).map((group) => ({
       key: sidebarItemKey("group", group.id),
+      kind: "group" as const,
       id: group.id,
       sectionId: sectionIdFor(group.section),
       priority: sidebarPriorityFor(group),
@@ -226,6 +227,7 @@ export function preferredStartupSelectionId(
       .filter((bot) => !bot.hidden)
       .map((bot) => ({
         key: sidebarItemKey("bot", bot.id),
+        kind: "bot" as const,
         id: bot.id,
         sectionId: sectionIdFor(bot.section),
         priority: sidebarPriorityFor(bot),
@@ -238,16 +240,23 @@ export function preferredStartupSelectionId(
   const normalized = normalizeSidebarOrder(order, sections, itemsBySection);
   const priorityByKey = Object.fromEntries(items.map((item) => [item.key, item.priority]));
   const partition = partitionSidebarItemKeys(normalized.sectionOrder, normalized.itemOrder, priorityByKey);
-  const orderedKeys = [
+  return [
     ...partition.chief,
     ...partition.pinned,
     ...normalized.sectionOrder.flatMap((id) => partition.regular[id] ?? []),
-  ];
-  for (const key of orderedKeys) {
-    const id = itemByKey.get(key)?.id;
-    if (id) return id;
-  }
-  return bots[0]?.id ?? "";
+  ].flatMap((key) => {
+    const item = itemByKey.get(key);
+    return item ? [{ kind: item.kind, id: item.id }] : [];
+  });
+}
+
+/** The id the sidebar renders first. */
+export function preferredStartupSelectionId(
+  bots: readonly SidebarStartupBot[],
+  groups: readonly SidebarStartupGroup[],
+  order: SidebarOrder,
+): string {
+  return sidebarOrderedItems(bots, groups, order)[0]?.id ?? bots[0]?.id ?? "";
 }
 
 export function sameSidebarOrder(a: SidebarOrder, b: SidebarOrder): boolean {

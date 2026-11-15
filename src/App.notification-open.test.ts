@@ -73,7 +73,7 @@ describe("desktop notification routing", () => {
 });
 
 describe("a tapped phone notification", () => {
-  it.each(["menu", "bot details", "pane", "settings", "new bot", "new group"])("lands on its chat with the %s open over it", async (cover) => {
+  it.each(["menu", "bot details", "pane", "settings", "new bot", "new group", "palette"])("lands on its chat with the %s open over it", async (cover) => {
     localStorage.setItem("omb-onboarding-done", "true");
     localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
       bots: ["b1", "b2"].map((id, at) => ({ id, threadId: `t${at + 1}`, name: id, messages: [], modelSelection: { instanceId: "inst", model: "m" } })),
@@ -94,7 +94,11 @@ describe("a tapped phone notification", () => {
       settings: store.state!.appSettingsOpen,
       newBot: store.state!.createBotOpen,
       newGroup: Boolean(document.querySelector("[role=dialog][aria-labelledby=group-wizard-title]")),
+      palette: Boolean(document.querySelector('[role=dialog][aria-label="Command palette"]')),
     });
+    const closed = new Set<string>();
+    const closing = (event: Event) => closed.add(event.type);
+    for (const type of ["orbit:close-model-picker", "orbit:close-message-menu"]) window.addEventListener(type, closing);
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     try {
@@ -105,6 +109,7 @@ describe("a tapped phone notification", () => {
         else if (cover === "pane") showItem({ threadId: "t1", path: "C:\w\a.png", kind: "image" });
         else if (cover === "settings") store.dispatch!({ type: "toggleAppSettings", open: true });
         else if (cover === "new bot") store.dispatch!({ type: "newBot" });
+        else if (cover === "palette") window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
       });
       if (cover === "new group") {
         await act(async () => document.querySelector<HTMLElement>('button[aria-label="New or share"]')!.click());
@@ -112,10 +117,13 @@ describe("a tapped phone notification", () => {
         expect(covers().newGroup).toBe(true);
       }
       await vi.waitFor(() => expect(Object.values(covers())).toContain(true));
+      closed.clear();
       await act(async () => worker.dispatchEvent(new MessageEvent("message", { data: { type: "orbit-open", url: "/?bot=b1&thread=t1" } })));
-      await vi.waitFor(() => expect(covers()).toEqual({ menu: false, details: false, pane: false, settings: false, newBot: false, newGroup: false }));
+      await vi.waitFor(() => expect(covers()).toEqual({ menu: false, details: false, pane: false, settings: false, newBot: false, newGroup: false, palette: false }));
       expect(store.state!.selectedId).toBe("b1");
+      expect([...closed].sort()).toEqual(["orbit:close-message-menu", "orbit:close-model-picker"]);
     } finally {
+      for (const type of ["orbit:close-model-picker", "orbit:close-message-menu"]) window.removeEventListener(type, closing);
       await act(async () => root.unmount());
       closeShow();
       host.remove();

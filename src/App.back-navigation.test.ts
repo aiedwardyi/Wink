@@ -107,3 +107,72 @@ describe("Back with the pane open on a phone", () => {
     }
   });
 });
+
+describe("Phone menu across a rotation", () => {
+  async function mountPhone() {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: ["b1", "b2"].map((id, at) => ({ id, threadId: `t${at + 1}`, name: id, messages: [], modelSelection: { instanceId: "inst", model: "m" } })),
+      groups: [],
+      selectedId: "b2",
+    }));
+    const media = { phone: true, flips: new Set<() => void>() };
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      get matches() { return query.includes("max-width") ? media.phone : query.includes("reduce"); },
+      media: query,
+      addEventListener: (_type: string, flip: () => void) => media.flips.add(flip),
+      removeEventListener: (_type: string, flip: () => void) => media.flips.delete(flip),
+    }) as unknown as MediaQueryList);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const entries: unknown[] = [];
+    vi.spyOn(window.history, "pushState").mockImplementation((state) => { entries.push(state); });
+    const go = vi.spyOn(window.history, "go").mockImplementation((delta = 0) => {
+      entries.splice(entries.length + delta);
+      queueMicrotask(() => window.dispatchEvent(new PopStateEvent("popstate", { state: entries.at(-1) ?? null })));
+    });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
+    const rotate = (phone: boolean) => act(async () => {
+      media.phone = phone;
+      [...media.flips].forEach((flip) => flip());
+    });
+    const openMenu = () => act(async () => host.querySelector<HTMLButtonElement>("[data-phone-menu]")!.click());
+    const unmount = async () => {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      localStorage.clear();
+      store.dispatch = null;
+    };
+    return { host, entries, go, rotate, openMenu, unmount };
+  }
+
+  it("drops the menu's Back entry when the wide layout hides the menu", async () => {
+    const view = await mountPhone();
+    try {
+      await view.openMenu();
+      expect(view.entries.at(-1)).toEqual({ orbitBack: "drawer", depth: 2 });
+      await view.rotate(false);
+      expect(view.go).toHaveBeenCalledWith(-1);
+      expect(view.entries).toEqual([{ orbitBack: "chat:b2", depth: 1 }]);
+      expect(view.host.querySelector("[data-phone-menu]")!.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("opens full width on a phone whatever fold the wide layout saved", async () => {
+    localStorage.setItem("openmausbot.sidebarCollapsed", "1");
+    const view = await mountPhone();
+    try {
+      await view.openMenu();
+      expect(view.host.querySelector("[data-phone-drawer] input")).not.toBeNull();
+    } finally {
+      await view.unmount();
+    }
+  });
+});

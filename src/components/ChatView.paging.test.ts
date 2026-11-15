@@ -1313,6 +1313,28 @@ describe("open window and jump pill", () => {
     expect(scroller.scrollTop).toBe(1000);
   });
 
+  it.each(["chat", "room"] as const)("keeps following a %s after a sideways swipe that springs back", async (view) => {
+    const thread = lettered("x", 30);
+    pagedServer("thread-x", [], view === "chat" ? { bots: [bot(thread, false)], groups: [] } : { bots: [], groups: [room(thread, false)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("x row 29;"));
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    const size = { client: 400, scroll: 1000 };
+    layout(scroller, size);
+    scroller.scrollTop = 600;
+    await act(async () => {
+      touch(scroller, "touchstart", 100);
+      touch(scroller, "touchmove", 106);
+      touch(scroller, "touchend", 106);
+    });
+    expect(pill(host)).toBeUndefined();
+
+    size.scroll = 1400;
+    await arrive(view === "chat" ? "thread-a" : "thread-g", { id: "x30", at: 1, role: "user", kind: "text", text: "x row 30;" });
+    await act(async () => vi.advanceTimersByTimeAsync(16));
+    expect(scroller.scrollTop).toBe(1400);
+  });
+
   const threadOf = (view: "chat" | "room") => (view === "chat" ? "thread-a" : "thread-g");
   const snapshotOf = (view: "chat" | "room", messages: Message[], hasMore: boolean) =>
     view === "chat" ? { bots: [bot(messages, hasMore)], groups: [] } : { bots: [], groups: [room(messages, hasMore)] };
