@@ -38,7 +38,7 @@ Keep one line per user-facing feature in `built.md` (project notes, else repo
   that action. Landing a verified result in step 9 is part of the job.
 - Name each verified, unlanded change (PR, branch, sha) in the task record. Before a
   release or calling a task done, list open PRs and unmerged branches; land each or record why it waits.
-- Say merged, released or in the app only once gh, the release list or the installed version shows it.
+- Say merged, deployed, released or in the app only once gh, the live site or user's build shows it.
 - Never stop a worker or others' processes unless the user names it.
 
 ## Standing rules
@@ -212,7 +212,6 @@ When a worker reports done, check its work yourself before anything moves:
    checkout is still clean on `<base>` and the app is not running,
    `git -C "<repo>" merge --squash <branch>` leaves the changes there
    uncommitted, as if you had made them. Otherwise ask the user first.
-10. After a merge, deploy or release, check the live result yourself before you call it done.
 
 An in-place worker has no branch: instead of steps 1 and 2, compare the files it
 changed with the safety copy, or with `git diff` for files that were clean. Skip

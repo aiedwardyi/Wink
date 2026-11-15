@@ -312,6 +312,7 @@ import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
+import { createUnlandedWork } from "./unlanded.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -2859,6 +2860,16 @@ const projectNotesCheck = createProjectNotesCheck({
   },
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
+const unlandedWork = createUnlandedWork({
+  reports: (botId) => {
+    const bot = store.bot(botId);
+    return bot ? store.messagesFor(bot.threadId) : [];
+  },
+  repoDir: (botId) => store.bot(botId)?.cwd ?? store.bot(botId)?.lastProjectCwd,
+  version: process.env.OMB_APP_VERSION ?? "",
+});
+// one bot at a time, so a restart after an update has the list before the first typed turn
+void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id); })();
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -4177,6 +4188,7 @@ bus.subscribe((event: RuntimeEvent) => {
             memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
+            void unlandedWork.refresh(bot.id);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
@@ -5753,8 +5765,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const notesPath = opensHostFiles(privateWorkspace) ? bot.projectNotes : undefined;
         const notesNotice = notesPath ? projectNotesCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
         const memoryNotice = privateWorkspace ? memoryHealthCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
+        const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(bot.id) : "";
         const withLate = (base: string) =>
-          [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : [])].join("\n\n");
+          [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
         const system =
           persona +
           // The folder is already this turn's cwd, but nothing told the model

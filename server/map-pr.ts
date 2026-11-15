@@ -18,7 +18,7 @@ const viewSchema = z.object({
 });
 const threadsSchema = z.object({ data: z.object({ repository: z.object({ pullRequest: z.object({ reviewThreads: z.object({ nodes: z.array(z.object({ isResolved: z.boolean() })) }) }) }) }) });
 
-const ghRun: MapGh = (cwd, args) => new Promise((done, fail) => {
+export const ghRun: MapGh = (cwd, args) => new Promise((done, fail) => {
   execFile("gh", args, {
     cwd, windowsHide: true, timeout: 15_000, maxBuffer: 8 * 1024 * 1024,
     env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" },
