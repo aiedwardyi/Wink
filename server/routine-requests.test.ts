@@ -228,9 +228,9 @@ describe("RoutineRequestService", () => {
       service.propose({
         botId: "bot-a",
         threadId: "thread-a",
-        proposal: createProposal({ durationMinutes: 5 }),
+        proposal: createProposal({ durationMinutes: 0 }),
       }),
-    ).rejects.toThrow(/15 to 240/);
+    ).rejects.toThrow(/whole number of minutes/);
     await expect(
       service.propose({
         botId: "bot-a",
@@ -276,6 +276,19 @@ describe("RoutineRequestService", () => {
         proposal: createProposal({ instructions: secretAtLimit }),
       }),
     ).rejects.toThrow(/20,000 characters or fewer after credentials are removed/);
+  });
+
+  it("creates and updates routines with any whole-minute duration", async () => {
+    const { service, routines } = harness();
+    const confirm = async (proposal: RoutineProposalInput) => {
+      const card = await service.propose({ botId: "bot-a", threadId: "thread-a", proposal });
+      expect(service.resolve({ botId: "bot-a", threadId: "thread-a", requestId: card.requestId, behavior: "allow" }).state).toBe("applied");
+    };
+
+    await confirm(createProposal({ durationMinutes: 5 }));
+    expect(routines.listRoutines()[0]!.durationMinutes).toBe(5);
+    await confirm({ action: "update", routineId: routines.listRoutines()[0]!.id, changes: { durationMinutes: 600 } });
+    expect(routines.listRoutines()[0]!.durationMinutes).toBe(600);
   });
 
   it("refuses a cloud routine before creating a card when cloud execution is not ready", async () => {

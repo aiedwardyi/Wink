@@ -96,7 +96,7 @@ const storedDefinitionSchema = z.object({
   instructions: z.string().trim().min(1).max(20_000),
   schedule: storedScheduleSchema,
   runOn: z.enum(["maus", "cloud"]),
-  durationMinutes: z.number().int().min(15).max(240),
+  durationMinutes: z.number().int().positive(),
 }).strict();
 const storedChangesSchema = storedDefinitionSchema.partial().refine(
   (changes) => Object.values(changes).some((value) => value !== undefined),
@@ -254,8 +254,8 @@ function runOn(value: RoutineRequestRunOn | undefined): RoutineRequestRunOn {
 
 function duration(value: number | undefined): number {
   const normalized = value ?? 30;
-  if (!Number.isInteger(normalized) || normalized < 15 || normalized > 240) {
-    throw new RoutineRequestError("durationMinutes must be a whole number from 15 to 240");
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new RoutineRequestError("durationMinutes must be a whole number of minutes");
   }
   return normalized;
 }
