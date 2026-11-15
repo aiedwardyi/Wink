@@ -7,10 +7,11 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR } from "../config.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
-import { askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
+import { ASK_DENY_NOTE, askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
@@ -241,6 +242,84 @@ describe("a teammate's line in a shared bot group", () => {
   });
 });
 
+describe("a teammate's request under the host's setting for the bot", () => {
+  /** The `approval` and `readOnly` a room turn sends, run from the sendTurn call in index.ts. */
+  function turnAccess(authority: string | undefined, bot: { autoApprove: boolean }, lane = false) {
+    const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    let props: string[] = [];
+    const walk = (node: ts.Node) => {
+      const input = ts.isCallExpression(node) && node.expression.getText(index).endsWith(".sendTurn") ? node.arguments[0] : undefined;
+      if (input && ts.isObjectLiteralExpression(input)) props = input.properties.map((prop) => prop.getText(index)).filter((text) => /^approval:|readOnly/.test(text));
+      ts.forEachChild(node, walk);
+    };
+    walk(runner);
+    expect(props).toHaveLength(2);
+    return new Function("authority", "bot", "lane", `${js(`const access = { ${props.join(", ")} };`)}\nreturn access;`)(authority, bot, lane);
+  }
+
+  /** The request.opened fold of index.ts for a request on the room's thread, up to its first break. */
+  function openRequest(event: Record<string, unknown> = {}) {
+    let fold = undefined as ts.CaseClause | undefined;
+    const walk = (node: ts.Node) => {
+      if (ts.isCaseClause(node) && node.expression.getText(index) === '"request.opened"') fold = node;
+      ts.forEachChild(node, walk);
+    };
+    walk(index);
+    expect(fold).toBeDefined();
+    const respondToRequest = vi.fn(async () => "delivered");
+    const pushMessage = vi.fn();
+    const scope = {
+      event: { type: "request.opened", requestType: "permission", requestId: "r1", threadId: group.threadId, tool: "Bash", summary: "npm run build", ...event },
+      bot: undefined, group: store.group(group.id), speaker: { botId: wink }, store, teammateAskTurn, autoVerdict, ASK_DENY_NOTE, pushMessage,
+      isUnattended: () => false, botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, appendDecision: vi.fn(), DATA_DIR,
+    };
+    new Function(...Object.keys(scope), js(`switch (event.type) { ${fold!.getText(index)} }`))(...Object.values(scope));
+    return { respondToRequest, pushMessage };
+  }
+
+  const running = () => {
+    const { ask } = hostedSend(group, said(sora), "@Wink change config.json and run the build");
+    expect(startAsk(ask!.id)).toBe(true);
+    return ask!;
+  };
+
+  it("sends an Ask bot's turn read-only in Ask mode and an Auto bot's as it is set", () => {
+    expect(turnAccess("ask-1", { autoApprove: false })).toEqual({ approval: "ask", readOnly: true });
+    expect(turnAccess("ask-1", { autoApprove: true })).toEqual({ approval: "auto" });
+    expect(turnAccess(undefined, { autoApprove: false })).toEqual({ approval: "ask" });
+    expect(turnAccess(undefined, { autoApprove: true }, true)).toEqual({ approval: "auto", readOnly: true });
+  });
+
+  it("denies an Ask bot's step at once with no card, even one the host always allows", async () => {
+    store.patchBot(wink, { autoApprove: false, alwaysAllow: ["Bash:npm"] });
+    const own = openRequest();
+    await vi.waitFor(() => expect(own.respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
+    running();
+    for (const requestType of ["permission", "question"]) {
+      const { respondToRequest, pushMessage } = openRequest({ requestType });
+      expect(respondToRequest.mock.calls).toEqual([[group.threadId, "r1", { behavior: "deny", message: ASK_DENY_NOTE }]]);
+      expect(pushMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it("lets an Auto bot answer a teammate's step as it does the host's", async () => {
+    store.patchBot(wink, { autoApprove: true });
+    running();
+    const { respondToRequest } = openRequest();
+    await vi.waitFor(() => expect(respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
+  });
+
+  it("counts only a teammate's started request on that thread and bot", () => {
+    const live = (threadId = group.threadId, botId = wink) => teammateAskTurn(group.hosted.roomId, threadId, botId);
+    const { ask } = hostedSend(group, said(sora), "@Wink hi");
+    expect(live()).toBe(false);
+    expect(startAsk(ask!.id)).toBe(true);
+    expect([live(), live("other-thread"), live(group.threadId, "other-bot")]).toEqual([true, false, false]);
+    expect(settleAsk(ask!.id, true)).not.toBeNull();
+    expect(live()).toBe(false);
+  });
+});
+
 describe("the answer", () => {
   /** The real busy path: runGroupMemberTurn sees a working bot and parks the ask on its queue. */
   async function queuedBehindBusyBot(ask: RoomAsk): Promise<RoomDrain> {
@@ -298,6 +377,16 @@ describe("the answer", () => {
     publishTurnAnswer(store, group, group.threadId, store.bot(wink)!, since);
     expect(botEntries()).toEqual([expect.objectContaining({ author: { kind: "bot", id: wink, name: "Wink" }, text: "Hi Edward." })]);
     expect(botEntries()[0]!.replyToId).toBeUndefined();
+  });
+
+  it("keeps an ask's own end line out of the answer that follows it", async () => {
+    hostedSend(group, { kind: "host" }, "@Wink hi");
+    const since = store.messagesFor(group.threadId).length;
+    const { ask } = hostedSend(group, said(sora), "@Wink and me?");
+    await endAsk(ask!.id, "cancelled");
+    botRow("Hi Edward.");
+    publishTurnAnswer(store, group, group.threadId, store.bot(wink)!, since);
+    expect(botEntries().map((entry) => entry.text)).toEqual(["Cancelled.", "Hi Edward."]);
   });
 
   it("ends an ask whose turn showed nothing as failed, with its line", () => {

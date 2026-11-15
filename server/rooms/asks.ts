@@ -289,6 +289,15 @@ export function askAllowsRequest(id: string): boolean {
   return ask?.state === "running" && !askInvalid(ask);
 }
 
+/** The deny for a card on a teammate's request: only the host could answer it. */
+export const ASK_DENY_NOTE =
+  "Wink: this step needs the host's approval, and a teammate's request can't wait for it. Skip it and say so in your reply.";
+
+/** A teammate's request is this bot's live turn on the thread. */
+export function teammateAskTurn(roomId: string, threadId: string, botId: string): boolean {
+  return roomAsks(roomId, ["running", "stopping"]).some((ask) => ask.asker.kind === "person" && ask.threadId === threadId && ask.botId === botId);
+}
+
 function writeEnd(ask: RoomAsk, text: string): void {
   if (peopleOnlyRoom(ask.roomId)) return;
   const { store } = need();

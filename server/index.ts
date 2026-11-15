@@ -55,7 +55,7 @@ import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
-import { askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -3702,6 +3702,8 @@ bus.subscribe((event: RuntimeEvent) => {
       const permission = event.requestType === "permission";
       // Auto mode answers permissions; questions still reach the human.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
+      // Only the host could answer a card on a teammate's request, and the room waits behind it.
+      const cardless = event.background || Boolean(group?.hosted && asker && teammateAskTurn(group.hosted.roomId, event.threadId, asker.id));
       if (permission && asker?.autoApprove && !event.requestId) {
         pushMessage({
           role: "bot",
@@ -3717,7 +3719,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // tee; SSE/broadcast (PR72) redacts the client copy. Masking first
       // hid `.aws/credentials` from sensitive-guard while the provider
       // still ran the raw command.
-      const verdict = permission && asker && event.requestId && (!event.background || asker.autoApprove)
+      const verdict = permission && asker && event.requestId && (!cardless || asker.autoApprove)
         ? autoVerdict(asker, event.tool, event.summary, { unattended, scope: event.approvalScope })
         : null;
       if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
@@ -3849,15 +3851,16 @@ bus.subscribe((event: RuntimeEvent) => {
         })();
         break;
       }
-      // The turn that started this work has ended, so a card would reach
-      // nobody: whatever Auto would not answer is denied now.
-      if (event.background) {
+      // The turn that started this work has ended, or a teammate asked for
+      // it, so a card would reach nobody who can answer: whatever Auto would
+      // not answer is denied now.
+      if (cardless) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : asker && botAccounts.instance(asker, event.threadId);
         if (instance && event.requestId) {
           void instance.adapter
-            .respondToRequest(event.threadId, event.requestId, { behavior: "deny", message: BACKGROUND_DENY_NOTE })
+            .respondToRequest(event.threadId, event.requestId, { behavior: "deny", message: event.background ? BACKGROUND_DENY_NOTE : ASK_DENY_NOTE })
             .catch(() => {});
         }
         break;
@@ -6906,9 +6909,9 @@ async function runClaimedGroupMemberTurn(
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
-        // A teammate's request never waits on the host's approval card.
-        approval: authority || bot.autoApprove ? "auto" : "ask",
-        ...(lane ? { readOnly: true as const } : {}),
+        // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
+        approval: bot.autoApprove ? "auto" : "ask",
+        ...(lane || (authority && !bot.autoApprove) ? { readOnly: true as const } : {}),
         attended: !isUnattended(bot.id),
         cwd,
         integrations,

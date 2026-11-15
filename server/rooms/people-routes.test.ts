@@ -10,7 +10,7 @@ import { PhoneAccess } from "../phone-access.ts";
 import { relayVerdict } from "../phone-auth.ts";
 import { isRelayRequest, markRelaySocket } from "../phone-relay/via.ts";
 import { Store } from "../store.ts";
-import type { HostedGroup } from "./asks.ts";
+import { closeAsksDb, type HostedGroup } from "./asks.ts";
 import { closeRoomsDb, createRoom, roomPeople } from "./db.ts";
 import { hostedRoomView } from "./guards.ts";
 import { configureRoomDoor, handleRoomDoor } from "./door.ts";
@@ -144,6 +144,7 @@ async function joined(group: HostedGroup, name: string): Promise<{ key: string; 
 
 const close = () => {
   configureRoomDoor(null);
+  closeAsksDb();
   closeInvitesDb();
   closeRoomsDb();
 };

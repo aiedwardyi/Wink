@@ -31,8 +31,9 @@ export function teammatesLine(group: { hosted?: { roomId: string } }): string {
   }
 }
 
+// a row already linked is a room line of its own, like an ask's "Cancelled."
 const shown = (message: Message, botId: string) =>
-  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && Boolean(message.text?.trim());
+  message.role === "bot" && message.kind === "text" && message.from?.botId === botId && !message.summarized && !message.queued && !message.quick && !message.comm && !message.roomEntryId && Boolean(message.text?.trim());
 
 /** A settled turn's shown words as one bot entry. Its thread row is linked by `roomEntryId`, never copied. */
 export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessage">, group: HostedGroup, threadId: string, bot: { id: string; name: string }, since: number, askId?: string): void {
