@@ -79,6 +79,11 @@ export function webPushTarget(search: string): NotificationTarget | null {
   return botId && threadId ? { botId, threadId } : null;
 }
 
+/** The blocker a tapped bot call rang about, from its `call=` param. */
+export function webPushCall(search: string): string | null {
+  return new URLSearchParams(search).get("call")?.trim() || null;
+}
+
 function base64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));

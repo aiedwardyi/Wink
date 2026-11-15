@@ -27,6 +27,7 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     open: async () => ({
       add: async (request) => cache.set(request.url, `cached ${request.url}`),
       match: async (url) => cache.get(url),
+      put: async (url, response) => void cache.set(url, response),
     }),
     match: async (url) => cache.get(url),
   };
@@ -52,9 +53,9 @@ async function install(listeners) {
   await done;
 }
 
-async function click(listeners, url) {
+async function click(listeners, url, extra = {}) {
   let done;
-  listeners.notificationclick({ notification: { data: { url }, close: () => {} }, waitUntil: (promise) => (done = promise) });
+  listeners.notificationclick({ notification: { data: { url, ...extra.data }, close: () => {} }, action: extra.action ?? "", waitUntil: (promise) => (done = promise) });
   await done;
 }
 
@@ -102,6 +103,60 @@ describe("service worker", () => {
     const { listeners, shown } = worker("home.tail1234.ts.net");
     await push(listeners, { title: "Scout finished", body: "done", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
     expect(shown[0].options.data).toEqual({ url: "/?bot=b1&thread=t1", chat: "g1", at: 7 });
+  });
+
+  it("shows a bot call as a ringing alert that waits for a tap", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    const call = { title: "📞 Scout is calling", body: "Sign in on Home.", tag: "wink-call:b1", url: "/?bot=b1&thread=t1&call=Sign+in+on+Home.", icon: "/i.png", chat: "b1", at: 7, call: "c1" };
+    await push(listeners, call);
+    expect(shown[0]).toEqual({
+      title: "📞 Scout is calling",
+      options: {
+        body: "Sign in on Home.",
+        tag: "wink-call:b1",
+        renotify: true,
+        requireInteraction: true,
+        vibrate: [1000, 500, 1000, 500, 1000, 500, 1000],
+        icon: "/i.png",
+        badge: "/app-icon-192.png?v=2",
+        actions: [{ action: "answer", title: "Answer" }, { action: "later", title: "Not now" }],
+        data: { url: call.url, chat: "b1", at: 7, call: "c1" },
+      },
+    });
+  });
+
+  it("keeps a plain alert plain", async () => {
+    const { listeners, shown } = worker("home.tail1234.ts.net");
+    await push(listeners, { title: "Scout has a question", body: "which branch?", tag: "openmausbot:b1", url: "/?bot=b1&thread=t1", icon: "/i.png", chat: "b1", at: 7 });
+    expect(shown[0].options).toEqual({
+      body: "which branch?",
+      tag: "openmausbot:b1",
+      renotify: true,
+      vibrate: [200, 100, 200],
+      icon: "/i.png",
+      badge: "/app-icon-192.png?v=2",
+      data: { url: "/?bot=b1&thread=t1", chat: "b1", at: 7 },
+    });
+  });
+
+  it("answers a call by opening its chat with the call param", async () => {
+    const { listeners, opened, now } = worker("home.tail1234.ts.net");
+    await click(listeners, "/?bot=b1&thread=t1&call=Sign+in", { action: "answer", data: { call: "c1" } });
+    await click(listeners, "/?bot=b1&thread=t1&call=Sign+in", { data: { call: "c2" } });
+    expect(opened).toEqual([
+      `https://home.tail1234.ts.net/?bot=b1&thread=t1&call=Sign+in&t0=${now}`,
+      `https://home.tail1234.ts.net/?bot=b1&thread=t1&call=Sign+in&t0=${now}`,
+    ]);
+  });
+
+  it("puts a call off without opening anything, and its later rings stay quiet", async () => {
+    const { listeners, opened, shown } = worker("home.tail1234.ts.net");
+    await click(listeners, "/?bot=b1&thread=t1&call=Sign+in", { action: "later", data: { call: "c1" } });
+    expect(opened).toEqual([]);
+    await push(listeners, { title: "📞 Scout is calling", body: "Sign in", tag: "wink-call:b1", url: "/?bot=b1&thread=t1&call=Sign+in", call: "c1" });
+    expect(shown[0].options).toMatchObject({ silent: true, renotify: false });
+    expect(shown[0].options.requireInteraction).toBeUndefined();
+    expect(shown[0].options.actions).toBeUndefined();
   });
 
   it("adds the tap time to the url when it opens a window", async () => {

@@ -3,9 +3,10 @@ import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
 import { trackScreen } from "../usage-stats";
+import { callAudio } from "./warm-audio";
 
-/** `bot` is the bot as it was when called, for a store that has not listed it yet. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext };
+/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about. */
+export type ActiveCall = { id: number; botId: string; bot: Bot; ctx: AudioContext; opener?: string };
 
 let calls = 0;
 let call: ActiveCall | null = null;
@@ -27,12 +28,21 @@ export function callsSupported(): boolean {
   return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
-export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, ctx };
+export function placeCall(bot: Bot, ctx: AudioContext, opener?: string): ActiveCall {
+  call = { id: ++calls, botId: bot.id, bot, ctx, opener };
   trackScreen("live-call");
   note = null;
   notify();
   return call;
+}
+
+/** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
+export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
+  if (!bot || !opener || call || !callsSupported()) return null;
+  const ctx = callAudio();
+  if (ctx.state === "suspended") addEventListener("pointerdown", () => void ctx.resume(), { once: true });
+  void ctx.resume();
+  return placeCall(bot, ctx, opener);
 }
 
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */

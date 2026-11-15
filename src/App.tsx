@@ -47,7 +47,8 @@ import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
-import { webPushSupported, webPushTarget } from "@/lib/web-push";
+import { answerCall } from "@/lib/live-call/active";
+import { webPushCall, webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
@@ -462,6 +463,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
 
   // A tapped push notification: its /?bot=&thread= url on a cold open, or a worker message when already open.
   const pushOpenTarget = useRef(webPushTarget(window.location.search));
+  const pushOpenCall = useRef(webPushCall(window.location.search));
   const hydratedBots = state.bots.length > 0;
   useEffect(() => {
     const target = pushOpenTarget.current;
@@ -469,6 +471,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     pushOpenTarget.current = null;
     window.history.replaceState(window.history.state, "", window.location.pathname);
     openNotificationTarget(dispatch, target, latestState.current, true);
+    answerCall(latestState.current.bots.find((candidate) => candidate.id === target.botId), pushOpenCall.current);
   }, [dispatch, hydratedBots]);
   useEffect(() => {
     const worker = window.ogb ? undefined : navigator.serviceWorker;
@@ -484,6 +487,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       setTerminalViews((views) => ({ ...views, [target.botId]: false }));
       startWarmOpenTiming(Number(event.data.t0), target.threadId);
       openNotificationTarget(dispatch, target, latestState.current);
+      answerCall(latestState.current.bots.find((candidate) => candidate.id === target.botId), webPushCall(new URL(event.data.url, window.location.origin).search));
     };
     worker.addEventListener("message", onMessage);
     return () => worker.removeEventListener("message", onMessage);
