@@ -4,7 +4,6 @@ export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "de
 export const ASK_STALE_MS = 6 * 60 * 60 * 1000;
 export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40 } as const;
 const BRIEF_ASKS = 5;
-const QUESTIONS_KEPT = 10;
 
 export const TASK_ASKS_PROMPT =
   "Add each ask the user makes to update_task_state asks in the same turn, and close it as done or declined as soon as it settles; never drop one. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them.";
@@ -91,8 +90,6 @@ export function addQuestionAsk(existing: readonly TaskAsk[] | undefined, questio
   const ask = clip(question, ASK_LIMITS.ask);
   const asks = (existing ?? []).map((item) => ({ ...item }));
   if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) return null;
-  const questions = asks.filter((item) => isQuestion(item) && isOpenAsk(item));
-  if (questions.length >= QUESTIONS_KEPT) asks.splice(asks.indexOf(questions[0]!), 1);
   const listed = clip(choices.join(" / "), ASK_LIMITS.ref);
   const id = `A${Math.max(0, ...asks.map((item) => Number(item.id.slice(1)))) + 1}`;
   asks.push({ id, ask, status: "open", kind: "question", ...(listed ? { choices: listed } : {}), at: now, changedAt: now });

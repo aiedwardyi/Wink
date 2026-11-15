@@ -165,9 +165,9 @@ describe("task asks", () => {
       expect(addQuestionAsk(open, "One more?", [], NOW)?.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
     });
 
-    it("caps open questions apart, so they never block the bot's own asks", () => {
+    it("keeps every open question, so they never block the bot's own asks", () => {
       const questions = Array.from({ length: 10 }, (_, index) => question(index + 1));
-      expect(addQuestionAsk(questions, "One more?", [], NOW)?.map((item) => item.id)).toEqual([...Array.from({ length: 9 }, (_, index) => `A${index + 2}`), "A11"]);
+      expect(addQuestionAsk(questions, "One more?", [], NOW)?.map((item) => item.id)).toEqual(Array.from({ length: 11 }, (_, index) => `A${index + 1}`));
       const full = [...questions, ...Array.from({ length: 30 }, (_, index) => ask(index + 11))];
       const { asks } = saved(mergeTaskAsks(full, [{ ask: "One more", status: "open" }], NOW));
       expect(asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
