@@ -155,11 +155,10 @@ function create(api: SceneApi) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
 
-  // The water is soft, so one buffer px per css px upsamples cleanly.
+  // The water is soft, so one buffer px per css px upsamples cleanly. Layout size: a theme tile shrinks its layer with a transform.
   const resize = () => {
-    const r = api.layer.getBoundingClientRect();
-    width = Math.max(1, Math.round(r.width));
-    height = Math.max(1, Math.round(r.height));
+    width = Math.max(1, api.layer.clientWidth);
+    height = Math.max(1, api.layer.clientHeight);
     canvas.width = width;
     canvas.height = height;
     render();
@@ -189,7 +188,8 @@ function create(api: SceneApi) {
       for (const x of ripples) x.age += k;
       ripples = ripples.filter((x) => x.age < RIPPLE_LIFE);
       render();
-      return flow > 0 || ripples.length > 0;
+      // flowTarget too: a first frame with no time passed has not moved flow off 0 yet.
+      return flowTarget > 0 || flow > 0 || ripples.length > 0;
     },
     event(event) {
       if (!ready) return;
@@ -200,6 +200,11 @@ function create(api: SceneApi) {
       }
       if (event.name === "motion") return render();
       if (api.reduced()) return;
+      if (event.name === "loop") {
+        flowTarget = 1;
+        flowUntil = -1;
+        api.wake();
+      }
       if (event.name === "send") {
         const r = api.rectIn(event.at);
         ripple(r.cx, r.y + 6, 1);

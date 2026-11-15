@@ -2,6 +2,89 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.268] - 2026-11-15
+
+### Changed
+- Wink with lots of chat history opens to typing about twice as fast by reading only each chat's newest messages at launch.
+
+### Fixed
+- After a restart, workers resuming together wait for memory instead of some giving up.
+- The chat box ring in Settings > Themes reaches the bar's right edge.
+
+## [1.0.267] - 2026-11-15
+
+### Changed
+- Muse bots answer sooner on a busy PC by keeping their engine ready between messages.
+- Muse turns report their token counts.
+
+### Fixed
+- Live Verify document replays glide down without jumping back up.
+- On a phone, a long question keeps three lines above its choices when there is room.
+- A worker with no pull request keeps its Git row summary in the Map.
+- A bot that never switched models no longer gets model tags in voice and cloud context.
+- Checking the Muse version no longer flashes a terminal window.
+
+## [1.0.266] - 2026-11-15
+
+### Changed
+- A file named mid-sentence is a plain underlined link, and a picture it links to appears under the reply. Click either to open it on the right.
+- New pictures open the side pane only when clicked. Pages and PDFs still open it automatically.
+- Gemini replies appear as they are written.
+- Codex bots stay warm between turns so their first words arrive sooner.
+- Grok bots run Wink's own tools without a permission wait, and a rule you remove from your Grok config stays removed.
+- The Model Index includes Gemini 4 Hydrogen and Carbon.
+
+### Fixed
+- Long questions keep their answer choices in sight.
+- The Map's Git row no longer overlaps the PR summary.
+- Hovering a Map folder's number explains how many files it counts.
+- What's New appears below messages synced from another PC.
+- The other-PC window explains connection failures instead of going black.
+- After a model switch, a bot credits earlier work to the model that wrote it.
+- A picture the bot already showed is not drawn a second time.
+- A bot's 1:1 chat stays quiet while it works in a group.
+
+## [1.0.265] - 2026-11-14
+
+### Added
+- The model picker's Chart style has one finished look: lab colors on black, in dark and light, on desktop and phone. Every key and click works as before.
+
+### Changed
+- How many worker tabs a bot can open now depends on free memory, not a fixed 16. A bot on a PC with room to spare can open its 17th tab and well past it.
+- Up/Down and clicks glide the Map arrow to the file you picked instead of drawing a box around it. Follow hands the arrow back to the workers.
+
+### Fixed
+- Muse bots have Wink's tools again, in 1:1s and groups, so they can make and show pictures, react, ask and use panes.
+- Typing while Codex is replying keeps the text it already showed instead of wiping it and starting over.
+- In a group set to answer only when @mentioned, a line that mentions no one no longer holds the message box, and you can add or remove bots while the group is working.
+- The Map opens with all workers at once instead of rebuilding as each one loads.
+- Map folder boxes leave the same gap on both sides of their name and count.
+
+## [1.0.264] - 2026-11-14
+
+### Added
+- Lagoon and Snow chat themes, each with Day and Night. The backdrop moves when you send and when a reply comes in, then rests.
+- The Map file viewer has an expand button that folds the tree away so the file fills the pane. Tap it again to get the tree back where you left it.
+- The Map's Git row reads as one straight line of named stops: Coding, Commit, Push, PR, Checks, Review and Merged.
+- Say it and hang up: tap Call and talk right away, and anything the call didn't answer goes to the bot as your message when you hang up.
+- Replies type live by default. A device where you picked Paragraphs keeps it.
+- A pinned question arrives as the full card, then shrinks to one row over the message box once the chat moves on. The row keeps the answer buttons.
+
+### Changed
+- Wink says "group" instead of "room" everywhere you see it, in English and Korean.
+- With two or more accounts on an engine, the status line names the account in use. Alt+T opens the Look strip from every picker.
+- Settings and phone setup buttons hover and move like the rest of the app.
+- Dragging a usage row no longer pushes the card into a scrollbar, and it slows into the ends instead of stopping dead.
+
+### Fixed
+- Codex bots keep write access when a chat continues, instead of asking for approval on every write.
+- Switching the model while a bot is replying sends your next message to the new model.
+- Voice calls read out only what you asked for, wait their turn, and ask a question once.
+- The Your PCs and Signed in here lists in Settings > Devices paint at once from the last answer.
+- The "Bots are working it out" strip hides when no bot is working.
+- Picking a style or look in the model picker closes the strip.
+- The Map tree fits small projects on a phone without overlapping boxes, and the clash list shows one row per file.
+
 ## [1.0.263] - 2026-11-14
 
 ### Added

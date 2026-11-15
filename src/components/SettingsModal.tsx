@@ -534,7 +534,7 @@ export function SettingsModal({
         // hands the excess to the content pane, which is the only thing that scrolls.
         className={cn(
           "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
-          "h-[560px]",
+          phone && section === "account" ? "h-auto" : "h-[560px]",
         )}
       >
         {phone && (

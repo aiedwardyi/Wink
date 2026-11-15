@@ -133,7 +133,8 @@ describe("terminal proxy", () => {
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
-    expect(workerModelsText().length).toBeLessThan(960);
+    expect(description).toContain("Muse Ember = muse-ember-1.0");
+    expect(workerModelsText().length).toBeLessThan(1000);
     expect(description).toContain("Gemini: Gemini 4 Carbon = gemini-4-carbon-<effort>, Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 4 Hydrogen = gemini-4-hydrogen-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
@@ -222,7 +223,7 @@ describe("terminal proxy", () => {
 
   it("posts no launch note when the spawn fails, and a failed note never fails the spawn", async () => {
     const config = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1", harness: "http://127.0.0.1:2", commsToken: "comms" };
-    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Too many bot terminals (limit 16)" }), { status: 400 }));
+    const refused = vi.fn(async () => new Response(JSON.stringify({ error: "Too many bot terminals (limit 128)" }), { status: 400 }));
     expect((await callTool("terminal_spawn", refused, config, { label: "worker" })).isError).toBe(true);
     expect(refused).toHaveBeenCalledTimes(1);
     const harnessDown = vi.fn(async (url: string | URL | Request) => {
@@ -293,9 +294,10 @@ describe("terminal proxy", () => {
 
   it("keeps the launch recipes out of the spawn description and points at the playbook", () => {
     expect(TOOLS[2].description).toContain("To run a worker, call terminal_playbook first");
-    expect(TOOLS[2].description).toContain("Max 16 live panes per bot");
+    expect(TOOLS[2].description).toContain("Max 128 live panes per bot");
     expect(TOOLS[2].description).not.toContain("--dangerously-skip-permissions");
     expect(TOOLS[2].description).not.toContain(workerModelsText());
+    expect(TOOLS.map((tool) => tool.description).join("\n")).not.toContain("muse-ember-1.0");
     expect(TOOLS[2].description.length).toBeLessThan(500);
   });
 

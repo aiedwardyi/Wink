@@ -23,13 +23,13 @@ import {
 } from "../acp/muse.ts";
 import { createMspDriver } from "./runtime.ts";
 
-/** Live `model/list` on 1.2.1 advertises these four; the server default is
- * the contributor build. Kept static so boot never spawns for the catalog. */
+/** Static catalog keeps model discovery off the boot path. */
 export const MSP_MUSE_MODELS: ModelCatalog = {
   default: "muse-spark-1.3",
   options: [
     { id: "muse-spark-1.3", label: "Meta Muse 1.3" },
     { id: "muse-spark-1.3-contributor", label: "Meta Muse 1.3 Contributor" },
+    { id: "muse-ember-1.0", label: "Meta Muse Ember" },
     { id: "muse-spark-1.2", label: "Meta Muse 1.2" },
     { id: "muse-spark-1.2-contributor", label: "Meta Muse 1.2 Contributor" },
   ],
@@ -66,11 +66,13 @@ function parseMuseText(stdout: string): string {
   return text;
 }
 
-/** Muse's goal and verify judges re-read the chat after every turn. An unknown -c key refuses the run and `wsl` hands argv to a shell, so only native 1.4.15+ gets the switch. */
+/** From 1.4.15 Muse starts no session MCP server, Wink's tools included, in an untrusted workspace.
+ * Muse's goal and verify judges re-read the chat after every turn. An unknown -c key refuses the run and `wsl` hands argv to a shell, so only native 1.4.15+ gets the -c switch. */
 export function museServeArgs(version: string | null, wsl: boolean): string[] {
   const [major = 0, minor = 0, patch = 0] = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "")?.slice(1).map(Number) ?? [];
-  const hasRoster = major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 15)));
-  return hasRoster && !wsl ? ["-c", "run.reminder_roster.agents=[]"] : [];
+  const recent = major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 15)));
+  if (!recent) return [];
+  return wsl ? ["--trust-workspace"] : ["--trust-workspace", "-c", "run.reminder_roster.agents=[]"];
 }
 
 const MUSE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+-R[0-9]+(\.[0-9]+)?$/;

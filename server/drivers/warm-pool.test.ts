@@ -29,7 +29,7 @@ function fixture(options: Partial<WarmPoolOptions> = {}) {
         tick?.();
       }
     },
-    reserve(threadId: string, engine?: string, kind: "speculative" | "handshake" = "speculative") {
+    reserve(threadId: string, engine?: string, kind: "speculative" | "handshake" | "kept" = "speculative") {
       return pool.reserve(key(threadId, engine), "fp", captured, kind);
     },
   };
@@ -221,6 +221,34 @@ describe("warm pool", () => {
     expect(mid.child.close).not.toHaveBeenCalled();
     expect(small.child.close).not.toHaveBeenCalled();
     expect(reserve("t4", "antigravityAgent")).toBe("denied");
+  });
+
+  it("a host kept after its turn ignores the warm floor, keeps the caps, and goes under 1.5 GB free", () => {
+    const { pool, mem, reserve, pass } = fixture();
+    mem.free = 0.15 * mem.total - 1 * GiB;
+    expect(reserve("t1", "museAgent")).toBe("denied");
+    const first = ready(reserve("t1", "museAgent", "kept"));
+    const second = ready(reserve("t2", "museAgent", "kept"));
+    expect(reserve("t3", "museAgent", "kept")).toBe("denied");
+    pass(60_000);
+    expect(pool.stats().idle).toBe(2);
+    mem.free = 1 * GiB;
+    pass(60_000);
+    expect(first.child.close).toHaveBeenCalledTimes(1);
+    expect(second.child.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("a small PC drops a kept host while a turn runs", () => {
+    let live = false;
+    const small = fixture({ liveTurns: () => live });
+    small.mem.total = 6 * GiB;
+    small.mem.free = 3 * GiB;
+    const { child: made } = ready(small.reserve("t1", "museAgent", "kept"));
+    small.pass(60_000);
+    expect(made.close).not.toHaveBeenCalled();
+    live = true;
+    small.pass(60_000);
+    expect(made.close).toHaveBeenCalledTimes(1);
   });
 
   it("yieldToWorker closes idle and cancels pending without awaiting", () => {

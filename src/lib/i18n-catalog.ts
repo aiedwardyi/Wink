@@ -701,6 +701,8 @@ export const en = {
   "chrome.newContextName": "New section name",
   "chrome.waitingForYou": "Waiting for you…",
   "chrome.working": "Working…",
+  "chrome.workingIn": "Working in {name}",
+  "chrome.workingOn": "Working on {name}",
   "chrome.screenFrame": "Screen frame",
   "chrome.botWorking": "{name} is working…",
   "chrome.aBot": "A bot",
@@ -1379,6 +1381,7 @@ export const en = {
   "whatsNew.close": "Close what's new",
   "whatsNew.gotIt": "Got it",
   "whatsNew.showMe": "Show me",
+  "whatsNew.themeMoves": "{name} moves while your bot works. It costs 0 tokens.",
   "update.later": "Later",
   "update.download": "Download",
 
@@ -2526,6 +2529,8 @@ export const ko = {
   "chrome.newContextName": "새 분류 이름",
   "chrome.waitingForYou": "사용자 응답을 기다리는 중…",
   "chrome.working": "작업 중…",
+  "chrome.workingIn": "{name}에서 작업 중",
+  "chrome.workingOn": "{name} 루틴 실행 중",
   "chrome.screenFrame": "화면 프레임",
   "chrome.botWorking": "{name} 작업 중…",
   "chrome.aBot": "봇",
@@ -3204,6 +3209,7 @@ export const ko = {
   "whatsNew.close": "새 기능 닫기",
   "whatsNew.gotIt": "확인",
   "whatsNew.showMe": "바로 보기",
+  "whatsNew.themeMoves": "{name} 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요.",
   "update.later": "나중에",
   "update.download": "다운로드",
 

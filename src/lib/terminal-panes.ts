@@ -4,8 +4,8 @@ import { z } from "zod";
 import { api, type Action } from "@/state/store";
 
 export const PANE_COUNT_REFRESH_MS = 15_000;
-// electron BOT_PANE_TOTAL: 16 home panes plus 64 on other PCs.
-const BOT_PANES = 80;
+// electron BOT_PANE_TOTAL: 128 home panes plus 64 on other PCs.
+const BOT_PANES = 192;
 
 const payloadSchema = z.object({
   counts: z.record(z.string(), z.number().int().min(1).max(BOT_PANES)).optional(),

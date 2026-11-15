@@ -4,10 +4,15 @@ import { localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
+export type PaneKind = ShowKind | "text";
+
+/** What a click shows in the pane: the kinds that open on their own, and plain text. */
+export const paneKind = (path: string): PaneKind | null => showKind(path) ?? (/[^\\/]\.txt$/i.test(path) ? "text" : null);
+
 export interface ShowItem {
   threadId: string;
   path: string;
-  kind: ShowKind;
+  kind: PaneKind;
   /** a room file's own URL; a bot's file goes through linked-file */
   src?: string;
 }
@@ -107,6 +112,25 @@ export function useMapThread(): string | null {
 
 export const showableLinks = (text: string) => localLinks(text).filter((path) => showKind(path));
 
+/** Replies in a turn whose bot already put a picture in the chat, so their file links don't draw it again. */
+export function picturedReplies(messages: readonly Message[]): Set<string> {
+  const pictured = new Set<string>();
+  let shown = new Set<string>();
+  let replies: Message[] = [];
+  const close = () => {
+    for (const reply of replies) if (shown.has(reply.from?.botId ?? "")) pictured.add(reply.id);
+    shown = new Set();
+    replies = [];
+  };
+  for (const message of messages) {
+    if (message.role === "user") close();
+    else if (message.kind === "screen" && message.image) shown.add(message.from?.botId ?? "");
+    else if (message.kind === "text") replies.push(message);
+  }
+  close();
+  return pictured;
+}
+
 export interface AutoShow {
   threadId?: string;
   /** message ids already weighed; null until the chat's first messages arrive */
@@ -122,7 +146,7 @@ export interface AutoShowStep {
 
 const turnOf = (messages: readonly Message[]) => messages.findLast(message => message.role === "user")?.id ?? "";
 
-/** Which file opens on its own: the newest one a bot hands over in this chat while it is open, unless closed this turn. */
+/** Which file opens on its own: the newest page or PDF a bot hands over in this chat while it is open, unless closed this turn. Pictures open on a click. */
 export function autoShowStep(state: AutoShow, threadId: string, messages: readonly Message[], closed: boolean): AutoShowStep {
   if (state.threadId !== threadId) state = { threadId, seen: null };
   if (closed) state = { ...state, closedTurn: turnOf(messages) };
@@ -133,7 +157,7 @@ export function autoShowStep(state: AutoShow, threadId: string, messages: readon
   for (let i = messages.length - 1; i >= 0 && !state.seen.has(messages[i]!.id); i--) {
     const message = messages[i]!;
     seen.add(message.id);
-    if (!path && message.role === "bot" && message.kind === "text" && message.text) path = showableLinks(message.text).at(-1);
+    if (!path && message.role === "bot" && message.kind === "text" && message.text) path = showableLinks(message.text).findLast((link) => showKind(link) !== "image");
   }
   const next = { ...state, seen };
   return { state: next, item: path && state.closedTurn !== turnOf(messages) ? { threadId, path, kind: showKind(path)! } : null };

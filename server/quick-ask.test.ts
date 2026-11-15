@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { DATA_DIR } from "./config.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
@@ -466,6 +468,39 @@ describe("boot recovery", () => {
     drainSteeredMessages(store, run);
     expect(run.mock.calls.filter(([botId]) => botId === bot.id)).toEqual([[bot.id, bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]]]);
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
+  });
+
+  it("recovers an ask in an old, long thread after a restart, reading only that thread", () => {
+    const before = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = before.createBot({}, { seedMessages: false });
+    const quiet = before.createBot({}, { seedMessages: false });
+    const old = before.appendMessage(bot.threadId, { role: "user", kind: "text", text: "which branch?", quick: { state: "asked" } });
+    before.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: old.id } });
+    const ask = before.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    for (let i = 0; i < 400; i++) {
+      before.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "Bash", ok: true, detail: { input: `step ${i}`, output: ["ok"] } } });
+      before.appendMessage(quiet.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: `line ${i}` });
+    }
+    const after = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const read = vi.spyOn(Store.prototype, "messagesFor");
+    const path = vi.spyOn(Store.prototype, "activePath");
+    recoverQuickAsks(after);
+    expect([...read.mock.calls, ...path.mock.calls].filter(([threadId]) => threadId === quiet.threadId)).toEqual([]);
+    expect(_queuedCount(bot.threadId)).toBe(1);
+    expect(after.messagesFor(bot.threadId).find((row) => row.id === ask.id)?.quick).toEqual({ state: "handoff" });
+    expect(after.messagesFor(bot.threadId).find((row) => row.id === old.id)?.quick).toEqual({ state: "asked" });
+  });
+
+  it("recovers an ask from a thread that is still a legacy file", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const legacy = [
+      { id: "m1", at: 1, role: "user", kind: "text", text: "build it" },
+      { id: "m2", at: 2, role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } },
+    ];
+    writeFileSync(join(DATA_DIR, `messages-${bot.threadId}.json`), JSON.stringify(legacy));
+    recoverQuickAsks(new Store(() => ({ instanceId: "claude", model: "opus" })));
+    expect(_queuedCount(bot.threadId)).toBe(1);
   });
 
   it("moves an orphaned ask to handoff", () => {

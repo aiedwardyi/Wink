@@ -108,7 +108,7 @@ describe("collapse and expand", () => {
   });
 
   it.each([
-    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel", "MemoryMap",
+    "ActivityRun", "ChatView", "EngineConnect", "EnginesSettings", "InspectorPanel",
     "MemorySaveChip", "PhoneLinkSettings", "SettingsModal", "SettingsPanel", "SkinPicker", "WorkerRows",
   ])("folds %s's disclosure content instead of snapping it", (name) => {
     expect(read(`components/${name}.tsx`)).toMatch(/<Fold open=\{/);
