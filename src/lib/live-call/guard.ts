@@ -159,13 +159,15 @@ export function misheard(text: string): boolean {
 
 const ASK_LEAD = /^(?:(?:so|and|sorry|okay|ok|just|but)[,\s]+)?(?:could|can|would|will|which|what|where|when|who|whose|how|do|does|did|are|is|was|should|shall)\b/i;
 const FILLER_WORDS = new Set("the and you your for with that this what which want mean kind could would should about have does did are was were can will just like some any one from into let check checking look looking find finding ask asking now right whether there here sure okay".split(" "));
-const contentWords = (text: string) => text.toLowerCase().match(/\p{L}{3,}/gu)?.filter((word) => !FILLER_WORDS.has(word)) ?? [];
+const contentWords = (text: string) => text.toLowerCase().match(/\p{L}{3,}|\p{N}+/gu)?.filter((word) => !FILLER_WORDS.has(word)) ?? [];
 const sameWord = (a: string, b: string) => a === b || (a.length >= 5 && b.length >= 5 && a.slice(0, 5) === b.slice(0, 5));
 /** Most of the line's words are in one of the others. */
 const covered = (line: string, others: readonly string[]) => {
   const words = contentWords(line);
   return words.length > 0 && others.some((other) => {
     const known = contentWords(other);
+    // "60 seconds" is not "30 seconds", however many other words match.
+    if (words.some((word) => /\p{N}/u.test(word) && !known.includes(word))) return false;
     const shared = words.filter((word) => known.some((was) => sameWord(word, was))).length;
     return shared >= Math.min(2, words.length) && shared / words.length >= 0.5;
   });

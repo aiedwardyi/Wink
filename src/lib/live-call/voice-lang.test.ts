@@ -487,3 +487,51 @@ describe("review threads", () => {
     expect(fixes(engine()).at(-1)).toMatch(/already asked/);
   });
 });
+
+describe("late review threads", () => {
+  it("a question with a new number is not a re-ask", () => {
+    expect(guard.reasks("Should the timeout be 60 seconds?", ["Should the timeout be 30 seconds?"], true)).toBe("no");
+    expect(guard.reasks("Should the timeout be 30 seconds?", ["Should the timeout be 30 seconds?"], true)).toBe("yes");
+  });
+
+  it("a numeric follow-up after his answer still plays", async () => {
+    const { audio, engine } = await live();
+    engine().events.heard("Raise the timeout.");
+    speak(engine(), "Should the timeout be 30 seconds?");
+    engine().events.heard("No, longer.");
+    const before = audio.played;
+    speak(engine(), "Should the timeout be 60 seconds?");
+    expect(audio.played).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).filter((text) => /already asked/.test(text))).toEqual([]);
+  });
+
+  it("an order he tapped yes on is what is being done, beside the ask", async () => {
+    const { call, engine, posts } = await live();
+    engine().events.heard("What version is installed? And restart the server.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "What version is installed?" } }]);
+    engine().events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Restart the server." } }]);
+    await flush();
+    engine().events.turnDone();
+    await call.answer(true);
+    expect(sentToBot(posts)).toEqual(["What version is installed?", "Restart the server."]);
+    speak(engine(), "I'm restarting the server now.");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).filter((text) => /being looked into/.test(text))).toEqual([]);
+  });
+
+  it("the offer's own words back through the speaker do not say yes to it", async () => {
+    const { audio, engine, posts } = await live({ device: "phone" });
+    engine().events.heard("Deploy the build.");
+    engine().events.answering();
+    engine().events.audio(pcm());
+    engine().events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Deploy the build." } }]);
+    engine().events.said("Would you like me to go for it?");
+    audio.playing = true;
+    engine().events.heard("Go for it.");
+    engine().events.turnDone();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sentToBot(posts)).toEqual([]);
+  });
+});

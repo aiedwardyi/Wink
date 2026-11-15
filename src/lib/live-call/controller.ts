@@ -754,12 +754,15 @@ export class LiveCall {
     const key = orderKey(pending.order);
     this.sent.add(key);
     const req = this.req;
+    // A tapped yes keeps the request, so "restarting it now" is backed by the order as well as its asks.
+    req.asked.push(pending.order);
     const said = this.stats.voiceLines;
     const result = await this.send(pending.order, { order: true });
     if (!reached(result)) {
       this.sent.delete(key);
       this.stats.orders.failed += 1;
       pending.req.accounted = req.accounted = false;
+      req.asked = req.asked.filter((asked) => asked !== pending.order);
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
     this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined);
