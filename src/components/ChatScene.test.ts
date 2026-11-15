@@ -24,6 +24,10 @@ const { seen, fake, offerThemeRow, scenePlayed } = vi.hoisted(() => {
 vi.mock("@/scenes/lagoon", () => ({ default: fake }));
 vi.mock("@/scenes/snow", () => ({ default: fake }));
 vi.mock("@/scenes/neon-grid", () => ({ default: fake }));
+vi.mock("@/scenes/samurai-ink", () => ({ default: fake }));
+vi.mock("@/scenes/night-rain", () => ({ default: fake }));
+vi.mock("@/scenes/warp", () => ({ default: fake }));
+vi.mock("@/scenes/circuit", () => ({ default: fake }));
 vi.mock("./WhatsNew", () => ({ offerThemeRow, scenePlayed }));
 
 const { ChatScene, sceneOf } = await import("./ChatScene");
@@ -97,6 +101,18 @@ describe("chat scene on a theme pick", () => {
     await render({ skin: "neon-grid", working: true });
     expect(names()).toEqual(["reply", "busy"]);
     await render({ skin: "neon-grid" });
+    expect(names()).toEqual(["reply", "busy", "reply"]);
+  });
+
+  it.each(["samurai-ink", "night-rain", "warp", "circuit"] as const)("plays %s's reply burst once and offers its row; a turn rolls it as busy", async (skin) => {
+    expect(sceneOf(skin)).toBe(skin);
+    await pick(skin);
+    expect(names()).toEqual(["reply"]);
+    expect(offerThemeRow.mock.calls).toEqual([[skin]]);
+    expect(scenePlayed.mock.calls).toEqual([[skin]]);
+    await render({ skin, working: true });
+    expect(names()).toEqual(["reply", "busy"]);
+    await render({ skin });
     expect(names()).toEqual(["reply", "busy", "reply"]);
   });
 

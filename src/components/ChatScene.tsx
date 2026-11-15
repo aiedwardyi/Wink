@@ -7,13 +7,18 @@ import { startScene, type SceneHost, type SceneModule } from "@/scenes/scene-hos
 import { offerThemeRow, scenePlayed } from "./WhatsNew";
 import "@/scenes/scenes.css";
 
-export type SceneId = "lagoon" | "snow" | "neon-grid";
+export type SceneId = "lagoon" | "snow" | "neon-grid" | "samurai-ink" | "night-rain" | "warp" | "circuit";
 
-const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow", "neon-grid": "neon-grid" };
+const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow", "neon-grid": "neon-grid",
+  "samurai-ink": "samurai-ink", "night-rain": "night-rain", warp: "warp", circuit: "circuit" };
 const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
   lagoon: () => import("@/scenes/lagoon"),
   snow: () => import("@/scenes/snow"),
   "neon-grid": () => import("@/scenes/neon-grid"),
+  "samurai-ink": () => import("@/scenes/samurai-ink"),
+  "night-rain": () => import("@/scenes/night-rain"),
+  warp: () => import("@/scenes/warp"),
+  circuit: () => import("@/scenes/circuit"),
 };
 const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 
