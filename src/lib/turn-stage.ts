@@ -4,6 +4,7 @@
 // signal the client already receives.
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { isVoiceLine, type CallTag } from "../../shared/live-call";
+import { isActiveRunStatus } from "../../shared/working-thread";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
@@ -82,6 +83,29 @@ export function hydrationTurnThread(
   if (bot.workingThreadId) return bot.workingThreadId;
   if (bot.id && groups.some((group) => group.busyBotId === bot.id)) return undefined;
   return bot.threadId;
+}
+
+/** Where a busy bot's turn runs when that is not its own open chat. */
+export function turnElsewhere(
+  bot: { id?: string; busy?: boolean; threadId: string; workingThreadId?: string | null },
+  groups: readonly { name: string; threadId: string; busyBotId?: string | null; tasks?: readonly { threadId: string }[] }[] = [],
+  runs: readonly { routineName: string; status: string; threadId?: string }[] = [],
+  joined: readonly { state: { roomName: string } | null; myBots?: readonly { botId: string; working?: boolean }[] }[] = [],
+): { kind: "room" | "routine"; name: string } | null {
+  if (!bot.busy) return null;
+  const thread = hydrationTurnThread(bot, groups);
+  if (thread === bot.threadId) return null;
+  const group = groups.find((candidate) =>
+    thread
+      ? candidate.threadId === thread || candidate.tasks?.some((task) => task.threadId === thread)
+      : candidate.busyBotId === bot.id,
+  );
+  if (group) return { kind: "room", name: group.name };
+  const run = runs.find((candidate) => candidate.threadId === thread && isActiveRunStatus(candidate.status));
+  if (run) return { kind: "routine", name: run.routineName };
+  // A joined room's turn runs in a hidden task, so only the room's own flag names it.
+  const room = joined.find((candidate) => candidate.myBots?.some((mine) => mine.botId === bot.id && mine.working));
+  return room?.state ? { kind: "room", name: room.state.roomName } : null;
 }
 
 /** Last visible message id as frames fold, including before React commits. */
