@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { pickerInstances } from "@/lib/cross-model-picker";
 import { createTeamRoom } from "@/lib/team-rooms";
 import { BotPickerList } from "./BotPickerList";
+import { AccountPicker } from "./UsageAccounts";
 import {
   WIZARD_BOT_NAME_LIMIT,
   groupCreatePayload,
@@ -271,27 +272,17 @@ export function NewBotRow({
 
       {pick ? (
         <div className="mt-1.5">
-          <select
-            aria-label={t("model.switchEngine")}
-            value={pick.instance.instanceId}
-            onChange={(e) => onPatch({ instanceId: e.target.value, model: null })}
-            className="w-full rounded-lg bg-raised/70 px-2 py-1.5 text-[13px] text-ink"
-          >
-            {engineOptions.map((i) => (
-              <option key={i.instanceId} value={i.instanceId}>{i.displayName}</option>
-            ))}
-          </select>
+          <AccountPicker field label={t("model.switchEngine")}
+            viewedId={pick.instance.instanceId}
+            select={(value) => onPatch({ instanceId: value, model: null })}
+            triggerClassName="bg-raised/70"
+            accounts={engineOptions.map((instance) => ({ id: instance.instanceId, name: instance.displayName }))} />
           <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-ink-secondary">
-            <select
-              aria-label={t("groupWizard.modelChange")}
-              value={model ?? ""}
-              onChange={(e) => onPatch({ model: e.target.value, instanceId: pick.instance.instanceId })}
-              className="min-w-0 flex-1 rounded-lg bg-raised/70 px-2 py-1.5 text-[13px] text-ink"
-            >
-              {wizardModelOptions(pick.instance).map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </select>
+            <AccountPicker field label={t("groupWizard.modelChange")}
+              viewedId={model ?? ""}
+              select={(value) => onPatch({ model: value, instanceId: pick.instance.instanceId })}
+              className="flex-1" triggerClassName="bg-raised/70"
+              accounts={wizardModelOptions(pick.instance).map((option) => ({ id: option.id, name: option.label }))} />
             <button
               onClick={submit}
               disabled={row.saving}

@@ -208,7 +208,7 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
           </Fragment>)}
         </span>
         <span className="map-flow-end">
-          <small data-tone={tone} data-short={pr ? `#${pr.number}` : ""}>{summary(flow, c)}</small>
+          <small data-tone={tone} data-short={pr ? `#${pr.number}` : undefined}>{summary(flow, c)}</small>
           {clash && <em className="map-flow-clash" data-short={`⚠ ${clash.paths.size}`} {...hover(`${item.id}:clash`, [c.also([...clash.who].join(", ")), ...clash.paths])}>{c.clash(clash.paths.size)}</em>}
         </span>
       </a>;

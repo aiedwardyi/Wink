@@ -3,6 +3,7 @@
 // Nothing extra is stored: the state is derived from the transcript, so the
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
+import { isShownMessage } from "./shown-message";
 import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
@@ -50,6 +51,16 @@ function isOpenApproval(message: Message): boolean {
  * where an approval waits; the question comes from the whole chat. */
 export function pinnedQuestion(messages: readonly Message[], visible: readonly Message[] = messages): Message | null {
   return visible.some(isOpenApproval) ? null : openQuestion(messages);
+}
+
+/** The chat moved on from `question`: the person sent a message after it (a queued line landing by itself is not one), or its asker replied. */
+export function chatMovedOn(messages: readonly Message[], question: Message): boolean {
+  const at = messages.indexOf(question);
+  const asker = question.from?.botId;
+  return at >= 0 && messages.slice(at + 1).some((message) =>
+    message.role === "bot"
+      ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
+      : isSentByPerson(message) && !message.queueId);
 }
 
 /** True when a sidebar row for this chat should glow. */

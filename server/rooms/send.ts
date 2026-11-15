@@ -4,7 +4,7 @@
 import { botChain, CHAIN_LINES, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { botLineResponder, roomResponder } from "../../shared/room-routing.ts";
 import type { Message } from "../store.ts";
-import { alertWhenUnread, roomLineText } from "./alerts.ts";
+import { alertWhenUnread, roomLineText, type RoomAlert } from "./alerts.ts";
 import { broadcastDoorStop } from "./door-streams.ts";
 import { committedRoomText, recentRoomEntries, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomPerson } from "./db.ts";
 import { ownRoomFiles } from "./files.ts";
@@ -22,6 +22,7 @@ const stopped = new Set<string>();
 /** This run's start: a handoff line from before it is no longer pending. */
 const BOOT = Date.now();
 const lapses: ChainLapses = new Map();
+const alerts = new Map<string, RoomAlert>();
 
 const groupBots = (group: HostedGroup) => group.memberIds.flatMap((id) => {
   const bot = roomAskDeps().store.bot(id);
@@ -82,7 +83,7 @@ function markPersonLine(group: HostedGroup, person: RoomPerson, entry: RoomEntry
   spend(group.hosted.roomId, person.id, "message");
   store.patchGroup(group.id, { unread: true });
   const line = { chat: group.id, threadId: group.threadId, room: group.name, name, text: roomLineText(entry.text, entry.files) };
-  if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert);
+  if (ping) alertWhenUnread(line, () => store.group(group.id)?.unread === true, alert, undefined, alerts);
 }
 
 /** Room Stop ends a bot chain here and on every joined PC. */

@@ -485,9 +485,9 @@ test("GET /v1/terminal/pane-counts returns worker counts for that grant only", a
 test("pane counts keep a bot with more than 8 workers, up to its home and remote total", () => {
   const labels = (n) => Array.from({ length: n }, (_, i) => `w${i}`);
   assert.equal(paneCountBody({ "bot-1": labels(9) }).counts["bot-1"], 9);
-  assert.equal(paneCountBody({ "bot-1": labels(80) }).counts["bot-1"], 80);
-  assert.deepEqual(paneCountBody({ "bot-1": labels(81) }), { counts: {}, panes: {} });
-  assert.equal(BOT_PANE_TOTAL, 80);
+  assert.equal(paneCountBody({ "bot-1": labels(192) }).counts["bot-1"], 192);
+  assert.deepEqual(paneCountBody({ "bot-1": labels(193) }), { counts: {}, panes: {} });
+  assert.equal(BOT_PANE_TOTAL, 192);
 });
 
 test("opens a pane only for the grant's own bot", async () => {
@@ -499,7 +499,7 @@ test("opens a pane only for the grant's own bot", async () => {
       sendBot: () => ({}),
       async openForBot(botId, input) {
         calls.push([botId, input]);
-        if (input.label === "full") throw new Error("Too many bot terminals (limit 16)");
+        if (input.label === "full") throw new Error("Too many bot terminals (limit 128)");
         return { sessionId: "p1", generation: 1 };
       },
     },

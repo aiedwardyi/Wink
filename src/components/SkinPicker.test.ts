@@ -5,7 +5,33 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, SKINS, applySkin, nextSkin, type SkinId } from "@/lib/skins";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
-import { SkinPicker } from "./SkinPicker";
+import type { SceneModule } from "@/scenes/scene-host";
+
+type Running = { skin: string; events: string[]; frames: number; stopped: boolean };
+const { running, broken, fakeScene } = vi.hoisted(() => {
+  const running: Running[] = [];
+  const broken = { on: false };
+  const fakeScene: SceneModule = {
+    pauseOnBlur: false,
+    create: (api) => {
+      const run: Running = { skin: api.skin(), events: [], frames: 0, stopped: false };
+      running.push(run);
+      return {
+        frame: () => ((run.frames += 1), true),
+        event: (event) => {
+          if (broken.on) throw new Error("no canvas");
+          run.events.push(event.name);
+          if (event.name === "loop") api.wake();
+        },
+        dispose: () => void (run.stopped = true),
+      };
+    },
+  };
+  return { running, broken, fakeScene };
+});
+vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("./ChatScene")>()), loadScene: async () => fakeScene }));
+
+const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
 const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
@@ -40,6 +66,9 @@ afterEach(async () => {
   document.body.replaceChildren();
   applySkin("precision");
   persistPreference("en");
+  running.length = 0;
+  broken.on = false;
+  document.documentElement.removeAttribute("data-orbit-idle");
   vi.unstubAllGlobals();
 });
 
@@ -163,6 +192,105 @@ describe("New tag", () => {
     await mount("dim-sand");
     await act(async () => applySkin("precision"));
     expect(taggedOld()).toEqual(["Bronze"]);
+  });
+});
+
+describe("New tag placement", () => {
+  it.each(["en", "ko"] as const)("keeps the tag on the name's line and lets a long name wrap inside its own box in %s", async (locale) => {
+    await mount("precision", locale);
+    const tags = [...document.querySelectorAll<HTMLElement>("[data-skin-new]")];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const tag of tags) {
+      const row = tag.parentElement!;
+      expect(row.className.split(" ")).not.toContain("flex-wrap");
+      expect(tag.className.split(" ")).toContain("shrink-0");
+      expect(row.firstElementChild!.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "break-words"]));
+    }
+  });
+});
+
+describe("Moving tiles", () => {
+  let frames: FrameRequestCallback[] = [];
+  const flush = (n = 1) => {
+    for (let i = 0; i < n; i++) {
+      const due = frames;
+      frames = [];
+      for (const run of due) run(performance.now());
+    }
+  };
+  const open = async (reduce = false) => {
+    frames = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => frames.push(run));
+    vi.stubGlobal("cancelAnimationFrame", () => (frames = []));
+    const media = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(media(query), "matches", { value: query.includes("reduce") && reduce }));
+    await mount("precision");
+  };
+  // One frame, then the timer queued behind it.
+  const painted = async () => {
+    flush();
+    await act(async () => { await new Promise((done) => setTimeout(done, 0)); });
+  };
+  afterEach(() => void vi.restoreAllMocks());
+
+  it("starts the tiles only after the picker has painted", async () => {
+    await open();
+    expect(running).toHaveLength(0);
+    await painted();
+    expect(running).toHaveLength(4);
+  });
+
+  it("starts nothing when the picker closes before its first paint", async () => {
+    await open();
+    await act(async () => root.unmount());
+    await painted();
+    expect(running).toHaveLength(0);
+  });
+
+  it("leaves the still tile when a scene cannot start", async () => {
+    broken.on = true;
+    await open();
+    await painted();
+    expect(running).toHaveLength(4);
+    expect(running.every((run) => run.stopped)).toBe(true);
+    expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(0);
+  });
+
+  it("keeps the Lagoon and Snow tiles moving while the picker is open, each in its own skin, and stops them when it closes", async () => {
+    await open();
+    await painted();
+    expect(running.map((run) => run.skin).sort()).toEqual(["lagoon", "lagoon-night", "snow", "snow-night"]);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(4);
+    for (const run of running) expect(run.events).toEqual(["loop"]);
+    flush(5);
+    for (const run of running) expect(run.frames).toBe(5);
+    await act(async () => root.unmount());
+    expect(running.every((run) => run.stopped)).toBe(true);
+    flush(5);
+    for (const run of running) expect(run.frames).toBe(5);
+  });
+
+  it.each(["hidden", "blur"])("rests every tile while the window is idle (%s)", async (idle) => {
+    await open();
+    await painted();
+    expect(running).toHaveLength(4);
+    flush(2);
+    document.documentElement.setAttribute("data-orbit-idle", idle);
+    await Promise.resolve();
+    flush(5);
+    for (const run of running) expect(run.frames).toBe(2);
+    document.documentElement.removeAttribute("data-orbit-idle");
+    await Promise.resolve();
+    flush(1);
+    for (const run of running) expect(run.frames).toBe(3);
+  });
+
+  it("leaves the still tiles alone under reduced motion", async () => {
+    await open(true);
+    await painted();
+    expect(running).toHaveLength(0);
+    flush(3);
+    expect(frames).toHaveLength(0);
   });
 });
 

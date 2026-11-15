@@ -1,6 +1,7 @@
 // A chat scene draws behind the transcript only on events (send, busy, reply)
-// and stops itself; the host owns the frame loop so no scene can run while the
-// window is hidden, or blurred for scenes that ask, or under reduced motion.
+// and stops itself; a theme tile asks it to loop. The host owns the frame loop
+// so no scene can run while the window is hidden, or blurred for scenes that
+// ask, or under reduced motion.
 import { reducedMotion } from "@/lib/phone-swipe";
 
 export type SceneRect = { x: number; y: number; w: number; h: number; cx: number; cy: number };
@@ -9,6 +10,7 @@ export type SceneEvent =
   | { name: "send"; at: Element }
   | { name: "busy" }
   | { name: "reply"; at?: Element }
+  | { name: "loop" }
   | { name: "skin" }
   | { name: "motion" };
 
@@ -35,7 +37,8 @@ export type SceneModule = { pauseOnBlur: boolean; create(api: SceneApi): Scene }
 
 export type SceneHost = { emit(event: SceneEvent): void; running(): boolean; stop(): void };
 
-export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLElement = document.documentElement): SceneHost {
+/** `look` carries the skin; a theme tile is its own, while rest always follows `root`. */
+export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLElement = document.documentElement, look: HTMLElement = root): SceneHost {
   let on = false;
   let want = false;
   let raf = 0;
@@ -78,9 +81,9 @@ export function startScene(layer: HTMLElement, module: SceneModule, root: HTMLEl
     wake,
     time: () => clock,
     reduced: () => reducedMotion(),
-    skin: () => root.dataset.skin ?? "",
+    skin: () => look.dataset.skin ?? "",
     dark() {
-      const m = getComputedStyle(root).getPropertyValue("--color-app").trim().match(/^#(..)(..)(..)/);
+      const m = getComputedStyle(look).getPropertyValue("--color-app").trim().match(/^#(..)(..)(..)/);
       return !m || 0.2126 * parseInt(m[1], 16) + 0.7152 * parseInt(m[2], 16) + 0.0722 * parseInt(m[3], 16) < 128;
     },
     rectIn(el) {

@@ -27,6 +27,11 @@ import { shareUserSetup } from "./account-shared-setup.ts";
 type AccountLaunchOptions = { account?: AccountContext; accountDriver?: string };
 type DirectStart = (launch: ResolvedSpawn, env: NodeJS.ProcessEnv) => (ResolvedSpawn & { env: NodeJS.ProcessEnv }) | null;
 
+// Without PATHEXT Windows PowerShell opens an .exe in a new console window instead of running it; Muse's launcher is a PowerShell script.
+function withPathExt(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.keys(env).some((key) => key.toUpperCase() === "PATHEXT" && env[key]) ? env : { ...env, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+}
+
 export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
   return resolveCliSpawn(cli, args);
 }
@@ -38,6 +43,7 @@ export function spawnCli(
 ): ChildProcessByStdio<Writable, Readable, Readable> {
   const resolved = resolveCli(cli, args);
   const { account, accountDriver, accountBaseHome, direct, ...options } = opts;
+  if (process.platform === "win32") options.env = withPathExt(options.env ?? process.env);
   if (account && accountBaseHome) shareUserSetup(accountDriver ?? "", account, accountBaseHome);
   const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env, Boolean(accountBaseHome));
   const start = (command: string, argv: string[], env?: NodeJS.ProcessEnv) => spawn(command, argv, {
@@ -125,7 +131,7 @@ export function execCli(
   const resolved = resolveCli(cli, args);
   const { account, accountDriver, ...options } = opts;
   // agy's --bg-updater gets its own console, which windowsHide can't reach.
-  if (process.platform === "win32") options.env = { ...(options.env ?? process.env), AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
+  if (process.platform === "win32") options.env = withPathExt({ ...(options.env ?? process.env), AGY_CLI_DISABLE_AUTO_UPDATE: "true" });
   const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env);
   // Every engine check asks each CLI for --version; an unchanged binary
   // answers the same, and a launch is what can stall the server on Windows.

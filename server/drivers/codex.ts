@@ -10,6 +10,9 @@
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start. After Orbit compaction the
 // harness omits resumeCursor and injects the bounded transcript instead.
+// A cleanly finished turn leaves its app-server in the warm pool, so the
+// thread's next turn with the same spawn shape skips straight to turn/start.
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod";
 
@@ -53,6 +56,7 @@ import { baseAccount } from "../worker-resume.ts";
 import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 import { CODEX_PROMO_MESSAGE, isCodexPromo, markCodexPromo, requireCodexPromoAccount } from "../../electron/codex-promo.mjs";
+import { warmPool, type Lease } from "./warm-pool.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -194,6 +198,22 @@ const baseAppServerArgs = (env: Record<string, string | undefined>, model: strin
   `web_search=${JSON.stringify("live")}`,
 ];
 
+/** One app-server process; it outlives a turn while warm. */
+type AppServer = {
+  child: ReturnType<typeof spawnCli>;
+  nextId: number;
+  stderr: string;
+  /** The turn reading it; frames that land while idle belong to nobody. */
+  turn?: { line(msg: any): void; error(e: Error): void; close(code: number | null): void };
+  lease?: Lease;
+  exited: Promise<void>;
+  /** The thread total last reported: a warm turn starts its spend there, as a resume replay would. */
+  total?: TurnUsage;
+};
+
+const appServerAlive = (server: AppServer) =>
+  server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
+
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
@@ -264,6 +284,68 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     }
     const active = new Map<string, Turn>();
     const lastThread = new Map<string, { cwd: string; model: string | undefined; cursor: string }>();
+    const incarnation = input.incarnation ?? newId();
+    const warmKey = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
+    const captured = (threadId: string) => ({ generation: input.account?.generation ?? warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
+    const warmServers = new WeakMap<Lease, AppServer>();
+    let disposed = false;
+
+    const spawnAppServer = (threadId: string, args: string[], cwd: string, env: Record<string, string | undefined>): AppServer => {
+      const child = spawnCli(config.cli, args, { ...turnPolicy, cwd, env, stdio: ["pipe", "pipe", "pipe"], direct: codexDirect });
+      const server: AppServer = { child, nextId: 1, stderr: "", exited: new Promise((resolve) => child.once("close", () => resolve())) };
+      let buf = "";
+      // decode as UTF-8 across chunk boundaries — a raw `buf += chunk` splits
+      // multibyte characters that straddle two reads and corrupts the text
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buf += chunk;
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (!line.trim()) continue;
+          let msg: any;
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          appendNative(threadId, { dir: "in", source: "codex.app-server", msg });
+          server.turn?.line(msg);
+        }
+      });
+      child.stderr.on("data", (c) => {
+        server.stderr += c;
+        if (server.stderr.length > 8192) server.stderr = server.stderr.slice(-8192);
+      });
+      child.on("error", (e) => server.turn?.error(e));
+      child.on("close", (code) => {
+        if (server.turn) server.turn.close(code);
+        else server.lease?.release("exit");
+      });
+      return server;
+    };
+    /** Leases a cleanly finished app-server to the pool for the thread's next turn. */
+    const keepWarm = (server: AppServer, threadId: string, fingerprint: string, codexThreadId: string): boolean => {
+      server.turn = undefined;
+      const session = { kind: "loaded" as const, id: codexThreadId };
+      if (disposed || !appServerAlive(server)) return false;
+      if (server.lease) return warmPool.offer(server.lease, session);
+      const lease = warmPool.reserve(warmKey(threadId), fingerprint, captured(threadId), "speculative");
+      if (typeof lease !== "object" || warmServers.has(lease)) return false;
+      server.lease = lease;
+      warmServers.set(lease, server);
+      lease.attach({
+        session,
+        alive: () => appServerAlive(server),
+        close: async () => {
+          retireAppServer(server.child, retirementHome);
+          await server.exited;
+        },
+      });
+      lease.ready();
+      return !lease.signal.aborted;
+    };
 
     const emit = (event: RuntimeEvent) => traceRuntimeEvent(event, () => {
       finishNative(event);
@@ -290,23 +372,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const turnId = newId();
       const trace = turn.trace ?? startTurnTrace({ engine: "codex", threadId, turnId });
       trace?.identify({ threadId, turnId, engine: "codex" });
-      // Reserve the thread across the retirement wait so Stop lands here.
-      active.set(threadId, { stop: () => { stopRequested = true; }, steer: async () => false, turnId, asks: new Map() });
-      const endRetirement = trace?.span("retirement_wait");
-      await awaitDyingAppServers(2_000, retirementHome);
-      endRetirement?.();
-      if (stopRequested) {
-        emit({ ...base(threadId, turnId), type: "turn.started" });
-        active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
-        return { turnId };
-      }
-      // a retry relaunches the whole app-server; the backoff is scaled down in
-      // tests so a fake's transient failures don't stall real seconds
-      const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
-      const authRequired = (message: unknown) => [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && isSignOut(message);
-
-      const launchAttempt = async (attempt: number): Promise<void> => {
+      const launchSpec = () => {
         const env = childEnv();
         const appServerArgs = baseAppServerArgs(env, turn.model);
         if (turn.integrations?.composio) {
@@ -345,22 +411,60 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_phone", turn.integrations.phone);
         }
 
-        const endSpawn = trace?.span("spawn", "cold", attempt);
-        const child = spawnCli(config.cli, appServerArgs, {
-          ...turnPolicy,
-          cwd: turn.cwd ?? homedir(),
-          env,
-          stdio: ["pipe", "pipe", "pipe"],
-          direct: codexDirect,
-        });
+        const cwd = turn.cwd ?? homedir();
+        // on-request never asks inside the workspace; untrusted asks before
+        // any edit or command that is not read-only
+        const approvalPolicy = config.fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : "on-request";
+        // a resume without it falls back to the config default, often read-only
+        const sandbox = config.fullAuto ? "danger-full-access" : "workspace-write";
+        // Everything fixed at spawn or thread/resume; the mounts' tokens live per boot, bot and thread.
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify([config.cli, appServerArgs, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), approvalPolicy, sandbox, turn.model ?? "", turn.effort ?? ""]))
+          .digest("hex");
+        return { env, appServerArgs, cwd, approvalPolicy, sandbox, fingerprint };
+      };
+      const first = launchSpec();
+      // A stale warm app-server is dropped here, so the wait below covers it too.
+      const taken = warmPool.take(warmKey(threadId), first.fingerprint, captured(threadId), turn.resumeCursor);
+      const firstWarm = typeof taken === "object" && "hit" in taken ? warmServers.get(taken.hit) : undefined;
+      if (typeof taken === "object" && !firstWarm) ("hit" in taken ? taken.hit : taken.pending).release("no app-server");
+      // Reserve the thread across the retirement wait so Stop lands here.
+      active.set(threadId, { stop: () => { stopRequested = true; }, steer: async () => false, turnId, asks: new Map() });
+      const endRetirement = trace?.span("retirement_wait");
+      if (!firstWarm) await awaitDyingAppServers(2_000, retirementHome);
+      endRetirement?.();
+      if (stopRequested) {
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        active.delete(threadId);
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
+        return { turnId };
+      }
+      // a retry relaunches the whole app-server; the backoff is scaled down in
+      // tests so a fake's transient failures don't stall real seconds
+      const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
+      const authRequired = (message: unknown) => [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && isSignOut(message);
 
-      child.once("spawn", () => endSpawn?.("spawned"));
-      child.once("error", () => endSpawn?.("error"));
+      const launchAttempt = async (attempt: number): Promise<void> => {
+        const { env, appServerArgs, cwd, approvalPolicy, sandbox, fingerprint } = attempt === 0 ? first : launchSpec();
+        const warm = attempt === 0 ? firstWarm : undefined;
+        const endSpawn = trace?.span("spawn", warm ? "warm" : "cold", attempt);
+        const server = warm ?? spawnAppServer(threadId, appServerArgs, cwd, env);
+        const child = server.child;
+
+      if (warm) endSpawn?.("reused");
+      else {
+        child.once("spawn", () => endSpawn?.("spawned"));
+        child.once("error", () => endSpawn?.("error"));
+      }
       let abandoned = false;
       // no_reply_needed ended the turn; frames still in flight belong to nobody
       let ending = false;
       let initialized = false;
-      const spend: TurnSpend = {};
+      // turn/completed arrived: the native turn is over, not just ended early
+      let nativeDone = false;
+      const spend: TurnSpend = warm?.total ? { baseline: warm.total } : {};
+      // a warm process's earlier stderr belongs to earlier turns
+      server.stderr = "";
       const state = {
         settled: false,
         lastText: "",
@@ -401,7 +505,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && !apiKeyAccount);
 
       const asks = new Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>();
-      let nextId = 1;
       let nativeThreadId: string | null = null;
       let nativeTurnId: string | null = null;
       const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
@@ -414,7 +517,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
       const request = (method: string, params: unknown, timeoutMs = 60_000) =>
         new Promise<any>((resolve, reject) => {
-          const id = nextId++;
+          const id = server.nextId++;
           const endRequest = trace?.rpc(method, id, attempt);
           // a wedged app-server can accept stdin and never reply; without this
           // the handshake await hangs forever and the bot stays busy for good
@@ -442,6 +545,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const stop = () => {
         stopRequested = true;
+        server.lease?.release("turn ended");
         retireAppServer(child, retirementHome);
       };
 
@@ -466,6 +570,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         active.delete(threadId);
+        // kept before turn.completed: the queue drain on it sends the next turn at once
+        const kept = ok && stopReason === null && nativeDone && !stopRequested && !ending && !abandoned && !!nativeThreadId
+          && keepWarm(server, threadId, fingerprint, nativeThreadId);
         emit({
           ...base(threadId, turnId),
           type: "turn.completed",
@@ -477,7 +584,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           contextWindow,
           ...(state.promptAccepted ? { promptAccepted: true } : {}),
         });
-        stop(); // the app-server never exits on its own
+        if (!kept) stop(); // the app-server never exits on its own
       };
 
       // server→client approval request → canonical request.opened
@@ -685,6 +792,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             } else if (p.tokenUsage?.total && !state.spend.latest) state.spend.baseline = toUsage(p.tokenUsage.total);
             const t = p.tokenUsage?.total;
             if (t) {
+              server.total = toUsage(t);
               emit({
                 ...base(threadId, turnId),
                 type: "thread.token-usage.updated",
@@ -708,6 +816,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           case "turn/completed": {
             trace?.mark("native_completion");
             const t = p.turn ?? {};
+            nativeDone = t.status === "completed";
             if ((t.status === "failed" && !stopRequested && promoFailure(t.error)) || promoReported) {
               settle(false, "api_credit_promo");
               break;
@@ -757,52 +866,29 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       };
 
-      let buf = "";
-      // decode as UTF-8 across chunk boundaries — a raw `buf += chunk` splits
-      // multibyte characters that straddle two reads and corrupts the text
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
-        buf += chunk;
-        let nl;
-        while ((nl = buf.indexOf("\n")) !== -1) {
-          const line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (!line.trim()) continue;
-          let msg: any;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            continue;
+      const line = (msg: any) => {
+        if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+          const pend = rpcPending.get(msg.id);
+          if (pend) {
+            rpcPending.delete(msg.id);
+            msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
           }
-          appendNative(threadId, { dir: "in", source: "codex.app-server", msg });
-          if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
-            const pend = rpcPending.get(msg.id);
-            if (pend) {
-              rpcPending.delete(msg.id);
-              msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
-            }
-          } else if (abandoned || ending) {
-            // a retired attempt's late turn/completed would settle its replacement
-            continue;
-          } else if (msg.id !== undefined && msg.method) {
-            handleServerRequest(msg);
-          } else if (msg.method) {
-            handleNotification(msg);
-          }
+        } else if (abandoned || ending) {
+          // a retired attempt's late turn/completed would settle its replacement
+          return;
+        } else if (msg.id !== undefined && msg.method) {
+          handleServerRequest(msg);
+        } else if (msg.method) {
+          handleNotification(msg);
         }
-      });
-
-      let stderr = "";
-      child.stderr.on("data", (c) => {
-        stderr += c;
-        if (stderr.length > 8192) stderr = stderr.slice(-8192);
-      });
-      child.on("error", (e) => {
+      };
+      const error = (e: Error) => {
         if (abandoned) return;
         emit({ ...base(threadId, turnId), type: "runtime.error", ...describeSpawnFailure(e, config.cli, turn.cwd ?? homedir()) });
         settle(false, "spawn_error");
-      });
-      child.on("close", (code) => {
+      };
+      const close = (code: number | null) => {
+        const stderr = server.stderr;
         if (abandoned) return;
         // Stop killed the child: settle quietly, no error chip.
         if (stopRequested && !state.settled) {
@@ -846,7 +932,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           });
           settle(false, "exit_before_result");
         }
-      });
+      };
+      server.turn = { line, error, close };
 
       // a microtask, so the tool's item.completed reaches every listener first
       const end = () => {
@@ -862,22 +949,20 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // one relaunch of the whole app-server after backoff — but only when
       // nothing streamed yet, and never for auth/shape errors or interrupts
       try {
-        await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
+        if (!warm) {
+          await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
+          send({ jsonrpc: "2.0", method: "initialized", params: {} });
+        }
         initialized = true;
-        send({ jsonrpc: "2.0", method: "initialized", params: {} });
         const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-        let codexThreadId: string | null = null;
+        // a warm app-server already holds this thread, loaded under the same policy
+        let codexThreadId: string | null = warm ? cursor : null;
         let startedModel: string | null = null;
         let resumeFailed = false;
-        // on-request never asks inside the workspace; untrusted asks before
-        // any edit or command that is not read-only
-        const approvalPolicy = config.fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : "on-request";
         // a user-level approvals_reviewer = "auto_review" would otherwise answer
         // escalations with a reviewer model, never reaching the chip or Auto mode
         const approvalsReviewer = "user";
-        // a resume without it falls back to the config default, often read-only
-        const sandbox = config.fullAuto ? "danger-full-access" : "workspace-write";
-        if (cursor) {
+        if (cursor && !warm) {
           try {
             const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox });
             codexThreadId = resumed?.thread?.id ?? cursor;
@@ -963,6 +1048,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           // This app-server never exits by itself. Retire the failed attempt
           // and silence its late handlers before the replacement launches.
           abandoned = true;
+          server.lease?.release("retry");
           retireAppServer(child, retirementHome);
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, Math.max(1, Math.round(delayMs * retryScale)));
@@ -1089,6 +1175,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       },
     },
     dispose: async () => {
+      disposed = true;
+      warmPool.invalidate({ instanceId, incarnation }, "dispose");
       text.dispose();
       for (const { stop } of active.values()) stop();
       listeners.clear();

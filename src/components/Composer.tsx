@@ -5,6 +5,7 @@ import { useStore, visibleMessages, type Bot, type Group, type Message, api } fr
 import { cn } from "@/lib/cn";
 import {
   botDraftId,
+  claimRoomHolds,
   draftRevision,
   forgetFailedComposerSend,
   getRoomHolds,
@@ -84,8 +85,7 @@ import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
-import { openQuestions, pinnedQuestion } from "@/lib/open-question";
-import { isShownMessage } from "@/lib/shown-message";
+import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -264,7 +264,7 @@ export function Composer({
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
   const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
-  const questionMovedOn = question ? chatMessages.slice(chatMessages.indexOf(question) + 1).some(isShownMessage) : false;
+  const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -608,6 +608,8 @@ export function Composer({
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
   const queuedRef = useRef<QueuedGroupSend[]>(queued);
+  const holdsRoom = Boolean(group);
+  useEffect(() => (holdsRoom ? claimRoomHolds(draftId) : undefined), [holdsRoom, draftId]);
   const roomFlushLock = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {

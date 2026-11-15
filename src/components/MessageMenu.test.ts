@@ -421,7 +421,7 @@ describe("message menu in 1:1 chats", () => {
   it("leaves a file card to its own menu", async () => {
     window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
     try {
-      const host = await mountChat(bot([botMsg("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      const host = await mountChat(bot([botMsg("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
       await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
       expect(document.querySelector("[data-file-menu]")).not.toBeNull();
       expect(messageMenu()).toBeNull();
@@ -596,7 +596,7 @@ describe("message menu in rooms", () => {
   it("leaves a file card to its own menu", async () => {
     window.ogb = { openFile: vi.fn() } as unknown as NonNullable<typeof window.ogb>;
     try {
-      const host = await mountRoom(members, room([roomBot("b1", "here [clip.mp4](C:/clips/clip.mp4)")]));
+      const host = await mountRoom(members, room([roomBot("b1", "here\n[clip.mp4](C:/clips/clip.mp4)")]));
       await rightClick(host.querySelector('[data-mid="b1"] [data-show-card]')!);
       expect(document.querySelector("[data-file-menu]")).not.toBeNull();
       expect(messageMenu()).toBeNull();
