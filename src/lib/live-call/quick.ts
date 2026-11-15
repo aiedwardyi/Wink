@@ -8,10 +8,17 @@ const EARLY_MAX_BYTES = 15 * 16_000 * 2;
 export class EarlyMic {
   readonly frames: ArrayBuffer[] = [];
   spoke = false;
+  private loudFrames = 0;
   private bytes = 0;
+
+  /** Words, not a click: one loud 40 ms frame is a tap on the glass. */
+  get talked() {
+    return this.loudFrames > 1;
+  }
 
   add(pcm: ArrayBuffer, loud: boolean) {
     this.spoke ||= loud;
+    if (loud) this.loudFrames += 1;
     this.frames.push(pcm);
     this.bytes += pcm.byteLength;
     while (this.bytes > EARLY_MAX_BYTES) this.bytes -= this.frames.shift()!.byteLength;
@@ -30,6 +37,9 @@ const SMALL = only([
 // Telling the voice to stop also takes back what he said before it.
 const BACK = only(["stop(?: it)?|wait|hold on|never ?mind|forget (?:it|that)|cancel(?: (?:it|that))?|no|nope|scratch that", "그만(?:해요?)?|잠깐만?|됐어요?|아니(?:야|요|다)?|취소(?:해요?)?|하지 ?마|신경 ?쓰지 ?마"]);
 const blank = (text: string) => !/[\p{L}\p{N}]/u.test(text);
+
+/** "never mind", "cancel that": a line that only takes back what he said before it. */
+export const takesBack = (text: string) => !blank(text.replace(SMALL, " ")) && blank(text.replace(SMALL, " ").replace(BACK, " "));
 
 /** His lines that no reply or send has dealt with yet, by line number. */
 export class OpenLines {

@@ -1,4 +1,5 @@
 // What the voice's turn claims, one sentence at a time: a promise of work, a refusal, a dodge, or an honest "not sent".
+import { bareYes } from "./consent";
 
 export type Claim = "promise" | "cant" | "unsure" | "failed";
 
@@ -135,4 +136,74 @@ export function callsVoice(heard: string, name: string, aliases: readonly string
   // Whole name only, though a Korean particle may follow it ("Nova야"); the shown name may run on ("Jennifer").
   const own = [escaped(name) && `${escaped(name)}(?![a-z0-9])`, ...aliases.map((alias) => `${escaped(alias)}[a-z]*(?![0-9])`), ...spelled(aliases)].filter(Boolean).join("|");
   return /\bhey\b|헤이/i.test(heard) || (own !== "" && new RegExp(`(?<![\\p{L}\\p{N}])(?:${own})`, "iu").test(heard));
+}
+
+// Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").
+const FOREIGN_SCRIPT = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]/iu;
+const FOREIGN_WORDS = /(?<![\p{L}\p{N}])(?:hola|aquí|estoy|gracias|qué|cómo|está|estás|bueno|claro|perdón|bonjour|merci|oui|danke|hallo|obrigado|olá|ciao|grazie)(?![\p{L}\p{N}])/giu;
+const HANGUL = /[가-힣]/;
+
+/** Speech in a third language. The brief keeps the voice to the app's; English and Korean lines are never cut here, he may mix them. */
+export function offLanguage(text: string): boolean {
+  if (FOREIGN_SCRIPT.test(text)) return true;
+  // Capitalized mid-sentence it is a name, like the Bonjour service; "Hola" opening a line is Spanish.
+  return [...text.matchAll(FOREIGN_WORDS)].some((word) => !/^\p{Lu}/u.test(word[0]) || !/\p{L}[^.!?]*$/u.test(text.slice(0, word.index)));
+}
+
+/** A line speech-to-text likely got wrong: another language, or a word or two that trail off with no end mark. Korean transcripts often have none. */
+export function misheard(text: string): boolean {
+  if (offLanguage(text)) return true;
+  if (HANGUL.test(text) || bareYes(text) || ordersChange(text) || looksUp(text)) return false;
+  return !/[.!?…]["'”’)\]]*\s*$/.test(text) && (text.match(/\p{L}[\p{L}'’-]*/gu)?.length ?? 0) <= 2;
+}
+
+const ASK_LEAD = /^(?:(?:so|and|sorry|okay|ok|just|but)[,\s]+)?(?:could|can|would|will|which|what|where|when|who|whose|how|do|does|did|are|is|was|should|shall)\b/i;
+const FILLER_WORDS = new Set("the and you your for with that this what which want mean kind could would should about have does did are was were can will just like some any one from into let check checking look looking find finding ask asking now right whether there here sure okay".split(" "));
+const contentWords = (text: string) => text.toLowerCase().match(/\p{L}{3,}|\p{N}+/gu)?.filter((word) => !FILLER_WORDS.has(word)) ?? [];
+const sameWord = (a: string, b: string) => a === b || (a.length >= 5 && b.length >= 5 && a.slice(0, 5) === b.slice(0, 5));
+/** Most of the line's words are in one of the others. */
+const covered = (line: string, others: readonly string[]) => {
+  const words = contentWords(line);
+  return words.length > 0 && others.some((other) => {
+    const known = contentWords(other);
+    // "60 seconds" is not "30 seconds", however many other words match.
+    if (words.some((word) => /\p{N}/u.test(word) && !known.includes(word))) return false;
+    const shared = words.filter((word) => known.some((was) => sameWord(word, was))).length;
+    return shared >= Math.min(2, words.length) && shared / words.length >= 0.5;
+  });
+};
+
+/** Whether the voice's turn opens by asking again what it already asked; "wait" until its first question is whole. */
+export function reasks(said: string, asked: readonly string[], whole = false): "yes" | "no" | "wait" {
+  const first = sentences(said)[0] ?? "";
+  if (!first) return whole ? "no" : "wait";
+  if (!ASK_LEAD.test(first) && !first.includes("?")) return "no";
+  if (!whole && !/[.!?…]\s*$/.test(first)) return "wait";
+  return covered(first, asked) ? "yes" : "no";
+}
+
+/** A promise the questions sent this turn stand behind: "Let me check whether you finished it", not "your watch history". */
+export function backs(promise: string, sent: readonly string[]): boolean {
+  return !contentWords(promise).length || covered(promise, sent);
+}
+
+const tokens = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+
+/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. */
+export function echoOf(heard: string, voice: string): "echo" | "maybe" | "no" {
+  const words = tokens(heard);
+  const said = tokens(voice);
+  if (!words.length) return "maybe";
+  if (!said.some((_, start) => words.every((word, i) => said[start + i] === word))) return "no";
+  return words.length >= 3 ? "echo" : "maybe";
+}
+
+/** "Hmm.", "Yes.": a nod while the voice talks, not a barge-in. */
+export function backchannel(heard: string): boolean {
+  return /^(?:h?m+|mhm|uh-?huh|u[hm]+|yeah|yes|yep|ok|okay|right|응|네|어)[.!?,\s]*$/i.test(heard.trim());
+}
+
+/** The bot's reply asks again what its card asks. */
+export function repeatsAsk(reply: string, question: string): boolean {
+  return sentences(reply).some((sentence) => covered(sentence, [question]));
 }

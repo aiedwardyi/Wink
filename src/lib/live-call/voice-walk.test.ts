@@ -217,17 +217,14 @@ describe("V2 a click while connecting does not cost the greeting", () => {
     expect(greetings(engine())).toHaveLength(1);
   });
 
-  it("words that follow the click still drop it", async () => {
-    const { call, audio, engine, tick, wait } = setup({ tokenMs: 300 });
+  it("a click does not hold the hello back for words", async () => {
+    const { call, audio, engine, tick } = setup({ tokenMs: 300 });
     const started = call.start();
     audio.click();
     await tick(300);
     await started;
     engine().events.ready();
-    await tick(500);
-    turn(engine(), "Rename it.", "Renaming it.");
-    await wait(5_000);
-    expect(greetings(engine())).toEqual([]);
+    expect(greetings(engine())).toHaveLength(1);
   });
 });
 
