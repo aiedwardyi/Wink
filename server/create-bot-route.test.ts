@@ -117,6 +117,14 @@ describe("POST /api/internal/create-bot", () => {
     });
   });
 
+  it("keeps the Chief's model when only effort is named", async () => {
+    const created = await createBot("Effort Operator", { effort: "low" });
+    expect(created.status).toBe(201);
+    expect(await listedBot(created.body.id!)).toMatchObject({
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5", effort: "low" },
+    });
+  });
+
   it("refuses an unknown model id and lists the valid ids", async () => {
     const created = await createBot("Ghost Operator", { model: "not-a-model" });
     expect(created.status).toBe(400);
