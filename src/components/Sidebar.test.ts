@@ -2297,7 +2297,7 @@ describe("Sidebar hold menu", () => {
         else await view.hold();
         await act(async () => chat.dispatchEvent(new Event("scroll")));
         expect(view.menu()).not.toBeNull();
-        await act(async () => view.row().closest(".overflow-y-auto")!.dispatchEvent(new Event("scroll")));
+        await act(async () => view.row().closest("[data-sidebar-list]")!.dispatchEvent(new Event("scroll")));
         expect(view.menu()).toBeNull();
       } finally {
         chat.remove();
