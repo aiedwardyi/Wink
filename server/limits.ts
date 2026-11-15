@@ -81,6 +81,9 @@ export const KEPT_LIMITS: Limits = {
   "server/quorum-route.ts": { MAX_DAYS: OUTSIDER },
   "server/replies.ts": { MAX_REPLY_EXCERPT: TOKENS },
   "server/room-lane.ts": { MAX_ROOM_LANES: "Crash: each lane is another engine process; extra turns wait, never refused." },
+  "server/rooms/door-streams.ts": { MAX_BACKLOG_BYTES: OUTSIDER },
+  "server/rooms/door.ts": { MAX_STREAMS: OUTSIDER },
+  "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER },
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
@@ -161,15 +164,10 @@ export const PENDING_LIMITS: Limits = {
     "instructions must be at most 1000": "Owned by CREATE-BOT-OPEN (create-bot route).",
   },
   "server/phone-devices.ts": { MAX_PHONES: "Follow-up: 21st phone refused; pairing brute force is already MAX_PAIRING_ATTEMPTS." },
-  "server/rooms/door-streams.ts": { MAX_BACKLOG_BYTES: "ROOM-COLLAB-OPEN is editing rooms/; memory of a slow outsider stream (likely keep)." },
-  "server/rooms/door.ts": { MAX_STREAMS: "ROOM-COLLAB-OPEN is editing rooms/; outsider streams (likely keep)." },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
-  "server/rooms/guest-client.ts": {
-    MAX_VIEW_ENTRIES: "ROOM-COLLAB-OPEN is editing rooms/; untrusted host input size (likely keep).",
-  },
+  "server/rooms/guest-client.ts": { MAX_VIEW_ENTRIES: "Parked for Edward: caps the user's own view of a joined room at 10,000 local rows; not host input." },
   "server/rooms/invites.ts": {
     MAX_PEOPLE: "Raised 20 -> 100, the most people every joiner's room state parses; a 101st left joiners unable to load (measured). Not yet registered.",
-    MAX_CREDENTIAL_LENGTH: "ROOM-COLLAB-OPEN is editing rooms/; outsider credential size (likely keep).",
   },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
   "server/team-manifest.ts": {
