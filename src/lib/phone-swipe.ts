@@ -80,8 +80,8 @@ export function dragOffset(dx: number, canMove: boolean): number {
   return canMove ? dx : dx / 3;
 }
 
-export function sidebarBotIds(doc: Document = document): string[] {
-  return [...doc.querySelectorAll('[data-sidebar-row-kind="bot"]')].flatMap((row) => row.getAttribute("data-sidebar-row-id") ?? []);
+export function sidebarChatIds(doc: Document = document): string[] {
+  return [...doc.querySelectorAll('[data-sidebar-row-kind="bot"], [data-sidebar-row-kind="group"]')].flatMap((row) => row.getAttribute("data-sidebar-row-id") ?? []);
 }
 
 export function swipeBlocked(target: EventTarget | null, startX: number, win: typeof window = window): boolean {

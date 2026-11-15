@@ -9,21 +9,11 @@ function px(value: string): number {
 }
 
 function naturalWidth(el: HTMLElement): number {
-  const copy = el.cloneNode(true);
-  if (!(copy instanceof HTMLElement)) return 0;
-  copy.style.position = "fixed";
-  copy.style.left = "-9999px";
-  copy.style.width = "max-content";
-  copy.style.minWidth = "0px";
-  copy.style.maxWidth = "none";
-  copy.style.flex = "none";
-  copy.style.display = "";
-  copy.style.overflow = "visible";
-  copy.style.textOverflow = "clip";
-  document.body.appendChild(copy);
-  const width = copy.getBoundingClientRect().width;
-  copy.remove();
-  return width;
+  // A nowrap text range includes clipped text without inserting a second layout tree.
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const style = getComputedStyle(el);
+  return range.getBoundingClientRect().width + px(style.paddingLeft) + px(style.paddingRight) + px(style.borderLeftWidth) + px(style.borderRightWidth);
 }
 
 function phoneMenuButton(root: ParentNode): HTMLElement | null {
@@ -48,7 +38,7 @@ function phoneMenuBounds(menu: HTMLElement): PhoneHeaderBox {
 
 // Compare the chip and menu before their switch animations.
 function stageShift(header: HTMLElement, menu: HTMLElement) {
-  let x = 0;
+  let x = header.closest<HTMLElement>("[data-phone-chat-page]")?.offsetLeft ?? 0;
   let y = 0;
   for (let el: HTMLElement | null = header; el && !el.contains(menu); el = el.parentElement) {
     const shift = transformShift(getComputedStyle(el).transform);
@@ -119,7 +109,6 @@ export function usePhoneHeaderNameFloor(
         clearChip();
         return;
       }
-      // Measured only here: the clone forces a layout that desktop never uses.
       if (!measured) {
         text = naturalWidth(button);
         rem = px(getComputedStyle(document.documentElement).fontSize) || 16;
@@ -236,11 +225,13 @@ export function usePhoneHeaderNameFloor(
     const mutations = new MutationObserver(kick);
     mutations.observe(header, { childList: true, subtree: true, characterData: true });
     window.addEventListener("resize", kick);
-    void document.fonts?.ready.then(() => {
-      if (!alive) return;
-      measured = false;
-      kick();
-    });
+    if (document.fonts?.status === "loading") {
+      void document.fonts.ready.then(() => {
+        if (!alive) return;
+        measured = false;
+        kick();
+      });
+    }
     return () => {
       alive = false;
       mutations.disconnect();

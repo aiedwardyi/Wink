@@ -1898,6 +1898,9 @@ describe("phone header name floor", () => {
       return computed(el, pseudo);
     });
     installRects(false);
+    const range = document.createRange();
+    vi.spyOn(range, "getBoundingClientRect").mockReturnValue(box(0, 80, 0, 20));
+    const measurements = vi.spyOn(document, "createRange").mockReturnValue(range);
     const rect = HTMLElement.prototype.getBoundingClientRect;
     HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
       if (this.style.left === "-9999px") clones += 1;
@@ -1912,14 +1915,18 @@ describe("phone header name floor", () => {
       await act(async () => { await Promise.resolve(); });
       await act(async () => { window.dispatchEvent(new Event("resize")); });
       expect(clones).toBe(0);
+      expect(measurements).not.toHaveBeenCalled();
       expect(rootStyles).toBe(0);
       const nameButton = [...host.querySelectorAll("button")].find((el) => el.textContent === "Bounty-Watch" && el.className.includes("md:hidden"));
       expect(nameButton?.style.minWidth).toBe("");
       phone = true;
       await act(async () => { window.dispatchEvent(new Event("resize")); });
-      expect(clones).toBe(1);
+      expect(clones).toBe(0);
+      expect(measurements).toHaveBeenCalledTimes(1);
       expect(rootStyles).toBe(1);
-      expect(nameButton?.style.minWidth).not.toBe("");
+      expect(nameButton?.style.minWidth).toBe("80px");
+      await act(async () => { window.dispatchEvent(new Event("resize")); });
+      expect(measurements).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
       host.remove();

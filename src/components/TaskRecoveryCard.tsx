@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 
 import { isCompletedTaskRecord, isTaskRecoveryVisible, shouldDismissCompletedReopen } from "@/lib/task-recovery";
 import { useI18n } from "@/lib/i18n";
+import { useChatPreview } from "@/lib/chat-preview";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useStore, type Bot, type Message, type TaskResumePacket } from "@/state/store";
 import { readContextCompaction } from "../../shared/context-compaction";
@@ -102,6 +103,7 @@ export function TaskRecoveryCard({
   busy?: boolean;
 }) {
   const { state, dispatch } = useStore();
+  const preview = useChatPreview();
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const settleGen = useRef(0);
@@ -112,7 +114,7 @@ export function TaskRecoveryCard({
     setResumeError(null);
   }, [bot.id, packet?.threadId]);
   useEffect(() => {
-    if (!packet || (busy ?? bot.busy)) return;
+    if (preview || !packet || (busy ?? bot.busy)) return;
     if (!shouldDismissCompletedReopen(packet)) return;
     const key = `${packet.threadId}:${packet.updatedAt}:${packet.flushReason}`;
     if (persistedDismiss.current === key) return;
@@ -124,7 +126,7 @@ export function TaskRecoveryCard({
       updatedAt: packet.updatedAt,
       flushReason: packet.flushReason,
     });
-  }, [bot.busy, bot.id, busy, dispatch, packet]);
+  }, [bot.busy, bot.id, busy, dispatch, packet, preview]);
   if (!isTaskRecoveryVisible(
     packet,
     busy ?? bot.busy,

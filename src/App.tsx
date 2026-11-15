@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -41,6 +41,7 @@ import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem 
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
+import { ChatPreviewContext } from "@/lib/chat-preview";
 import { altDigitSelectsPane, backquoteTogglesTerminal, workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { workerRuns } from "@/lib/worker-runs";
 import { useTerminalPanes } from "@/lib/terminal-panes";
@@ -49,7 +50,7 @@ import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
-import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
+import { useDrawerSwipe, useIsPhone, usePhoneSwipe, type PhoneSwipePeek } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
@@ -94,6 +95,46 @@ function BootFallback({
 function fallbackStartupBot(bots: Bot[], groups: Group[]): Bot | undefined {
   const id = preferredStartupSelectionId(bots, groups, loadSidebarOrder());
   return bots.find((b) => b.id === id) ?? bots[0];
+}
+
+function PhoneChatPages({ id, enabled, menuVisible, hidden, rider, onSelect, children }: {
+  id: string;
+  enabled: boolean;
+  menuVisible: boolean;
+  hidden: boolean;
+  rider: RefObject<HTMLElement | null>;
+  onSelect: (id: string) => void;
+  children: (id: string, preview: boolean) => ReactNode;
+}) {
+  const [peek, setPeek] = useState<PhoneSwipePeek | null>(null);
+  const [slot, setSlot] = useState(0);
+  const carrier = useRef<HTMLDivElement | null>(null);
+  const peekReady = useCallback((target: string) => {
+    const page = [...(carrier.current?.children ?? [])].find((node) => node.getAttribute("data-phone-chat-page") === target);
+    return Boolean(page);
+  }, []);
+  const showPeek = useCallback((next: PhoneSwipePeek | null) => {
+    setPeek(next);
+  }, []);
+  const select = useCallback((target: string) => {
+    setSlot((current) => 1 - current);
+    onSelect(target);
+  }, [onSelect]);
+  const stage = usePhoneSwipe(id, enabled, select, rider, showPeek, peekReady);
+  const bindStage = useCallback((node: HTMLDivElement | null) => {
+    carrier.current = node;
+    stage(node);
+  }, [stage]);
+  const neighbor = menuVisible && peek?.from === id ? peek : null;
+  return <div ref={bindStage} className="relative flex min-h-0 min-w-0 flex-1" inert={hidden} aria-hidden={hidden}>
+    {[{ key: slot, id, preview: false }, ...(neighbor ? [{ key: 1 - slot, id: neighbor.id, preview: true }] : [])].map((page) =>
+      <div key={page.key} data-phone-chat-page={page.id} className="flex min-h-0 min-w-0 flex-1"
+        style={page.preview ? { position: "absolute", top: 0, bottom: 0, left: `${neighbor!.step * 100}%`, width: "100%" } : undefined}
+        inert={page.preview} aria-hidden={page.preview || undefined}>
+        {children(page.id, page.preview)}
+      </div>,
+    )}
+  </div>;
 }
 
 function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
@@ -567,7 +608,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
-  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
+  const swipeChatId = joinedId ? state.selectedId : (group ?? bot)?.id;
+  const selectSwipe = useCallback((id: string) => {
+    dispatch({ type: "select", id });
+  }, [dispatch]);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();
@@ -692,6 +736,32 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     window.dispatchEvent(new Event("orbit:close-model-picker"));
   }, [terminalOpen, state.selectedId]);
 
+  const phoneMenu = (preview = false) => (
+    <button
+      type="button"
+      ref={preview ? undefined : menuButtonRef}
+      aria-label={menuQuestion ? t("ask.openBotList") : menuRoutine ? t("routine.openBotList") : t("chrome.openBotList")}
+      aria-expanded={drawerOpen}
+      onClick={() => setDrawerOpen(true)}
+      data-menu-needs-you={menuAsking || undefined}
+      data-phone-menu={!preview || undefined}
+      data-arrival-glow={menuArrival.playing || undefined}
+      onAnimationEnd={preview ? undefined : menuArrival.onAnimationEnd}
+      className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
+    >
+      <Menu size={18} />
+      {menuUnreadBadge != null && (
+        <span
+          data-menu-unread
+          aria-hidden="true"
+          className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
+        >
+          {menuUnreadBadge}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <div className="flex h-full flex-col">
       {/* Windows titleBarOverlay drag strip; height reserved via body padding. */}
@@ -713,29 +783,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         </div>
       )}
       <div ref={drawerShellRef} className="relative flex min-h-0 flex-1">
-      <button
-        type="button"
-        ref={menuButtonRef}
-        aria-label={menuQuestion ? t("ask.openBotList") : menuRoutine ? t("routine.openBotList") : t("chrome.openBotList")}
-        aria-expanded={drawerOpen}
-        onClick={() => setDrawerOpen(true)}
-        data-menu-needs-you={menuAsking || undefined}
-        data-phone-menu
-        data-arrival-glow={menuArrival.playing || undefined}
-        onAnimationEnd={menuArrival.onAnimationEnd}
-        className={`absolute z-30 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink md:hidden ${sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT}${menuAsking ? " needs-you-glow" : ""}${menuArrival.playing ? " arrival-glow" : ""}`}
-      >
-        <Menu size={18} />
-        {menuUnreadBadge != null && (
-          <span
-            data-menu-unread
-            aria-hidden="true"
-            className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink"
-          >
-            {menuUnreadBadge}
-          </span>
-        )}
-      </button>
+      {phoneMenu()}
       <div
         aria-hidden
         data-phone-drawer-scrim
@@ -759,35 +807,33 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
-      ) : joinedId ? (
-        <JoinedRoomView key={joinedId} roomId={joinedId} />
-      ) : group && isTeamRoom(group) ? (
-        <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-          <TeamRoomView key={group.id} group={group} />
-          {watchPanel(nativeViewOverlayOpen)}
-        </div>
-      ) : group ? (
-        LIVE_VERIFY_V0 ? (
-          <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-            <GroupView key={group.id} group={group} />
-            {watchPanel(nativeViewOverlayOpen)}
-          </div>
-        ) : (
-          <GroupView key={group.id} group={group} />
-        )
-      ) : bot ? (
+      ) : swipeChatId ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">
-          <div ref={swipeStageRef} className={`flex min-h-0 flex-1${watchDock}`} inert={terminalOpen} aria-hidden={terminalOpen}>
-            <ChatView
-              bot={bot}
-              hidden={terminalOpen || nativeViewOverlayOpen}
-              focusComposerBlocked={paletteOpen || terminalOpen}
-              onOpenTerminal={openMainTerminal}
-              onOpenTerminalPane={openTerminalPane}
-            />
-            {watchPanel(terminalOpen || nativeViewOverlayOpen)}
-          </div>
-          {terminalViews[bot.id] !== undefined && (
+          <PhoneChatPages id={swipeChatId} enabled={!terminalOpen && !nativeViewOverlayOpen} menuVisible={phoneMenuVisible} hidden={terminalOpen} rider={menuButtonRef} onSelect={selectSwipe}>
+            {(id, preview) => {
+              const roomId = joinedRoomIdOf(id);
+              const pageGroup = state.groups.find((candidate) => candidate.id === id);
+              const pageBot = state.bots.find((candidate) => candidate.id === id);
+              const withWatch = Boolean(pageBot || pageGroup && (isTeamRoom(pageGroup) || LIVE_VERIFY_V0));
+              return <div className={`flex min-h-0 min-w-0 flex-1${withWatch ? watchDock : ""}`}>
+                {preview && phoneMenu(true)}
+                <ChatPreviewContext.Provider value={preview}>
+                  {roomId ? <JoinedRoomView key={roomId} roomId={roomId} />
+                    : pageGroup && isTeamRoom(pageGroup) ? <TeamRoomView key={pageGroup.id} group={pageGroup} />
+                    : pageGroup ? <GroupView key={pageGroup.id} group={pageGroup} />
+                    : pageBot && <ChatView
+                      bot={pageBot}
+                      hidden={terminalOpen || nativeViewOverlayOpen}
+                      focusComposerBlocked={preview || paletteOpen || terminalOpen}
+                      onOpenTerminal={openMainTerminal}
+                      onOpenTerminalPane={openTerminalPane}
+                    />}
+                </ChatPreviewContext.Provider>
+                {!preview && withWatch && watchPanel(terminalOpen || nativeViewOverlayOpen)}
+              </div>;
+            }}
+          </PhoneChatPages>
+          {bot && terminalViews[bot.id] !== undefined && (
             <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" data-open={terminalOpen} inert={!terminalOpen} aria-hidden={!terminalOpen}>
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (

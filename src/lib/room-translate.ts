@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 
 import { request } from "./api-request";
+import { useChatPreview } from "./chat-preview";
 import type { LocaleId } from "./i18n";
 
 export function alreadyInLanguage(text: string, lang: LocaleId): boolean {
@@ -16,19 +17,20 @@ export function translateLine(base: string, entryId: string, lang: LocaleId): Pr
 }
 
 export function useTranslationAvailable(base: string): boolean {
+  const preview = useChatPreview();
   const { state } = useStore();
   const [available, setAvailable] = useState(false);
   useEffect(() => {
     let current = true;
     setAvailable(false);
-    if (!base) return;
+    if (preview || !base) return;
     const check = () => {
       void request(`${base}/translate`).then((body) => { if (current) setAvailable(body.available === true); }, () => { if (current) setAvailable(false); });
     };
     check();
     window.addEventListener("focus", check);
     return () => { current = false; window.removeEventListener("focus", check); };
-  }, [base, state.instances, state.config]);
+  }, [base, state.instances, state.config, preview]);
   return available;
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, PlugZap, RefreshCw, X } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
+import { useChatPreview } from "@/lib/chat-preview";
 import { api, type Message } from "@/state/store";
 
 async function openConnectionPage(url: string, blocked: string) {
@@ -16,6 +17,7 @@ async function openConnectionPage(url: string, blocked: string) {
 }
 
 export function ConnectorCard({ botId, threadId, message }: { botId: string; threadId: string; message: Message }) {
+  const preview = useChatPreview();
   const { t } = useI18n();
   const connector = message.connector!;
   const [busy, setBusy] = useState(false);
@@ -29,7 +31,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   }, [endpoint, threadId]);
 
   useEffect(() => {
-    if (connector.status !== "authorizing" || connector.dismissed) return;
+    if (preview || connector.status !== "authorizing" || connector.dismissed) return;
     polling.current = true;
     let tries = 0;
     const timer = setInterval(() => {
@@ -51,7 +53,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
       polling.current = false;
       clearInterval(timer);
     };
-  }, [checkStatus, connector.dismissed, connector.status]);
+  }, [checkStatus, connector.dismissed, connector.status, preview]);
 
   if (connector.dismissed) return null;
 

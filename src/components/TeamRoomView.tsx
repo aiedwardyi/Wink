@@ -35,7 +35,7 @@ export function TeamRoomView({ group }: { group: TeamRoom }) {
       <div className={cn("flex items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <RoomTitle name={group.name} picture={!missing && <RoomPicture key={group.id} src={roomPictureUrl(base, group.picture)} />} disabled={missing} />
         {!missing && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div data-no-swipe className="flex shrink-0 items-center gap-1">
             <RoomAlertsBell chat={group.id} />
             <ShowPaneButton threadId={group.threadId} />
           </div>

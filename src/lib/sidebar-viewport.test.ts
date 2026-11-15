@@ -35,6 +35,17 @@ afterEach(async () => {
 });
 
 describe("sidebar viewport", () => {
+  it("keeps commit checks off viewport geometry until a resize", async () => {
+    let reads = 0;
+    Object.defineProperty(window, "innerWidth", { configurable: true, get: () => { reads++; return 1440; } });
+    await act(async () => root.render(createElement(Probe)));
+    const before = reads;
+    await act(async () => root.render(createElement(Probe, { aside: 400 })));
+    await act(async () => root.render(createElement(Probe)));
+    expect(reads).toBe(before);
+    expect(document.body.textContent).toBe("480");
+  });
+
   it("does not rerender while every sidebar width still fits", async () => {
     await act(async () => root.render(createElement(Probe)));
     const before = renders;

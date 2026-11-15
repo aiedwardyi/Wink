@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { request } from "@/lib/api-request";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { useChatPreview } from "@/lib/chat-preview";
 import { cn } from "@/lib/cn";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useI18n } from "@/lib/i18n";
@@ -24,6 +25,7 @@ import { TurnPresence } from "./TurnPresence";
 const PAGE = 200;
 
 export function JoinedRoomView({ roomId }: { roomId: string }) {
+  const preview = useChatPreview();
   const { t } = useI18n();
   const { state } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
@@ -79,6 +81,7 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
   const stoppable = myTurns.some((bot) => bot.working || bot.waiting);
   const seq = entries?.at(-1)?.seq;
   useEffect(() => {
+    if (preview) return;
     const read = () => {
       if (seq === undefined || !shouldClearSelectedUnread(state, { id: joinedSelection(roomId), unread: Boolean(room?.unread) }, document.visibilityState === "visible" && document.hasFocus())) return;
       void request(`${base}/read`, { method: "POST", body: JSON.stringify({ seq }) }).catch(() => {});
@@ -90,12 +93,12 @@ export function JoinedRoomView({ roomId }: { roomId: string }) {
       window.removeEventListener("focus", read);
       document.removeEventListener("visibilitychange", read);
     };
-  }, [base, roomId, room?.unread, seq, state.selectedId, state.workspaceOpen]);
+  }, [base, roomId, room?.unread, seq, state.selectedId, state.workspaceOpen, preview]);
   return (
     <main data-team-room="joined" data-team-room-phase={phase ?? "gone"} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <div className={cn("flex min-h-[3.25rem] items-center justify-between px-5 py-3", sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT)}>
         <RoomTitle name={name} picture={<RoomPicture src={roomPictureUrl(base, room?.state?.picture)} retry={room?.link} />} disabled={!room?.state} />
-        {room && joined && <RoomAlertsBell chat={joinedSelection(roomId)} />}
+        {room && joined && <div data-no-swipe className="contents"><RoomAlertsBell chat={joinedSelection(roomId)} /></div>}
       </div>
       <AppErrorBanner />
       <TeamRoomTranscript

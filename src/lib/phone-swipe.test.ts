@@ -16,7 +16,7 @@ import {
   neighborId,
   saveVibration,
   sheetSwipeCloses,
-  sidebarBotIds,
+  sidebarChatIds,
   swipeBlocked,
   swipeStep,
   vibrationEnabled,
@@ -156,17 +156,29 @@ describe("dragOffset", () => {
   });
 });
 
-describe("sidebarBotIds", () => {
+describe("sidebarChatIds", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("reads bot rows in DOM order and skips rooms", () => {
+  it("reads bot and room rows in DOM order", () => {
     document.body.innerHTML = `
       <div data-sidebar-row-kind="bot" data-sidebar-row-id="a"></div>
       <div data-sidebar-row-kind="group" data-sidebar-row-id="room"></div>
       <div data-sidebar-row-kind="bot" data-sidebar-row-id="b"></div>`;
-    expect(sidebarBotIds()).toEqual(["a", "b"]);
+    expect(sidebarChatIds()).toEqual(["a", "room", "b"]);
+  });
+
+  it("keeps pinned and section order and ignores rows that are not chats", () => {
+    document.body.innerHTML = `
+      <div data-sidebar-row-kind="group" data-sidebar-row-id="pinned-room"></div>
+      <section>
+        <div data-sidebar-row-kind="bot" data-sidebar-row-id="second-bot"></div>
+        <div data-sidebar-row-kind="section" data-sidebar-row-id="heading"></div>
+        <div data-sidebar-row-kind="group" data-sidebar-row-id="section-room"></div>
+      </section>
+      <div data-sidebar-row-kind="bot" data-sidebar-row-id="first-bot"></div>`;
+    expect(sidebarChatIds()).toEqual(["pinned-room", "second-bot", "section-room", "first-bot"]);
   });
 });
 
@@ -355,10 +367,10 @@ describe("usePhoneSwipe", () => {
     setWidth(1024);
   });
 
-  it("switches to the next bot on a left swipe, skipping rooms", () => {
+  it("switches from a bot to the next room on a left swipe", () => {
     render("a");
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("b");
+    expect(select).toHaveBeenCalledWith("room");
   });
 
   it("switches to the previous bot on a right swipe", () => {
@@ -380,7 +392,7 @@ describe("usePhoneSwipe", () => {
     expect((document.querySelector("#stage") as HTMLElement).style.transform).toBe("");
   });
 
-  it("moves the menu button with the chat through a drag and its snap back", () => {
+  it("moves the menu button with the chat through a drag and its snap back", async () => {
     const menu = document.createElement("button");
     document.body.append(menu);
     const rider = { current: menu };
@@ -391,13 +403,15 @@ describe("usePhoneSwipe", () => {
     act(() => root.render(createElement(Ridden)));
     const stage = document.querySelector<HTMLElement>("#stage")!;
     [[300, 200], [280, 200], [240, 200]].forEach(([x, y], index) => touch(index ? "touchmove" : "touchstart", x!, y!, index * 16));
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
     expect(stage.style.transform).toMatch(/^translateX\(-\d/);
     expect(menu.style.transform).toBe(stage.style.transform);
     touch("touchcancel", 0, 0, 48);
     expect(stage.style.transform).toBe("");
     expect(menu.style.transform).toBe("");
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    expect(app).toContain('dispatch({ type: "select", id }), menuButtonRef);');
+    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, showPeek, peekReady);");
+    expect(app).toContain("rider={menuButtonRef} onSelect={selectSwipe}");
   });
 
   it("stops at the last bot", () => {
@@ -429,27 +443,27 @@ describe("usePhoneSwipe", () => {
     expect(select).not.toHaveBeenCalled();
     act(() => root.render(createElement(Gated, { enabled: true })));
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("b");
+    expect(select).toHaveBeenCalledWith("room");
   });
 
   it("is turned off by the open drawer in App", () => {
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    const overlay = app.slice(app.indexOf("const nativeViewOverlayOpen ="), app.indexOf("const swipeStageRef"));
+    const overlay = app.slice(app.indexOf("const nativeViewOverlayOpen ="), app.indexOf("const swipeChatId"));
     expect(overlay).toContain("drawerOpen ||");
-    expect(app).toContain("usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen,");
+    expect(app).toContain("enabled={!terminalOpen && !nativeViewOverlayOpen}");
   });
 
   it("rebinds after the stage node is replaced (e.g. Back from another view)", () => {
     act(() => root.render(createElement(Harness, { botId: "a" })));
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("b");
+    expect(select).toHaveBeenCalledWith("room");
     select.mockClear();
 
     act(() => root.render(createElement(Harness, { botId: "a", showStage: false })));
     act(() => root.render(createElement(Harness, { botId: "a", showStage: true })));
 
     swipe([[300, 200], [260, 202], [200, 204], [150, 205]]);
-    expect(select).toHaveBeenCalledWith("b");
+    expect(select).toHaveBeenCalledWith("room");
   });
 });
 

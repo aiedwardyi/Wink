@@ -88,6 +88,8 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
+import { CHAT_PEEK_WINDOW_SIZE, useChatPreview } from "@/lib/chat-preview";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import { turnPresenceWaiting } from "@/lib/send-accept";
 import { picturedReplies } from "@/lib/show-pane";
@@ -960,8 +962,12 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group: live }: { group: Group }) {
-  const archive = useGroupArchive(live.id);
+export const GroupView = memo(function GroupView({ group: live }: { group: Group }) {
+  const preview = useChatPreview();
+  const phone = useIsPhone();
+  const compactWindow = preview || phone;
+  const heldArchive = useGroupArchive(live.id);
+  const archive = preview ? null : heldArchive;
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -980,7 +986,7 @@ export function GroupView({ group: live }: { group: Group }) {
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
-  const find = useSearchFindSeed(group.threadId);
+  const find = useSearchFindSeed(group.threadId, !preview);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     group.threadId,
@@ -1004,9 +1010,10 @@ export function GroupView({ group: live }: { group: Group }) {
     setMenuThread(group.threadId);
     setMenu(null);
   }
-  useEffect(() => endSelectMode, [group.threadId]);
+  useEffect(() => preview ? undefined : endSelectMode, [group.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
+      if (preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1014,7 +1021,7 @@ export function GroupView({ group: live }: { group: Group }) {
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind]);
+  }, [find.openFind, preview]);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -1079,21 +1086,26 @@ export function GroupView({ group: live }: { group: Group }) {
     start: number;
     end: number | null;
     expanded?: boolean;
+    size?: number;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders),
+    start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_WINDOW_SIZE, renders),
     end: null,
+    size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
   }));
+  const windowSize = transcriptWindow.size ?? TRANSCRIPT_WINDOW_SIZE;
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_WINDOW_SIZE, renders), end: null, size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined });
   }
+  if (!compactWindow && windowSize < TRANSCRIPT_WINDOW_SIZE) setTranscriptWindow((w) => ({ ...w, size: TRANSCRIPT_WINDOW_SIZE }));
   const [windowTerminal, setWindowTerminal] = useState(terminal);
   if (windowTerminal !== terminal) {
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, TRANSCRIPT_WINDOW_SIZE, (index) => messageVisible(shown[index], showToolCalls, showActivities)),
+      start: tailWindowStart(shown.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_WINDOW_SIZE, (index) => messageVisible(shown[index], showToolCalls, showActivities)),
       end: null,
+      size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
     });
   }
   // The window is index-based, so an older page landing on top shifts it.
@@ -1121,9 +1133,9 @@ export function GroupView({ group: live }: { group: Group }) {
     endIndex,
   } = useMemo(
     () => resolveTranscriptWindow(shown, follow && !jump.messages
-      ? followedWindow(transcriptWindow, shown.length, TRANSCRIPT_WINDOW_SIZE, renders).start
-      : transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
-    [shown, follow, jump.messages, renders, transcriptWindow],
+      ? followedWindow(transcriptWindow, shown.length, windowSize, renders).start
+      : transcriptWindow.start, windowSize, transcriptWindow.end),
+    [shown, follow, jump.messages, renders, transcriptWindow, windowSize],
   );
 
   const setBottomFollow = useCallback((next: boolean) => {
@@ -1171,7 +1183,7 @@ export function GroupView({ group: live }: { group: Group }) {
   const { open: openJump, close: closeJump } = jump;
   useEffect(() => {
     const focus = state.focusMessage;
-    if (!focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
+    if (preview || !focus || focus.consumed || focus.threadId !== group.threadId || appliedFocus.current === focus.nonce) return;
     const liveIndex = group.messages.findIndex((message) => message.id === focus.messageId);
     const list = liveIndex >= 0 ? group.messages : shown;
     const targetIndex = liveIndex >= 0 ? liveIndex : shown.findIndex((message) => message.id === focus.messageId);
@@ -1197,22 +1209,28 @@ export function GroupView({ group: live }: { group: Group }) {
     setBottomFollow(false);
     if (switching || next !== current) setTranscriptWindow({ key: transcriptKey, ...next, expanded: next.end === null });
     setFocusWindowNonce(focus.nonce);
-  }, [closeJump, endIndex, group.hasMore, group.messages, group.threadId, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end]);
+  }, [closeJump, endIndex, group.hasMore, group.messages, group.threadId, openJump, setBottomFollow, showActivities, showToolCalls, shown, startIndex, state.focusMessage, transcriptKey, transcriptWindow.end, preview]);
   const focusPaging =
     Boolean(group.hasMore) &&
     state.focusMessage?.threadId === group.threadId &&
     !shown.some((message) => message.id === state.focusMessage?.messageId);
-  useFocusMessage(group.threadId, shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
+  useFocusMessage(group.threadId, !preview && shown.length > 0 && !focusPaging && focusWindowNonce === state.focusMessage?.nonce);
   useEffect(() => {
-    if (!follow || jump.messages || followedWindow(transcriptWindow, group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders) === transcriptWindow) return;
-    setTranscriptWindow((w) => followedWindow(w, group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders));
-  }, [follow, jump.messages, group.messages.length, renders, transcriptWindow]);
+    if (!follow || jump.messages || followedWindow(transcriptWindow, group.messages.length, windowSize, renders) === transcriptWindow) return;
+    setTranscriptWindow((w) => followedWindow(w, group.messages.length, windowSize, renders));
+  }, [follow, jump.messages, group.messages.length, renders, transcriptWindow, windowSize]);
   // A plain tail holds at least the newest window of visible rows - see ChatView.
-  const tailStart = useMemo(() => tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), [group.messages.length, renders]);
+  const tailStart = useMemo(() => tailWindowStart(group.messages.length, windowSize, renders), [group.messages.length, renders, windowSize]);
 
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted - see ChatView.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (transcriptWindow.size === undefined || !el || !followRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
+    previousScrollTop.current = el.scrollTop;
+  }, [group.id, group.threadId, windowSize, transcriptWindow.size, startIndex]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
@@ -1248,12 +1266,18 @@ export function GroupView({ group: live }: { group: Group }) {
 
   // A plain tail too short to scroll pages older rows in until it fills or the thread runs out.
   // A widening window still to commit is not short of rows.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
+    const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
+    setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(group.messages.length, size, renders) }));
+  }, [windowSize, startIndex, group.messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
-    Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart;
+    Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
     const el = scrollRef.current;
-    if (fillPaging && el && transcriptUnderfilled(el)) loadOlder();
-  }, [fillPaging, loadOlder, underfilled]);
+    if (!preview && fillPaging && el && transcriptUnderfilled(el)) loadOlder();
+  }, [fillPaging, loadOlder, underfilled, preview]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
   const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
@@ -1298,7 +1322,7 @@ export function GroupView({ group: live }: { group: Group }) {
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !jump.pending, follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1331,7 +1355,7 @@ export function GroupView({ group: live }: { group: Group }) {
   return (
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      <GroupCallOverlay group={group} members={members} />
+      {!preview && <GroupCallOverlay group={group} members={members} />}
       <div
         className={cn(
           // md:min-h-18 matches the 1:1 header's 48px avatar row, so switching never jumps
@@ -1343,7 +1367,7 @@ export function GroupView({ group: live }: { group: Group }) {
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
           <RoomTitle name={group.name} picture={<RoomPicture key={group.id} src={group.hosted && roomPictureUrl(hostRoomBase(group.hosted.roomId), group.picture)} />} />
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
+        <div data-no-swipe className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
           <RoomAlertsBell chat={group.id} />
@@ -1372,13 +1396,15 @@ export function GroupView({ group: live }: { group: Group }) {
           onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
         />
       ) : (
-        <PinnedBanner
-          bot={{ name: t("chrome.aBot"), threadId: group.threadId, hasMore: group.hasMore }}
-          pinnedId={group.pinnedMessageId}
-          messages={group.messages}
-          onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
-          onUnpin={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
-        />
+        <div data-no-swipe className="contents">
+          <PinnedBanner
+            bot={{ name: t("chrome.aBot"), threadId: group.threadId, hasMore: group.hasMore }}
+            pinnedId={group.pinnedMessageId}
+            messages={group.messages}
+            onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
+            onUnpin={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
+          />
+        </div>
       )}
 
       <ReconnectingCue />
@@ -1387,6 +1413,7 @@ export function GroupView({ group: live }: { group: Group }) {
       <div
         ref={scrollRef}
         data-orbit-transcript
+        data-compact-transcript={compactWindow && transcriptWindow.size !== undefined && !transcriptWindow.expanded || undefined}
         data-room-transcript
         className="isolate min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         style={{ overflowAnchor: follow ? "none" : "auto" }}
@@ -1434,7 +1461,7 @@ export function GroupView({ group: live }: { group: Group }) {
           setMenu({ kind: "selection", x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" });
         }}
       >
-        {setupPending ? (
+        {preview && group.messages.length === 0 ? null : setupPending ? (
           <div
             className="flex min-h-full w-full items-center px-5 py-8"
             style={{ paddingBottom: TRANSCRIPT_GAP }}
@@ -1452,7 +1479,7 @@ export function GroupView({ group: live }: { group: Group }) {
         >
           {group.messages.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
-              <div className="flex -space-x-2">
+              <div data-no-swipe className="flex -space-x-2">
                 {members.slice(0, 3).map((b) => (
                   <BotAvatar
                     key={b.id}
@@ -1471,7 +1498,7 @@ export function GroupView({ group: live }: { group: Group }) {
               </div>
             </div>
           )}
-          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (
+          {(hiddenCount > 0 || (jump.messages ? jump.hasMore : group.hasMore)) && (!preview || group.messages.length > 0) && (
             <div ref={olderRow} className="flex justify-center pt-2">
               <button
                 onClick={showEarlier}
@@ -1553,7 +1580,7 @@ export function GroupView({ group: live }: { group: Group }) {
               busy={roomRecoveryBusy(group, recoveryBot.busy)}
             />
           )}
-          <CallWidgetSlot className="px-3 pb-2 md:hidden" />
+          {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
           <Composer
             key={group.threadId}
             group={group}
@@ -1561,6 +1588,7 @@ export function GroupView({ group: live }: { group: Group }) {
             composerRef={composerInputRef}
             onSend={jumpToLatest}
             locked={setupPending}
+            focusBlocked={preview}
             replyTo={replyTo}
             onClearReply={clearReply}
             onConsumeReply={consumeReply}
@@ -1573,4 +1601,4 @@ export function GroupView({ group: live }: { group: Group }) {
     </main>
     </MediaViewerProvider>
   );
-}
+});

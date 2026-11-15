@@ -184,6 +184,11 @@
   content-visibility: auto;
 }
 
+/* Compact tails are already windowed; estimated row heights would move their bottom. */
+[data-orbit-transcript][data-compact-transcript] [data-settled] > * {
+  content-visibility: visible;
+}
+
 /* A jump measures the rows around its target at their real height. */
 [data-orbit-transcript] [data-settled][data-landing] > * {
   content-visibility: visible;

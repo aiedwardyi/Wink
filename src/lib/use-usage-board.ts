@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { api, useStore } from "@/state/store";
 import { connectUsageBoard, invalidateUsageBoard, subscribeUsageBoard, usageBoardInstances, usageBoardState } from "./usage-board-client";
+import { useChatPreview } from "./chat-preview";
 
 connectUsageBoard(api);
 
@@ -11,19 +12,22 @@ function panesKey(panes: Record<string, string[]> = {}) {
 
 // The last pane contents any caller has seen, so one change invalidates once however many lines and desks read the board.
 let seenPanes = "";
+const cachedBoard = () => () => {};
 
 /** The cached board at once; reads happen behind it and never gate paint. */
 export function useUsageBoard() {
+  const preview = useChatPreview();
   const { state } = useStore();
-  useLayoutEffect(() => { usageBoardInstances(state.instances); }, [state.instances]);
+  useLayoutEffect(() => { if (!preview) usageBoardInstances(state.instances); }, [state.instances, preview]);
   const key = panesKey(state.terminalPanes);
   const panes = useRef(key);
   useEffect(() => {
+    if (preview) return;
     if (panes.current === key) { seenPanes = key; return; }
     panes.current = key;
     if (seenPanes === key) return;
     seenPanes = key;
     invalidateUsageBoard();
-  }, [key]);
-  return useSyncExternalStore(subscribeUsageBoard, usageBoardState, usageBoardState);
+  }, [key, preview]);
+  return useSyncExternalStore(preview ? cachedBoard : subscribeUsageBoard, usageBoardState, usageBoardState);
 }
