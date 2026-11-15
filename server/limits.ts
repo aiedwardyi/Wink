@@ -164,7 +164,6 @@ export const PENDING_LIMITS: Limits = {
     "role must be at most 120": "Owned by CREATE-BOT-OPEN (create-bot route).",
     "instructions must be at most 1000": "Owned by CREATE-BOT-OPEN (create-bot route).",
   },
-  "server/phone-devices.ts": { MAX_PHONES: "Follow-up: 21st phone refused; pairing brute force is already MAX_PAIRING_ATTEMPTS." },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
   "server/rooms/guest-client.ts": { MAX_VIEW_ENTRIES: "Parked for Edward: caps the user's own view of a joined room at 10,000 local rows; not host input." },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
