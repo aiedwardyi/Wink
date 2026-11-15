@@ -9,10 +9,10 @@
 - GPT-6.1 Terra gained Terminal-Bench costs at all 5 efforts.
 - Changed: 59 GDPval-AA Elos, 11 Terminal-Bench costs (Claude Fable 5.1, Gemini 3.8 Flash, Grok 4.7, Muse Spark 1.3 max) and the Argon cost above. Removed: Terminal-Bench costs for Claude Fable 5 max, Grok 4.6 low/medium/high, Muse Spark 1.3 xhigh and GPT-5.6 Terra low/medium/high/xhigh, because their model pages no longer carry an Intelligence Index cost breakdown.
 - GDPval-AA costs come from the Cost per Task view on the [gdpval-aa page](https://artificialanalysis.ai/evaluations/gdpval-aa), which shows one effort per model. Every Wink cost in that view was unchanged. Costs for efforts outside it keep their earlier reading.
-- Muse Ember (`muse-ember-1.0`) is mapped, with AA rows at xhigh and max, a [Vals Legal Research](https://www.vals.ai/benchmarks/legal_research) score of 49.038 at $0.056581 per test, and its [Meta list price](https://dev.meta.ai/docs/pricing-rate-limits). Meta prices Ember by input length ($0.10 input, $0.004 cached, $0.50 output per 1M tokens up to 200K input tokens; $0.30, $0.012 and $1.50 above), which the parser now reads. Ember is not in the picker, so it is not charted yet.
+- Muse Ember (`muse-ember-1.0`) is mapped, with AA rows at xhigh and max, a [Vals Legal Research](https://www.vals.ai/benchmarks/legal_research) score of 49.038 at $0.056581 per test, and its [Meta list price](https://dev.meta.ai/docs/pricing-rate-limits). Meta prices Ember by input length ($0.10 input, $0.004 cached, $0.50 output per 1M tokens up to 200K input tokens; $0.30, $0.012 and $1.50 above), which the parser now reads. Ember is in the picker and charted on Intelligence, Coding, Agentic, Legal and Cost using these existing rows.
 - Rams Index, CyberBench and the other list prices were re-read with no change.
 
-Picker model/chart gaps went from 24 to 17. Counts use the 17 picker models and active charts only.
+Picker model/chart gaps went from 24 to 17. Counts use the 17 picker models and active charts before Ember joined the picker.
 
 | Chart | Missing before | Missing after | Filled | Still missing |
 | --- | ---: | ---: | --- | --- |

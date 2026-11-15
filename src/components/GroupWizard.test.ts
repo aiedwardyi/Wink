@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import type { Action, Bot, Group, InstanceInfo } from "@/state/store";
+import { MSP_MUSE_MODELS } from "../../server/drivers/msp/muse.ts";
 
 const dispatched: Action[] = [];
 const apiCalls: Array<{ path: string; init?: RequestInit }> = [];
@@ -240,6 +241,28 @@ describe("GroupWizard members", () => {
       expect(menuTrigger(host, "Switch engine").textContent).toBe("Codex");
       await act(async () => button(host, "Add bot").click());
       expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("codex");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it.each(["en", "ko"] as const)("offers the requested Ember model in %s", async (locale) => {
+    applyLocale(locale);
+    const muse = { ...engine("muse", "museAgent", "Meta Muse"), models: MSP_MUSE_MODELS };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onAdd = vi.fn();
+    try {
+      await act(async () => root.render(createElement(NewBotRow, {
+        row: { key: 1, name: "Research", instanceId: "muse", model: "muse-ember-1.0", saving: false, error: null },
+        preferIndex: 0, instances: [muse], onPatch: () => undefined, onAdd,
+      })));
+      const ember = host.querySelector('option[value="muse-ember-1.0"]') as HTMLOptionElement;
+      expect(ember.textContent).toBe("Meta Muse Ember");
+      expect(ember.selected).toBe(true);
+      await act(async () => button(host, locale === "en" ? "Add bot" : "봇 추가").click());
+      expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("muse");
     } finally {
       await act(async () => root.unmount());
     }
