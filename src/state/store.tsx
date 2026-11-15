@@ -103,6 +103,15 @@ export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId" | "ha
   return visible;
 }
 
+/** Undoes a rejected send's settlement, unless something settled the card since. */
+function reopenCard(state: AppState, threadId: string, settles: { cardId: string; answered: string }): AppState {
+  const settledHere = (messages: readonly Message[]) => messages.some((message) => message.id === settles.cardId && message.card?.answered === settles.answered);
+  const bot = state.bots.find((candidate) => candidate.threadId === threadId);
+  if (bot && settledHere(bot.messages)) return patchCard(state, bot.id, settles.cardId, { answered: undefined });
+  const group = state.groups.find((candidate) => candidate.threadId === threadId);
+  return group && settledHere(group.messages) ? patchGroupCard(state, group.id, settles.cardId, { answered: undefined }) : state;
+}
+
 /** The open question a typed send settles in chat; a queued line's Send now was typed before. */
 function typedPast(state: AppState, action: Action) {
   if (action.type === "send" && !action.queueId) {
@@ -809,6 +818,7 @@ export function reducer(state: AppState, action: Action): AppState {
           text: action.text,
           at: Date.now(),
           after: action.after,
+          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
       if (paint.kind === "thinking") {
@@ -834,6 +844,7 @@ export function reducer(state: AppState, action: Action): AppState {
           kind: paint.kind,
           text: action.text,
           answersCard: action.cardId,
+          settles: typed ? { cardId: typed.question.id, answered: typed.answered } : undefined,
         }),
       };
     }
@@ -848,6 +859,8 @@ export function reducer(state: AppState, action: Action): AppState {
       );
       const acceptedSends = forgetAcceptedSend(state.acceptedSends, action.threadId, action.sendId);
       let next: AppState = { ...state, acceptedSends };
+      // a sync hold queued the send; only its paint goes
+      if (rejected?.settles && !action.held) next = reopenCard(next, action.threadId, rejected.settles);
       if (
         rejected?.kind === "thinking" &&
         action.botId &&
@@ -1448,6 +1461,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          // only once the server took the send, so it routed it with the question still open
+          const saveTyped = () => { if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           const post = () =>
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
@@ -1513,13 +1528,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
               });
-              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
+              if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId, held: true });
             }
             if (typeof settledThread === "string") {
               rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.queued === true });
             }
-            // after the server routed the send, so it saw the question still open
-            if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
+            saveTyped();
           };
           const sending = post()
             .then(settle)
@@ -1531,6 +1545,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 if (action.queueId) rawDispatch({ type: "consumePendingQueued", threadId, queueId: action.queueId });
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
+                saveTyped();
                 return;
               }
               // A queued send stays off the transcript until drain; the same
@@ -1786,7 +1801,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
-          if (typedBeforeSend) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
+          const saveTyped = () => { if (typedBeforeSend) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered }); };
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
@@ -1821,6 +1836,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 // idle: no turn will start, so settle it like a queued send or Thinking never ends
                 rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.idle === true });
               }
+              saveTyped();
             })
             .catch(async (error) => {
               cancelledSendsRef.current.delete(sendId);
@@ -1829,6 +1845,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (accepted && typeof threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId, message: accepted });
                 rawDispatch({ type: "sendSettled", threadId, sendId });
+                saveTyped();
                 return;
               }
               if (typeof threadId === "string") {

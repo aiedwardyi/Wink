@@ -42,6 +42,13 @@ it("an idle tap starts the same turn and marks the line with its card", async ()
   expect(h.startTurn.mock.calls[1]![2]).not.toHaveProperty("answersCard", expect.anything());
 });
 
+it("a tap marks only a card on the active path", async () => {
+  const h = harness();
+  h.store.branchMessage(h.bot.threadId, h.card.id, "start over");
+  await h.send({ text: "Can't tonight", cardId: h.card.id });
+  expect(h.startTurn.mock.calls[0]![2]).not.toHaveProperty("answersCard", expect.anything());
+});
+
 it("a tap into a running turn steers the same prompt and marks the row", async () => {
   const h = harness();
   h.busy();

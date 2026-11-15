@@ -10,6 +10,7 @@ interface Row {
   from?: { botId?: string };
   author?: { kind: string };
   call?: CallTag;
+  answersCard?: string;
   card?: { subtitle?: string; options?: string[]; askUser?: true; staysOpen?: true; requestId?: string; answered?: string; dismissed?: boolean };
 }
 
@@ -91,6 +92,11 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     }
     if (!answersQuestion(message)) continue;
     const text = message.text ?? "";
+    const tapped = message.answersCard ? asked.find((card) => card.id === message.answersCard) : undefined;
+    if (tapped) {
+      if (open.includes(tapped)) answer(tapped, text.startsWith(answerPrefix(tapped)) ? text.slice(answerPrefix(tapped).length) : text, message);
+      continue;
+    }
     const quoted = text.startsWith("Re: “") ? asked.findLast((card) => text.startsWith(answerPrefix(card))) : undefined;
     if (quoted) {
       if (open.includes(quoted)) answer(quoted, text.slice(answerPrefix(quoted).length), message);
@@ -106,6 +112,12 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     if (top && (states.get(top)?.state !== "waiting" || !top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
   }
   return states;
+}
+
+/** What the person's typed `text` answers `card` with: their own words, or "Answered in chat" past its choices. */
+export function typedReply(card: Row, text: string): string {
+  const { staysOpen, options } = card.card!;
+  return !staysOpen || !options?.length || options.includes(text.trim()) ? firstLine(text) : ANSWERED_IN_CHAT;
 }
 
 /** The chat's newest waiting ask_user card, if any. */

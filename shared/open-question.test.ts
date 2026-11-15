@@ -36,6 +36,13 @@ describe("a question settled with the person's line", () => {
     expect(scanQuestion([folder, branch({ options: ["main", "dev"], answered: "Answered in chat" }), line("release")])).toBe(folder);
   });
 
+  it("a tapped line answers its own card, even after a newer one arrived", () => {
+    const ship = { id: "ship", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship it?", staysOpen: true as const, options: ["Yes", "No"] } };
+    const tap = { ...line("Yes"), answersCard: "ship" };
+    expect(scanQuestion([ship, branch({}), tap])?.card.subtitle).toBe("Which branch?");
+    expect(scanQuestion([{ ...ship, card: { ...ship.card, answered: "Yes" } }, branch({}), tap])?.card.subtitle).toBe("Which branch?");
+  });
+
   it("leaves the next line to the older question", () => {
     expect(scanQuestion([folder, branch({ answered: "main" }), line("main"), line("docs")])).toBeNull();
     expect(scanQuestion([folder, branch({ dismissed: true }), line("docs")])).toBeNull();

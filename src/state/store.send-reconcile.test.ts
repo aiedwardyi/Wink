@@ -715,10 +715,59 @@ describe("typing while a question is open", () => {
 
   it("folds a room question at once", async () => {
     const room = { ...group, busyBotId: undefined, messages: [{ ...ask(["Can't tonight", "Sure"]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>(() => {}), [bot], [room]);
+    let accept!: (response: Response) => void;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [bot], [room]);
     await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "maybe at 8", threadId: room.threadId }));
     expect(store.state.groups[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
+    await act(async () => accept(Response.json({ ok: true, threadId: room.threadId })));
     expect(patches(fetch)).toEqual([["/api/groups/g1/cards/m-card", { answered: "Answered in chat" }]]);
+  });
+
+  it("a second typed reply answers the older question with its own words", async () => {
+    const folder = { ...ask([]), id: "m-folder", card: { ...card([]), subtitle: "Which folder?" } };
+    const branch = { ...ask([]), id: "m-branch", at: 2, card: { ...card([]), subtitle: "Which branch?" } };
+    const idle = { ...bot, busy: false, activity: "idle", messages: [folder, branch] } as Bot;
+    await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>(() => {}), [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "main", threadId: idle.threadId }));
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "docs", threadId: idle.threadId }));
+    expect(store.state.bots[0]!.messages.map((message) => message.card?.answered)).toEqual(["docs", "main"]);
+  });
+
+  it("saves a typed reply whose lost response the transcript recovers", async () => {
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const line: Message = { id: "u1", at: 2, role: "user", kind: "text", text: "maybe at 8", sendId: "s1" };
+    const fetch = await mount(() => Response.json({ messages: [line], hasMore: false }), undefined, [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId, sendId: "s1" }));
+    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]));
+  });
+
+  it("a rejected typed reply reopens its 1:1 question and saves nothing", async () => {
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, cancelled: true, threadId: idle.threadId }), [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
+    await vi.waitFor(() => expect(store.state.bots[0]?.messages[0]?.card?.answered).toBeUndefined());
+    expect(patches(fetch)).toEqual([]);
+  });
+
+  it("a reply held for sync keeps its question answered", async () => {
+    const idle = { ...bot, busy: false, activity: "idle", messages: [ask(["Can't tonight", "Sure"])] } as Bot;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, queued: true, reason: "sync", queueId: "q1", threadId: idle.threadId }), [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
+    await vi.waitFor(() => expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "Answered in chat" }]]));
+    expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe("Answered in chat");
+  });
+
+  it("a room saves a typed reply only once the room took it, and reopens on rejection", async () => {
+    const room = { ...group, busyBotId: undefined, messages: [{ ...ask(["Can't tonight", "Sure"]), from: { botId: "b1", name: "Bot", color: "green" } }] } as Group;
+    let patchedBeforePost: unknown[] | undefined;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
+      patchedBeforePost = patches(fetch);
+      return Response.json({ ok: true, cancelled: true, threadId: room.threadId });
+    }, [bot], [room]);
+    await act(async () => store.dispatch({ type: "sendGroup", groupId: room.id, text: "maybe at 8", threadId: room.threadId }));
+    expect(patchedBeforePost).toEqual([]);
+    await vi.waitFor(() => expect(store.state.groups[0]?.messages[0]?.card?.answered).toBeUndefined());
+    expect(patches(fetch)).toEqual([]);
   });
 
   it("leaves a settled question alone", async () => {

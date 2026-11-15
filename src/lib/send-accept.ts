@@ -15,6 +15,8 @@ export type AcceptedSend = {
   after?: boolean;
   /** A tapped choice: its placeholder hides like the line it stands for. */
   answersCard?: string;
+  /** The open card this typed send settled at once; a rejection reopens it. */
+  settles?: { cardId: string; answered: string };
 };
 
 export type AcceptedSends = Record<string, AcceptedSend[]>;
