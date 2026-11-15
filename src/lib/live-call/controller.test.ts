@@ -878,7 +878,7 @@ describe("VOICE-SEND: dropped orders (D1-D7)", () => {
     expect(nudges(engine())).toHaveLength(1);
   });
 
-  it("D3 a yes said over the offer still sends after a talk-over cancel, and its result is context, not a second ack", async () => {
+  it("D3 a yes said over the offer still sends after a talk-over cancel, told as a [Wink] line when the voice said nothing since", async () => {
     const { call, engine, posts } = await started({ "/messages": { status: 202, data: { ok: true } } });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     engine().events.toolCancel(["t1"]);
@@ -889,8 +889,7 @@ describe("VOICE-SEND: dropped orders (D1-D7)", () => {
     expect(messagesOf(posts)).toHaveLength(1);
     expect(engine().results).toEqual([]);
     engine().events.turnDone();
-    expect(engine().texts.filter((text) => text.includes("Sent:"))).toEqual([]);
-    expect(engine().contexts.at(-1)).toBe("[Wink] Already answered aloud. Context only, do not read it out.\nSent: Open the Orbit folder.");
+    expect(engine().texts.at(-1)).toBe("[Wink] Sent: Open the Orbit folder.");
   });
 
   it("D4 a final yes at hang-up sends before the call ends", async () => {

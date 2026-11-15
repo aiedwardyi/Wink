@@ -74,7 +74,8 @@ const TOOLS: Record<string, ToolRun> = {
 type Request = { text: string; accounted: boolean; nudged: boolean; failed: boolean; told: boolean; asks: Map<string, Promise<string>>; asked: string[]; misheard: boolean; overclaimed: boolean };
 /** A [Wink] line waiting for the voice to be quiet. */
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
-type Held = { text: string; valid?: () => boolean; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string };
+// `kept` is context it leaves behind when dropped as no longer valid.
+type Held = { text: string; valid?: () => boolean; kept?: string; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string };
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
@@ -618,7 +619,7 @@ export class LiveCall {
   }
 
   /** A result reaches the voice on the tool call it answers, or as a [Wink] line once that call is gone. */
-  private toolResult(ids: string[], name: string, subject: string, result: string, note?: string) {
+  private toolResult(ids: string[], name: string, subject: string, result: string, note?: string, said?: number) {
     // An ask redirected to propose_work shows until its offer replaces it.
     if (subject && !reached(result) && !result.startsWith("already") && !result.startsWith("not needed")) this.notSent(subject, result === CHANGE_ASK ? "needs a yes" : reasonOf(result));
     const engine = this.engine;
@@ -630,12 +631,10 @@ export class LiveCall {
     this.missed = false;
       return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     }
-    // Its call is gone and they already heard the voice answer: a line of its own would be a second ack.
-    if (note === HEARD) {
-      this.context.push(`[Wink] Already answered aloud. Context only, do not read it out.\n${told(heard, subject)}`);
-      return this.release();
-    }
-    this.held.push({ text: `[Wink] ${told(heard, subject)}` });
+    const line = `[Wink] ${told(heard, subject)}`;
+    // Its call is gone: once the voice has spoken since his answer, a line of its own would be a second ack.
+    const answered = note === HEARD && said !== undefined;
+    this.held.push(answered ? { text: line, valid: () => this.stats.voiceLines === said, kept: `[Wink] Already answered aloud. Context only, do not read it out.\n${told(heard, subject)}` } : { text: line });
     this.release();
   }
 
@@ -718,22 +717,23 @@ export class LiveCall {
     this.set({ pending: undefined });
   }
 
-  private answerTool(result: string, note?: string) {
+  private answerTool(result: string, note?: string, said?: number) {
     const pending = this.pending;
     if (!pending) return;
     this.clearPending();
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, note, said);
   }
 
   /** Yes or No on the pending order, tapped or spoken. A spoken one gets the voice's own turn, so its result must not make another. */
   async answer(yes: boolean, spoken = false) {
     const pending = this.pending;
     if (!pending) return;
+    const said = this.stats.voiceLines;
     if (!yes) {
       this.stats.orders.declined += 1;
       pending.req.accounted = false;
       this.open.settle(this.stats.userLines);
-      return this.answerTool("declined", spoken ? HEARD : undefined);
+      return this.answerTool("declined", spoken ? HEARD : undefined, said);
     }
     this.clearPending();
     this.stats.orders.confirmed += 1;
@@ -742,7 +742,6 @@ export class LiveCall {
     const req = this.req;
     // A tapped yes keeps the request, so "restarting it now" is backed by the order as well as its asks.
     req.asked.push(pending.order);
-    const said = this.stats.voiceLines;
     const result = await this.send(pending.order, { order: true });
     if (!reached(result)) {
       this.sent.delete(key);
@@ -751,7 +750,7 @@ export class LiveCall {
       req.asked = req.asked.filter((asked) => asked !== pending.order);
       this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
     }
-    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined);
+    this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined, said);
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
@@ -1173,7 +1172,10 @@ export class LiveCall {
     if (!this.connected || this.stalled || this.snapshot.hushed || this.playing || (this.gap && !this.held[0]?.fix) || this.cutHold || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
     this.carry();
     let item = this.held.shift();
-    while (item?.valid && !item.valid()) item = this.held.shift();
+    while (item?.valid && !item.valid()) {
+      if (item.kept) this.context.push(item.kept);
+      item = this.held.shift();
+    }
     if (!item) return;
     // The next turn relays a real result, so the guards sit it out.
     this.guarded = !item.nudge;

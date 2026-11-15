@@ -1,6 +1,6 @@
 // The 11-15 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039).
 // Silent: a fake engine and a fake audio port, no socket, mic or speaker.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CallLine, LiveVoice } from "../../../shared/live-call";
@@ -13,12 +13,13 @@ class FakeEngine implements LiveEngine {
   events!: LiveEvents;
   session!: LiveSession;
   texts: string[] = [];
+  contexts: string[] = [];
   results: Array<{ id: string; result: unknown }> = [];
   connect(session: LiveSession, events: LiveEvents) { this.session = session; this.events = events; }
   sendAudio() {}
   audioPaused() {}
   sendText(text: string) { this.texts.push(text); }
-  sendContext() {}
+  sendContext(text: string) { this.contexts.push(text); }
   sendToolResult(ids: string[], _name: string, result: unknown) { for (const id of ids) this.results.push({ id, result }); }
   close() {}
 }
@@ -630,7 +631,7 @@ describe("9 quiet means quiet", () => {
   });
 
   it("talk-over is a cut, never a duck: nothing turns the voice down to bring it back up", () => {
-    for (const file of ["./audio.ts", "./controller.ts"]) {
+    for (const file of readdirSync(new URL(".", import.meta.url)).filter((name) => /(?<!\.test)\.ts$/.test(name)).map((name) => `./${name}`)) {
       expect(readFileSync(new URL(file, import.meta.url), "utf8"), `${file}: barge-in must flush() playback, never lower the volume and raise it again`).not.toMatch(/\.volume\s*=|duck/i);
     }
   });
@@ -649,5 +650,6 @@ describe("9 quiet means quiet", () => {
     expect(sentToBot(posts)).toEqual(["Fix the login bug on the settings page"]);
     expect(engine().results).toEqual([]);
     expect(fixes(engine())).toEqual([]);
+    expect(engine().contexts.at(-1)).toContain("Already answered aloud. Context only, do not read it out.");
   });
 });
