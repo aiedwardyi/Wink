@@ -5353,7 +5353,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     store.settleTaskPacket(threadId);
-    return startedTurn(userMessage);
+    return startedTurn(userMessage, { cancelled: true });
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
     memoryLookup.release(bot.id, threadId);
@@ -5370,7 +5370,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     clearSendRunning(bot.id);
     logSummaryWait();
     store.settleTaskPacket(threadId);
-    return startedTurn(userMessage);
+    return startedTurn(userMessage, { cancelled: true });
   }
   // a pane note, delegation, routine, or peer ask starting this turn is not
   // the user reading anything - only their own message should clear it

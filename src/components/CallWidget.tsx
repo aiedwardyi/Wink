@@ -25,7 +25,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
   const shown = Boolean(live && bot && snap && !inChat);
   const pending = shown && Boolean(snap?.pending);
   const failed = snap?.status === "failed";
-  const notice = !shown || !snap ? "" : failed ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? noticeText(snap.notice, locale) : "";
+  const notice = !shown || !snap ? "" : failed ? [snap.error ? `${words.failed}: ${snap.error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ") : snap.notice ? noticeText(snap.notice, locale) : "";
 
   useEffect(() => {
     if (!shown || !snap?.startedAt || failed) return;

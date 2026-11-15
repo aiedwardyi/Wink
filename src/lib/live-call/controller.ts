@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksForChange, asksForQuiet, callsVoice, claimOf, looksUp, restates } from "./guard";
+import { asksAboutDone, asksForChange, asksForQuiet, callsVoice, claimOf, looksUp, ordersChange, restates } from "./guard";
 import { answersCard, GAP_MS } from "./manners";
 import { EarlyMic, OpenLines } from "./quick";
 
@@ -198,7 +198,7 @@ export class LiveCall {
   private quietTimer?: ReturnType<typeof setTimeout>;
   private ran = false;
   private req = request("");
-  private pending?: { order: string; toolIds: string[]; req: Request; timer: ReturnType<typeof setTimeout> };
+  private pending?: { order: string; toolIds: string[]; req: Request; upto: number; timer: ReturnType<typeof setTimeout> };
   private toolEngines = new Map<string, LiveEngine>();
   private cancelled = new Set<string>();
   private sent = new Set<string>();
@@ -228,6 +228,8 @@ export class LiveCall {
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
   private context: string[] = [];
+  // Handed to the engine, which sends it with its next text or tool result; a socket that drops first never did.
+  private riding: string[] = [];
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
@@ -527,6 +529,7 @@ export class LiveCall {
     const old = this.engine;
     this.engine = null;
     this.connected = false;
+    this.context.unshift(...this.riding.splice(0));
     this.flushHeard(this.quiet);
     this.turnHadAudio = false;
     this.generating = false;
@@ -558,7 +561,11 @@ export class LiveCall {
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
-    if (live.length) return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
+    if (live.length) {
+      this.carry();
+      this.riding = [];
+      return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
+    }
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
@@ -613,9 +620,12 @@ export class LiveCall {
       }
       this.stats.orders.expired += 1;
       pending.req.accounted = false;
+      // The bar says not sent, so a hang-up must not send it either.
+      this.open.settle(pending.upto);
+      this.postLines([{ who: "voice", text: told("expired", order), at: this.now() }]);
       this.answerTool("expired");
     };
-    const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
+    const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, upto: this.stats.userLines, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
     this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
     if (yes) void this.answer(true);
@@ -747,7 +757,7 @@ export class LiveCall {
   private guard(said: string) {
     if (this.guarded || !said) return;
     const req = this.req;
-    const claim = claimOf(said, asksAboutDone(req.text), !this.pending && !req.accounted && asksForChange(req.text));
+    const claim = claimOf(said, asksAboutDone(req.text), !this.pending && !req.accounted && ordersChange(req.text, [this.deps.botName, ...this.aliases]));
     // A turn answering a nudge that still sent nothing is a dropped request, whatever it says.
     if (!claim && !req.nudged) return;
     if (claim?.claim === "failed") {
@@ -1052,14 +1062,22 @@ export class LiveCall {
   // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
     if (!this.connected || this.stalled || this.snapshot.hushed || this.playing || (this.gap && !this.held[0]?.fix) || this.cutHold || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
-    for (const text of this.context.splice(0)) this.engine?.sendContext(text);
+    this.carry();
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();
     if (!item) return;
     // The next turn relays a real result, so the guards sit it out.
     this.guarded = !item.nudge;
     this.playing = { item, ended: false };
+    this.riding = [];
     this.engine?.sendText(item.text);
+  }
+
+  private carry() {
+    for (const text of this.context.splice(0)) {
+      this.engine?.sendContext(text);
+      this.riding.push(text);
+    }
   }
 
   // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
@@ -1251,10 +1269,15 @@ export class LiveCall {
       this.flushSaid(share);
     }
     if (hangUp) await Promise.all([...this.sends]);
-    const words = hangUp ? this.open.text() : "";
+    const left = this.open.text();
+    const words = hangUp ? left : "";
     if (this.pending && !words) {
       this.stats.orders.dropped += 1;
       this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
+    } else if (!hangUp && left) {
+      // A drop is no yes: his words stay on screen, unsent.
+      this.postLines([{ who: "voice", text: `Not sent (call ended): ${left}`, at }]);
+      this.notSent(left, "call ended");
     }
     this.pending = undefined;
     if (words) {

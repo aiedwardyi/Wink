@@ -83,7 +83,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
 // Known outcome reasons; anything else (a server error) shows as sent in English and is dropped elsewhere.
 const REASONS: Record<LocaleId, Record<string, string>> = {
   en: {},
-  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨" },
+  ko: { declined: "거절됨", expired: "시간 초과", replaced: "다른 요청으로 바뀜", "needs a yes": "확인 필요", cancelled: "취소됨", "call ended": "통화 종료" },
 };
 
 export function noticeText(notice: NonNullable<CallState["notice"]>, locale: LocaleId): string {
@@ -279,7 +279,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
   const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
   const [privacy] = useState(() => !seenPrivacy());
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? (snap.error ? `${words.failed}: ${snap.error}` : words.failed) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
+  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? [snap.error ? `${words.failed}: ${snap.error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ") : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
   useEffect(() => {

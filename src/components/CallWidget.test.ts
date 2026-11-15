@@ -184,6 +184,15 @@ describe("call follows you", () => {
     expect(button(shown, "End")).not.toBeNull();
   });
 
+  it("a dropped call shows the words it never sent beside the failure", async () => {
+    await mount(atlas);
+    const engine = await call();
+    await render(juno);
+    await act(async () => engine.events.heard("Fix the login bug."));
+    await act(async () => engine.events.closed(1006, ""));
+    expect(widget()!.querySelector("[role=alert]")?.textContent).toBe("Call failed: The call dropped. Not sent: Fix the login bug. (call ended)");
+  });
+
   it("opens the call's chat from the widget and hangs up from it", async () => {
     await mount(atlas);
     const engine = await call();

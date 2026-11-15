@@ -2,16 +2,18 @@
 
 export type Claim = "promise" | "cant" | "unsure" | "failed";
 
-const ACTION_EN = /\b(?:(?:i'?ll|i will|i am going to|i'?m going to|let me|let's|i'?m|i am|i'?ve|i have|i just|i already)\s+(?:certainly\s+|just\s+|now\s+|already\s+|go ahead and\s+)?(?:check|checking|checked|look|looking|looked|find|finding|found|ask|asking|asked|open|opening|opened|add|adding|added|send|sending|sent|start|starting|started|get started|handle|handling|fix|fixing|fixed|schedule|scheduled|restart|restarting|run|running|ran|take care|go ahead|proceed|work on|working on)|i (?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran))\b(?!\s+(?:late|behind|out|low)\b)/i;
+const ACTION_EN = /\b(?:(?:i'?ll|i will|i am going to|i'?m going to|let me|let's|i'?m|i am|i'?ve|i have|i just|i already)\s+(?:certainly\s+|just\s+|now\s+|already\s+|go ahead and\s+)?(?:check|checking|checked|look|looking|looked|find|finding|found|ask|asking|asked|open|opening|opened|add|adding|added|send|sending|sent|start|starting|started|get started|handle|handling|fix|fixing|fixed|schedule|scheduled|restart|restarting|run|running|ran|take care|go ahead|proceed|work on|working on|merge|merging|merged|deploy|deploying|deployed|push|pushing|pushed|delete|deleting|deleted|remove|removing|removed|install|installing|installed|create|creating|created|update|updating|updated|commit|committing|committed|close|closing|closed|move|moving|moved|rename|renaming|renamed)|i (?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran|merged|deployed|pushed|deleted|removed|installed|created|updated|committed|closed|moved|renamed))\b(?!\s+(?:late|behind|out|low|back)\b)/i;
+// "Opening it now.": the same promise with its subject dropped.
+const DOING_EN = /^(?:(?:okay|ok|sure|got it|alright|right|yes|yep|yeah)[,!.]?\s+)?(?:now\s+)?(?:checking|looking|opening|adding|sending|starting|fixing|restarting|running|merging|deploying|pushing|deleting|removing|installing|creating|updating|committing|closing|moving|renaming)\s+(?:it|that|this|them|those|the|your|my|a|an|up|into|now|right)\b/i;
 const ON_IT = /^(?:(?:okay|ok|sure|got it|alright|right)[,!.]?\s+)?(?:i'?m\s+)?on it\b/i;
-const ACTION_KO = /확인해\s?(?:볼게|보겠|드릴게|드리겠)|확인했|알아\s?(?:볼게|보겠)|알아봤|찾아\s?(?:볼게|보겠)|찾았|열어\s?(?:볼게|드릴게|드리겠)|열었|추가했|추가해\s?(?:둘게|드릴게|놓을게)|바로\s?(?:확인|진행|처리)|진행할게|진행하겠|처리할게|처리하겠|보내\s?드릴게|보냈|물어\s?(?:볼게|보겠)/;
+const ACTION_KO = /확인해\s?(?:볼게|보겠|드릴게|드리겠)|확인했|알아\s?(?:볼게|보겠)|알아봤|찾아\s?(?:볼게|보겠)|찾았|열어\s?(?:볼게|드릴게|드리겠)|열었|추가했|추가해\s?(?:둘게|드릴게|놓을게)|바로\s?(?:확인|진행|처리)|진행할게|진행하겠|처리할게|처리하겠|보내\s?드릴게|보냈|물어\s?(?:볼게|보겠)|(?:확인|추가|시작|수정|예약|재시작|실행|머지|병합|배포|푸시|삭제|설치|업데이트|커밋|검색)\s?(?:할게|하겠|해\s?(?:볼게|둘게|놓을게|드릴게|보겠|드리겠))|(?:열|고칠|보낼|지울|만들|닫을|옮길|바꿀|돌릴|찾을|올릴)게|(?:고쳐|보내|지워|만들어|닫아|옮겨|바꿔|돌려|올려)\s?(?:볼게|둘게|놓을게|드릴게|줄게|보겠|드리겠)|(?:그렇게|바로|지금|당장)\s?(?:할게|하겠)/;
 const CANT = /\b(?:i can(?:not|'?t)|i'?m unable|i am unable|unable to|i (?:don'?t|do not) have access|no access)\b[^.!?]*\b(?:open|access|see|check|find|look|do|interact|reach|read|run)\b|(?:열|볼|접근할|확인할|찾을|실행할|읽을|들어갈) 수(?:가)? 없|권한이 없/i;
 const UNSURE = /\b(?:not (?:entirely |quite |really |completely )?sure|i (?:don'?t|do not) know|i (?:don'?t|do not) (?:report|provide|track)|i (?:don'?t|do not) have (?:that |this |any |the )?(?:info|information|data|details|access))\b|잘 모르|모르겠|알 수 없|정보가 없/i;
 // An offer, question or condition promises nothing yet.
 const HYPOTHETICAL = /\?\s*$|\b(?:if you|let me know|whenever|once you|when you|would you like|do you want|want me to|shall i|should i)\b|시면|으면|할까요|드릴까요|볼까요/i;
 const CLARIFY = /\b(?:heard|hear you|catch that|repeat|say that again|what you mean)\b|다시 말씀|다시 한 ?번|못 들었|잘 안 들/i;
 // What a recap reports as done; only what is left after it can still be a promise.
-const DONE = /\bi(?:'?ve| have| just| already)?\s+(?:just\s+|already\s+)?(?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran)\b|확인했|알아봤|찾았|열었|추가했|보냈/gi;
+const DONE = /\bi(?:'?ve| have| just| already)?\s+(?:just\s+|already\s+)?(?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran|merged|deployed|pushed|deleted|removed|installed|created|updated|committed|closed|moved|renamed)\b|확인했|알아봤|찾았|열었|추가했|보냈/gi;
 const FAILED = /\b(?:nothing (?:was|has been|got) sent|(?:wasn'?t|was not|isn'?t|is not|hasn'?t been|has not been|couldn'?t be|could not be) sent|not sent|nothing is running)\b|아무것도 (?:안 )?보내지 않|보내지 (?:않았|못했)|안 보냈|전송되지 않/i;
 
 // A thinking noise is not an answer, so it promises nothing.
@@ -27,7 +29,7 @@ export function claimOf(said: string, recap = false, order = false): { claim: Cl
   for (const sentence of sentences(said)) {
     if (HYPOTHETICAL.test(sentence)) continue;
     const ahead = recap ? sentence.replace(DONE, " ") : sentence;
-    if (ACTION_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
+    if (ACTION_EN.test(ahead) || DOING_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
     if (CANT.test(sentence)) return { claim: "cant", sentence };
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
     if (!FILLER_ONLY.test(sentence)) plain ||= sentence;
@@ -44,6 +46,18 @@ const CHANGE_KO = /(?:열어|실행해|재시작해|재부팅해|고쳐|수정�
 /** A request to change something, even phrased as a question: it needs propose_work and a yes. */
 export function asksForChange(question: string): boolean {
   return CHANGE_EN.test(question) || CHANGE_KO.test(question);
+}
+
+const LEAD_EN = "hey|hi|hello|ok(?:ay)?|so|and|now|well|alright|yeah|yes|please|just|then|also|go ahead and";
+const NEED_EN = new RegExp(`\\b(?:i (?:need|want|would like|'d like) you to|you (?:need|have) to) (?:please )?(?:just )?(?:${CHANGES})\\b`, "i");
+// The plain form ends the line: "고쳐도 돼?" asks. No 보내, 꺼 or 켜: "좋은 하루 보내" and "내 꺼" are talk.
+const COMMAND_KO = /(?:열어|실행해|재시작해|재부팅해|고쳐|수정해|추가해|삭제해|지워|예약해|설치해|배포해|푸시해|머지해|커밋해|만들어|바꿔|옮겨|닫아|업데이트해)\s?(?:봐|라|요)?[\s.!~…]*$/;
+
+/** His line as an order in the shapes speech takes: behind a hello, a name or a softener, as "I need you to", or a plain Korean command. */
+export function ordersChange(heard: string, names: readonly string[] = []): boolean {
+  const lead = [LEAD_EN, ...names.map(escaped).filter(Boolean)].join("|");
+  const said = heard.replace(new RegExp(`^\\s*(?:(?:${lead})(?![\\p{L}\\p{N}])[\\s,.!]*)+`, "iu"), "");
+  return asksForChange(said) || NEED_EN.test(heard) || COMMAND_KO.test(heard);
 }
 
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
