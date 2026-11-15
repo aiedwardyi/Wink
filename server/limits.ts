@@ -185,6 +185,8 @@ export const PENDING_LIMITS: Limits = {
 
 /** Guards the scan cannot see by shape; the test checks each still exists. */
 export const NAMED_GUARDS: Limits = {
+  "electron/terminal-host.mjs": { "Ctrl+C is not allowed": "Never interrupts a running worker: a confirmed send cannot carry Ctrl+C into a live pane." },
+  "server/terminal-snapshot.ts": { "Ctrl+C is not allowed": "Never interrupts a running worker: the remote terminal box cannot paste Ctrl+C into a live pane." },
   "server/index.ts": {
     chainEdge: "Runaway loop: the room reply-loop guard; each bot-to-bot mention pair runs once per human message.",
     MAX_COMMS_DEPTH: "Runaway loop: the bot-to-bot reply-loop guard.",
