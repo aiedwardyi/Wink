@@ -8,7 +8,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, taskAskSchema } from "./task-asks.ts";
+import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
@@ -91,6 +91,7 @@ const taskResumePacketSchema = z.object({
   lastEventId: idSchema.optional(),
   turnsAtWrite: z.number().int().nonnegative(),
   asks: z.array(taskAskSchema).optional(),
+  lastAskId: z.number().int().nonnegative().optional(),
 }).strict();
 
 export type TaskResumePacket = z.output<typeof taskResumePacketSchema>;
@@ -173,6 +174,8 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
     }];
   });
   if (asks?.length) normalized.asks = asks;
+  const lastAskId = lastAskIdOf(packet);
+  if (lastAskId) normalized.lastAskId = lastAskId;
   return taskResumePacketSchema.parse(normalized);
 }
 

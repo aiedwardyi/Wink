@@ -185,9 +185,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       for (const artifact of artifacts) {
         if (!next.artifacts.some((existing) => existing.ref === artifact.ref)) next.artifacts.push(artifact);
       }
-      const asks = body.asks ? mergeTaskAsks(next.asks, body.asks, Date.now()) : null;
+      const asks = body.asks ? mergeTaskAsks(next, body.asks, Date.now()) : null;
       if (asks && "error" in asks) return json(res, 400, { error: asks.error });
-      if (asks) next.asks = asks.asks;
+      if (asks) Object.assign(next, { asks: asks.asks, lastAskId: asks.lastAskId });
       next.updatedAt = Date.now();
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";

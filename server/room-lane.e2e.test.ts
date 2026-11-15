@@ -301,7 +301,7 @@ describe("room lane", () => {
     await holdOneOnOne(bee, "b7");
 
     await post(room.id, "@Ace start the chain");
-    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(2);
+    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(3);
     await poll(async () => (await groupOf(room.id)).working).toBe(false);
     open("a7");
     open("b7");

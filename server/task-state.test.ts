@@ -185,6 +185,13 @@ describe("task resume packets", () => {
     expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(open);
   });
 
+  it("keeps the highest ask id across saves after that ask is gone", () => {
+    const top: TaskAsk = { id: "A7", ask: "old", status: "done", at: 1, changedAt: 1 };
+    expect(writeTaskResumePacket(packet({ asks: [top] }), { dir }).lastAskId).toBe(7);
+    writeTaskResumePacket({ ...readTaskResumePacket("thread-1", { dir })!, asks: [] }, { dir });
+    expect(readTaskResumePacket("thread-1", { dir })?.lastAskId).toBe(7);
+  });
+
   it("replaces an old packet without leaving temporary files", () => {
     writeTaskResumePacket(packet(), { dir });
     writeTaskResumePacket(packet({ nextAction: "Publish after approval" }), { dir });

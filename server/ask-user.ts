@@ -9,7 +9,7 @@ import { z } from "zod";
 import { ANSWERED_IN_CHAT, askStates, scanQuestion } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
-import { addQuestionAsk, answerQuestionAsk, isOpenAsk, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 
 export const ASK_USER_TITLE = "Your bot has a question";
 export const ASK_USER_QUESTION_MAX = 2_000;
@@ -165,29 +165,31 @@ export function skippedQuestion(before: readonly Message[], next: Message): Mess
 /** Files a question card a newer one followed unanswered on its thread's asks list, and closes it once answered. `update` saves what `change` returns; null saves nothing. */
 export function watchSkippedQuestions(
   store: Pick<Store, "onChange" | "activePath" | "importingSync">,
-  update: (threadId: string, change: (asks: TaskAsk[] | undefined) => TaskAsk[] | null) => void,
+  update: (threadId: string, change: (book: AskBook | undefined) => SavedAsks | null) => void,
   now = Date.now,
 ): void {
+  const answered = (book: AskBook | undefined, asks: TaskAsk[] | null): SavedAsks | null => asks && { asks, lastAskId: lastAskIdOf(book) };
   store.onChange((change) => {
     if (store.importingSync) return;
     if (change.type === "message" && !change.imported && isAskUserCard(change.message)) {
       const path = store.activePath(change.threadId);
       const card = skippedQuestion(path.at(-1)?.id === change.message.id ? path.slice(0, -1) : path, change.message)?.card;
-      if (card) update(change.threadId, (asks) => addQuestionAsk(asks, card.subtitle, card.options, now()));
+      if (card) update(change.threadId, (book) => addQuestionAsk(book, card.subtitle, card.options, now()));
     } else if (change.type === "message" && !change.imported && sentByPerson(change.message)) {
       // a typed answer leaves no patch; only a thread with a filed question pays for the walk
-      update(change.threadId, (asks) => {
+      update(change.threadId, (book) => {
+        const asks = book?.asks;
         if (!asks?.some((ask) => ask.kind === "question" && isOpenAsk(ask))) return null;
         const path = store.activePath(change.threadId);
         for (const [card, state] of askStates(path.at(-1)?.id === change.message.id ? path : [...path, change.message])) {
-          if (state.state === "answered" && state.by?.id === change.message.id) return answerQuestionAsk(asks, card.card!.subtitle, card.at, now());
+          if (state.state === "answered" && state.by?.id === change.message.id) return answered(book, answerQuestionAsk(asks, card.card!.subtitle, card.at, now()));
         }
         return null;
       });
     } else if (change.type === "message.patch" && isAskUserCard(change.message) && change.message.card!.answered) {
       // a card-typed answer can land just after its message filed the card as skipped
       const { card, at } = change.message;
-      update(change.threadId, (asks) => answerQuestionAsk(asks, card!.subtitle, at, now()));
+      update(change.threadId, (book) => answered(book, answerQuestionAsk(book?.asks, card!.subtitle, at, now())));
     }
   });
 }

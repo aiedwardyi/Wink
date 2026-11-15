@@ -4351,8 +4351,8 @@ bus.subscribe((event: RuntimeEvent) => {
 const askHold = watchAskHold(store, bus);
 watchSkippedQuestions(store, (threadId, change) => {
   const current = taskPacketForWrite(threadId);
-  const asks = current && change(current.asks);
-  if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 });
 
 // Drain queued delegations for a source thread after its turn settles.

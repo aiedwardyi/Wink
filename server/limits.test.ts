@@ -7,12 +7,12 @@ import { describe, expect, it } from "vitest";
 import { KEPT_LIMITS, NAMED_GUARDS, PENDING_LIMITS, PROMPT_WORDING } from "./limits.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const scanned = /^(?:server|src|electron)\/(?!vendor\/|testing\/).+\.(?:[cm]?[jt]s|tsx)$/;
+const scanned = /^(?:server|src|electron|shared)\/(?!vendor\/|testing\/).+\.(?:[cm]?[jt]s|tsx)$/;
 const skipped = /\.(?:test|node-test|spec)\.[cm]?[jt]sx?$|\.d\.ts$/;
 const phrase = /\b(?:at most|limited to|keeps \d+)\b/i;
 const constant = /^MAX_[A-Z0-9_]+$/;
 
-interface Hit { file: string; line: number; text: string }
+interface Hit { file: string; line: number; text: string; constant: boolean }
 
 function limitHits(file: string, source: string): Hit[] {
   if (!phrase.test(source) && !source.includes("MAX_")) return [];
@@ -21,10 +21,10 @@ function limitHits(file: string, source: string): Hit[] {
   const at = (node: ts.Node) => tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && constant.test(node.name.text) && /^\d/.test(node.initializer?.getText(tree) ?? "")) {
-      hits.push({ file, line: at(node), text: node.name.text });
+      hits.push({ file, line: at(node), text: node.name.text, constant: true });
     }
     const literal = ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isJsxText(node);
-    if (literal && phrase.test(node.text)) hits.push({ file, line: at(node), text: node.text });
+    if (literal && phrase.test(node.text)) hits.push({ file, line: at(node), text: node.text, constant: false });
     ts.forEachChild(node, visit);
   };
   visit(tree);
@@ -39,7 +39,7 @@ for (const limits of [KEPT_LIMITS, PROMPT_WORDING, PENDING_LIMITS]) {
 function checkLimits(files: readonly string[], read: (file: string) => string): string[] {
   const used = new Set<string>();
   const unknown = files.flatMap((file) => limitHits(file, read(file))).filter((hit) => {
-    const key = Object.keys(registered[hit.file] ?? {}).find((find) => hit.text.includes(find));
+    const key = Object.keys(registered[hit.file] ?? {}).find((find) => hit.constant ? find === hit.text : hit.text.includes(find));
     if (key) used.add(`${hit.file}\0${key}`);
     return !key;
   }).map((hit) => `New limit found at ${hit.file}:${hit.line}. Wink adds no limits over the user. Remove it, or add it to server/limits.ts with the crash, data loss or runaway loop it prevents.`);
@@ -49,8 +49,8 @@ function checkLimits(files: readonly string[], read: (file: string) => string): 
   return [...unknown, ...stale];
 }
 
-const tracked = () => execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", windowsHide: true })
-  .split("\0").filter((file) => scanned.test(file) && !skipped.test(file) && file !== "server/limits.ts");
+const selected = (files: readonly string[]) => files.filter((file) => scanned.test(file) && !skipped.test(file) && file !== "server/limits.ts");
+const tracked = () => selected(execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", windowsHide: true }).split("\0"));
 const readTracked = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
 describe("limits registry", () => {
@@ -70,6 +70,19 @@ describe("limits registry", () => {
     const [file, finds] = Object.entries(KEPT_LIMITS)[0]!;
     expect(checkLimits([file], () => `${readTracked(file)}\nconst MAX_PLANTED_CAP = 3;\n`)).toHaveLength(1);
     expect(checkLimits([file], () => "")).toHaveLength(Object.keys(finds).length);
+  });
+
+  it("scans every app source folder and skips tests, types and the registry", () => {
+    expect(selected(["server/a.ts", "src/b.tsx", "electron/c.mjs", "shared/planted.ts", "shared/planted.test.ts", "shared/d.d.ts", "server/limits.ts", "server/testing/e.ts", "docs/f.ts"]))
+      .toEqual(["server/a.ts", "src/b.tsx", "electron/c.mjs", "shared/planted.ts"]);
+  });
+
+  it("flags a new constant whose name only extends a registered one", () => {
+    const file = "electron/error-reports.mjs";
+    expect(KEPT_LIMITS[file]).toHaveProperty("MAX_BYTES");
+    expect(checkLimits([file], () => `${readTracked(file)}\nconst MAX_BYTES_PER_USER = 8;\n`)).toEqual([
+      expect.stringContaining(`New limit found at ${file}:`),
+    ]);
   });
 
   it("holds every limit in the repo", () => {

@@ -217,8 +217,8 @@ describe("skipped ask_user questions", () => {
       activePath: () => [...path],
     };
     watchSkippedQuestions(store, (threadId, change) => {
-      const asks = change(lists.get(threadId));
-      if (asks) lists.set(threadId, asks);
+      const saved = change({ asks: lists.get(threadId) });
+      if (saved) lists.set(threadId, saved.asks);
     }, () => 50);
     const append = (message: Message, imported?: true) => {
       path.push(message);
