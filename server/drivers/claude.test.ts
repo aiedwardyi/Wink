@@ -1443,6 +1443,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
   });
 
+  it("interrupt ends a turn stuck on a tool that never returns and frees its thread", async () => {
+    await create("tool-hang");
+    await instance.adapter.sendTurn({ threadId: "t-tool-hang", text: "go" });
+    await recorder.until((e) => e.type === "item.started" && e.itemType === "tool");
+
+    await instance.adapter.interruptTurn("t-tool-hang");
+    expect(instance.adapter.hasSession("t-tool-hang")).toBe(false);
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: false });
+  });
+
   it("releases the thread on interrupt so the next sendTurn is not rejected", async () => {
     await create("hang");
     await instance.adapter.sendTurn({ threadId: "t-handoff", text: "one" });

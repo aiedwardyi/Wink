@@ -3231,6 +3231,12 @@ const watchdog = new TurnWatchdog({
     }, 6_000);
     release.unref?.();
   },
+  onQuiet: (turn) => {
+    const bot = store.bot(turn.botId);
+    // a lane turn or an open approval owns what the bot's activity says
+    if (!bot?.busy || bot.activeThreadId !== turn.threadId || bot.activity === "waiting-on-you") return;
+    store.setActivity(bot.id, turn.quiet ? "no-signal" : "working", turn.threadId);
+  },
 });
 watchdog.start();
 

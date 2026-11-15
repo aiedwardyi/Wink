@@ -11,7 +11,8 @@
 // on a human approval are exempt — waiting on a person is not a stall. So is
 // a turn with a tool still in flight: a long build or test run emits nothing
 // between item.started and item.completed, and killing it mid-call loses the
-// whole turn.
+// whole turn. Silence past `stallMs` there only marks it quiet, so the user
+// sees it and Stop ends it.
 export interface WatchedTurn {
   threadId: string;
   botId: string;
@@ -20,6 +21,8 @@ export interface WatchedTurn {
   waitingOnHuman: boolean;
   /** Tool item ids started and not yet completed on this turn. */
   toolsInFlight: Set<string>;
+  /** A tool in flight has been silent past stallMs. */
+  quiet: boolean;
 }
 
 export interface TurnWatchdogOptions {
@@ -27,6 +30,8 @@ export interface TurnWatchdogOptions {
   checkMs: number;
   /** Called once per stalled turn, after the entry is removed. */
   onStall: (turn: WatchedTurn) => void;
+  /** Called when `quiet` flips. */
+  onQuiet: (turn: WatchedTurn) => void;
   now?: () => number;
 }
 
@@ -68,13 +73,21 @@ export class TurnWatchdog {
       lastEventAt: at,
       waitingOnHuman: false,
       toolsInFlight: new Set(),
+      quiet: false,
     });
+  }
+
+  private heard(turn: WatchedTurn): void {
+    turn.lastEventAt = this.now();
+    if (!turn.quiet) return;
+    turn.quiet = false;
+    this.opts.onQuiet(turn);
   }
 
   /** Any provider event for the thread proves the turn is alive. */
   touch(threadId: string): void {
     const turn = this.turns.get(threadId);
-    if (turn) turn.lastEventAt = this.now();
+    if (turn) this.heard(turn);
   }
 
   /** request.opened → true (a human is deciding; not a stall however long
@@ -83,7 +96,7 @@ export class TurnWatchdog {
     const turn = this.turns.get(threadId);
     if (!turn) return;
     turn.waitingOnHuman = waiting;
-    turn.lastEventAt = this.now();
+    this.heard(turn);
   }
 
   /** A tool call opened; it holds the stall clock until it completes or the
@@ -109,8 +122,13 @@ export class TurnWatchdog {
   sweep(): void {
     const at = this.now();
     for (const turn of this.turns.values()) {
-      if (turn.waitingOnHuman || turn.toolsInFlight.size > 0) continue;
-      if (at - turn.lastEventAt < this.opts.stallMs) continue;
+      if (turn.waitingOnHuman || at - turn.lastEventAt < this.opts.stallMs) continue;
+      if (turn.toolsInFlight.size > 0) {
+        if (turn.quiet) continue;
+        turn.quiet = true;
+        this.opts.onQuiet(turn);
+        continue;
+      }
       this.turns.delete(turn.threadId);
       this.opts.onStall(turn);
     }
