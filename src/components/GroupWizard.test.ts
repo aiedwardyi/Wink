@@ -258,9 +258,11 @@ describe("GroupWizard members", () => {
         row: { key: 1, name: "Research", instanceId: "muse", model: "muse-ember-1.0", saving: false, error: null },
         preferIndex: 0, instances: [muse], onPatch: () => undefined, onAdd,
       })));
-      const ember = host.querySelector('option[value="muse-ember-1.0"]') as HTMLOptionElement;
-      expect(ember.textContent).toBe("Meta Muse Ember");
-      expect(ember.selected).toBe(true);
+      const modelTrigger = menuTrigger(host, locale === "en" ? "Change model" : "모델 변경");
+      expect(modelTrigger.textContent).toBe("Meta Muse Ember");
+      const ember = (await menuOptions(modelTrigger)).find((option) => option.textContent === "Meta Muse Ember");
+      expect(ember?.getAttribute("aria-checked")).toBe("true");
+      await closeMenu();
       await act(async () => button(host, locale === "en" ? "Add bot" : "봇 추가").click());
       expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("muse");
     } finally {
