@@ -614,12 +614,30 @@ describe("task state clipping", () => {
     const schema = taskStateUpdateSchema([]);
     const ids = { fromBotId: "bot-1", fromThreadId: "thread-1" };
     expect(rejection(schema.safeParse({ ...ids, notes: "x" }))).toContain("unknown field notes");
-    expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "a", status: "active" }, { step: "b", status: "active" }] }))).toContain("at most one plan step may be active");
     expect(rejection(schema.safeParse({ ...ids, goal: "   " }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: [{ step: "", status: "pending" }] }))).toContain("plan.0.step");
     expect(rejection(schema.safeParse({ ...ids, goal: 5 }))).toContain("goal");
     expect(rejection(schema.safeParse({ ...ids, plan: "step one" }))).toContain("plan");
     expect(rejection(schema.safeParse(ids))).toContain("at least one task field is required");
-    expect(rejection(schema.safeParse({ ...ids, plan: Array.from({ length: 21 }, () => ({ step: "a", status: "pending" })) }))).toContain("limit 20");
+  });
+
+  it("trims long lists with a note instead of refusing the update", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: Array.from({ length: 25 }, (_, index) => ({ step: `step ${index}`, status: index < 2 ? "active" : "pending" })),
+      blockers: Array.from({ length: 12 }, (_, index) => ({ kind: "input", note: `blocker ${index}` })),
+      artifacts: Array.from({ length: 22 }, (_, index) => ({ ref: `file-${index}.md`, label: `File ${index}` })),
+      asks: Array.from({ length: 30 }, (_, index) => ({ ask: `ask ${index}`, status: "open" })),
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
+    expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(2);
+    expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
+    expect(parsed.data.artifacts).toHaveLength(20);
+    expect(parsed.data.asks).toHaveLength(30);
+    expect(clipped).toEqual(["plan (25 > 20)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
   });
 });

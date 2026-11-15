@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "declined"] as const;
 export const ASK_STALE_MS = 6 * 60 * 60 * 1000;
-export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40, update: 20 } as const;
+export const ASK_LIMITS = { ask: 80, ref: 80, kept: 40 } as const;
 const BRIEF_ASKS = 5;
 const QUESTIONS_KEPT = 10;
 

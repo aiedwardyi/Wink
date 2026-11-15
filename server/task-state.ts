@@ -316,14 +316,16 @@ export function taskStateUpdateSchema(clipped: string[]) {
     clipped.push(`${path} (${text.length} > ${max})`);
     return clipText(text, max);
   };
+  const keep = <T>(path: string, items: T[], max: number, from: "first" | "last"): T[] => {
+    if (items.length <= max) return items;
+    clipped.push(`${path} (${items.length} > ${max})`);
+    return from === "first" ? items.slice(0, max) : items.slice(-max);
+  };
   const plan = z.array(z.object({
     step: z.string().trim().min(1),
     status: z.enum(["pending", "active", "done", "skipped"]),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => ({ ...item, step: clip(`plan.${index}.step`, item.step, LIMITS.step) })),
-  ).refine(
-    (items) => items.filter((item) => item.status === "active").length <= 1,
-    "at most one plan step may be active",
+  }).strict()).transform((items) =>
+    keep("plan", items, LIMITS.plan, "first").map((item, index) => ({ ...item, step: clip(`plan.${index}.step`, item.step, LIMITS.step) })),
   );
   // Empty string clears. Whitespace-only is rejected before trim.
   const nextAction = z.string().refine(
@@ -332,14 +334,14 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const blockers = z.array(z.object({
     kind: z.enum(["login", "input", "engine"]),
     note: z.string().trim().min(1),
-  }).strict()).max(10).transform((items) =>
-    items.map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
+  }).strict()).transform((items) =>
+    keep("blockers", items, LIMITS.blockers, "last").map((item, index) => ({ ...item, note: clip(`blockers.${index}.note`, item.note, LIMITS.note) })),
   );
   const artifacts = z.array(z.object({
     ref: z.string().trim().min(1),
     label: z.string().trim().min(1),
-  }).strict()).max(20).transform((items) =>
-    items.map((item, index) => {
+  }).strict()).transform((items) =>
+    keep("artifacts", items, LIMITS.artifacts, "last").map((item, index) => {
       if (item.ref.length > LIMITS.ref) return item;
       return { ref: item.ref, label: clip(`artifacts.${index}.label`, item.label, LIMITS.label) };
     }),
@@ -349,7 +351,7 @@ export function taskStateUpdateSchema(clipped: string[]) {
     ask: z.string().trim().min(1).optional(),
     status: z.enum(ASK_STATUSES),
     ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
-  }).strict()).max(ASK_LIMITS.update).transform((items) =>
+  }).strict()).transform((items) =>
     items.map((item, index) => ({
       ...item,
       ...(item.ask === undefined ? {} : { ask: clip(`asks.${index}.ask`, item.ask, ASK_LIMITS.ask) }),
