@@ -62,14 +62,26 @@ describe("task asks", () => {
     expect(mergeTaskAsks([ask(1)], [{ status: "open" }], NOW)).toEqual({ error: "A new ask needs ask, the user's words in brief; send id to update one." });
   });
 
-  it("drops the oldest closed asks past the cap and refuses when every kept ask is open", () => {
+  it("drops the oldest closed asks past 40 and never refuses an open one", () => {
     const kept = Array.from({ length: 40 }, (_, index) => ask(index + 1, { status: index < 3 ? "done" : "open" }));
     const { asks } = saved(mergeTaskAsks(kept, [{ ask: "One more", status: "open" }, { ask: "And another", status: "open" }], NOW));
     expect(asks.map((item) => item.id)).toEqual([...Array.from({ length: 38 }, (_, index) => `A${index + 3}`), "A41", "A42"]);
     const open = Array.from({ length: 40 }, (_, index) => ask(index + 1));
-    expect(mergeTaskAsks(open, [{ ask: "One too many", status: "open" }], NOW)).toEqual({
-      error: "That would leave 41 asks open; Wink keeps 40. Close finished ones as done or declined first.",
-    });
+    const forty = saved(mergeTaskAsks(open, [{ ask: "The 41st", status: "open" }], NOW));
+    expect(forty.asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
+    expect(forty.note).toBe("Asks saved: added A41; 41 open.");
+    let many: TaskAsk[] = forty.asks;
+    for (let index = 42; index <= 100; index += 1) many = saved(mergeTaskAsks(many, [{ ask: `ask ${index}`, status: "open" }], NOW)).asks;
+    expect(many).toHaveLength(100);
+    expect(many.at(-1)).toMatchObject({ id: "A100", ask: "ask 100", status: "open" });
+  });
+
+  it("keeps the brief at five open asks however many are open", () => {
+    const open = Array.from({ length: 100 }, (_, index) => ask(index + 1));
+    const block = asksBlock(open, NOW);
+    expect(block.split("\n")).toHaveLength(7);
+    expect(block).toMatch(/\+95 more open$/);
+    expect(tokens(block)).toBeLessThanOrEqual(tokens(asksBlock(open.slice(0, 40), NOW)) + 1);
   });
 
   it.each(["open", "building", "waiting-for-user"] as const)("flags a %s ask with no change for 6 hours as stale", (status) => {
@@ -146,10 +158,11 @@ describe("task asks", () => {
       expect(addQuestionAsk([question(1, { ask: "Ship it?", status: "done" })], "Ship it?", [], NOW)?.map((item) => item.id)).toEqual(["A1", "A2"]);
     });
 
-    it("keeps the 40 cap: drops the oldest closed first and never an open one", () => {
+    it("drops the oldest closed ask past 40 and files past 40 open", () => {
       const kept = Array.from({ length: 40 }, (_, index) => ask(index + 1, { status: index < 2 ? "done" : "open" }));
       expect(addQuestionAsk(kept, "One more?", [], NOW)?.map((item) => item.id)).toEqual([...Array.from({ length: 39 }, (_, index) => `A${index + 2}`), "A41"]);
-      expect(addQuestionAsk(Array.from({ length: 40 }, (_, index) => ask(index + 1)), "One more?", [], NOW)).toBeNull();
+      const open = Array.from({ length: 40 }, (_, index) => ask(index + 1));
+      expect(addQuestionAsk(open, "One more?", [], NOW)?.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
     });
 
     it("caps open questions apart, so they never block the bot's own asks", () => {
@@ -157,7 +170,7 @@ describe("task asks", () => {
       expect(addQuestionAsk(questions, "One more?", [], NOW)?.map((item) => item.id)).toEqual([...Array.from({ length: 9 }, (_, index) => `A${index + 2}`), "A11"]);
       const full = [...questions, ...Array.from({ length: 30 }, (_, index) => ask(index + 11))];
       const { asks } = saved(mergeTaskAsks(full, [{ ask: "One more", status: "open" }], NOW));
-      expect(asks.map((item) => item.id)).toEqual([...Array.from({ length: 39 }, (_, index) => `A${index + 2}`), "A41"]);
+      expect(asks.map((item) => item.id)).toEqual(Array.from({ length: 41 }, (_, index) => `A${index + 1}`));
     });
 
     it("lets the bot close a question with the usual asks update", () => {

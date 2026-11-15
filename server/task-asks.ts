@@ -39,6 +39,13 @@ const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 const isStale = (ask: TaskAsk, now: number) => isOpenAsk(ask) && !isQuestion(ask) && now - ask.changedAt >= ASK_STALE_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
+// only closed asks fall off, oldest first; an open ask is never dropped or refused
+function trimClosed(asks: TaskAsk[]): void {
+  for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
+    asks.splice(closed, 1);
+  }
+}
+
 /** No id adds an ask, an id updates it; closing keeps it, and only the oldest closed asks fall off past the cap. */
 export function mergeTaskAsks(
   existing: readonly TaskAsk[] | undefined,
@@ -70,15 +77,7 @@ export function mergeTaskAsks(
     asks.push({ id: `A${last}`, ask: text, status: update.status, ...(update.ref ? { ref: update.ref } : {}), at: now, changedAt: now });
     added.push(`A${last}`);
   }
-  while (asks.length > ASK_LIMITS.kept) {
-    const closed = asks.findIndex((ask) => !isOpenAsk(ask));
-    // a skipped question gives way before the bot's own ask is refused
-    const drop = closed < 0 ? asks.findIndex(isQuestion) : closed;
-    if (drop < 0) {
-      return { error: `That would leave ${asks.length} asks open; Wink keeps ${ASK_LIMITS.kept}. Close finished ones as done or declined first.` };
-    }
-    asks.splice(drop, 1);
-  }
+  trimClosed(asks);
   return { asks, note: `Asks saved${added.length ? `: added ${added.join(", ")}` : ""}; ${asks.filter(isOpenAsk).length} open.` };
 }
 
@@ -87,18 +86,17 @@ const clip = (text: string, max: number) => {
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
 };
 
-/** Files a question card left unanswered as an open question; null when an open ask has its words or none can close to make room. */
+/** Files a question card left unanswered as an open question; null when an open ask has its words. */
 export function addQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, choices: readonly string[], now: number): TaskAsk[] | null {
   const ask = clip(question, ASK_LIMITS.ask);
   const asks = (existing ?? []).map((item) => ({ ...item }));
   if (!ask || asks.some((item) => isOpenAsk(item) && words(item.ask) === words(ask))) return null;
   const questions = asks.filter((item) => isQuestion(item) && isOpenAsk(item));
   if (questions.length >= QUESTIONS_KEPT) asks.splice(asks.indexOf(questions[0]!), 1);
-  if (asks.filter(isOpenAsk).length >= ASK_LIMITS.kept) return null;
   const listed = clip(choices.join(" / "), ASK_LIMITS.ref);
   const id = `A${Math.max(0, ...asks.map((item) => Number(item.id.slice(1)))) + 1}`;
   asks.push({ id, ask, status: "open", kind: "question", ...(listed ? { choices: listed } : {}), at: now, changedAt: now });
-  while (asks.length > ASK_LIMITS.kept) asks.splice(asks.findIndex((item) => !isOpenAsk(item)), 1);
+  trimClosed(asks);
   return asks;
 }
 

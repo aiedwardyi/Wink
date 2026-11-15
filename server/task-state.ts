@@ -12,6 +12,8 @@ import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, taskAskSchema } from "./task-asks.
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
+// open asks ride outside the 16 KiB budget; this only stops a runaway file from being read whole
+const TASK_STATE_READ_MAX_BYTES = 8 * 1024 * 1024;
 
 const LIMITS = {
   id: 160,
@@ -88,7 +90,7 @@ const taskResumePacketSchema = z.object({
   ]),
   lastEventId: idSchema.optional(),
   turnsAtWrite: z.number().int().nonnegative(),
-  asks: z.array(taskAskSchema).max(ASK_LIMITS.kept).optional(),
+  asks: z.array(taskAskSchema).optional(),
 }).strict();
 
 export type TaskResumePacket = z.output<typeof taskResumePacketSchema>;
@@ -177,12 +179,11 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
 function serializeBounded(packet: TaskResumePacket): string {
   const bounded = structuredClone(packet);
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
-  let serialized = JSON.stringify(bounded, null, 2);
-  while (Buffer.byteLength(serialized, "utf8") > TASK_STATE_MAX_BYTES) {
+  const budgeted = () => Buffer.byteLength(JSON.stringify({ ...bounded, asks: bounded.asks?.filter((ask) => !isOpenAsk(ask)) }, null, 2), "utf8");
+  while (budgeted() > TASK_STATE_MAX_BYTES) {
     const closedAsk = bounded.asks?.findIndex((ask) => !isOpenAsk(ask)) ?? -1;
     if (closedAsk >= 0) {
       bounded.asks?.splice(closedAsk, 1);
-      serialized = JSON.stringify(bounded, null, 2);
       continue;
     }
     const removable = pruneOrder.filter((candidate) => bounded[candidate].length > 1);
@@ -196,9 +197,8 @@ function serializeBounded(packet: TaskResumePacket): string {
     )[0];
     if (!key) throw new Error("task state exceeds its storage limit");
     bounded[key].shift();
-    serialized = JSON.stringify(bounded, null, 2);
   }
-  return serialized;
+  return JSON.stringify(bounded, null, 2);
 }
 
 // a sha256 hex digest and its newline
@@ -213,7 +213,7 @@ function sealed(packet: TaskResumePacket, dir: string): { path: string; serializ
   return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
 }
 
-function fileText(path: string, maxBytes = TASK_STATE_MAX_BYTES): string | null {
+function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
   try {
     const status = lstatSync(path);
     if (!status.isFile() || status.isSymbolicLink() || status.size > maxBytes) return null;
@@ -240,7 +240,7 @@ function savedMark(path: string): string {
 }
 
 function stagedRecord(path: string, threadId: ThreadId): { raw: string; packet: TaskResumePacket } | null {
-  const text = fileText(stagedPath(path), TASK_STATE_MAX_BYTES + MARK_BYTES);
+  const text = fileText(stagedPath(path), TASK_STATE_READ_MAX_BYTES + MARK_BYTES);
   if (!text || text.slice(0, MARK_BYTES) !== savedMark(path)) return null;
   const raw = text.slice(MARK_BYTES);
   const packet = recordOf(raw, threadId);

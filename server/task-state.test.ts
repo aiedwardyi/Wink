@@ -152,7 +152,7 @@ describe("task resume packets", () => {
     expect(writeTaskResumePacket(packet(), { dir })).not.toHaveProperty("asks");
   });
 
-  it("drops closed asks first to fit 16 KiB and never an open one", () => {
+  it("drops closed asks first to fit 16 KiB beside the open ones and never an open one", () => {
     const many = Array.from({ length: 40 }, (_, index): TaskAsk => ({
       id: `A${index + 1}`,
       ask: `${index}:${"가".repeat(70)}`,
@@ -165,9 +165,24 @@ describe("task resume packets", () => {
 
     const saved = writeTaskResumePacket(packet({ asks: many, completed }), { dir });
 
-    expect(statSync(join(dir, "thread-1.json")).size).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
-    expect(saved.asks?.map((ask) => ask.id)).toEqual(many.filter((ask) => ask.status === "open").map((ask) => ask.id));
+    const rest = { ...saved, asks: saved.asks?.filter((ask) => ask.status !== "open") };
+    expect(Buffer.byteLength(JSON.stringify(rest, null, 2), "utf8")).toBeLessThanOrEqual(TASK_STATE_MAX_BYTES);
+    const dropped = many.filter((ask) => !saved.asks?.some((kept) => kept.id === ask.id));
+    expect(dropped.length).toBeGreaterThan(0);
+    expect(dropped).toEqual(many.filter((ask) => ask.status === "done").slice(0, dropped.length));
     expect(saved.completed.length).toBeGreaterThan(0);
+  });
+
+  it("saves and reads back 100 open asks past the 16 KiB budget", () => {
+    const open = Array.from({ length: 100 }, (_, index): TaskAsk => ({
+      id: `A${index + 1}`, ask: `${index}:${"가".repeat(70)}`, status: "open", ref: "r".repeat(80), at: index, changedAt: index,
+    }));
+
+    const saved = writeTaskResumePacket(packet({ asks: open }), { dir });
+
+    expect(statSync(join(dir, "thread-1.json")).size).toBeGreaterThan(TASK_STATE_MAX_BYTES);
+    expect(saved.asks).toEqual(open);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(open);
   });
 
   it("replaces an old packet without leaving temporary files", () => {
