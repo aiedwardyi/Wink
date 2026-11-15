@@ -243,7 +243,7 @@ describe("remove", () => {
   it("binds a pre-upgrade member's resumed stream to the same seat and removal ban", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
     expect(mina.status).toBe(200);
     const stream = await openStream(id, mina.body.key, pcOf("Mina"));
@@ -263,7 +263,7 @@ describe("remove", () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
     const mina = await joined(group, "Mina");
-    const legacy = createInvite(id, "Joon", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Joon", ["Edward"]);
     const joon = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Joon");
     const { body } = await invite(id);
     const snapshot = () => call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: joon.body.key, device: pcOf("Mina") });
@@ -277,7 +277,7 @@ describe("remove", () => {
   it("does not bind a device without a live guest key", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina");
     expect((await call(`/room/v1/rooms/${id}/snapshot`, { relay: true, key: "wkg_wrong", device: pcOf("Mina") })).status).toBe(401);
     const { body } = await invite(id);
@@ -288,7 +288,7 @@ describe("remove", () => {
   it("retires the shared code when removing a member who joined before device tracking", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await call("/room/v1/join", { method: "POST", relay: true, body: { code: `wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}` } });
     expect(mina.status).toBe(200);
     const { body } = await invite(id);
@@ -304,7 +304,7 @@ describe("remove", () => {
   it("keeps a legacy invite join on the same seat when that PC uses the room code", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const first = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
     expect(first.status).toBe(200);
     const { body } = await invite(id);
@@ -317,7 +317,7 @@ describe("remove", () => {
   it("bars a legacy invite joiner's PC from the room code after Remove", async () => {
     const group = peopleRoom();
     const id = group.hosted.roomId;
-    const legacy = createInvite(id, "Mina", "chat", ["Edward"]);
+    const legacy = createInvite(id, "Mina", ["Edward"]);
     const mina = await joinAs(`wkr1:${HOST}:${legacy.invite.id}.${legacy.secret}`, "Mina", pcOf("Mina"));
     expect(mina.status).toBe(200);
     expect((await remove(id, mina.body.person.id)).status).toBe(200);

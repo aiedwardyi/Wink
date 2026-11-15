@@ -96,8 +96,8 @@ describe("room translation", () => {
   });
 
   it.each([false, true])("restores romanized member names and replaces legacy cache: joined=%s", async (joined) => {
-    addPerson(roomId, "이서연", "chat", []);
-    addPerson(roomId, "Unmentioned Person", "chat", []);
+    addPerson(roomId, "이서연", []);
+    addPerson(roomId, "Unmentioned Person", []);
     entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "Mina" }, text: "이서연님, 준비됐어요." }).id;
     if (joined) {
       joinRoom();
@@ -133,8 +133,8 @@ describe("room translation", () => {
   });
 
   it("restores repeated and overlapping names without changing mentions or suffixes", async () => {
-    addPerson(roomId, "서연", "chat", []);
-    addPerson(roomId, "Mina Park", "chat", []);
+    addPerson(roomId, "서연", []);
+    addPerson(roomId, "Mina Park", []);
     const text = "@이서연님, 서연, Mina Park, 이서연.";
     entryId = appendRoomEntry(roomId, { author: { kind: "person", id: "p1", name: "이서연" }, text }).id;
     generateText.mockImplementation(async (...args: unknown[]) => String(args[0]).match(/<message>\n([\s\S]*)\n<\/message>/)![1]!

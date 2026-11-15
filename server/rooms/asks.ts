@@ -1,6 +1,5 @@
 // Team room asks: one row per request to a room's bot, moved only by
-// compare-and-set, plus the durable day and hour quotas. Both live in rooms.db
-// beside the log, in tables of their own.
+// compare-and-set. They live in rooms.db beside the log, in a table of their own.
 import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,7 +31,7 @@ export interface RoomAsk {
   quoteId?: string;
   /** Unset while held; Allow or Answer only picks it. */
   grant?: RoomGrant;
-  /** The grant came from the host's tap, not the asker's level. */
+  /** The grant came from the host's tap. */
   allowed: boolean;
   clean: boolean;
   state: AskState;
@@ -57,17 +56,7 @@ export interface RoomAskDeps {
 /** Words answers plug in here; with none, a words ask fails without a call. */
 export const roomAskHooks: { words?: (ask: RoomAsk, instance: ProviderInstance | null) => void } = {};
 
-export const ROOM_LIMITS = {
-  messagesPerPersonDay: 1_000,
-  messagesPerRoomDay: 5_000,
-  asksPerPersonHour: 30,
-  asksPerRoomHour: 120,
-  openWorkPerPerson: 1,
-  heldPerPerson: 3,
-};
-
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
+const DAY = 24 * 60 * 60 * 1000;
 const LIVE: readonly AskState[] = ["queued", "running"];
 const NEXT: Record<AskState, readonly AskState[]> = {
   held: ["queued", "failed", "cancelled"],
@@ -127,13 +116,6 @@ function open(): DatabaseSync {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS asks_by_room ON asks (room_id, state);
-    CREATE TABLE IF NOT EXISTS room_spend (
-      room_id TEXT NOT NULL,
-      person_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS room_spend_by_room ON room_spend (room_id, kind, at);
   `);
   return db;
 }
@@ -191,10 +173,9 @@ export function roomAsks(roomId: string, states: readonly AskState[]): RoomAsk[]
   return rows.map(rowToAsk);
 }
 
-/** Terminal asks and spend older than a day go. */
+/** Terminal asks older than a day go. */
 function prune(now: number): void {
   db().prepare("DELETE FROM asks WHERE state IN ('done', 'failed', 'cancelled') AND updated_at < ?").run(now - DAY);
-  db().prepare("DELETE FROM room_spend WHERE at < ?").run(now - DAY);
 }
 
 export function createAsk(draft: Omit<RoomAsk, "id" | "at" | "state" | "reason" | "allowed">): RoomAsk {
@@ -368,7 +349,7 @@ export async function finishEnd(id: string): Promise<boolean> {
   return true;
 }
 
-/** Every ending of a live ask: Cancel, Leave, Remove, a level drop, the deadline, room Stop. */
+/** Every ending of a live ask: Cancel, Leave, Remove, the deadline, room Stop. */
 export async function endAsk(id: string, end: AskEnd, line?: string): Promise<boolean> {
   const first = beginEnd(id, end, line);
   if (first !== "stopping") return first === "ended";
@@ -382,7 +363,7 @@ export function stopRoomAsks(roomId: string): string[] {
   return roomAsks(roomId, ["queued", "running"]).filter((ask) => beginEnd(ask.id, "cancelled") === "stopping").map((ask) => ask.id);
 }
 
-/** Remove, Leave or a level change: end what the person's level no longer covers. */
+/** Remove or Leave: end the person's asks once they are out of the room. */
 export function revalidatePersonAsks(roomId: string, personId: string): Promise<boolean[]> {
   const asks = roomAsks(roomId, ["held", "queued", "running"]).filter((ask) => ask.asker.kind === "person" && ask.asker.id === personId);
   return Promise.all(asks.map((ask) => {
@@ -408,40 +389,10 @@ export function failInterruptedAsks(): number {
   return failed;
 }
 
-function spent(roomId: string, kind: "message" | "ask", since: number, personId?: string): number {
-  const row = (personId === undefined
-    ? db().prepare("SELECT COUNT(*) AS n FROM room_spend WHERE room_id = ? AND kind = ? AND at > ?").get(roomId, kind, since)
-    : db().prepare("SELECT COUNT(*) AS n FROM room_spend WHERE room_id = ? AND kind = ? AND at > ? AND person_id = ?").get(roomId, kind, since, personId)) as { n: number };
-  return row.n;
-}
-
-export function spend(roomId: string, personId: string, kind: "message" | "ask"): void {
-  db().prepare("INSERT INTO room_spend (room_id, person_id, kind, at) VALUES (?, ?, ?, ?)").run(roomId, personId, kind, Date.now());
-}
-
-/** Why this person can't send now, if they can't. The host has no quota. `behind` lets work wait behind their open request. */
-export function sendRefusal(roomId: string, personId: string, ask: RoomGrant | "held" | null, behind = false): string | null {
-  const now = Date.now();
-  if (spent(roomId, "message", now - DAY, personId) >= ROOM_LIMITS.messagesPerPersonDay) return "you've sent today's limit of messages in this room";
-  if (spent(roomId, "message", now - DAY) >= ROOM_LIMITS.messagesPerRoomDay) return "this room has reached today's message limit";
-  if (!ask) return null;
-  const mine = roomAsks(roomId, ["held", "queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === personId);
-  if (ask === "held") return mine.filter((row) => row.state === "held").length >= ROOM_LIMITS.heldPerPerson ? "you already have 3 requests waiting" : null;
-  return askRefusal(roomId, personId, ask, mine, behind);
-}
-function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: RoomAsk[], behind = false): string | null {
-  const now = Date.now();
-  if (ask === "work" && !behind && mine.filter((row) => row.grant === "work" && row.state !== "held").length >= ROOM_LIMITS.openWorkPerPerson) return "wait for your last request to finish";
-  if (spent(roomId, "ask", now - HOUR, personId) >= ROOM_LIMITS.asksPerPersonHour) return "you've asked the bot the most it takes in an hour";
-  if (spent(roomId, "ask", now - HOUR) >= ROOM_LIMITS.asksPerRoomHour) return "this room has asked the bot the most it takes in an hour";
-  return null;
-}
-
 /** A queued ask starts: work on the room's queue, words through its hook. */
 export function runAsk(ask: RoomAsk): void {
   const { dispatch, instance } = need();
   if (peopleOnlyRoom(ask.roomId)) return void endAsk(ask.id, "failed");
-  if (ask.asker.kind === "person") spend(ask.roomId, ask.asker.id, "ask");
   if (ask.grant === "work") return dispatch(ask);
   if (roomAskHooks.words) return roomAskHooks.words(ask, instance(ask.botId, ask.threadId));
   void endAsk(ask.id, "failed");
@@ -451,11 +402,6 @@ export function runAsk(ask: RoomAsk): void {
 export function admitAsk(id: string, grant: RoomGrant): RoomAsk | null {
   const ask = askById(id);
   if (ask?.state !== "held") return null;
-  if (ask.asker.kind === "person") {
-    const mine = roomAsks(ask.roomId, ["queued", "running", "stopping"]).filter((row) => row.asker.kind === "person" && row.asker.id === ask.asker.id);
-    const refusal = askRefusal(ask.roomId, ask.asker.id, grant, mine);
-    if (refusal) throw Object.assign(new Error(refusal), { status: 429 });
-  }
   const moved = db().prepare("UPDATE asks SET state = 'queued', grant_kind = ?, allowed = 1, updated_at = ? WHERE id = ? AND state = 'held'")
     .run(grant, Date.now(), id).changes === 1;
   if (!moved) return null;

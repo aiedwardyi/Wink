@@ -177,7 +177,7 @@ function peopleRoom(name = "Team"): HostedGroup {
 }
 
 function code(group: HostedGroup, name: string): { code: string; inviteId: string; secret: string } {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   return { code: `wkr1:${HOST}:${invite.id}.${secret}`, inviteId: invite.id, secret };
 }
 
@@ -331,7 +331,7 @@ describe("door routes", () => {
     expect((await post("/room/v1/join", { code: code(botRoom, "Mina").code })).status).toBe(200);
     expect(roomPeople(botRoom.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
     const loose = createRoom("Loose");
-    const { invite, secret } = createInvite(loose.id, "Joon", "chat", ["Edward"]);
+    const { invite, secret } = createInvite(loose.id, "Joon", ["Edward"]);
     expect(await post("/room/v1/join", { code: `wkr1:${HOST}:${invite.id}.${secret}` })).toMatchObject({ status: 404, body: { error: "no-invite" } });
     expect(roomInvites(loose.id).map((row) => row.id)).toEqual([invite.id]);
   });

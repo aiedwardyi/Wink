@@ -20,13 +20,12 @@ export function wordsWindow(entries: readonly RoomEntry[]): RoomEntry[] {
   return newest(entries);
 }
 
-/** A work turn trusts only the host, people Trusted now, and clean bot
- * answers to them. An answer whose ask is not in `entries` is dropped. */
-export function workWindow(entries: readonly RoomEntry[], trusted: ReadonlySet<string>): RoomEntry[] {
+/** A work turn reads every member like the host, and clean bot answers to
+ * them. An answer whose ask is not in `entries` is dropped. */
+export function workWindow(entries: readonly RoomEntry[]): RoomEntry[] {
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const trustedAuthor = (entry: RoomEntry | undefined) =>
-    entry?.author.kind === "host" || (entry?.author.kind === "person" && trusted.has(entry.author.id));
+  const member = (entry: RoomEntry | undefined) => entry?.author.kind === "host" || entry?.author.kind === "person";
   return newest(entries.filter((entry) => entry.author.kind === "bot"
-    ? entry.clean === true && entry.replyToId !== undefined && trustedAuthor(byId.get(entry.replyToId))
-    : trustedAuthor(entry)));
+    ? entry.clean === true && entry.replyToId !== undefined && member(byId.get(entry.replyToId))
+    : member(entry)));
 }

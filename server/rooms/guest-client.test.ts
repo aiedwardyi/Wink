@@ -723,7 +723,7 @@ describe("bot lines", () => {
     expect(c.room("r1")!.unread).toBe(2);
   });
 
-  it("hands on each new bot line once, never a backfill or a person's line, and a Stop", async () => {
+  it("hands on each new line once, never a backfill, and a Stop", async () => {
     const mine = { kind: "bot", id: "tb-pete", name: "Pete", owner: "p1" } as const;
     const frame = (body: unknown) => `data: ${JSON.stringify(body)}
 
@@ -740,14 +740,14 @@ describe("bot lines", () => {
       }
       reply(res, 404, { error: "not found" });
     };
-    const onBotLine = vi.fn();
+    const onLine = vi.fn();
     const onStop = vi.fn();
-    const c = guest({ onBotLine, onStop });
+    const c = guest({ onLine, onStop });
     expect((await c.join(CODE)).ok).toBe(true);
     await until(() => onStop.mock.calls.length === 1);
     expect(c.room("r1")!.entries).toHaveLength(3);
     await c.botSend("r1", "tb-pete", "@Wink yours");
-    expect(onBotLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e4"]]);
+    expect(onLine.mock.calls.map(([roomId, entry]) => [roomId, entry.id])).toEqual([["r1", "e2"], ["r1", "e3"], ["r1", "e4"]]);
     expect(onStop).toHaveBeenCalledWith("r1");
   });
 
