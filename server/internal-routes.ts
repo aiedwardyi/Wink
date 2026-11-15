@@ -12,7 +12,6 @@ import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { claimOpenAsk, MAX_OPEN_ASKS, releaseOpenAsk } from "./comms-budget.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
 import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
@@ -310,22 +309,17 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
-      // Depth stops recursion, not breadth. Both claims happen before the
+      // Depth stops recursion, the root budget breadth. The claim happens before the
       // approval card so a turn cannot open unbounded cards either.
       const taskId = newId();
-      if (!claimOpenAsk(fromThreadId, taskId)) {
-        return json(res, 200, { limit: `You already have ${MAX_OPEN_ASKS} teammate messages waiting. Collect those replies first.` });
-      }
       const credit = reserve(snapshot.rootId, "ask");
       if (!credit.ok) {
-        releaseOpenAsk(fromThreadId, taskId);
         postRefusalNotice(store, credit.reason, snapshot.rootId, taskId, fromThreadId, store.dmGroup(from.id, target.id)?.threadId);
         return json(res, 200, { limit: refusalText(credit.reason) });
       }
       const reservation = credit.reservation;
       const refuse = (code: number, error: string) => {
         release(reservation);
-        releaseOpenAsk(fromThreadId, taskId);
         return json(res, code, { error });
       };
       let currentFrom = from;
@@ -619,7 +613,6 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           self: "a bot cannot delegate to itself",
           too_deep: "message chains are limited to one hop",
           no_target: "no such bot",
-          too_many: "too many delegations queued on this turn - finish some first",
         };
         return json(res, 200, { error: said[queued.result === "ok" ? "no_target" : queued.result] });
       }
