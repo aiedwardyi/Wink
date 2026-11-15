@@ -216,6 +216,13 @@ describe("O1 a promise with nothing behind it is caught, whatever shape the orde
     expect(plain.filter((said) => claimOf(said))).toEqual([]);
   });
 
+  it("a gerund that explains is not a promise", () => {
+    const explains = ["Running the tests locally will show you the failure.", "Opening the settings panel lets you choose a voice.", "Restarting the server is the quickest fix.", "Checking the logs usually helps."];
+    expect(explains.filter((said) => claimOf(said))).toEqual([]);
+    const promises = ["Opening the settings so you can choose a voice.", "Checking the logs now.", "Restarting the server, it is slow today."];
+    expect(promises.filter((said) => claimOf(said)?.claim !== "promise")).toEqual([]);
+  });
+
   it.each([
     ["Hey, open my Desktop folder.", "Opening it now."],
     ["Just merge it.", "Merging it now."],

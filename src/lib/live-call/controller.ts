@@ -1279,7 +1279,8 @@ export class LiveCall {
       this.flushHeard();
       this.flushSaid(share);
     }
-    if (hangUp) await Promise.all([...this.sends]);
+    // A send already on its way may still land, so its words are not called unsent before it does.
+    await Promise.all([...this.sends]);
     const left = this.open.text();
     const words = hangUp ? left : "";
     if (this.pending && !words) {

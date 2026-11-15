@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall, useCallChatShown } from "@/lib/live-call/active";
 import { BotAvatar } from "./Avatar";
-import { clock, noticeText, OrderCard, ResumeButton, useLive, WORDS } from "./LiveCallBar";
+import { clock, failedText, noticeText, OrderCard, ResumeButton, useLive, WORDS } from "./LiveCallBar";
 
 /** The live call outside its own chat: tap to go back, mute, hang up, and answer an order. */
 export function CallWidget({ narrow = false, className }: { narrow?: boolean; className?: string }) {
@@ -25,7 +25,7 @@ export function CallWidget({ narrow = false, className }: { narrow?: boolean; cl
   const shown = Boolean(live && bot && snap && !inChat);
   const pending = shown && Boolean(snap?.pending);
   const failed = snap?.status === "failed";
-  const notice = !shown || !snap ? "" : failed ? [snap.error ? `${words.failed}: ${snap.error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ") : snap.notice ? noticeText(snap.notice, locale) : "";
+  const notice = !shown || !snap ? "" : failed ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : "";
 
   useEffect(() => {
     if (!shown || !snap?.startedAt || failed) return;

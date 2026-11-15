@@ -92,6 +92,13 @@ export function noticeText(notice: NonNullable<CallState["notice"]>, locale: Loc
   return `${words[notice.kind]}: ${notice.text}${why ? ` (${why})` : ""}`;
 }
 
+/** "Call failed: X. Not sent: Y"; a server error may bring its own period. */
+export function failedText(snap: CallState, locale: LocaleId): string {
+  const words = WORDS[locale] ?? WORDS.en;
+  const error = snap.error?.endsWith(".") ? snap.error.slice(0, -1) : snap.error;
+  return [error ? `${words.failed}: ${error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ");
+}
+
 async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
@@ -279,7 +286,7 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
   const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
   const [privacy] = useState(() => !seenPrivacy());
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
-  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? [snap.error ? `${words.failed}: ${snap.error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ") : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
+  const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
   // Marked once shown, not at mount: a restarted render would hide it before anyone saw it.
   useEffect(() => {

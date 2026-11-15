@@ -10,6 +10,7 @@ import type { LiveEvents } from "@/lib/live-call/engine";
 import { CallHostSlot, CallWidgetSlot } from "./CallSlots";
 import { CallVoicePicker } from "./CallVoicePicker";
 import { ChatView } from "./ChatView";
+import { failedText } from "./LiveCallBar";
 
 const fakes = vi.hoisted(() => ({ engines: [] as Array<{ events: LiveEvents; closed: boolean }>, sse: undefined as { onmessage: ((event: { data: string; lastEventId: string }) => void) | null } | undefined, puts: [] as unknown[], clips: [] as Array<{ src: string; paused: boolean; onended: (() => void) | null }> }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
@@ -191,6 +192,12 @@ describe("call follows you", () => {
     await act(async () => engine.events.heard("Fix the login bug."));
     await act(async () => engine.events.closed(1006, ""));
     expect(widget()!.querySelector("[role=alert]")?.textContent).toBe("Call failed: The call dropped. Not sent: Fix the login bug. (call ended)");
+  });
+
+  it("a server error that ends in a period gets no second one", () => {
+    const notice = { kind: "notSent" as const, text: "Fix the login bug.", why: "call ended" };
+    expect(failedText({ status: "failed", muted: false, error: "Could not reach Google: fetch failed.", notice }, "en")).toBe("Call failed: Could not reach Google: fetch failed. Not sent: Fix the login bug. (call ended)");
+    expect(failedText({ status: "failed", muted: false, error: "The call dropped." }, "en")).toBe("Call failed: The call dropped");
   });
 
   it("opens the call's chat from the widget and hangs up from it", async () => {

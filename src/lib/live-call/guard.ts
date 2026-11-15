@@ -5,6 +5,10 @@ export type Claim = "promise" | "cant" | "unsure" | "failed";
 const ACTION_EN = /\b(?:(?:i'?ll|i will|i am going to|i'?m going to|let me|let's|i'?m|i am|i'?ve|i have|i just|i already)\s+(?:certainly\s+|just\s+|now\s+|already\s+|go ahead and\s+)?(?:check|checking|checked|look|looking|looked|find|finding|found|ask|asking|asked|open|opening|opened|add|adding|added|send|sending|sent|start|starting|started|get started|handle|handling|fix|fixing|fixed|schedule|scheduled|restart|restarting|run|running|ran|take care|go ahead|proceed|work on|working on|merge|merging|merged|deploy|deploying|deployed|push|pushing|pushed|delete|deleting|deleted|remove|removing|removed|install|installing|installed|create|creating|created|update|updating|updated|commit|committing|committed|close|closing|closed|move|moving|moved|rename|renaming|renamed)|i (?:checked|looked|found|asked|opened|added|sent|started|fixed|scheduled|restarted|ran|merged|deployed|pushed|deleted|removed|installed|created|updated|committed|closed|moved|renamed))\b(?!\s+(?:late|behind|out|low|back)\b)/i;
 // "Opening it now.": the same promise with its subject dropped.
 const DOING_EN = /^(?:(?:okay|ok|sure|got it|alright|right|yes|yep|yeah)[,!.]?\s+)?(?:now\s+)?(?:checking|looking|opening|adding|sending|starting|fixing|restarting|running|merging|deploying|pushing|deleting|removing|installing|creating|updating|committing|closing|moving|renaming)\s+(?:it|that|this|them|those|the|your|my|a|an|up|into|now|right)\b/i;
+// "Running the tests will show you": a gerund as a verb's subject explains; "Opening it so you can see" still promises.
+const EXPLAINS = "will|would|can|could|should|may|might|is|are|was|were|lets|helps|shows|gives|makes|means|takes|tells|works|saves";
+const SUBJECTS = "you|it|we|they|i|he|she|that|this|which";
+const EXPLAINED = new RegExp(`(?<!\\b(?:${SUBJECTS})\\s)\\b(?:${EXPLAINS})\\b`, "i");
 const ON_IT = /^(?:(?:okay|ok|sure|got it|alright|right)[,!.]?\s+)?(?:i'?m\s+)?on it\b/i;
 const ACTION_KO = /확인해\s?(?:볼게|보겠|드릴게|드리겠)|확인했|알아\s?(?:볼게|보겠)|알아봤|찾아\s?(?:볼게|보겠)|찾았|열어\s?(?:볼게|드릴게|드리겠)|열었|추가했|추가해\s?(?:둘게|드릴게|놓을게)|바로\s?(?:확인|진행|처리)|진행할게|진행하겠|처리할게|처리하겠|보내\s?드릴게|보냈|물어\s?(?:볼게|보겠)|(?:확인|추가|시작|수정|예약|재시작|실행|머지|병합|배포|푸시|삭제|설치|업데이트|커밋|검색)\s?(?:할게|하겠|해\s?(?:볼게|둘게|놓을게|드릴게|보겠|드리겠))|(?:열|고칠|보낼|지울|만들|닫을|옮길|바꿀|돌릴|찾을|올릴)게|(?:고쳐|보내|지워|만들어|닫아|옮겨|바꿔|돌려|올려)\s?(?:볼게|둘게|놓을게|드릴게|줄게|보겠|드리겠)|(?:그렇게|바로|지금|당장)\s?(?:할게|하겠)/;
 const CANT = /\b(?:i can(?:not|'?t)|i'?m unable|i am unable|unable to|i (?:don'?t|do not) have access|no access)\b[^.!?]*\b(?:open|access|see|check|find|look|do|interact|reach|read|run)\b|(?:열|볼|접근할|확인할|찾을|실행할|읽을|들어갈) 수(?:가)? 없|권한이 없/i;
@@ -29,7 +33,7 @@ export function claimOf(said: string, recap = false, order = false): { claim: Cl
   for (const sentence of sentences(said)) {
     if (HYPOTHETICAL.test(sentence)) continue;
     const ahead = recap ? sentence.replace(DONE, " ") : sentence;
-    if (ACTION_EN.test(ahead) || DOING_EN.test(ahead) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
+    if (ACTION_EN.test(ahead) || (DOING_EN.test(ahead) && !EXPLAINED.test(ahead)) || ON_IT.test(ahead) || ACTION_KO.test(ahead)) return { claim: "promise", sentence };
     if (CANT.test(sentence)) return { claim: "cant", sentence };
     if (!clarifies && UNSURE.test(sentence)) return { claim: "unsure", sentence };
     if (!FILLER_ONLY.test(sentence)) plain ||= sentence;
@@ -63,18 +67,26 @@ export function ordersChange(heard: string, names: readonly string[] = []): bool
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;
 // Korean puts the verb last, so the lookup has to end the order: "검색해서 나온 파일은 지워줘" deletes.
 const LOOKUP_KO = /(?:(?:검색|조사)(?:\s?좀)?\s?해|(?:찾아|알아)\s?(?:봐|보세요|볼래|줘|주세요|줄래))(?:\s?(?:봐|보세요|볼래|줘|주세요|줄래))*요?[\s.!?~]*$/;
-// A second step: a list mark, a new sentence (an initial like "E." is not one), a 고 clause, "and", "then" or a change word.
-const MORE = new RegExp(`[;,:]|(?<!(?<![\\p{L}\\p{N}])\\p{L})[.!?]\\s+\\S|[가-힣]고\\s|\\b(?:and|then|${CHANGES})\\b`, "iu");
+// A second step: a list mark, a new sentence (an initial like "E." is not one), a 고 clause, a joining word or a change word.
+const STEPS = "and|then|before|after|while|until|once";
+const MORE = new RegExp(`[;,:]|(?<!(?<![\\p{L}\\p{N}])\\p{L})[.!?]\\s+\\S|[가-힣]고\\s|\\b(?:${STEPS}|${CHANGES})\\b`, "iu");
 
 /** A plain lookup changes nothing, so it needs no yes; a second step makes it an order. */
 export function looksUp(order: string): boolean {
   return (LOOKUP_EN.test(order) || LOOKUP_KO.test(order)) && !MORE.test(order) && !CHANGE_KO.test(order);
 }
 
-/** A question already asked, said again in other words: every word of it is in the order. */
+// What a lookup wraps around the question it repeats.
+const LOOKUP_WORDS = new Set("please search look up into google research find out for about on if whether 검색해줘 검색해 검색해주세요 찾아봐 찾아줘 알아봐 알아봐줘 좀 대해".split(" "));
+
+/** A question already asked, said again in other words: every word of it is in the order, and the order adds only lookup words. */
 export function restates(order: string, asked: Iterable<string>): boolean {
-  const words = new Set(order.split(" "));
-  return [...asked].some((was) => was.split(" ").every((word) => words.has(word)));
+  const words = order.split(" ");
+  const have = new Set(words);
+  return [...asked].some((was) => {
+    const known = new Set(was.split(" "));
+    return [...known].every((word) => have.has(word)) && words.every((word) => known.has(word) || LOOKUP_WORDS.has(word));
+  });
 }
 
 const RECAP = /^\s*(?:(?:so|and|okay|ok|hey)[,\s]+)?(?:did|have|has|had)\s+(?:you|we|they|it|he|she)\b|\bwhat\b[^.!?]*\b(?:did|have|has|had|got|was|were)\b|\b(?:recap|so far|summary|summarize)\b|뭐 했|한 일|했어\s*\??\s*$|했나요|했니|됐어\s*\?|됐나요/i;
