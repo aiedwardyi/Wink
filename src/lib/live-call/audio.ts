@@ -4,7 +4,6 @@ import { CAPTURE_WORKLET } from "./capture-worklet";
 
 const VOICE_RATE = 24_000;
 const FADE_SAMPLES = 0.3 * VOICE_RATE;
-const DUCK_VOLUME = 0.2;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
@@ -58,9 +57,18 @@ export class CallAudio {
     this.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onFrame(event.data);
     this.listen(this.stream);
     await this.ctx.resume();
-    // Open the speaker stream after capture selects Android's call audio mode.
-    this.output.srcObject = this.destination.stream;
-    await this.output.play();
+    await this.speak(this.stream);
+  }
+
+  // Takes the open mic as proof: Android gives a stream call or media volume once, as it opens, by whether a mic is open then; the side keys follow the mic.
+  private speak(_mic: MediaStream) {
+    if (this.output.srcObject !== this.destination.stream) this.output.srcObject = this.destination.stream;
+    return this.output.play();
+  }
+
+  /** False while the phone wants a tap, which can leave `start` pending. */
+  private tapped(start: Promise<unknown>): Promise<boolean> {
+    return Promise.race([start.then(() => true, () => false), new Promise<boolean>((resolve) => setTimeout(resolve, HEAL_MS, false))]);
   }
 
   private listen(stream: MediaStream) {
@@ -82,12 +90,14 @@ export class CallAudio {
   /** Back from the background: true once the mic and the voice run again, false while the phone wants a tap. */
   async heal(): Promise<boolean> {
     if (!this.node || this.closed) return false;
-    // Both start before any await, so a tap's permission to play reaches them.
-    const out = Promise.all([this.ctx.resume(), this.output.paused ? this.output.play() : undefined]).then(() => true, () => false);
+    // With the mic open, both start before any await, so a tap's permission to play reaches them.
+    const resumed = this.tapped(this.ctx.resume());
     const track = this.stream?.getAudioTracks()[0];
     if (!track || track.readyState === "ended" || track.muted) this.reopening ??= this.reopen();
-    const [mic, played] = await Promise.all([this.reopening ?? true, Promise.race([out, new Promise<boolean>((resolve) => setTimeout(resolve, HEAL_MS, false))])]);
-    return mic && played && this.ctx.state === "running" && !this.closed;
+    const voice = () => (this.output.paused && this.stream ? this.tapped(this.speak(this.stream)) : true);
+    const spoken = this.reopening ? this.reopening.then((mic) => mic && voice()) : voice();
+    const [running, played] = await Promise.all([resumed, spoken]);
+    return running && played && this.ctx.state === "running" && !this.closed;
   }
 
   private async reopen(): Promise<boolean> {
@@ -167,13 +177,7 @@ export class CallAudio {
     if (first) this.onStart();
   }
 
-  /** iOS keeps a media element at full volume, so there only the cut on his words applies. */
-  duck(on: boolean) {
-    this.output.volume = on ? DUCK_VOLUME : 1;
-  }
-
   flush() {
-    this.output.volume = 1;
     const had = this.sources.size > 0;
     for (const source of this.sources) {
       source.onended = null;

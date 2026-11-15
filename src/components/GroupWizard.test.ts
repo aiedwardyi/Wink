@@ -336,6 +336,29 @@ describe("GroupWizard members", () => {
     }
   });
 
+  it("moves on to the bots on Enter in the name with no bot picked, and never on an IME confirm", async () => {
+    const fetched = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetched);
+    const { host, root } = await renderWizard();
+    try {
+      // SAFETY: the wizard always renders the labelled name input.
+      const name = host.querySelector('input[aria-label="Name your group"]') as HTMLInputElement;
+      name.focus();
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+      expect(fetched).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(document.activeElement).toBe(pickRow(host, "Ada"));
+      await act(async () => pickRow(host, "Ada").click());
+      await act(async () => { name.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true })); });
+      expect(dispatched).toEqual([]);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("checks existing bots and creates with the setup defaults", async () => {
     const { host, root } = await renderWizard();
     try {

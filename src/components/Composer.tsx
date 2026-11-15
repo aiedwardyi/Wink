@@ -1383,7 +1383,7 @@ export function Composer({
               : busyChrome.placeholder
           }
           aria-label={t("composer.messageAria", { name: group ? group.name : room ? room.name : (bot?.name ?? "") })}
-            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none"
+            className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]"
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
           {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}

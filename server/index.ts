@@ -806,6 +806,7 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
   driverKind: entry.driverKind,
   defaultModel: entry.models.default,
   available: entry.snapshot.state === "available",
+  authenticated: entry.snapshot.authenticated,
   capabilities: entry.capabilities,
   effortLevels: entry.capabilities.effortLevels,
   rateLimits: rateLimitsByInstance.get(entry.instanceId)?.windows,
@@ -841,6 +842,7 @@ function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate 
     driverKind: instance.driverKind,
     defaultModel: instance.models.default,
     available: automaticAvailability.get(instance.instanceId) !== false,
+    authenticated: providerSnapshots.get(instance.instanceId)?.authenticated,
     capabilities: {
       agentsMcp: instance.adapter.capabilities.agentsMcp === true,
       approvalReview: instance.reviewPermission !== undefined,
@@ -1000,6 +1002,20 @@ function checkedModelSelection(
     if (effort) selection.effort = effort;
   }
   return { ok: true, selection };
+}
+
+function createdBotSelection(chief: ModelSelection, model: unknown, effort: unknown): ReturnType<typeof checkedModelSelection> {
+  if (model === undefined) return effort === undefined ? { ok: true, selection: { ...chief } } : checkedModelSelection({ ...chief, effort });
+  const engines = [chief.instanceId, ...registry.instances().map((instance) => instance.instanceId)];
+  const instanceId = engines.find((id) => instanceOffersModel(id, String(model)));
+  if (!instanceId) {
+    const valid = new Set(engines.filter((id) => !accounts.get(id)).flatMap((id) => {
+      const models = registry.get(id)?.models;
+      return models ? [models.default, ...models.options.map((option) => option.id)].filter(Boolean) : [];
+    }));
+    return { ok: false, status: 400, error: `model "${String(model)}" is not offered; valid ids: ${[...valid].join(", ")}` };
+  }
+  return checkedModelSelection({ instanceId, model, mode: "pinned", effort }, false, true);
 }
 
 function checkedGroupResponder(value: unknown, memberIds: string[]): GroupDefaultResponder | null {
@@ -7581,6 +7597,7 @@ const internalRoutes = createInternalRoutes({
   computerControl,
   askBotAndWait,
   checkedMemberIds,
+  createdBotSelection,
   store,
   keepGoing,
   wireBot,

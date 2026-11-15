@@ -1,5 +1,6 @@
 // The 11-15 calls replayed line by line (c-fe757eee6f68, c-042465e96fb5, c-b2f94ce7575d, c-4d062f54ed1b, c-fef843f09039).
 // Silent: a fake engine and a fake audio port, no socket, mic or speaker.
+import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CallLine, LiveVoice } from "../../../shared/live-call";
@@ -12,17 +13,18 @@ class FakeEngine implements LiveEngine {
   events!: LiveEvents;
   session!: LiveSession;
   texts: string[] = [];
+  contexts: string[] = [];
   results: Array<{ id: string; result: unknown }> = [];
   connect(session: LiveSession, events: LiveEvents) { this.session = session; this.events = events; }
   sendAudio() {}
   audioPaused() {}
   sendText(text: string) { this.texts.push(text); }
-  sendContext() {}
+  sendContext(text: string) { this.contexts.push(text); }
   sendToolResult(ids: string[], _name: string, result: unknown) { for (const id of ids) this.results.push({ id, result }); }
   close() {}
 }
 
-type Audio = Omit<CallAudioPort, "playing"> & { playing: boolean; flushed: number; played: number; ducked: boolean; mic(loud: boolean): void; click(): void };
+type Audio = Omit<CallAudioPort, "playing"> & { playing: boolean; flushed: number; played: number; mic(loud: boolean): void; click(): void };
 
 function fakeAudio(): Audio {
   let frame: (pcm: ArrayBuffer) => void = () => {};
@@ -31,14 +33,12 @@ function fakeAudio(): Audio {
     flushed: 0,
     played: 0,
     playing: false,
-    ducked: false,
     // A live mic sends room noise all along; without it the call reads as stalled.
     async capture(onFrame) { frame = onFrame; room ??= setInterval(() => frame(new Int16Array(640).fill(20).buffer), 1_000); },
     stopMic() {},
     async heal() { return true; },
     play() { this.played += 1; },
     flush() { this.flushed += 1; this.playing = false; },
-    duck(on: boolean) { this.ducked = on; },
     close() { clearInterval(room); },
     boop() {},
     heardShare: () => 0.5,
@@ -289,27 +289,14 @@ describe("7 barge-in on the phone", () => {
     expect(linesOf(posts).at(-1)).toMatch(/^voice: It's excellent/);
   });
 
-  it("a barge-in with no words yet ducks the voice at once, and his words then stop it", async () => {
-    const { audio, engine } = await live({ device: "phone" });
-    engine().events.heard("Is Primer good?");
-    speak(engine(), "It's excellent if you like complex time travel", false);
-    audio.playing = true;
-    engine().events.interrupted();
-    expect(audio.ducked).toBe(true);
-    expect(audio.flushed).toBe(0);
-    engine().events.heard("Wait,");
-    expect(audio.flushed).toBe(1);
-  });
-
-  it("the voice's own words coming back through the speaker never cut it and are not his line", async () => {
+  it("an echo that trips barge-in cuts the voice, and its words coming back are not his line", async () => {
     const { call, audio, engine, posts } = await live({ device: "phone" });
     engine().events.heard("Is Primer good?");
     speak(engine(), "It's excellent if you like complex time travel movies", false);
     audio.playing = true;
     engine().events.interrupted();
+    expect(audio.flushed).toBe(1);
     engine().events.heard("excellent if you like complex");
-    expect(audio.flushed).toBe(0);
-    expect(audio.ducked).toBe(false);
     engine().events.turnDone();
     engine().events.answering();
     engine().events.turnDone();
@@ -543,5 +530,126 @@ describe("late review threads", () => {
     engine().events.turnDone();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(sentToBot(posts)).toEqual([]);
+  });
+});
+
+// The 11-15 audits' probes (FINDINGS-FABLE F0-F2, FINDINGS-SOL S06) as assertions.
+describe("9 quiet means quiet", () => {
+  const QUIET = [
+    "Stay quiet.", "Be quiet.", "Wink, stay quiet for a minute.", "Okay stay quiet", "Shh.",
+    "Stay quiet for a few minutes.", "Stay quiet for five minutes.", "Stay quiet, I'm talking to someone.", "Stay quiet while I talk to my friend.", "Be quiet, I need to talk to my wife.",
+    "Can you stay quiet for a bit?", "Don't say anything.", "Don't talk.", "Don't respond.", "Stop responding.", "Mute yourself.", "Give me a minute.", "Hold on, I'm talking to someone else.", "Not talking to you.", "I'm not talking to you.",
+    "Stay quite.", "Be quite.", "Stay quiet okay?", "Just listen.", "Stay silent.", "Keep it down.", "Pause.",
+    "조용히 해.", "잠깐 조용히 있어 봐.", "조용히 좀 해줘.", "잠깐만 조용히 해봐, 나 얘기 중이야.", "말하지 말고 있어.", "가만히 있어.", "아무 말도 하지 마.", "대답하지 마.", "잠깐 기다려, 친구랑 얘기 좀 할게.",
+    "Stay quiet for a few minutes, I'm talking to my friend.",
+  ];
+  // [shown voice, bot name, line]
+  const SIDE: Array<[LiveVoice, string, string]> = [
+    ["Aoede", "Wink", "Hey, did you eat yet?"], ["Aoede", "Wink", "헤이 뭐해"], ["Aoede", "Wink", "Did you see him wink at me?"], ["Aoede", "Wink", "I'm on a call with Wink."],
+    ["Aoede", "Wink", "Jenny said she's coming."], ["Aoede", "Wink", "Jennifer is late again."], ["Aoede", "Wink", "젠 어디 갔어?"], ["Alnilam", "Wink", "Eddie, dinner's ready."],
+    ["Alnilam", "Wink", "에디야 밥 먹어"], ["Alnilam", "Wink", "Eddy can you help me?"], ["Erinome", "Wink", "I love that Adele song."], ["Aoede", "Zen", "That place is so zen."],
+    ["Aoede", "Wink", "I told Peter to say hey when he arrives."], ["Aoede", "Wink", "Jennings is meeting us downstairs."], ["Aoede", "Wink", "피터야, hey라고 말해 줘."], ["Aoede", "Wink", "제니퍼, 피터가 곧 온대."], ["Aoede", "Wink", "Hola, hey, ¿cómo estás?"],
+  ];
+  const WAKE: Array<[LiveVoice, string]> = [["Aoede", "Wink?"], ["Aoede", "Hey Wink."], ["Aoede", "Jenn, are you there?"], ["Aoede", "Jennifer, you can talk now."], ["Alnilam", "Eddie?"], ["Alnilam", "에디야"], ["Erinome", "아델, 이제 말해도 돼."]];
+  const names = (voice: LiveVoice) => ({ Aoede: ["Jenn"], Alnilam: ["Eddie"], Erinome: ["Adele", "아델"] })[voice];
+
+  it("every quiet ask in the audits hushes, extra words and all", () => {
+    expect(QUIET.filter((line) => !guard.asksForQuiet(line, "Wink", ["Jenn"]))).toEqual([]);
+  });
+
+  it("side talk with a hey, a name or its own name in it never wakes it; its name said to it does", () => {
+    expect(SIDE.filter(([voice, bot, line]) => guard.callsVoice(line, bot, names(voice)))).toEqual([]);
+    expect(WAKE.filter(([voice, line]) => !guard.callsVoice(line, "Wink", names(voice)))).toEqual([]);
+  });
+
+  it.each(["Stay quiet, I'm talking to someone.", "Stay quiet for a few minutes, I'm talking to my friend.", "잠깐만 조용히 해봐, 나 얘기 중이야."])("after \"%s\" side talk word by word never plays, offers or wakes it", async (hush) => {
+    const { call, audio, engine, posts } = await live({ voice: "Alnilam", botName: "Wink" });
+    engine().events.heard(hush);
+    speak(engine(), "Okay, I'll stay quiet.");
+    expect(call.state().hushed).toBe(true);
+    const played = audio.played;
+    for (const [, , line] of SIDE) {
+      for (const word of line.split(/(?<= )/)) engine().events.heard(word);
+      engine().events.answering();
+      engine().events.audio(pcm());
+      engine().events.audio(pcm());
+      engine().events.said("네, 맛있게 드세요!");
+      engine().events.toolCall([{ id: `t-${line}`, name: "propose_work", args: { order: "Order kimchi stew for dinner" } }]);
+      engine().events.turnDone();
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+    expect({ hushed: call.state().hushed, played: audio.played - played, pending: call.state().pending, sent: sentToBot(posts) }).toEqual({ hushed: true, played: 0, pending: undefined, sent: [] });
+    engine().events.heard("Eddie?");
+    speak(engine(), "I'm here.", false);
+    expect({ hushed: call.state().hushed, played: audio.played - played }).toEqual({ hushed: undefined, played: 1 });
+  });
+
+  it("the reply in flight when he says stay quiet never plays after", async () => {
+    const { call, audio, engine } = await live();
+    engine().events.heard("What's on my list today?");
+    speak(engine(), "You have three things today. First, ", false);
+    audio.playing = true;
+    engine().events.heard("Stay quiet, I'm talking to someone.");
+    engine().events.interrupted();
+    await vi.advanceTimersByTimeAsync(1_500);
+    const played = audio.played;
+    speak(engine(), "Sure, I'll be quiet.");
+    expect({ hushed: call.state().hushed, played: audio.played - played }).toEqual({ hushed: true, played: 0 });
+  });
+
+  it.each(["name", "tap"] as const)("a wake by %s mid-turn drops the turn already in flight; the next one plays", async (by) => {
+    const { call, audio, engine } = await live({ voice: "Alnilam" });
+    engine().events.heard("Stay quiet.");
+    speak(engine(), "Okay.");
+    engine().events.heard("So where should we go tonight?");
+    engine().events.answering();
+    engine().events.audio(pcm());
+    if (by === "tap") call.wake();
+    else {
+      engine().events.heard("Eddie?");
+      await vi.advanceTimersByTimeAsync(1_500);
+    }
+    expect(call.state().hushed).toBeUndefined();
+    engine().events.audio(pcm());
+    engine().events.said("How about the new Italian place downtown?");
+    engine().events.turnDone();
+    expect(audio.played).toBe(0);
+    speak(engine(), "I'm here.");
+    expect(audio.played).toBe(1);
+  });
+
+  it("a barge-in cuts the voice at once and it stays cut: no duck, no coming back up", async () => {
+    const { audio, engine, posts } = await live({ device: "phone" });
+    engine().events.heard("Tell me about the plan.");
+    speak(engine(), "The plan has three parts. First we fix login.", false);
+    audio.playing = true;
+    engine().events.interrupted();
+    expect(audio.flushed).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect({ flushed: audio.flushed, played: audio.played }).toEqual({ flushed: 1, played: 1 });
+    expect(linesOf(posts).at(-1)).toMatch(/^voice: The plan.*…$/);
+  });
+
+  it("talk-over is a cut, never a duck: nothing turns the voice down to bring it back up", () => {
+    for (const file of readdirSync(new URL(".", import.meta.url)).filter((name) => /(?<!\.test)\.ts$/.test(name)).map((name) => `./${name}`)) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8"), `${file}: barge-in must flush() playback, never lower the volume and raise it again`).not.toMatch(/\.volume\s*=|duck/i);
+    }
+  });
+
+  it("a yes that lands after its tool call was cancelled is acked once, whatever the words", async () => {
+    const { engine, posts } = await live();
+    engine().events.heard("Fix the login bug on the settings page.");
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug on the settings page" } }]);
+    await vi.advanceTimersByTimeAsync(500);
+    engine().events.heard("Yes.");
+    engine().events.toolCancel(["t1"]);
+    engine().events.interrupted();
+    await vi.advanceTimersByTimeAsync(3_000);
+    speak(engine(), "On it.");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sentToBot(posts)).toEqual(["Fix the login bug on the settings page"]);
+    expect(engine().results).toEqual([]);
+    expect(fixes(engine())).toEqual([]);
+    expect(engine().contexts.at(-1)).toContain("Already answered aloud. Context only, do not read it out.");
   });
 });

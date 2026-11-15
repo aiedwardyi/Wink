@@ -158,7 +158,7 @@ describe("call token", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain(`On screen your voice is called ${shown}; that name means you too.`);
     expect(brief).toContain("Told your voice changed or sounds different: say it glitched and you're still the same assistant.");
-    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.");
+    expect(brief).toContain("\"Be quiet\" or the like hushes you and updates wait in the chat; your name wakes you.");
   });
 
   it("brief speaks as the bot, never mentions sending to a bot", async () => {

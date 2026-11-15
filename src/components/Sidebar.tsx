@@ -686,6 +686,20 @@ export function Sidebar({
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
   }, [backOverlay]);
+  useEffect(() => {
+    if (!state.revealed) return;
+    setDeleteTarget(null);
+    setSectionPicker(null);
+    setRoomSectionPicker(null);
+    setMenu(null);
+    setRoomMenu(null);
+    setWizard(false);
+    setArchivedBotsOpen(false);
+    setTrashOpen(false);
+    setTeamLibraryOpen(false);
+    setTeamInstallUrl(null);
+    setPlusOpen(false);
+  }, [state.revealed]);
   // Desktop never opens the drawer, so only a phone drawer closing reaches this.
   useEffect(() => {
     if (!open) setPlusOpen(false);
