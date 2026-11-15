@@ -158,7 +158,7 @@ export async function terminalSendResponse(
     writes = body && enter ? [body, enter] : [text];
   }
   if (!access) return { status: 503, body: { error: "terminal bridge unavailable" } };
-  let res!: Response;
+  let res: Response | undefined;
   for (const text of writes) {
     try {
       res = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal/send`, {
@@ -179,7 +179,7 @@ export async function terminalSendResponse(
       return { status: 502, body: { error: `terminal bridge: HTTP ${res.status}` } };
     }
   }
-  return { status: 200, body: snapshotBody((await res.json().catch(() => ({}))) as Record<string, unknown>) };
+  return { status: 200, body: snapshotBody(((await res?.json().catch(() => ({}))) ?? {}) as Record<string, unknown>) };
 }
 
 /** A pane's terminal label, if the desktop bridge knows one. */

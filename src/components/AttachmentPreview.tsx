@@ -52,7 +52,7 @@ function usePictureRetry(src: string) {
     };
     window.addEventListener("orbit:picture-landed", landed);
     return () => window.removeEventListener("orbit:picture-landed", landed);
-  }, [src, waiting]);
+  }, [src, waiting, retryNow]);
   return { src: pictureSrc(src, attempt), failed: waiting, onError, retryNow };
 }
 
