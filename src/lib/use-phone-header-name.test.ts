@@ -7,17 +7,19 @@ import { usePhoneHeaderNameFloor } from "./use-phone-header-name";
 let root: Root;
 let host: HTMLElement;
 let available = 40;
+let compactAvailable = 0;
+let nameWidth = 120;
 let phone = true;
 let crowded: "cluster" | "child" | null = null;
 
-function Harness() {
+function Harness({ botName = "A long bot name" }: { botName?: string }) {
   const cluster = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  usePhoneHeaderNameFloor(cluster, name, "A long bot name", false);
+  usePhoneHeaderNameFloor(cluster, name, botName, false);
   return createElement("header", null,
     createElement("div", { ref: cluster, "data-cluster": true },
       createElement("button", { "data-avatar": true }),
-      createElement("button", { ref: name, "data-name": true }, "A long bot name"),
+      createElement("button", { ref: name, "data-name": true }, botName),
     ),
     createElement("div", { "data-controls": true },
       createElement("button", { "data-chip": true },
@@ -31,6 +33,8 @@ function Harness() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   available = 40;
+  compactAvailable = 0;
+  nameWidth = 120;
   phone = true;
   crowded = null;
   const matchMedia = window.matchMedia.bind(window);
@@ -43,7 +47,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     let left = 0;
     let width = 392;
-    if (this.hasAttribute("data-name")) width = this.style.width === "max-content" ? 120 : Math.max(64, Number.parseFloat(this.style.minWidth) || 120);
+    if (this.hasAttribute("data-name")) width = this.style.width === "max-content" ? nameWidth : Math.max(Math.min(64, nameWidth), Number.parseFloat(this.style.minWidth) || nameWidth);
     else if (this.hasAttribute("data-avatar")) width = 40;
     else if (this.hasAttribute("data-cluster")) width = 180;
     else if (this.hasAttribute("data-controls") || this.hasAttribute("data-chip")) {
@@ -53,8 +57,9 @@ beforeEach(() => {
       width = 132;
     }
     else if (this.hasAttribute("data-model-label")) {
-      left = 392 - available;
-      width = this.style.display === "none" ? 0 : this.style.minWidth === "max-content" ? 80 : Math.min(40, available);
+      const room = host.querySelector<HTMLElement>("[data-controls]")?.style.columnGap && compactAvailable ? compactAvailable : available;
+      left = 392 - room;
+      width = this.style.display === "none" ? 0 : this.style.minWidth === "max-content" ? 80 : Math.min(40, room);
     } else if (this.hasAttribute("data-model-effort")) { left = 370; width = this.style.display === "none" ? 0 : 30; }
     return { x: left, y: 0, left, right: left + width, top: 0, bottom: 30, width, height: 30, toJSON() {} };
   });
@@ -89,16 +94,27 @@ it("shows the full short model name when the header has room", async () => {
   expect(host.querySelector<HTMLElement>("[data-controls]")!.style.columnGap).toBe("");
 });
 
+it("uses compact spacing before truncating the model beside a short bot name", async () => {
+  nameWidth = 52;
+  compactAvailable = 100;
+  await act(async () => root.render(createElement(Harness, { botName: "Pokkey" })));
+  const label = host.querySelector<HTMLElement>("[data-model-label]")!;
+  expect(label.getBoundingClientRect().width).toBe(80);
+  expect(label.style.textOverflow).toBe("clip");
+  expect(host.querySelector<HTMLElement>("[data-name]")!.style.minWidth).toBe("52px");
+});
+
 it.each(["cluster", "child"] as const)("compacts an overlapping %s and restores spacing when it fits", async (overlap) => {
   crowded = overlap;
   await act(async () => root.render(createElement(Harness)));
   const header = host.querySelector("header")!;
   const controls = host.querySelector<HTMLElement>("[data-controls]")!;
-  expect(header.style.columnGap).toBe("4px");
-  expect(controls.style.columnGap).toBe("4px");
+  expect(header.style.columnGap).toBe("2px");
+  expect(controls.style.columnGap).toBe("2px");
   expect(host.querySelector<HTMLElement>("[data-name]")!.style.minWidth).toBe("64px");
   expect(host.querySelector<HTMLElement>("[data-model-label]")!.getBoundingClientRect().width).toBeGreaterThan(0);
   crowded = null;
+  available = 100;
   await act(async () => window.dispatchEvent(new Event("resize")));
   expect(header.style.columnGap).toBe("");
   expect(controls.style.columnGap).toBe("");

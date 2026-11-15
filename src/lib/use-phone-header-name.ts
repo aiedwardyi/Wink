@@ -248,19 +248,20 @@ export function usePhoneHeaderNameFloor(
       };
       const last = slots.at(-1);
       if (!last) return;
-      const fit = () => {
+      const fit = (truncate = false) => {
         for (const slot of slots) {
+          if (slot.truncateLabel && !truncate) continue;
           paint(slot);
           if (fits(slot)) return true;
         }
         return false;
       };
-      // Keep normal spacing unless even the truncated label overlaps the controls.
+      // Spend compact spacing before giving up any of the model name.
       if (!fit()) {
         compact();
         if (!fit()) {
           compact(2);
-          fit();
+          fit(true);
         }
       }
     };
