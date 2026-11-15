@@ -1998,6 +1998,25 @@ describe("AUDIT4B-VOICE", () => {
     expect(linesOf(posts)).toContain("Yes");
   });
 
+  it("a dropped call lets a send already on its way land before calling his words unsent", async () => {
+    let deliver!: (posted: Posted) => void;
+    const { call, engine, posts } = await started({ "/messages": () => new Promise<Posted>((resolve) => { deliver = resolve; }) });
+    engine().events.heard("Fix the login bug.");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    engine().events.turnDone();
+    void call.answer(true);
+    await flush();
+    engine().events.closed(1006, "");
+    await flush();
+    deliver({ status: 202, data: { ok: true } });
+    await flush();
+    await flush();
+    expect(messagesOf(posts)).toHaveLength(1);
+    expect(linesOf(posts).filter((line) => line.startsWith("Not sent"))).toEqual([]);
+    expect(call.state().notice).toBeUndefined();
+  });
+
   it("a half-heard line at a reconnect is not sent as the answer to the bot's question", async () => {
     const { call, engine, posts } = await started({ "/messages": ACCEPTED });
     engine().events.resumable("h1");

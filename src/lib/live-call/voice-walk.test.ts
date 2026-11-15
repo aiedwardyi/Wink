@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { asksForQuiet, callsVoice, looksUp } from "./guard";
+import { asksForQuiet, callsVoice, looksUp, restates } from "./guard";
 import { answersCard } from "./manners";
 
 const CALL = "c-0123456789ab";
@@ -387,6 +387,17 @@ describe("his 15:56 call, replayed", () => {
     expect(more.filter((order) => looksUp(order))).toEqual([]);
     const joined = ["Search the logs; email them to the team.", "Look up the server; shut it down.", "Look up the server. Shut it down.", "Search the logs, email them to the team.", "로그는 메일로 부치고 검색해줘.", "검색해줘. 그리고 서버도 내려."];
     expect(joined.filter((order) => looksUp(order))).toEqual([]);
+  });
+
+  it("B1 a lookup with a step after it waits for a yes", () => {
+    const steps = ["Look up the server URL before shutting it down.", "Search for the invoice before emailing it to the team.", "Look up the backup after wiping the disk.", "Find out the price while ordering it."];
+    expect(steps.filter((order) => looksUp(order))).toEqual([]);
+    expect(looksUp("Look up flights to Seoul.")).toBe(true);
+  });
+
+  it("B2 a lookup that asks for more than the question sent is not a restatement", () => {
+    expect(restates("search what is the weather in seoul tomorrow", ["what is the weather in seoul"])).toBe(false);
+    expect(restates("search if edward e ford is associated with the microtuber cryptocurrency project", ["is edward e ford associated with the microtuber cryptocurrency project"])).toBe(true);
   });
 
   it("B1 a lookup takes the place of an order still waiting for a yes", async () => {

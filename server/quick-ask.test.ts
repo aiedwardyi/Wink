@@ -449,7 +449,7 @@ describe("quick route", () => {
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Let me check.", call: { ...call, voice: true } });
     await h.send({ text: QUESTION, call: { ...call, ask: true } });
     await h.settled();
-    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nYou: Let me check.") });
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: QUESTION, notes: expect.stringContaining("Person: Which port does the server use?\nVoice: Let me check.") });
   });
 });
 

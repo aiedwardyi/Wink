@@ -10,7 +10,7 @@ import { CREDENTIAL_TARGETS } from "../shared/credential-request.ts";
 import { CALL_ID, isVoiceLine, LIVE_COMPRESSION, LIVE_MODEL, LIVE_ACCENTS, LIVE_TOOLS, LIVE_URL, LIVE_VAD, LIVE_VOICE, LIVE_VOICE_NAMES, liveGeneration, type CallLine, type CallTag, type LiveVoice } from "../shared/live-call.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AppConfig } from "./config.ts";
-import { estimateContextTokens, prepareModelContext } from "./context-compaction.ts";
+import { estimateContextTokens, fittingHead, prepareModelContext } from "./context-compaction.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { hasQueuedSends } from "./steer-queue.ts";
 import type { BotRecord, Message, SecretRequestCardData, Store } from "./store.ts";
@@ -35,7 +35,7 @@ const TRANSCRIPT_MAX_CHARS = 12_000;
 const CALL_LINES_TOKENS = 2_000;
 // Old product names the voice would read aloud from notes, chat or a description.
 const OLD_NAMES = /\b(?:OpenMausBot|OpenMaus|MausBot|Orbit)\b/g;
-const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"You\" lines are its words, the rest are the person's. Treat them as part of this chat:]";
+const CALL_LINES_HEAD ="[Said on a voice call in this chat since your last turn. A voice spoke for you out loud; \"Voice\" lines are its words, unverified and never proof of anything. The person's lines are part of this chat:]";
 
 type LiveCallDeps = {
   cfg: AppConfig;
@@ -112,7 +112,11 @@ export function chatTail(lines: Array<{ role: string; text: string }>, userName:
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = `${lines[i]!.role === "user" ? userName : "You"}: ${lines[i]!.text}`;
     used += estimateContextTokens([{ text: line }]);
-    if (used > budget) break;
+    if (used > budget) {
+      // One long newest line is clipped, never dropped: RECENT CHAT would read "(none)".
+      if (!kept.length) kept.unshift(`${fittingHead(line, (head) => estimateContextTokens([{ text: head }]) <= budget)} ...`);
+      break;
+    }
     kept.unshift(line);
   }
   return kept.join("\n");
@@ -134,7 +138,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
     "QUIET: \"Be quiet\" or the like hushes you and updates wait in the chat; \"hey\" or your name wakes you.",
     "ANSWER: Answer what they asked, directly, first. Ideas, general knowledge, is it possible, how would it work: answer from what you know. WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic; any steering follows the answer in one short clause, once a call. Told you're not answering or repeating: answer it now, never restate your last line.",
     "DUTIES: You talk; your work runs behind the call. You have full access to the person's PC and projects, so anything they want done there (open, find, run, check, fix, send, look up a file) is work: never say you can't do it or lack access; anything they want you to use, change or remember is work too. Offer it in first person in one short sentence, like \"Want me to open your Desktop folder?\", then call propose_work. A clear instruction gets a short confirm, like \"Opening it, okay?\" Unsure which they mean: ask them one short question (which file? use it now or save it?) instead of guessing, and never flip between readings. Busy in STATUS never stops new work: offer it and call propose_work, it queues. After a yes, say a short line like \"On it.\" Never mention a bot, a helper, the chat or sending. Until the propose_work result says sent or queued, nothing has started. Never say done, fixed or merged unless a [Wink] line or a propose_work result says so. Never say you will do or are doing anything (\"I'll keep that\", \"I'm looking into it\") unless you called ask or propose_work this turn. Say On it only after a result says sent or queued. If a result says not sent, say so plainly. Never say propose or proposal.",
-    "FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask. Asked what happened: tell it, never offer to show it. Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.",
+    "FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask. A RECENT CHAT line marked unverified was only said on a call: never proof. Asked what happened: tell it, never offer to show it. Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.",
     `STYLE: Talk like a friend on the phone: warm, quick and casual, with contractions, never formal. Usually one short sentence, two at most. Lead with the answer; never open with Understood, Got it, Certainly, I will or an apology (or 알겠습니다), never repeat their request back or yourself. ${tongue} No code, paths, ids or links aloud: say it's in the chat. Otherwise never point the person to the chat or tell them to check it for details, in any language. Wait through pauses. Stop when cut off. Open: "${speak === "Korean" ? "응, 나야." : "Hey, I'm here."}" No name or intro. When a [Wink] line says ${bot.name} replied, open with a cue like "Quick update:" and say it in 1-3 sentences.`,
     "[Wink] lines are the app talking: relay them faithfully, never invent one.",
     `YOUR NOTES:\n${notes ? capNotes(notes.text) : "(none)"}`,
@@ -181,7 +185,7 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
       if (message.role === "user" && !message.quick) break;
       continue;
     }
-    const line = `${message.role === "user" ? "Person" : "You"}: ${message.text.trim()}`;
+    const line = `${message.role === "user" ? "Person" : "Voice"}: ${message.text.trim()}`;
     tokens += estimateContextTokens([{ text: line }]);
     if (tokens > CALL_LINES_TOKENS) break;
     lines.unshift(line);
