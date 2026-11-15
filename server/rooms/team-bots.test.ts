@@ -70,7 +70,7 @@ function frames(path: string, key: string, count: number): Promise<unknown[]> {
 }
 
 async function join(name: string): Promise<{ key: string; id: string }> {
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward", "Wink"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward", "Wink"]);
   const res = await call("/room/v1/join", "POST", undefined, { code: `wkr1:${HOST}:${invite.id}.${secret}` });
   expect(res.status).toBe(200);
   return { key: res.body.key, id: res.body.person.id };
@@ -123,7 +123,7 @@ describe("teammates' own bots", () => {
     expect(snapshot.body.state.teamBots).toEqual([{ id: added.body.bot.id, name: "Pete-Coder", color: "teal", owner: peter.id }]);
     expect(snapshot.body.state.bots).toEqual([{ id: wink, name: "Wink", color: "purple" }]);
     // A later joiner can't take the bot's name.
-    const { invite, secret } = createInvite(group.hosted.roomId, "Pete-Coder", "chat", ["Edward", "Wink"]);
+    const { invite, secret } = createInvite(group.hosted.roomId, "Pete-Coder", ["Edward", "Wink"]);
     expect((await call("/room/v1/join", "POST", undefined, { code: `wkr1:${HOST}:${invite.id}.${secret}` })).status).toBe(409);
   });
 

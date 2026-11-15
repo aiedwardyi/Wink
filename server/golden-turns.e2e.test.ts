@@ -106,8 +106,8 @@ windowsOnly.each(WORLDS)("golden turns with %s", (world) => {
     const seed = [
       `import { addPerson, appendRoomEntry } from ${db};`,
       "const room = process.env.ROOM_ID;",
-      'const mina = addPerson(room, "Mina", "ask", ["Roomie"]);',
-      'addPerson(room, "Jun", "trusted", ["Roomie"]);',
+      'const mina = addPerson(room, "Mina", ["Roomie"]);',
+      'addPerson(room, "Jun", ["Roomie"]);',
       'const ask = appendRoomEntry(room, { author: { kind: "person", id: mina.id, name: mina.name }, text: "@Roomie hello" });',
       'appendRoomEntry(room, { author: { kind: "bot", id: "roomie", name: "Roomie" }, text: "Hi Mina.", replyToId: ask.id, askId: "a1", grant: "words", clean: false });',
     ].join("\n");

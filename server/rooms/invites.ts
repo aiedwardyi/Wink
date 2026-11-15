@@ -13,7 +13,7 @@ import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
 import { RateLimiter } from "../phone-auth.ts";
 import { MAX_PAIRING_ATTEMPTS, sameText, sha256 } from "../phone-devices.ts";
-import { RoomError, roomById, type RoomLevel, type RoomPerson } from "./db.ts";
+import { RoomError, roomById, type RoomPerson } from "./db.ts";
 import { endDoorPerson } from "./door-streams.ts";
 import { checkedRoomName, joinerName } from "./names.ts";
 
@@ -29,7 +29,6 @@ const DEVICE = /^[\w-]{16,64}$/;
 export interface RoomInvite {
   id: string;
   name: string;
-  level: RoomLevel;
   createdAt: number;
   expiresAt: number;
 }
@@ -41,7 +40,7 @@ export type JoinResult = { ok: true; roomId: string; person: RoomPerson; key: st
 export type Joiner = { name?: unknown; device?: unknown };
 
 type InviteRow = {
-  id: string; room_id: string; name: string; level: RoomLevel; secret_hash: string; created_at: number; expires_at: number; tries_left: number;
+  id: string; room_id: string; name: string; secret_hash: string; created_at: number; expires_at: number; tries_left: number;
 };
 
 const DB_FILE = () => join(DATA_DIR, "rooms.db");
@@ -58,6 +57,7 @@ function open(): DatabaseSync {
       id TEXT PRIMARY KEY,
       room_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      -- retired: every member is a full collaborator; older files keep it NOT NULL
       level TEXT NOT NULL,
       secret_hash TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -132,7 +132,7 @@ const peopleNames = (database: DatabaseSync, roomId: string) =>
 const newCredential = (prefix: string) => `${prefix}${randomBytes(32).toString("base64url")}`;
 
 /** `taken` is the host's and the bots' names. The secret is returned once and never stored. */
-export function createInvite(roomId: string, name: unknown, level: RoomLevel, taken: readonly string[]): { invite: RoomInvite; secret: string } {
+export function createInvite(roomId: string, name: unknown, taken: readonly string[]): { invite: RoomInvite; secret: string } {
   return transaction((database) => {
     if (!database.prepare("SELECT 1 FROM rooms WHERE id = ?").get(roomId)) throw new RoomError(404, "no such room");
     pruneExpired(database);
@@ -140,11 +140,11 @@ export function createInvite(roomId: string, name: unknown, level: RoomLevel, ta
     const checked = checkedRoomName(name, [...taken, ...peopleNames(database, roomId), ...pending]);
     if (!checked.ok) throw new RoomError(400, checked.error);
     const now = Date.now();
-    const invite = { id: newId(), name: checked.name, level, createdAt: now, expiresAt: now + INVITE_TTL_MS };
+    const invite = { id: newId(), name: checked.name, createdAt: now, expiresAt: now + INVITE_TTL_MS };
     const secret = newCredential(SECRET_PREFIX);
     database.prepare(`
-      INSERT INTO invites (id, room_id, name, level, secret_hash, created_at, expires_at, tries_left) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(invite.id, roomId, invite.name, level, sha256(secret), invite.createdAt, invite.expiresAt, MAX_PAIRING_ATTEMPTS);
+      INSERT INTO invites (id, room_id, name, level, secret_hash, created_at, expires_at, tries_left) VALUES (?, ?, ?, 'member', ?, ?, ?, ?)
+    `).run(invite.id, roomId, invite.name, sha256(secret), invite.createdAt, invite.expiresAt, MAX_PAIRING_ATTEMPTS);
     return { invite, secret };
   });
 }
@@ -153,7 +153,7 @@ export function roomInvites(roomId: string): RoomInvite[] {
   const database = db();
   pruneExpired(database);
   const rows = database.prepare("SELECT * FROM invites WHERE room_id = ? ORDER BY created_at, rowid").all(roomId) as InviteRow[];
-  return rows.map((row) => ({ id: row.id, name: row.name, level: row.level, createdAt: row.created_at, expiresAt: row.expires_at }));
+  return rows.map((row) => ({ id: row.id, name: row.name, createdAt: row.created_at, expiresAt: row.expires_at }));
 }
 
 export function cancelInvite(roomId: string, inviteId: string): boolean {
@@ -206,18 +206,18 @@ function joinByRoomCode(database: DatabaseSync, codeId: string, secret: string, 
     | { person_id: string; removed: number }
     | undefined;
   if (seen?.removed) return { ok: false, error: "removed" };
-  const back = seen && (database.prepare("SELECT id, name, level, joined_at FROM people WHERE room_id = ? AND id = ?").get(roomId, seen.person_id) as
-    | { id: string; name: string; level: RoomLevel; joined_at: number }
+  const back = seen && (database.prepare("SELECT id, name, joined_at FROM people WHERE room_id = ? AND id = ?").get(roomId, seen.person_id) as
+    | { id: string; name: string; joined_at: number }
     | undefined);
   let person: RoomPerson;
   if (back) {
-    person = { id: back.id, name: back.name, level: back.level, joinedAt: back.joined_at };
+    person = { id: back.id, name: back.name, joinedAt: back.joined_at };
     database.prepare("DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?").run(roomId, person.id);
   } else {
     const people = peopleNames(database, roomId);
     if (people.length >= MAX_PEOPLE) return { ok: false, error: "room-full" };
-    person = { id: newId(), name: joinerName(joiner.name, [...taken, ...people]), level: "chat", joinedAt: Date.now() };
-    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, ?, ?)").run(roomId, person.id, person.name, person.level, person.joinedAt);
+    person = { id: newId(), name: joinerName(joiner.name, [...taken, ...people]), joinedAt: Date.now() };
+    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, 'member', ?)").run(roomId, person.id, person.name, person.joinedAt);
     database.prepare("INSERT OR REPLACE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(roomId, joiner.device, person.id);
   }
   const key = newCredential(KEY_PREFIX);
@@ -245,10 +245,10 @@ export function joinRoom(inviteId: string, secret: string, taken: readonly strin
     const people = peopleNames(database, invite.room_id);
     if (people.length >= MAX_PEOPLE) return { ok: false, error: "room-full" };
     if (!checkedRoomName(invite.name, [...taken, ...people]).ok) return { ok: false, error: "name-taken" };
-    const person = { id: newId(), name: invite.name, level: invite.level, joinedAt: Date.now() };
+    const person = { id: newId(), name: invite.name, joinedAt: Date.now() };
     const key = newCredential(KEY_PREFIX);
-    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, ?, ?)")
-      .run(invite.room_id, person.id, person.name, person.level, person.joinedAt);
+    database.prepare("INSERT INTO people (room_id, id, name, level, joined_at) VALUES (?, ?, ?, 'member', ?)")
+      .run(invite.room_id, person.id, person.name, person.joinedAt);
     database.prepare("DELETE FROM invites WHERE id = ?").run(invite.id);
     database.prepare("INSERT INTO guest_keys (hash, room_id, person_id, created_at) VALUES (?, ?, ?, ?)")
       .run(sha256(key), invite.room_id, person.id, person.joinedAt);
@@ -266,13 +266,13 @@ export function guestByKey(key: string, device?: string | string[]): { roomId: s
   if (!key.startsWith(KEY_PREFIX) || key.length > MAX_CREDENTIAL_LENGTH) return null;
   const database = db();
   const row = database.prepare(`
-    SELECT p.room_id, p.id, p.name, p.level, p.joined_at FROM guest_keys k
+    SELECT p.room_id, p.id, p.name, p.joined_at FROM guest_keys k
     JOIN people p ON p.room_id = k.room_id AND p.id = k.person_id WHERE k.hash = ?
-  `).get(sha256(key)) as { room_id: string; id: string; name: string; level: RoomLevel; joined_at: number } | undefined;
+  `).get(sha256(key)) as { room_id: string; id: string; name: string; joined_at: number } | undefined;
   if (row && typeof device === "string" && DEVICE.test(device)) {
     database.prepare("INSERT OR IGNORE INTO room_devices (room_id, device, person_id) VALUES (?, ?, ?)").run(row.room_id, device, row.id);
   }
-  return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, level: row.level, joinedAt: row.joined_at } } : null;
+  return row ? { roomId: row.room_id, person: { id: row.id, name: row.name, joinedAt: row.joined_at } } : null;
 }
 
 /** The room a live invite or room code is for, without spending a try. */

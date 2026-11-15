@@ -203,7 +203,7 @@ async function joinedTeam(name = "Mina") {
   const c = teammate();
   // As the local routes do: start first, so a later start() can't follow the room twice.
   c.start();
-  const { invite, secret } = createInvite(group.hosted.roomId, name, "chat", ["Edward"]);
+  const { invite, secret } = createInvite(group.hosted.roomId, name, ["Edward"]);
   const result = await c.join(`wkr1:${HOST}:${invite.id}.${secret}`);
   if (!result.ok) throw new Error(result.error);
   await until(() => c.rooms()[0]?.link === "live");

@@ -145,8 +145,8 @@ export interface GuestClientDeps {
   onChange?(roomId: string): void;
   /** A line this PC sent, as the host stored it. */
   onSent?(roomId: string, entry: JoinedEntry): void;
-  /** A bot's line, stored here for the first time live or from this PC's own bot. */
-  onBotLine?(roomId: string, entry: JoinedEntry): void;
+  /** A line stored here for the first time live, or this PC's own bot's line. */
+  onLine?(roomId: string, entry: JoinedEntry): void;
   /** The host pressed the room's Stop. */
   onStop?(roomId: string): void;
   /** What this PC's bots in the room are doing now. */
@@ -479,7 +479,7 @@ export class GuestClient {
     if (!entry.success) return unavailable();
     if (addJoinedEntries(roomId, [entry.data.entry])) {
       this.changed(roomId);
-      this.deps.onBotLine?.(roomId, entry.data.entry);
+      this.deps.onLine?.(roomId, entry.data.entry);
     }
     return { ok: true, value: entry.data.entry };
   }
@@ -786,7 +786,7 @@ export class GuestClient {
       if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) {
         this.changed(roomId);
         this.alertLine(roomId, parsed.entry);
-        if (parsed.entry.author.kind === "bot") this.deps.onBotLine?.(roomId, parsed.entry);
+        this.deps.onLine?.(roomId, parsed.entry);
       }
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);

@@ -6534,7 +6534,7 @@ const guestClient: GuestClient = new GuestClient({
   ownRoom: (code) => ownRoomGroup(code, store.groups),
   onChange: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   onSent: (roomId, entry) => setImmediate(() => myRoomBotTurns.sent(roomId, entry)),
-  onBotLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
+  onLine: (roomId, entry) => setImmediate(() => myRoomBotTurns.heard(roomId, entry)),
   onStop: (roomId) => myRoomBotTurns.stop(roomId),
   botTurn: (roomId, id) => myRoomBotTurns.turn(roomId, id),
   botChain: (roomId) => myRoomBotTurns.chain(roomId),
