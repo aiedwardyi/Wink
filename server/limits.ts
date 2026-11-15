@@ -148,7 +148,6 @@ export const PROMPT_WORDING: Limits = {
 
 /** Limits other cards own or a follow-up removes; delete the entry with the limit. */
 export const PENDING_LIMITS: Limits = {
-  "server/accounts.ts": { MAX_ENGINE_ACCOUNTS: "Follow-up: 8 sign-ins per engine guards nothing.", "At most ": "Follow-up: MAX_ENGINE_ACCOUNTS refusal." },
   "server/bot-routes.ts": { "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
   "server/config.ts": { MAX_LOCAL_VM_MAX_INSTANCES: "Follow-up: nothing reads maxInstances past the status echo." },
   "server/drivers/agents-proxy.ts": {
