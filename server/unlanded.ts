@@ -148,7 +148,9 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       if (!ref.repo && !dir) continue;
       const key = `${ref.repo ?? dir}|${ref.number ?? ref.branch}`;
       let entry = lookups.get(key);
-      if (!entry || (!entry.final && now() - entry.at >= UNLANDED_REFRESH_MS)) lookups.set(key, entry = await lookup(ref, dir));
+      // a branch can open a new PR after its last one settles; only a PR number stays settled
+      const settled = entry?.final === true && Boolean(ref.number);
+      if (!entry || (!settled && now() - entry.at >= UNLANDED_REFRESH_MS)) lookups.set(key, entry = await lookup(ref, dir));
       if (!entry.pr) continue;
       const id = `${entry.pr.repo}#${entry.pr.number}`;
       const seen = found.get(id);

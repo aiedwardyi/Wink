@@ -7776,6 +7776,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
       if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
       const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
+      if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);
       if (source.notifications !== false) phonePing(source.id, pingForMailbox(source.name || source.id, parsed.data.text, botNotifyIconPath(source)), { botId: source.id, threadId: source.threadId });
       if (kind !== "report") void raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
       void noteSteer.noteArrived(source.id, source.threadId, scope.pane);

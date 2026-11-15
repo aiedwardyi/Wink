@@ -208,6 +208,21 @@ describe("createUnlandedWork", () => {
     expect(calls.map((args, index) => [args[0], args[2], cwds[index]]).filter(([kind]) => kind === "pr")).toEqual([["pr", "1640", "D:/repo-a"], ["pr", "1642", "D:/repo-b"]]);
   });
 
+  it("re-resolves a branch whose PR settled, so the branch's next PR shows", async () => {
+    let at = NOW;
+    const live = views();
+    live.set("fix/reused", allViews["1641"]);
+    const { gh } = fakeGh(live, compare());
+    const reports = [report(NOW - 2 * HOUR, "pushed", "fix/reused")];
+    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toBe("");
+    live.set("fix/reused", allViews["1640"]);
+    at += UNLANDED_REFRESH_MS;
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1640 fix: tell bots what has not landed (2h)");
+  });
+
   it("keeps the repo of a PR reported from outside the task's folder", async () => {
     const { gh } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages.slice(4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
@@ -275,5 +290,12 @@ describe("unlanded wiring", () => {
     expect(source).toContain("await unlandedWork.refresh(bot.id, bot.threadId);");
     expect(source).toContain("const pinned = store.taskByThread(botId, threadId)?.cwd;");
     expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
+  });
+
+  it("refreshes a task's list as soon as a worker report is stored, so an idle bot's next typed turn has it", () => {
+    const route = source.slice(source.indexOf('path === "/api/mailbox"'), source.indexOf("return json(res, 200, { ok: true, id: message.id });"));
+    const stored = route.indexOf('const message = store.appendMessage(source.threadId, { role: "bot", kind: "note"');
+    expect(stored).toBeGreaterThan(0);
+    expect(route.indexOf('if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);')).toBeGreaterThan(stored);
   });
 });
