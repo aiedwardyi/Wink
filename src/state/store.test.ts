@@ -19,6 +19,7 @@ import {
   shouldClearSelectedUnread,
   visibleNotificationThread,
   visibleMessages,
+  type AppState,
   type Bot,
   type Group,
   type InstanceInfo,
@@ -127,13 +128,22 @@ describe("notification routing", () => {
     ],
   }];
 
+  it("closes whatever stands over the chat, also when that chat is already selected", () => {
+    let state: AppState = { ...initialState, bots: bots as never, selectedId: "bot-1", appSettingsOpen: true, pluginsOpen: true, createBotOpen: true };
+
+    openNotificationTarget((action) => { state = reducer(state, action); }, { botId: "bot-1", threadId: "main-thread" }, { bots, groups, hydrated: true }, true);
+
+    expect([state.appSettingsOpen, state.pluginsOpen, state.createBotOpen]).toEqual([false, false, false]);
+    expect(state.revealed).toBe(1);
+  });
+
   it("selects the bot and switches to the notification's exact task", () => {
     const dispatch = vi.fn();
 
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "detached-thread" }, { bots, groups, hydrated: true });
 
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
-      { type: "select", id: "bot-1" },
+      { type: "select", id: "bot-1", reveal: true },
       { type: "switchTask", botId: "bot-1", threadId: "detached-thread" },
     ]);
   });
@@ -145,7 +155,7 @@ describe("notification routing", () => {
 
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "room-thread" }, { bots, groups, hydrated: true });
 
-    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "room-1" }]);
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "room-1", reveal: true }]);
   });
 
   it("opens the room and restores the exact inactive channel task", () => {
@@ -154,7 +164,7 @@ describe("notification routing", () => {
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "older-room-thread" }, { bots, groups, hydrated: true });
 
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
-      { type: "select", id: "room-1" },
+      { type: "select", id: "room-1", reveal: true },
       { type: "switchGroupTask", groupId: "room-1", threadId: "older-room-thread" },
     ]);
   });
@@ -164,7 +174,7 @@ describe("notification routing", () => {
 
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "deleted-task-thread" }, { bots, groups, hydrated: true });
 
-    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "bot-1" }]);
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "bot-1", reveal: true }]);
   });
 
   it("skips the transcript switch when the bot's notification thread is already active", () => {
@@ -172,7 +182,7 @@ describe("notification routing", () => {
 
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "main-thread" }, { bots, groups, hydrated: true }, true);
 
-    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "bot-1" }]);
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "bot-1", reveal: true }]);
   });
 
   it("still switches on a warm tap whose cached state shows the thread active", () => {
@@ -181,7 +191,7 @@ describe("notification routing", () => {
     openNotificationTarget(dispatch, { botId: "bot-1", threadId: "main-thread" }, { bots, groups, hydrated: true });
 
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
-      { type: "select", id: "bot-1" },
+      { type: "select", id: "bot-1", reveal: true },
       { type: "switchTask", botId: "bot-1", threadId: "main-thread" },
     ]);
   });
@@ -192,7 +202,7 @@ describe("notification routing", () => {
 
     openNotificationTarget(dispatch, target, { bots, groups, hydrated: false });
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
-      { type: "select", id: "bot-1" },
+      { type: "select", id: "bot-1", reveal: true },
       { type: "notificationSwitchPending", target },
     ]);
 
@@ -214,7 +224,7 @@ describe("notification routing", () => {
 
     openNotificationTarget(dispatch, target, { bots, groups, hydrated: false });
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
-      { type: "select", id: "room-1" },
+      { type: "select", id: "room-1", reveal: true },
       { type: "notificationSwitchPending", target },
     ]);
 

@@ -504,6 +504,8 @@ export interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   createBotOpen: boolean;
+  /** Bumps when a tapped notification asks for its chat, so whatever is open over the chat closes. */
+  revealed: number;
   composerFocusBotId: string | null;
   settingsOpen: boolean;
   /** Bumps when the chat avatar asks bot details to open the avatar picker. */
@@ -626,7 +628,7 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
   | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
-  | { type: "select"; id: string }
+  | { type: "select"; id: string; reveal?: boolean }
   | {
       type: "send";
       botId: string;
