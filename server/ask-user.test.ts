@@ -72,12 +72,12 @@ describe("ask-user endpoint", () => {
     expect(h.alerts).toEqual([]);
   });
 
-  it("caps the question and trims, dedupes and caps the choices", () => {
+  it("caps the question and trims and dedupes the choices", () => {
     const h = harness();
     ask(h.deps, { fromBotId: "bot-a", fromThreadId: "thread-a", question: "q".repeat(ASK_USER_QUESTION_MAX + 50) });
     expect(h.appended[0].message.card?.subtitle).toHaveLength(ASK_USER_QUESTION_MAX);
     expect(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices).toHaveLength(9);
-    expect(askUserChoices(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(askUserChoices(askUserRequestSchema.parse({ choices: [" a ", "a", "", 4, "b", "c", "d", "e", "f"] }).choices)).toEqual(["a", "b", "c", "d", "e", "f"]);
     expect(askUserRequestSchema.parse({ choices: "a,b" }).choices).toEqual([]);
     expect(askUserRequestSchema.parse("not an object")).toEqual({ fromBotId: "", fromThreadId: "", question: "", choices: [] });
   });

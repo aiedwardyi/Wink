@@ -13,7 +13,6 @@ import { addQuestionAsk, answerQuestionAsk, isOpenAsk, type TaskAsk } from "./ta
 
 export const ASK_USER_TITLE = "Your bot has a question";
 export const ASK_USER_QUESTION_MAX = 2_000;
-export const ASK_USER_MAX_CHOICES = 5;
 const CHOICE_MAX = 200;
 const CLOSED_QUESTION_CHARS = 200;
 
@@ -37,14 +36,13 @@ export const askUserCardPatchSchema = z
   })
   .catch({});
 
-/** Trimmed, deduped, non-empty choices, at most five. */
+/** Trimmed, deduped, non-empty choices. */
 export function askUserChoices(raw: readonly string[]): string[] {
   const choices: string[] = [];
   for (const value of raw) {
     const choice = value.trim().slice(0, CHOICE_MAX);
     if (!choice || choices.includes(choice)) continue;
     choices.push(choice);
-    if (choices.length === ASK_USER_MAX_CHOICES) break;
   }
   return choices;
 }
