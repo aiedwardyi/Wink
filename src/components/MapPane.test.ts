@@ -637,6 +637,12 @@ it("keeps the last tree and diff up, with no loading line, while a picked worker
   expect(host.querySelector(".map-where")?.textContent).toContain("repo-b");
 });
 
+it("pins the summary line so a short tree box cannot scroll it away", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toContain(".map-where { position: sticky; top: -10px;");
+  expect(css).toMatch(/\.map-top \{[^}]*overflow: auto; scroll-padding: 32px 0 14px;/);
+});
+
 it("lists a clash once per file with all its workers and caps the list with many workers", async () => {
   const shared = ["b.ts", "src/a.ts", "src/manual.ts", "src/z.ts", "README.md"];
   const team = Array.from({ length: 10 }, (_, i) => ({ ...workers[0], id: `w${i}`, nick: `W${i}`, editedAt: i, path: "src/a.ts", files: shared.map(path => ({ path, added: 1, removed: 0, ranges: [[i * 50 + 1, i * 50 + 1]] })) }));

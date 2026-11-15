@@ -9,13 +9,14 @@
 .map-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; min-width: 180px; max-width: 270px; padding: 4px; border: 1px solid var(--color-hairline); border-radius: 8px; background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / .2); }
 .map-menu button { display: block; width: 100%; padding: 8px 10px; border-radius: 6px; text-align: left; overflow-wrap: anywhere; }
 .map-menu button[aria-checked="true"] { background: var(--color-raised); color: var(--color-accent-text); }
-.map-top { display: flex; flex-direction: column; gap: 8px; flex: 0 1 auto; min-height: 96px; max-height: var(--map-split); overflow: auto; scroll-padding-bottom: 14px; padding: 10px 12px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); scrollbar-width: thin; }
+.map-top { display: flex; flex-direction: column; gap: 8px; flex: 0 1 auto; min-height: 96px; max-height: var(--map-split); overflow: auto; scroll-padding: 32px 0 14px; padding: 10px 12px 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-panel); scrollbar-width: thin; }
 /* not inherited: a drag restyles this one box, never the tree in it */
 @property --map-split { syntax: "<length-percentage>"; inherits: false; initial-value: 36%; }
 .map-pane[data-expanded] > :is(.map-top, .map-flow-rows) { max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0; overflow: hidden; visibility: hidden; }
 .map-pane[data-expanded] > .map-split { display: none; }
 @media (pointer: coarse) { .map-split::before { content: ""; position: absolute; inset: -6px 0 -4px; } }
-.map-where { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
+/* pinned: a short tree box scrolls to the current file and would carry this line off; sticky measures inside the box's 10px top padding */
+.map-where { position: sticky; top: -10px; z-index: 4; margin: -10px 0 -6px; padding: 10px 0 6px; background: var(--color-panel); display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; color: var(--color-ink-secondary); }
 .map-where b { color: var(--color-ink); font-weight: 600; }
 .map-where span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (hover: hover) {
