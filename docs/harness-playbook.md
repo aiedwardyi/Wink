@@ -74,6 +74,7 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
   rules differ: comments only for a footgun, one line, about the code: never who asked or liked it, session dates, or internal card names; new logic in a
   focused file, not a large one.
 - If a choice this card does not cover would change the result, stop and report BLOCKED with the question.
+- Fix the cause, no timer/retry/comment patch around it, else BLOCKED.
 - Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
@@ -99,13 +100,14 @@ done, ruled out, and any edit in flight (file, what, why).
 The exact shape of its final message, plus one line: what it reused.
 ```
 
-- NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`).
+- NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`); `<name>` below is it in lowercase.
 - FRESH: a new worker with no context. CURRENT: reuse a live pane that already
   has the context; send it the card path with terminal_send.
 - One card, one branch, one worktree. Keep scope tight; the worker does
   exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
+- A repeat mistake gets a failing check (lint naming the fix, type, test), not a rule line.
 - Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the
@@ -115,10 +117,8 @@ The exact shape of its final message, plus one line: what it reused.
 
 ## Token budget
 
-Every step re-reads the worker's whole context, so long runs cost more.
-
 - Size each card so its worker finishes under about 200k tokens of context.
-  Split research or probes and the build into separate cards.
+  Split research or probes from the build.
 - A new task gets a FRESH worker. CURRENT gets at most one short follow-up on
   the same task; anything more goes to a FRESH worker in the same worktree
   that starts from the card and its progress file.
@@ -152,7 +152,6 @@ git -C "<repo>" worktree add "{{WORKTREE}}" -b <branch> <base>
 ```
 
 - Create it before the spawn and pass it as the pane cwd.
-- `<name>` matches the nickname in lowercase.
 - A read-only review of a plain folder that is not a repo runs in a scratch copy of it, never in place: workers run unsandboxed, so a stray edit there could not be undone.
 - An editing job in a plain folder gets no worktree: one worker edits it in place, and you leave the folder alone until it reports.
 - The same goes for a checkout with uncommitted changes (`git status --short` lists files): a worktree starts from a commit and would miss them. Check before you write the card, and keep cards outside the repo so they never count.
@@ -196,18 +195,17 @@ When a worker reports done, check its work yourself before anything moves:
    expected files changed, no whole-file line-ending diffs.
 3. Run the targeted checks only: the test files the card names and the repo's
    typecheck, with the commands the repo's own instructions give.
-4. Don't run the full test suite or boot the app's server unless the repo's
-   instructions say that's safe.
-5. Read the diff for the acceptance items. A report is a claim, not proof. An
+4. No full test suite or app server unless the repo's instructions allow it.
+5. Read the diff for the acceptance items. A report is a claim; proof is test output, pictures, clips. An
    unmet item fails even when the worker says it was already like that.
 6. Run new regression tests on the base commit first. They must fail with the
    exact old bug.
-7. Check numeric claims yourself. Run old and new one after the other so
-   timeouts don't skew the counts. Timing runs need a quiet machine: a timing
+7. Check numeric claims yourself. Run old and new back to back so timeouts
+   don't skew the counts. Timing runs need a quiet machine: a timing
    worker waits for a GO file you write once other heavy runs finish.
 8. Test servers get a fresh data folder and their own port. Run them in a pane
-   (terminal_spawn, then terminal_close), not as a background task you kill
-   later; a killed task shows up as failed.
+   (terminal_spawn, then terminal_close), not a background task: a killed
+   task shows as failed.
 9. Land the result unless the user asked for a branch, push or PR. If the
    checkout is still clean on `<base>` and the app is not running,
    `git -C "<repo>" merge --squash <branch>` leaves the changes there

@@ -527,6 +527,15 @@ describe("onboarding quiz", () => {
   });
 });
 
+describe("deleting the open group", () => {
+  it("lands on a bot that is not archived", () => {
+    const bots = [{ id: "old", hidden: true }, { id: "live" }] as unknown as Bot[];
+    const groups = [{ id: "room", threadId: "room-thread", memberIds: [], messages: [] }] as unknown as Group[];
+    const next = reducer({ ...initialState, bots, groups, selectedId: "room" }, { type: "groupDeleted", groupId: "room" });
+    expect(next.selectedId).toBe("live");
+  });
+});
+
 describe("cross-client bot creation", () => {
   it("adds an announced bot before its greeting frames arrive", () => {
     const announced = {

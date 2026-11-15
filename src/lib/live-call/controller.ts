@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksForChange, asksForQuiet, callsVoice, claimOf } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForChange, asksForQuiet, callsVoice, claimOf, looksUp, ordersChange, restates } from "./guard";
 import { answersCard, GAP_MS } from "./manners";
 import { EarlyMic, OpenLines } from "./quick";
 
@@ -67,7 +67,7 @@ type ToolRun = (call: LiveCall, args: Record<string, unknown>, id: string) => vo
 // One table; later cards add their tools here.
 const TOOLS: Record<string, ToolRun> = {
   propose_work: (call, args, id) => call.propose(String(args.order ?? "").trim(), [id]),
-  ask: (call, args, id) => call.query(String(args.question ?? "").trim(), id),
+  ask: (call, args, id) => call.query(String(args.question ?? "").trim(), [id]),
 };
 
 /** One thing the person said: a request until something real accounts for it. */
@@ -102,6 +102,9 @@ const HANG_UP_WAIT_MS = 1_000;
 const GREETING = "[Wink] The call just started. Busy? Nod to the job in a few words.";
 // What the bot wrote after these answers them, not the person.
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
+// An order from a call this recent is still his when he calls back to hear how it went.
+const CARRY_MS = 10 * 60_000;
+const MISSED = "[Wink] The chat line above landed after your last answer. Say ONE short line: \"Update: that just changed,\" then its fact in one clause. Nothing else.";
 const IN_CHAT = "[Wink] In chat, already on screen. Context only, do not read it out.\n";
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -172,6 +175,7 @@ export class LiveCall {
   private listeners = new Set<() => void>();
   private snapshot: CallState = { status: "starting", muted: false };
   private callId?: string;
+  private tapAt = 0;
   private threadId?: string;
   private writes = new Set<Promise<unknown>>();
   private sends = new Set<Promise<unknown>>();
@@ -195,7 +199,7 @@ export class LiveCall {
   private quietTimer?: ReturnType<typeof setTimeout>;
   private ran = false;
   private req = request("");
-  private pending?: { order: string; toolIds: string[]; req: Request; timer: ReturnType<typeof setTimeout> };
+  private pending?: { order: string; toolIds: string[]; req: Request; upto: number; timer: ReturnType<typeof setTimeout> };
   private toolEngines = new Map<string, LiveEngine>();
   private cancelled = new Set<string>();
   private sent = new Set<string>();
@@ -225,6 +229,10 @@ export class LiveCall {
   private held: Held[] = [];
   private playing?: { item: Held; ended: boolean };
   private context: string[] = [];
+  // Handed to the engine, which sends it with its next text or tool result; a socket that drops first never did.
+  private riding: string[] = [];
+  // A reply the voice has as context only, not yet on the wire.
+  private missed = false;
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
@@ -295,6 +303,7 @@ export class LiveCall {
   }
 
   async start() {
+    this.tapAt = this.now();
     this.set({ status: "starting", error: undefined });
     // The mic opens on the tap, beside the token, so words said while the call connects are kept.
     const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then(() => null, (error) => error ?? new Error("mic failed")));
@@ -386,8 +395,9 @@ export class LiveCall {
         const early = this.early;
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
-        // Talking from the tap is a quick call: no greeting first, and none once he has spoken.
-        if (!resumed && !early?.spoke) this.held.unshift({ text: GREETING, valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
+        // Sound from the tap may be a quick call or a click: the greeting waits a beat for his words, and goes only if none came.
+        if (!resumed) this.held.unshift({ text: GREETING, valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
+        if (early?.spoke) this.pause();
         this.release();
       },
       audio: (pcm) => {
@@ -452,6 +462,11 @@ export class LiveCall {
             this.exchanged = true;
             this.offerCard();
           }
+          // A plain answer about the work, given before a reply reached the voice, gets one short correction; the reply rides that line.
+          if (this.replyTo && this.missed && !this.held.length && !this.pending && !this.playing && asksAboutWork(this.req.text, this.deps.botName)) {
+            this.missed = false;
+            this.held.push({ text: MISSED, fix: true });
+          }
         }
         this.replyTo = 0;
         if (this.playing) this.playing.ended = true;
@@ -460,6 +475,7 @@ export class LiveCall {
       },
       interrupted: () => {
         if (!mine()) return;
+        this.stir();
         this.stats.interrupted += 1;
         this.cutHold = "cut";
         // Echo or noise can trip barge-in; with no speech heard the received reply plays out.
@@ -521,6 +537,7 @@ export class LiveCall {
     const old = this.engine;
     this.engine = null;
     this.connected = false;
+    this.context.unshift(...this.riding.splice(0));
     this.flushHeard(this.quiet);
     this.turnHadAudio = false;
     this.generating = false;
@@ -552,7 +569,12 @@ export class LiveCall {
     const engine = this.engine;
     const live = ids.filter((id) => engine && this.toolEngines.get(id) === engine && !this.cancelled.has(id));
     const heard = UNANSWERED[result] ?? result;
-    if (live.length) return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
+    if (live.length) {
+      this.carry();
+      this.riding = [];
+    this.missed = false;
+      return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
+    }
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
     this.release();
   }
@@ -576,6 +598,9 @@ export class LiveCall {
     if (this.cardTakes) return this.toolResult(ids, "propose_work", order, this.notNeeded);
     const key = orderKey(order);
     if (this.sent.has(key)) return this.toolResult(ids, "propose_work", order, "already sent");
+    // A lookup he asked for changes nothing, so it goes with no yes; the one already sent, said in other words, does not go twice.
+    const lookup = this.req.text !== "" && looksUp(order);
+    if (lookup && this.req.accounted && restates(key, this.req.asks.keys())) return this.toolResult(ids, "propose_work", order, "already sent");
     // Every result makes the voice speak, so a re-offer waits to be answered with the first one.
     if (this.pending && orderKey(this.pending.order) === key) return void this.pending.toolIds.push(...ids);
     // A newer offer answers for the old call too: a result of its own made the voice speak a turn that sounded like a yes.
@@ -585,6 +610,7 @@ export class LiveCall {
       this.clearPending();
       this.notSent(replaced.order, "replaced");
     }
+    if (lookup) return this.query(order, [...(replaced?.toolIds ?? []), ...ids], "propose_work");
     this.stats.orders.proposed += 1;
     // A yes to the voice's own question, before it said anything new, already confirms the order.
     const yes = !this.req.accounted && bareYes(this.req.text) && offered(this.lastSaid) && !spokenText(this.saidBuf) && !this.turnHadAudio;
@@ -603,9 +629,12 @@ export class LiveCall {
       }
       this.stats.orders.expired += 1;
       pending.req.accounted = false;
+      // The bar says not sent, so a hang-up must not send it either.
+      this.open.settle(pending.upto);
+      this.postLines([{ who: "voice", text: told("expired", order), at: this.now() }]);
       this.answerTool("expired");
     };
-    const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
+    const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, upto: this.stats.userLines, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
     this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
     if (yes) void this.answer(true);
@@ -661,10 +690,10 @@ export class LiveCall {
   }
 
   /** A question for the bot: no yes needed, one send per request however often the voice replays it. */
-  query(question: string, id: string) {
-    if (!question) return this.toolResult([id], "ask", question, "not sent: no question");
-    if (this.cardTakes) return this.toolResult([id], "ask", question, this.notNeeded);
-    if (asksForChange(question)) return this.toolResult([id], "ask", question, CHANGE_ASK);
+  query(question: string, ids: string[], tool = "ask") {
+    if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
+    if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
+    if (asksForChange(question)) return this.toolResult(ids, tool, question, CHANGE_ASK);
     const req = this.req;
     req.accounted = true;
     const key = orderKey(question);
@@ -682,7 +711,7 @@ export class LiveCall {
       });
       req.asks.set(key, run);
     }
-    void run.then((result) => this.toolResult([id], "ask", question, result));
+    void run.then((result) => this.toolResult(ids, tool, question, result));
   }
 
   private send(text: string, tag: { order: true } | { ask: true }, sendId = crypto.randomUUID()): Promise<string> {
@@ -737,7 +766,7 @@ export class LiveCall {
   private guard(said: string) {
     if (this.guarded || !said) return;
     const req = this.req;
-    const claim = claimOf(said, asksAboutDone(req.text), !this.pending && !req.accounted && asksForChange(req.text));
+    const claim = claimOf(said, asksAboutDone(req.text), !this.pending && !req.accounted && ordersChange(req.text, [this.deps.botName, ...this.aliases]));
     // A turn answering a nudge that still sent nothing is a dropped request, whatever it says.
     if (!claim && !req.nudged) return;
     if (claim?.claim === "failed") {
@@ -787,9 +816,11 @@ export class LiveCall {
     this.letters.hangul += text.match(HANGUL)?.length ?? 0;
     this.letters.all += text.match(LETTER)?.length ?? 0;
     this.justAnswered = false;
-    const req = this.req = request(text);
-    // A clear answer to the card read out goes to the bot as one, quoting it so the next call sees it answered; anything else is talk.
     const card = this.card;
+    // A bare yes while his request is already running asks for nothing new.
+    const same = this.awaiting > 0 && this.req.accounted && !this.pending && !card?.armed && bareYes(text) && !offered(this.lastSaid);
+    const req = same ? this.req : (this.req = request(text));
+    // A clear answer to the card read out goes to the bot as one, quoting it so the next call sees it answered; anything else is talk.
     if (ended && !this.snapshot.hushed && !this.pending && card?.armed && !answersCard(text, card.options)) card.passed = true;
     else if (ended && !this.snapshot.hushed && !this.pending && card?.armed) {
       card.armed = false;
@@ -864,7 +895,11 @@ export class LiveCall {
       let asked: Message | undefined;
       let orders: Message[] = [];
       let replied = false;
+      let backs: Message[] = [];
+      const carried = (row: Message) => Boolean(row.call?.order || row.call?.ask) && row.at >= startedAt - CARRY_MS;
       for (const row of input.messages) {
+        // A reply that landed before this call is no longer news once he wrote or called again after it.
+        if (isVoiceLine(row) ? row.call?.id !== this.callId : isSentByPerson(row)) backs = backs.filter((back) => back.at >= startedAt);
         if (isSentByPerson(row) && !isVoiceLine(row) && row.quick?.state !== "asked" && !row.queued && row.text?.trim()) {
           if (!row.steered || !orders.length) {
             asked = row;
@@ -874,13 +909,18 @@ export class LiveCall {
           if ((row.call?.order || row.call?.ask) && row.call.id === this.callId) orders.push(row);
         } else if (BACKGROUND.has(row.kind)) {
           // A request of this call still waiting keeps its reply; once answered, the bot's next line answers the note.
-          if (replied || (!orders.length && !(asked && asked.at >= startedAt))) {
+          if (replied || (!orders.length && !(asked && (asked.at >= startedAt || carried(asked))))) {
             asked = undefined;
             orders = [];
           }
         } else if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && !row.quick && row.text?.trim()) {
           replied = true;
-          if (row.at < startedAt || this.reported.has(row.id)) continue;
+          if (this.reported.has(row.id)) continue;
+          if (!orders.length && asked && asked.at < startedAt && carried(asked)) {
+            backs.push(row);
+            continue;
+          }
+          if (row.at < startedAt) continue;
           this.reported.add(row.id);
           this.justAnswered = false;
           replies.set(asked, { reply: row, orders: [...orders] });
@@ -897,6 +937,16 @@ export class LiveCall {
         for (const row of replyOrders) this.sent.delete(orderKey(row.text!));
         this.answered(replyOrders, replyOrders.map((row) => row.id), reply);
         void this.report(reply.text!, replyOrders.map((row) => row.id));
+      }
+      // The call back reads out the newest reply to his last call's order; older ones stay context.
+      const back = backs.pop();
+      for (const row of backs) {
+        this.reported.add(row.id);
+        if (row.at >= startedAt) this.remember(row.text!);
+      }
+      if (back) {
+        this.reported.add(back.id);
+        void this.report(back.text!, []);
       }
       if (this.ran) this.stopped(input.messages, openQuestion(input.messages)?.at, Boolean(input.needs && !this.toldNeeds.has(input.needs.id)));
     }
@@ -1014,6 +1064,7 @@ export class LiveCall {
   }
 
   private remember(reply: string) {
+    this.missed = true;
     this.context.push(`${IN_CHAT}${this.deps.botName}: ${reply.trim()}`.slice(0, REPORT_CHARS));
     this.release();
   }
@@ -1021,14 +1072,23 @@ export class LiveCall {
   // Text sent while the voice talks, thinks, listens or has a line in flight cuts it off, so every [Wink] line waits here for quiet.
   private release() {
     if (!this.connected || this.stalled || this.snapshot.hushed || this.playing || (this.gap && !this.held[0]?.fix) || this.cutHold || this.turnHadAudio || this.deps.audio.playing || (!this.quiet && (this.generating || spokenText(this.heardBuf)))) return;
-    for (const text of this.context.splice(0)) this.engine?.sendContext(text);
+    this.carry();
     let item = this.held.shift();
     while (item?.valid && !item.valid()) item = this.held.shift();
     if (!item) return;
     // The next turn relays a real result, so the guards sit it out.
     this.guarded = !item.nudge;
     this.playing = { item, ended: false };
+    this.riding = [];
+    this.missed = false;
     this.engine?.sendText(item.text);
+  }
+
+  private carry() {
+    for (const text of this.context.splice(0)) {
+      this.engine?.sendContext(text);
+      this.riding.push(text);
+    }
   }
 
   // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
@@ -1139,6 +1199,7 @@ export class LiveCall {
 
   /** No retry: a live call ends quietly with its last line in the chat, one not yet live fails softly. */
   private outOfVoice() {
+    if (this.ended) return;
     if (!this.wasLive) return this.fail(VOICE_OUT);
     this.postLines([{ who: "voice", text: VOICE_OUT_LINE[activeLocale() === "ko" ? "ko" : "en"], at: this.now() }]);
     this.teardown();
@@ -1146,6 +1207,7 @@ export class LiveCall {
   }
 
   private fail(error: string) {
+    if (this.ended) return;
     this.teardown();
     this.set({ status: "failed", error });
   }
@@ -1217,25 +1279,32 @@ export class LiveCall {
       this.flushHeard();
       this.flushSaid(share);
     }
-    if (hangUp) await Promise.all([...this.sends]);
-    const words = hangUp ? this.open.text() : "";
+    // A send already on its way may still land, so its words are not called unsent before it does.
+    await Promise.all([...this.sends]);
+    const left = this.open.text();
+    const words = hangUp ? left : "";
     if (this.pending && !words) {
       this.stats.orders.dropped += 1;
       this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
+    } else if (!hangUp && left) {
+      // A drop is no yes: his words stay on screen, unsent.
+      this.postLines([{ who: "voice", text: `Not sent (call ended): ${left}`, at }]);
+      this.notSent(left, "call ended");
     }
     this.pending = undefined;
     if (words) {
       const result = await this.send(words, { order: true });
       if (!reached(result)) this.postLines([{ who: "voice", text: told(result, words), at: this.now() }]);
     }
-    if (!this.callId || this.snapshot.startedAt === undefined) return;
+    // Hung up before it connected, the call still ends on the server, timed from the tap.
+    if (!this.callId || (this.snapshot.startedAt === undefined && !hangUp)) return;
     const { ttfa, usage, ...counts } = this.stats;
     const body = {
       callId: this.callId,
       stats: {
         ...counts,
         device: this.deps.device,
-        ms: at - this.snapshot.startedAt,
+        ms: at - (this.snapshot.startedAt ?? this.tapAt),
         hangulShare: this.letters.all ? Math.round((this.letters.hangul / this.letters.all) * 100) / 100 : 0,
         ttfaMs: { p50: percentile(ttfa, 0.5), p90: percentile(ttfa, 0.9) },
         ackMs: { p50: percentile(this.ack, 0.5), p90: percentile(this.ack, 0.9) },

@@ -102,7 +102,7 @@ it("a steered call send carries the call lines since the last user turn", async 
   await h.send({ text: "Check the build.", call: { ...CALL, ask: true } });
   await h.send({ text: "plain" });
   const [spoken, plain] = h.steer.mock.calls.map((call) => call[1]);
-  expect(spoken).toContain("Person: Can you check the build?\nYou: Let me check.");
+  expect(spoken).toContain("Person: Can you check the build?\nVoice: Let me check.");
   expect(spoken!.endsWith("Check the build.")).toBe(true);
   expect(plain).not.toContain("Person:");
 });

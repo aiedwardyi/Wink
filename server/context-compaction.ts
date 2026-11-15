@@ -13,6 +13,7 @@ import {
   readContextCompaction,
   type ContextCompactionV1,
 } from "../shared/context-compaction.ts";
+import { VOICE_SAID } from "../shared/live-call.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
 
 export const MODEL_CONTEXT_FALLBACK = 128_000;
@@ -198,7 +199,7 @@ export function estimateContextTokens(messages: Array<{ text: string }>): number
 }
 
 /** Longest prefix that fits, ending at a line end, else at whitespace, else anywhere. */
-function fittingHead(text: string, fits: (head: string) => boolean): string {
+export function fittingHead(text: string, fits: (head: string) => boolean): string {
   let low = 0;
   let high = text.length;
   while (low < high) {
@@ -573,7 +574,7 @@ function replayUnits(
     if (message.quick?.state === "handoff" && message.queueId) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
-      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : body;
+      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[your fast reply] ${body}` : message.role === "bot" && message.call?.voice ? `${VOICE_SAID} ${body}` : body;
       const speaker = message.role === "user" ? (message.author?.kind === "person" ? message.author.name : userName) : (message.from?.name ?? "Bot");
       const unit: ReplayUnit = {
         id: message.id,

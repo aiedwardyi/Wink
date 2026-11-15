@@ -6,8 +6,10 @@ export const GAP_MS = 1_500;
 const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const ORDINAL = /^(?:(?:the|option|number)\s+)?(first|second|third|1|2|3|one|two|three|last)(?:\s+(?:one|option))?$/;
 const ORDINAL_KO = /^(첫|두|세|마지막)\s?번째/;
-const HELLO = /\b(?:hi|hello|hey)\b|안녕/i;
-const PLACE: Record<string, number> = { first: 0, "1": 0, one: 0, 첫: 0, second: 1, "2": 1, two: 1, 두: 1, third: 2, "3": 2, three: 2, 세: 2 };
+// The whole line, and never 이: "이번" is "this time".
+const NUMBER_KO = /^(1|2|3|일|삼)\s?번(?:이요|요|으로)?$/;
+const HELLO = /\b(?:hi|hello|hey)\b|안녕|여보세요/i;
+const PLACE: Record<string, number> = { first: 0, "1": 0, one: 0, 첫: 0, 일: 0, second: 1, "2": 1, two: 1, 두: 1, third: 2, "3": 2, three: 2, 세: 2, 삼: 2 };
 
 export function answersCard(said: string, options: readonly string[]): boolean {
   const text = said.trim();
@@ -22,7 +24,7 @@ export function answersCard(said: string, options: readonly string[]): boolean {
     return want !== "" && ` ${line} `.includes(` ${want} `) && size <= want.split(" ").length + 2;
   });
   if (named.length === 1) return true;
-  const place = line.match(ORDINAL)?.[1] ?? text.match(ORDINAL_KO)?.[1];
+  const place = line.match(ORDINAL)?.[1] ?? text.match(ORDINAL_KO)?.[1] ?? line.match(NUMBER_KO)?.[1];
   if (!place || !options.length) return false;
   const index = place === "last" || place === "마지막" ? options.length - 1 : PLACE[place]!;
   return index < options.length;

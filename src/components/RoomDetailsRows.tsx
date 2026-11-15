@@ -44,6 +44,7 @@ export function RoomFolderRow({ group }: { group: Group }) {
     if (chosen) void save(chosen);
   };
 
+  if (!folder) return null;
   return (
     <div data-room-folder className={DETAILS_ROW}>
       <div className="flex items-center justify-between gap-3">
@@ -63,7 +64,7 @@ export function RoomFolderRow({ group }: { group: Group }) {
       </div>
       {locked || canPick ? (
         <div className="mt-1 truncate text-[13px] text-ink" title={folder}>
-          {folder ? shortPath(folder, home) : <span className="text-ink-secondary">{t("room.eachBotFolder")}</span>}
+          {shortPath(folder, home)}
         </div>
       ) : (
         <form
@@ -85,7 +86,7 @@ export function RoomFolderRow({ group }: { group: Group }) {
           </button>
         </form>
       )}
-      {locked && folder && <div className="mt-1 text-[12px] text-ink-secondary">{t("room.fixedFolder")}</div>}
+      {locked && <div className="mt-1 text-[12px] text-ink-secondary">{t("room.fixedFolder")}</div>}
       {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
