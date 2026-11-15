@@ -56,6 +56,7 @@ Use the [feature map](docs/feature-map.md) to reach a screen in tests or QA.
 - **Platform-specific code is gated.** `server/` stays portable Node. Native code that needs Windows, macOS or Linux lives behind a `process.platform` check. Renderer code reads the desktop capability contract (`useDesktopCapabilities`), never the OS: screen preview, dictation and local control are separate capabilities.
 - **MCP tool schemas stay flat.** Each engine converts a tool's `inputSchema` for its model and drops what it can't map. No `oneOf`, `anyOf`, `allOf`, `const` or `format`; put per-variant rules in `description`s and guard the shape with a schema test, like `server/drivers/agents-proxy.test.ts`.
 - **Match the altitude.** Plain Node on the server, one store, one event bus. No new runtime dependency where thirty lines will do. A new dependency needs a reason in the PR.
+- **Fix the cause, then make it impossible.** No timer, retry or comment that patches around a bug. A mistake that can recur gets a check that fails on it: an anti-slop lint rule (`tools/oxlint/anti-slop`) whose message names the right fix, a type, or a test. A prose rule is the last resort.
 - **One concern per PR.** Big changes start with an issue that agrees on the approach.
 - **Commits:** `type: half-sentence`, with `feat`, `fix`, `docs`, `test`, `chore`, `refactor`, `perf` or `ci`. No body unless it says something the diff can't.
 - **Prose and comments:** terse plain English, like the README. Plain dashes, no em dashes.

@@ -115,6 +115,15 @@ const MISSED = "[Wink] The chat line above landed after your last answer. Say ON
 const IN_CHAT = "[Wink] In chat, already on screen. Context only, do not read it out.\n";
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+// A spoken line's words in order, a number keeping its sign and percent: "-5%" is not "5%".
+const lineKey = (line: string) => (line.toLowerCase().match(/[-+−]?\d+(?:[.,]\d+)*%?|[\p{L}\p{N}]+/gu) ?? []).join(" ");
+/** The turn so far may still be the last line said again, word by word; only a last word still arriving may stop short. */
+const mayRepeat = (line: string, said: string) => {
+  const was = line.split(" ");
+  const now = lineKey(spokenText(said)).split(" ").filter(Boolean);
+  const open = !/[\s\p{P}]$/u.test(said);
+  return now.length <= was.length && now.every((word, i) => word === was[i] || (open && i === now.length - 1 && was[i]!.startsWith(word)));
+};
 const reached = (result: string) => result === "sent" || result === "queued";
 const HEARD = "They already heard you answer: say nothing more.";
 const CHANGE_ASK = "not sent: this changes something, so offer it with propose_work and wait for a yes";
@@ -463,7 +472,7 @@ export class LiveCall {
         if (offLanguage(words)) return this.drop(wrongTongue(this.app));
         const ask = this.checkAsk ? reasks(words, this.closed) : "no";
         if (ask === "yes") return this.drop(this.askedLine());
-        if (this.echo && ask === "no" && (!this.lastLine || !this.lastLine.startsWith(orderKey(words))) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
+        if (this.echo && ask === "no" && (!this.lastLine || !mayRepeat(this.lastLine, this.saidBuf)) && (!this.offTongue || /\s\S|[.!?…]\s*$/.test(words))) this.unhold(true);
         if (!this.echo) this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
           this.doneTold = true;
@@ -489,16 +498,18 @@ export class LiveCall {
         this.stats.turns += 1;
         if (this.echo && this.checkAsk && reasks(spokenText(this.saidBuf), this.closed, true) === "yes") this.drop(this.askedLine());
         if (this.echo) {
-          const repeat = orderKey(spokenText(this.saidBuf)) === this.lastLine;
+          const repeat = lineKey(spokenText(this.saidBuf)) === this.lastLine;
           if (repeat) this.stats.repeats += 1;
           this.unhold(!repeat);
+          if (!repeat) this.caption("voice", this.saidBuf);
         }
         this.dropping = this.offTongue = this.checkAsk = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
         const spoke = this.turnHadAudio || Boolean(said);
-        if (said) this.lastLine = orderKey(said);
+        // His late words clear the last line, so they go first: this answer is the line a later turn must not repeat.
         this.flushHeard();
+        if (said) this.lastLine = lineKey(said);
         this.guard(said);
         this.flushSaid(1);
         this.ackOut();

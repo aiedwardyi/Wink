@@ -549,6 +549,7 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     ["It's done, except the tests.", "It's done."],
     ["3 of the tests passed.", "4 of the tests passed."],
     ["The fix is not merged yet.", "The fix is merged."],
+    ["The change is -5%.", "The change is 5%."],
   ])("a new fact that only looks like the last line is still said: %s -> %s", async (first, second) => {
     const { audio, engine, posts, tick } = await live();
     const play = vi.spyOn(audio, "play");
@@ -607,5 +608,55 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     await tick(1_100);
     expect(voiced(posts)).toEqual(["Not yet."]);
     expect(play).not.toHaveBeenCalled();
+  });
+
+  it("an answer to words that landed after it started is still the last line, so its repeat is dropped", async () => {
+    const { audio, engine, posts, tick } = await live();
+    const e = engine();
+    const play = vi.spyOn(audio, "play");
+    e.events.answering();
+    e.events.audio(new Int16Array([1]));
+    e.events.heard("Is it done?");
+    e.events.said("Not yet.");
+    e.events.turnDone();
+    speak(e, "Not yet.");
+    await tick(0);
+    expect(voiced(posts)).toEqual(["Not yet."]);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("a shorter line held until its turn ended still shows as the caption", async () => {
+    const { call, engine } = await live();
+    engine().events.heard("How is it going?");
+    speak(engine(), "It's done, except the tests.");
+    speak(engine(), "It's done.");
+    expect(call.state().caption).toMatchObject({ who: "voice", text: "It's done." });
+  });
+
+  it("a line that starts like a word of the last one plays at once", async () => {
+    const { audio, engine } = await live();
+    const e = engine();
+    e.events.heard("Is it done?");
+    speak(e, "Not yet.");
+    const play = vi.spyOn(audio, "play");
+    e.events.answering();
+    e.events.audio(new Int16Array([1]));
+    e.events.said("No, ");
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("a dropped repeat leaves the guard as it was", async () => {
+    const { call, engine, posts, tick } = await live();
+    const e = engine();
+    e.events.heard("Fix the login bug.");
+    speak(e, "I'll fix it.");
+    await tick(0);
+    const fixes = e.texts.length;
+    speak(e, "I'll fix it.");
+    await tick(0);
+    expect(e.texts).toHaveLength(fixes);
+    call.end();
+    await tick(1_100);
+    expect(ended(posts)[0].stats).toMatchObject({ repeats: 1, guard: { nudges: 1, failLines: 0, promise: 1 } });
   });
 });

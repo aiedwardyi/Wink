@@ -1,19 +1,22 @@
 // The animated backdrop of the scene themes. Each scene is its own lazy chunk,
 // so other themes load and run none of it.
 import { useEffect, useRef, type RefObject } from "react";
+import type { MessageKey } from "@/lib/i18n-catalog";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { SKINS, SKIN_CHANGE_EVENT, type SkinId } from "@/lib/skins";
 import { startScene, type SceneHost, type SceneModule } from "@/scenes/scene-host";
 import { offerThemeRow, scenePlayed } from "./WhatsNew";
 import "@/scenes/scenes.css";
 
-export type SceneId = "lagoon" | "snow";
+export type SceneId = "lagoon" | "snow" | "neon-grid";
 
-const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow" };
+const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow", "neon-grid": "neon-grid" };
 const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
   lagoon: () => import("@/scenes/lagoon"),
   snow: () => import("@/scenes/snow"),
+  "neon-grid": () => import("@/scenes/neon-grid"),
 };
+export const SCENE_NAME: Record<SceneId, MessageKey> = { lagoon: "settings.skin.lagoon", snow: "settings.skin.snow", "neon-grid": "settings.skin.neonGrid" };
 const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 
 export const sceneOf = (skin: SkinId): SceneId | undefined => SCENE_SKINS[skin];
