@@ -23,6 +23,7 @@ const { seen, fake, offerThemeRow, scenePlayed } = vi.hoisted(() => {
 });
 vi.mock("@/scenes/lagoon", () => ({ default: fake }));
 vi.mock("@/scenes/snow", () => ({ default: fake }));
+vi.mock("@/scenes/neon-grid", () => ({ default: fake }));
 vi.mock("./WhatsNew", () => ({ offerThemeRow, scenePlayed }));
 
 const { ChatScene, sceneOf } = await import("./ChatScene");
@@ -86,6 +87,18 @@ it("chat scene stays still for the theme the app starts on", async () => {
 
 describe("chat scene on a theme pick", () => {
   beforeEach(() => act(() => applySkin("precision")));
+
+  it("plays Neon Grid's reply burst once and offers its row; a turn rolls it as busy", async () => {
+    expect(sceneOf("neon-grid")).toBe("neon-grid");
+    await pick("neon-grid");
+    expect(names()).toEqual(["reply"]);
+    expect(offerThemeRow.mock.calls).toEqual([["neon-grid"]]);
+    expect(scenePlayed.mock.calls).toEqual([["neon-grid"]]);
+    await render({ skin: "neon-grid", working: true });
+    expect(names()).toEqual(["reply", "busy"]);
+    await render({ skin: "neon-grid" });
+    expect(names()).toEqual(["reply", "busy", "reply"]);
+  });
 
   it("plays the reply burst once from the last reply and offers the theme's row", async () => {
     await pick("lagoon");

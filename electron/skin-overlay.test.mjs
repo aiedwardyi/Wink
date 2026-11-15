@@ -223,6 +223,7 @@ describe("skin overlay chrome", () => {
     expect(skinThemeSource("onyx")).toBe("dark");
     expect(skinThemeSource("dracula")).toBe("dark");
     expect(skinThemeSource("cobalt")).toBe("dark");
+    expect(skinThemeSource("neon-grid")).toBe("dark");
     expect(skinThemeSource("gruvbox")).toBe("dark");
     expect(skinThemeSource("precision")).toBe("dark");
     expect(skinThemeSource("community")).toBe("dark");
