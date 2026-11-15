@@ -981,8 +981,9 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
   const followRef = useRef(true);
   const previousScrollTop = useRef(0);
   const touchY = useRef(0);
-  // A finger pulling toward older rows; follow breaks only once it scrolls away from the end, so a sideways swipe keeps it.
+  // A finger pulling toward older rows; follow breaks only once the list scrolls up from its highest point, so a sideways swipe or a growing reply keeps it.
   const reaching = useRef(false);
+  const touchTop = useRef(0);
   const find = useSearchFindSeed(group.threadId);
   const findOpen = find.findOpen;
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
@@ -1406,6 +1407,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
         onTouchStart={(e) => {
           touchY.current = e.touches[0]?.clientY ?? 0;
           reaching.current = false;
+          touchTop.current = scrollRef.current?.scrollTop ?? 0;
         }}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
@@ -1421,7 +1423,8 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
-          if (reaching.current && el.scrollHeight - scrollTop - el.clientHeight >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
+          touchTop.current = Math.max(touchTop.current, scrollTop);
+          if (reaching.current && touchTop.current - scrollTop >= BOTTOM_FOLLOW_THRESHOLD) setBottomFollow(false);
           advanceLater(scrollTop > previousScrollTop.current);
           const resume = shouldResumeBottomFollow({
             following: followRef.current,
