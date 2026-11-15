@@ -15,8 +15,8 @@ import { loadScene, sceneOf, type SceneId } from "./ChatScene";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
-const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night"]);
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "bronze", "lagoon-night", "snow-night", "neon-grid", "dim-sand", "lagoon", "snow", "wink-day", "notebook"];
+const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["precision-dimmed", "bronze", "dim-sand", "lagoon", "lagoon-night", "snow", "snow-night", "neon-grid"]);
 
 /** An animated theme's own scene, looping in its tile while the picker is open; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {

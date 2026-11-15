@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
+import { LIGHT_SKIN_IDS, SKINS, useSkin, type SkinId } from "@/lib/skins";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
@@ -109,7 +109,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
   const { t, locale } = useI18n();
   const { dispatch } = useStore();
   const entry = release ? WHATS_NEW[release] : undefined;
-  const title = theme ? t("whatsNew.themeMoves", { name: t(`settings.skin.${theme}`) }) : entry?.title[locale];
+  const title = theme ? t("whatsNew.themeMoves", { name: t(SKINS.find(({ id }) => id === theme)!.nameKey!) }) : entry?.title[locale];
   const skin = useSkin();
   const card = useRef<HTMLElement>(null);
   const visible = useSeen(card);

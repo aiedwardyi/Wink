@@ -34,10 +34,10 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
-const darkCount = 10;
-const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", Lagoon: "라군", Snow: "스노우" };
-const scene = ["Lagoon Night", "Snow Night", "Lagoon", "Snow"];
+const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"];
+const darkCount = 11;
+const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", Lagoon: "라군", Snow: "스노우" };
+const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Lagoon", "Snow"];
 const taggedOld = () => tagged().filter((name) => !scene.includes(name!));
 const kept = ["Wink Violet", "Wink Black", "Pewter", "Precision Dimmed"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
@@ -73,7 +73,7 @@ afterEach(async () => {
 });
 
 describe("featured themes", () => {
-  it.each(["en", "ko"] as const)("starts folded with fifteen featured themes in %s and reveals every offered theme", async (locale) => {
+  it.each(["en", "ko"] as const)("starts folded with sixteen featured themes in %s and reveals every offered theme", async (locale) => {
     await mount("precision", locale);
     const shown = locale === "en" ? featured : featured.map((name) => koScene[name] ?? name);
     expect(names()).toEqual(shown);
@@ -161,12 +161,12 @@ describe("featured themes", () => {
 describe("New tag", () => {
   it.each(["en", "ko"] as const)("marks the new themes until tried in %s", async (locale) => {
     await mount("precision", "en");
-    expect(tagged()).toEqual(["Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow"]);
+    expect(tagged()).toEqual(["Bronze", "Lagoon Night", "Snow Night", "Neon Grid", "Dim Sand", "Lagoon", "Snow"]);
     await act(async () => root.unmount());
     await mount("precision", locale);
     expect(document.querySelector("[data-skin-new]")?.textContent).toBe(locale === "en" ? "New" : "신규");
     await act(async () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
-    expect(tagged()).toHaveLength(7);
+    expect(tagged()).toHaveLength(8);
     expect(tagged().at(-1)).toBe("Precision Dimmed");
   });
 
@@ -237,7 +237,7 @@ describe("Moving tiles", () => {
     await open();
     expect(running).toHaveLength(0);
     await painted();
-    expect(running).toHaveLength(4);
+    expect(running).toHaveLength(5);
   });
 
   it("starts nothing when the picker closes before its first paint", async () => {
@@ -251,16 +251,16 @@ describe("Moving tiles", () => {
     broken.on = true;
     await open();
     await painted();
-    expect(running).toHaveLength(4);
+    expect(running).toHaveLength(5);
     expect(running.every((run) => run.stopped)).toBe(true);
     expect(document.querySelectorAll("[data-mini-scene][data-live]")).toHaveLength(0);
   });
 
-  it("keeps the Lagoon and Snow tiles moving while the picker is open, each in its own skin, and stops them when it closes", async () => {
+  it("keeps the Lagoon, Snow and Neon Grid tiles moving while the picker is open, each in its own skin, and stops them when it closes", async () => {
     await open();
     await painted();
-    expect(running.map((run) => run.skin).sort()).toEqual(["lagoon", "lagoon-night", "snow", "snow-night"]);
-    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(4);
+    expect(running.map((run) => run.skin).sort()).toEqual(["lagoon", "lagoon-night", "neon-grid", "snow", "snow-night"]);
+    expect(document.querySelectorAll("[data-mini-scene]")).toHaveLength(5);
     for (const run of running) expect(run.events).toEqual(["loop"]);
     flush(5);
     for (const run of running) expect(run.frames).toBe(5);
@@ -273,7 +273,7 @@ describe("Moving tiles", () => {
   it.each(["hidden", "blur"])("rests every tile while the window is idle (%s)", async (idle) => {
     await open();
     await painted();
-    expect(running).toHaveLength(4);
+    expect(running).toHaveLength(5);
     flush(2);
     document.documentElement.setAttribute("data-orbit-idle", idle);
     await Promise.resolve();
@@ -310,5 +310,16 @@ describe("Scene themes", () => {
     await act(async () => snowNight.click());
     expect(document.documentElement.dataset.skin).toBe("snow-night");
     expect(snowNight.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it.each([["en", "Neon Grid"], ["ko", "네온 그리드"]] as const)("puts Neon Grid up front among the dark tiles with the New tag in %s", async (locale, name) => {
+    await mount("precision", locale);
+    expect(names().indexOf(name)).toBeLessThan(darkCount);
+    expect(tagged()).toContain(name);
+    const tile = tiles().find((button) => button.querySelector(".font-medium")?.textContent === name)!;
+    expect(tile.querySelector('[data-mini-scene="neon-grid"]')).not.toBeNull();
+    await act(async () => tile.click());
+    expect(document.documentElement.dataset.skin).toBe("neon-grid");
+    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
   });
 });

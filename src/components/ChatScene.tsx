@@ -7,12 +7,13 @@ import { startScene, type SceneHost, type SceneModule } from "@/scenes/scene-hos
 import { offerThemeRow, scenePlayed } from "./WhatsNew";
 import "@/scenes/scenes.css";
 
-export type SceneId = "lagoon" | "snow";
+export type SceneId = "lagoon" | "snow" | "neon-grid";
 
-const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow" };
+const SCENE_SKINS: Partial<Record<SkinId, SceneId>> = { lagoon: "lagoon", "lagoon-night": "lagoon", snow: "snow", "snow-night": "snow", "neon-grid": "neon-grid" };
 const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
   lagoon: () => import("@/scenes/lagoon"),
   snow: () => import("@/scenes/snow"),
+  "neon-grid": () => import("@/scenes/neon-grid"),
 };
 const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 
