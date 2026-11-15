@@ -1717,6 +1717,14 @@ describe("Lagoon and Snow scene themes", () => {
     for (const [name, value] of Object.entries(night)) expect(cssToken("lagoon-night", `--color-${name}`), name).toBe(value);
   });
 
+  it("adds Neon Grid as a dark theme with its own indigo, pink and cyan palette", () => {
+    expect(SKIN_IDS).toContain("neon-grid");
+    expect(LIGHT_SKIN_IDS.has("neon-grid")).toBe(false);
+    expect(SKINS.find((skin) => skin.id === "neon-grid")?.name).toBe("Neon Grid");
+    const grid = { app: "#100c25", card: "#161233", ink: "#f2edff", accent: "#ff4fd8", focus: "#5ce1f5", "bubble-user": "#1d3fa8" };
+    for (const [name, value] of Object.entries(grid)) expect(cssToken("neon-grid", `--color-${name}`), name).toBe(value);
+  });
+
   it("dresses Snow in Wink Day's palette and Snow Night in Precision's, everywhere those skins are styled", () => {
     for (const [twin, base] of [["snow", "wink-day"], ["snow-night", "precision"]] as const) {
       const lists = [...css.matchAll(/[^{}]*\{/g)].map(([selector]) => selector).filter((selector) => selector.includes(`[data-skin="${base}"]`));
