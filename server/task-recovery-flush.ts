@@ -176,6 +176,24 @@ export function packetAfterInterruption(
   return stampTaskResumePacket(seedTaskResumePacket(seed), reason, stamp);
 }
 
+/** Members a cut-off room line still owes an answer: its responders with no reply after it, bar the one being resumed. */
+export function owedRoomResponders<T extends { id: string }>(
+  messages: ReadonlyArray<{ id: string; role: string; kind: string; text?: string; from?: { botId?: string } }>,
+  instructionId: string,
+  respondersFor: (text: string) => T[],
+  resumedId: string,
+): T[] {
+  const at = messages.findIndex((message) => message.id === instructionId);
+  if (at < 0) return [];
+  const responders = respondersFor(messages[at].text ?? "");
+  // a line routed outside the room rule (a card's asker) owes nobody else
+  if (!responders.some((bot) => bot.id === resumedId)) return [];
+  const replied = new Set(
+    messages.slice(at + 1).flatMap((message) => (message.role === "bot" && message.kind === "text" && message.from?.botId ? [message.from.botId] : [])),
+  );
+  return responders.filter((bot) => bot.id !== resumedId && !replied.has(bot.id));
+}
+
 export interface TaskResumeEntry {
   botId: string;
   threadId: string;

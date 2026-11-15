@@ -610,6 +610,8 @@ export type Action =
       sendId?: string;
       replyToId?: string;
       threadId?: string;
+      /** The question card this line answers: its asker replies, not the room's default. */
+      cardId?: string;
       onError?: () => void;
     }
   | {

@@ -944,7 +944,8 @@ export class Store {
       if (!target) continue;
       const existing = this.taskPacket(target.threadId);
       if (existing) {
-        this.writeTaskPacket({ ...existing, flushReason: "crash" });
+        // a room packet names the line's first responder; Continue has to run the member that was cut off
+        this.writeTaskPacket({ ...existing, botId, flushReason: "crash" });
         continue;
       }
       const instruction = lastUserInstruction(this.messagesFor(target.threadId));

@@ -249,6 +249,37 @@ describe("a group line nobody answers", () => {
     expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
   });
 
+  it("drops Thinking when the turn ends before any member starts", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }), receipt({ idle: false }), [bot], [idle]);
+    await sendHi("s1");
+    await vi.waitFor(() => expect(messagesOf(idle.threadId)).toEqual([line("s1")]));
+    await act(async () => store.dispatch({ type: "groupPatched", group: { id: idle.id, working: true } }));
+    expect(store.state.acceptedSends[idle.threadId]).toEqual([expect.objectContaining({ sendId: "s1", kind: "thinking" })]);
+    await act(async () => store.dispatch({ type: "groupPatched", group: { id: idle.id, working: false } }));
+    expect(store.state.acceptedSends[idle.threadId]).toBeUndefined();
+  });
+
+  it("names the card when a question card is tapped", async () => {
+    const ask = { id: "ask", at: 1, role: "bot", kind: "options", from: { botId: bot.id, name: "Bot", color: "green" }, card: { title: "Q", subtitle: "Prod?", options: ["Yes"], askUser: true } } as Message;
+    const post = vi.fn(receipt({ idle: false }));
+    await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...idle, messages: [ask] }]);
+    await act(async () => store.dispatch({ type: "answerGroupCard", groupId: idle.id, messageId: ask.id, answer: "Yes" }));
+    await vi.waitFor(() => expect(post).toHaveBeenCalled());
+    expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ text: "Yes", cardId: ask.id });
+  });
+
+  it("sends a held line when its room settles with the room closed", async () => {
+    const held = { text: "next", requestText: "next", sendId: "h1", threadId: idle.threadId, revision: 1, attachments: [] };
+    localStorage.setItem("omb-room-holds", JSON.stringify({ [`group:${idle.id}:${idle.threadId}`]: [held, { ...held, sendId: "h2", text: "last", requestText: "last" }] }));
+    const post = vi.fn(receipt({ idle: false }));
+    await mount(() => Response.json({ messages: [], hasMore: false }), post, [bot], [{ ...idle, working: true } as Group]);
+    expect(post).not.toHaveBeenCalled();
+    await act(async () => store.dispatch({ type: "groupPatched", group: { id: idle.id, working: false } }));
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(post.mock.calls[0]![0]?.body))).toMatchObject({ text: "next", sendId: "h1" });
+    expect(JSON.parse(localStorage.getItem("omb-room-holds")!)[`group:${idle.id}:${idle.threadId}`]).toEqual([expect.objectContaining({ sendId: "h2" })]);
+  });
+
   it("drops Thinking for a line sent after Stop", async () => {
     const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), receipt({ idle: true }), [bot], [idle]);
     const route = fetch.getMockImplementation()!;

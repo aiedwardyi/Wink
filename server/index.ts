@@ -246,6 +246,7 @@ import {
 import {
   isRecoveringPacket,
   lastUserInstruction,
+  owedRoomResponders,
   packetAfterInterruption,
   PendingTurnInterrupts,
   shutdownStampsForClose,
@@ -1016,13 +1017,15 @@ function checkedGroupResponder(value: unknown, memberIds: string[]): GroupDefaul
 
 function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | { ok: false; error: string } {
   if (!Array.isArray(value)) return { ok: false, error: "memberIds must be a list of bot IDs" };
-  const invalidIndex = value.findIndex(
+  // a room keeps the id of a deleted sole member; an edit that names a live bot lets it go
+  const live = value.filter((id) => typeof id === "string" && store.bot(id));
+  const invalidIndex = live.length ? -1 : value.findIndex(
     (id) => typeof id !== "string" || !id.trim() || !store.bot(id),
   );
   if (invalidIndex !== -1) {
     return { ok: false, error: `unknown channel member: ${String(value[invalidIndex])}` };
   }
-  const memberIds = [...new Set(value as string[])];
+  const memberIds = [...new Set(live as string[])];
   if (!memberIds.length) return { ok: false, error: "a channel needs at least one bot" };
   return { ok: true, memberIds };
 }
@@ -2953,7 +2956,8 @@ function flushInterruptedTask(
   const packet = taskPacketForWrite(threadId);
   const turnsAtWrite = store.taskByThread(botId, threadId)?.usage?.turns ?? packet?.turnsAtWrite ?? 0;
   const next = packetAfterInterruption(
-    packet,
+    // a room packet names the line's first responder; Continue has to run the member that was cut off
+    packet && store.groupByThread(threadId) ? { ...packet, botId } : packet,
     reason,
     { now: Date.now(), turnsAtWrite },
     seedFromLastUser(botId, threadId, turnsAtWrite),
@@ -6152,6 +6156,10 @@ class ServerBotTrash extends BotTrash {
   // stopping switches routines off, so it runs after the entry has listed the ones a Restore turns back on
   override trash(botId: string, opts?: { syncId?: string; deletedAt?: number }): TrashEntry {
     const bot = store.bot(botId);
+    // leaving its rooms clears busyBotId, so a room turn has to be stopped while the room still names it
+    for (const group of store.groups) {
+      if (group.busyBotId === botId) void groupRoutes.stopMember(group.threadId, botId).catch((error) => console.warn("bot trash: room stop failed", error));
+    }
     const entry = super.trash(botId, opts);
     if (bot) void stopBotWork(bot).catch((error) => console.warn("bot trash: stop failed", error));
     return entry;
@@ -6994,7 +7002,7 @@ async function runClaimedGroupMemberTurn(
 
 function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
   const key = `${botId}\0${threadId}`;
-  if (groupTaskResumes.has(key)) return;
+  if (groupTaskResumes.has(key)) return false;
   const operation = beginGroupTurnOperation(groupId, threadId);
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
@@ -7008,9 +7016,21 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
   });
   const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
   groupQueues.set(groupId, tracked.catch(() => {}));
+  return true;
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string) {
+/** Continue resumes one member; the others a restart cut off answer after it. */
+function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string) {
+  const group = store.group(groupId);
+  const packet = taskPacketForWrite(threadId);
+  // a Stop ended the whole line on purpose
+  if (!group || !packet?.instructionId || packet.flushReason === "stop") return;
+  const members = group.memberIds.map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot));
+  const owed = owedRoomResponders(store.messagesFor(threadId), packet.instructionId, (text) => roomResponders(text, members, group.defaultResponder), resumedId);
+  for (const bot of owed) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId: packet.instructionId });
+}
+
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
@@ -7049,7 +7069,8 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
       },
     });
   }
-  let responders = roomResponders(text, members, group.defaultResponder);
+  const asker = availableMembers.find((member) => member.id === askerId);
+  let responders = roomResponders(text, members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
   // bot⇄bot channels: chipping in without a tag addresses the last speaker
   if (!responders.length && group.dm) {
     const lastSpeakerId = [...store.messagesFor(threadId)]
@@ -7662,6 +7683,7 @@ const botChatRoutes = createBotChatRoutes({
   resolveAndSendRoutine,
   approvalBus,
   startGroupCardContinuation,
+  queueOwedRoomTurns,
   resolveReplyTarget,
   connectorMessage,
   maybeResumeConnectors,

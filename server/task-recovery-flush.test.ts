@@ -8,6 +8,7 @@ import {
   idleReopenStampReason,
   isRecoveringPacket,
   lastUserInstruction,
+  owedRoomResponders,
   packetAfterInterruption,
   shouldStampRecoveryDismiss,
   shutdownStampsForClose,
@@ -70,6 +71,24 @@ describe("task recovery interruption flush", () => {
       flushReason: "stop",
     });
     expect(packetAfterInterruption(null, "crash", { now: 1, turnsAtWrite: 0 })).toBeNull();
+  });
+});
+
+describe("room answers owed after a restart", () => {
+  const members = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const text = (id: string, botId?: string) => ({ id, role: botId ? "bot" : "user", kind: "text", text: id, ...(botId ? { from: { botId } } : {}) });
+  const all = () => members;
+
+  it("owes the responders that never answered, bar the one being resumed", () => {
+    const rows = [text("old", "c"), text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+    expect(owedRoomResponders([...rows, text("c1", "c")], "line", all, "b")).toEqual([]);
+  });
+
+  it("owes nobody when the line is gone or was not routed by the room rule", () => {
+    const rows = [text("line"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "missing", all, "b")).toEqual([]);
+    expect(owedRoomResponders(rows, "line", () => [{ id: "a" }], "b")).toEqual([]);
   });
 });
 
