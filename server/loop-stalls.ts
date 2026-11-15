@@ -40,6 +40,7 @@ export function onLoopStall(listener: (stall: LoopStall) => void): () => void {
   return () => listeners.delete(listener);
 }
 
+// A 1 s tick sees a stall up to TICK_MS after it began, so the earliest possible start counts.
 export function loopStallsDuring(from: number, to: number): LoopStall[] {
-  return stalls.filter((stall) => stall.start < to && stall.start + stall.ms > from);
+  return stalls.filter((stall) => stall.start - TICK_MS < to && stall.start + stall.ms > from);
 }

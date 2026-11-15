@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COLD_OPEN_FILE, receiveColdOpen } from "./cold-open-diag.ts";
-import { watchLoopStalls } from "./loop-stalls.ts";
+import { loopStallsDuring, onLoopStall, watchLoopStalls, type LoopStall } from "./loop-stalls.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -41,5 +41,19 @@ describe("server stalls in the cold-open record", () => {
     expect(stall.ms).toBeLessThanOrEqual(2_600);
     expect(Date.parse(stall.at)).toBeGreaterThanOrEqual(blockedAt - 50);
     expect(Date.parse(stall.at)).toBeLessThanOrEqual(blockedAt + 1_100);
+  }, 10_000);
+
+  it("counts a stall whose tick fired after a window that ends inside the tick before it", async () => {
+    watchLoopStalls();
+    await settle();
+    const seen: LoopStall[] = [];
+    const stop = onLoopStall((stall) => seen.push(stall));
+    block(2_500);
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    stop();
+    expect(seen.length).toBeGreaterThan(0);
+    const [stall] = seen;
+    expect(loopStallsDuring(stall.start - 900, stall.start - 1)).toContainEqual(stall);
   }, 10_000);
 });
