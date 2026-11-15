@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksForChange, asksForQuiet, callsVoice, claimOf, looksUp, ordersChange, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForChange, asksForQuiet, callsVoice, claimOf, looksUp, ordersChange, restates } from "./guard";
 import { answersCard, GAP_MS } from "./manners";
 import { EarlyMic, OpenLines } from "./quick";
 
@@ -104,6 +104,7 @@ const GREETING = "[Wink] The call just started. Busy? Nod to the job in a few wo
 const BACKGROUND = new Set<Message["kind"]>(["note", "routine.run"]);
 // An order from a call this recent is still his when he calls back to hear how it went.
 const CARRY_MS = 10 * 60_000;
+const MISSED = "[Wink] The chat line above landed after your last answer. Say ONE short line: \"Update: that just changed,\" then its fact in one clause. Nothing else.";
 const IN_CHAT = "[Wink] In chat, already on screen. Context only, do not read it out.\n";
 
 const orderKey = (order: string) => order.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -230,6 +231,8 @@ export class LiveCall {
   private context: string[] = [];
   // Handed to the engine, which sends it with its next text or tool result; a socket that drops first never did.
   private riding: string[] = [];
+  // A reply the voice has as context only, not yet on the wire.
+  private missed = false;
   private letters = { hangul: 0, all: 0 };
   private stats = {
     turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
@@ -459,6 +462,11 @@ export class LiveCall {
             this.exchanged = true;
             this.offerCard();
           }
+          // A plain answer about the work, given before a reply reached the voice, gets one short correction; the reply rides that line.
+          if (this.replyTo && this.missed && !this.held.length && !this.pending && !this.playing && asksAboutWork(this.req.text, this.deps.botName)) {
+            this.missed = false;
+            this.held.push({ text: MISSED, fix: true });
+          }
         }
         this.replyTo = 0;
         if (this.playing) this.playing.ended = true;
@@ -564,6 +572,7 @@ export class LiveCall {
     if (live.length) {
       this.carry();
       this.riding = [];
+    this.missed = false;
       return engine!.sendToolResult(live, name, note ? `${heard}. ${note}` : heard);
     }
     this.held.push({ text: `[Wink] ${told(heard, subject)}` });
@@ -1055,6 +1064,7 @@ export class LiveCall {
   }
 
   private remember(reply: string) {
+    this.missed = true;
     this.context.push(`${IN_CHAT}${this.deps.botName}: ${reply.trim()}`.slice(0, REPORT_CHARS));
     this.release();
   }
@@ -1070,6 +1080,7 @@ export class LiveCall {
     this.guarded = !item.nudge;
     this.playing = { item, ended: false };
     this.riding = [];
+    this.missed = false;
     this.engine?.sendText(item.text);
   }
 

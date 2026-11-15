@@ -84,6 +84,13 @@ export function asksAboutDone(request: string): boolean {
   return RECAP.test(request);
 }
 
+const WORK = /\b(?:status|updates?|progress|news|done|finish(?:ed)?|ready|repl(?:y|ied)|answer(?:ed)?|working|running)\b|\bhow(?:'s| is| are| did)\b[^.!?]*\b(?:going|go|look(?:ing)?|doing)\b|\b(?:did|has|have|is|are) (?:it|that|the|my|our)\b|상태|진행|끝났|다 됐|어떻게 (?:됐|돼|되)|하고 있|소식|결과|답(?:장|변)|뭐래/i;
+
+/** A question about the bot or its work, so a reply the voice had not seen may have changed the answer. */
+export function asksAboutWork(heard: string, name = ""): boolean {
+  return asksAboutDone(heard) || WORK.test(heard) || Boolean(name.trim()) && heard.toLowerCase().includes(name.trim().toLowerCase());
+}
+
 const AGAIN = /\bwhat(?:'s| is| was)\s+(?:the|that|their|his|her|its)\s+question\b|\bwhat (?:did|does) (?:\w+ )?(?:ask|want)\b|\b(?:say|read) (?:that|it|the question) again\b|\brepeat (?:that|it|the question)\b|\bcome again\b|^\s*(?:sorry|pardon|what|huh)\s*[?!.]*\s*$|질문이?\s*뭐|뭐라고|뭘 물어|뭐 물어|다시 (?:말해|말씀|읽어|한 ?번)|못 들었/i;
 
 /** The person asking to hear the question again, which is not its answer. */

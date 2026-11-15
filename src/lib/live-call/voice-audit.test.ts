@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { claimOf, ordersChange } from "./guard";
+import { asksAboutWork, claimOf, ordersChange } from "./guard";
 
 const CALL = "c-0123456789ab";
 
@@ -50,8 +50,8 @@ function fakeAudio(): CallAudioPort & { hiss(): void } {
 
 const ACCEPTED: Posted = { status: 202, data: { ok: true } };
 
-/** Live past its greeting, with the mic quiet. */
-async function live() {
+/** Live past its greeting, with the mic quiet. `early` lands in chat before the hello. */
+async function live(early?: unknown[]) {
   let t = 0;
   const audio = fakeAudio();
   const engines: FakeEngine[] = [];
@@ -82,6 +82,11 @@ async function live() {
   };
   await call.start();
   engines[0]!.events.ready();
+  if (early) {
+    call.observe({ busy: false, messages: early as never });
+    engines[0]!.events.answering();
+    engines[0]!.events.said("Hey, I'm here.");
+  }
   engines[0]!.events.turnDone();
   await wait(5_000);
   return { call, engines, engine: () => engines.at(-1)!, posts, tick, wait };
@@ -143,6 +148,56 @@ describe("T1 what changed mid-call reaches the voice", () => {
     engine().events.ready();
     await wait(2_000);
     expect(engine().contexts).toEqual([]);
+  });
+});
+
+const UPDATE = "Update: that just changed";
+const updates = (engine: FakeEngine) => engine.wire.filter((frame) => frame.includes(UPDATE));
+
+describe("T1 an answer that missed a reply is corrected once", () => {
+  it("a plain answer about the work, with a reply unseen, gets one Update line carrying it", async () => {
+    const { call, engine, wait } = await live();
+    call.observe({ busy: false, messages: [reply("r1", "The deploy finished.", 9_000)] as never });
+    turn(engine(), "Did the deploy finish?", "Not yet, it's still running.");
+    await wait(3_000);
+    expect(updates(engine())).toHaveLength(1);
+    expect(updates(engine())[0]).toContain("The deploy finished.");
+    engine().events.answering();
+    engine().events.said("Update: that just changed, the deploy finished.");
+    engine().events.turnDone();
+    turn(engine(), "Is it done?", "Yes, it finished.");
+    await wait(3_000);
+    expect(updates(engine())).toHaveLength(1);
+  });
+
+  it("the hello stays silent, and so does small talk after it", async () => {
+    const { engine, wait } = await live([reply("r1", "The deploy finished.", 0)]);
+    expect(engine().texts).toHaveLength(1);
+    turn(engine(), "Hey, what's a good name for a cat?", "Maybe Miso.");
+    await wait(3_000);
+    expect(engine().texts).toHaveLength(1);
+    expect(updates(engine())).toEqual([]);
+    expect(engine().contexts.join("\n")).toContain("The deploy finished.");
+  });
+
+  it("a reply the voice saw with a tool result needs no Update", async () => {
+    const { call, engine, tick, wait } = await live();
+    engine().events.heard("Did the deploy finish?");
+    engine().events.answering();
+    call.observe({ busy: false, messages: [reply("r1", "The deploy finished.", 9_000)] as never });
+    engine().events.toolCall([{ id: "a1", name: "ask", args: { question: "Did the deploy finish?" } }]);
+    await tick(10);
+    engine().events.said("Yes, it finished.");
+    engine().events.turnDone();
+    await wait(3_000);
+    expect(updates(engine())).toEqual([]);
+  });
+
+  it("his line is about the work or it is not", () => {
+    const work = ["Did the deploy finish?", "Is it done yet?", "Any update?", "What's the status?", "How's the build going?", "Is Nova still working?", "What did it say?", "배포 끝났어?", "어떻게 됐어?", "지금 뭐 하고 있어?"];
+    expect(work.filter((line) => !asksAboutWork(line, "Nova"))).toEqual([]);
+    const other = ["Hey, what's a good name for a cat?", "Tell me a joke.", "Thanks.", "오늘 날씨 어때?"];
+    expect(other.filter((line) => asksAboutWork(line, "Nova"))).toEqual([]);
   });
 });
 
