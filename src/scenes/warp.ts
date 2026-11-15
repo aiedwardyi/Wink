@@ -16,12 +16,12 @@ void main() {
   vec2 d = px - c;
   float r = length(d);
   float R = length(uSize) * 0.5;
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = (1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX)));
 
   vec2 q = px / max(uSize.y, 300.0) * 3.0;
   float n = 0.5 + 0.25 * (sin(q.x * 1.3 + sin(q.y * 0.9 + 1.0) * 1.7) + sin(q.y * 1.7 + sin(q.x * 1.1 + 2.0) * 1.5));
   vec3 col = uSpace;
-  col += uNebula * n * n * 0.5 * smoothstep(1.2, 0.2, r / R);
+  col += uNebula * n * n * 0.5 * (1.0 - smoothstep(0.2, 1.2, r / R));
   col += uDust * (0.5 + 0.5 * sin(q.x * 0.7 - q.y * 1.9 + sin(q.x * 2.3))) * 0.14;
   col += uBlue * exp(-r * r / (R * R * 0.06)) * 0.16;
   col *= mix(1.0, 0.6, lane);
@@ -47,7 +47,7 @@ void main() {
     float dr = r < r0 ? r0 - r : max(r - rs, 0.0);
     float size = mix(0.45, 1.25, hs) * clamp(0.55 + 0.35 / z, 0.6, 2.6);
     float e = (da * da + dr * dr) / (size * size);
-    float a = smoothstep(1.0, 0.82, z) * mix(0.5, 1.0, hs);
+    float a = (1.0 - smoothstep(0.82, 1.0, z)) * mix(0.5, 1.0, hs);
     float tail = r < rs ? mix(0.55, 1.0, clamp((r - r0) / max(rs - r0, 1.0), 0.0, 1.0)) : 1.0;
     float s = (exp(-e) + 0.2 * exp(-e * 0.12)) * a * tail;
     tint += s * (hs > 0.94 ? uWarm : (hs > 0.8 ? uBlue : uStar));

@@ -138,12 +138,12 @@ vec3 tex(vec2 p) { return texture2D(uTex, clamp(p / uSize, 0.0, 1.0)).rgb; }
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uBuf.y - gl_FragCoord.y) * (uSize / uBuf);
   float hy = uSize.y * 0.6;
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = (1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX)));
   vec3 col = tex(px);
   float depth = (px.y - hy) / (uSize.y - hy);
   // The street runs between the walls' feet, which the painting draws to the screen's bottom corners.
   float far = 150.0 * clamp(uSize.y / 860.0, 0.45, 1.3);
-  float street = depth > 0.0 ? smoothstep(1.5, -1.5, abs(px.x - uSize.x * 0.5) - mix(far, uSize.x * 0.5, depth)) : 0.0;
+  float street = depth > 0.0 ? (1.0 - smoothstep(-1.5, 1.5, abs(px.x - uSize.x * 0.5) - mix(far, uSize.x * 0.5, depth))) : 0.0;
   if (street > 0.0) {
     float wob = sin(px.y * 0.35 + uT * 6.2831853 * 0.5) * 1.6 * (1.0 - depth * 0.5);
     float my = hy - (px.y - hy) * 0.55;
@@ -157,7 +157,7 @@ void main() {
       float age = fract(hs * 5.0 + uT * 0.5);
       vec2 o = (fract(g) - 0.5) * vec2(46.0, 18.0) / vec2(1.0, 0.38);
       float rr = length(o);
-      col += uRain * smoothstep(1.4, 0.0, abs(rr - age * 18.0)) * (1.0 - age) * 0.28 * depth * street;
+      col += uRain * (1.0 - smoothstep(0.0, 1.4, abs(rr - age * 18.0))) * (1.0 - age) * 0.28 * depth * street;
     }
   }
   float rain = 0.0;
@@ -169,9 +169,9 @@ void main() {
     float c = floor(p.x / cw);
     float hs = h1(vec2(c, fi * 11.0));
     float y = fract(p.y / len + uT * (1.5 + fi * 0.5) + hs * 9.0);
-    float on = smoothstep(0.0, 0.08, y) * smoothstep(0.42 + hs * 0.2, 0.1, y);
+    float on = smoothstep(0.0, 0.08, y) * (1.0 - smoothstep(0.1, 0.42 + hs * 0.2, y));
     float w = abs(fract(p.x / cw) - 0.3 - hs * 0.4) * cw;
-    rain += on * smoothstep(0.55 + fi * 0.25, 0.0, w) * step(0.5, hs) * (0.16 + fi * 0.1);
+    rain += on * (1.0 - smoothstep(0.0, 0.55 + fi * 0.25, w)) * step(0.5, hs) * (0.16 + fi * 0.1);
   }
   vec3 lit = uRain + tex(px) * 1.8;
   col += lit * rain * mix(0.45, 1.0, uFlow);

@@ -8,7 +8,7 @@ uniform vec2 uSize, uBuf;
 uniform float uT, uFlow, uLaneX, uLaneW;
 uniform vec3 uBoard, uTrace, uLit, uPulse, uPad;
 float h1(vec2 p) { return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
-float line(float d, float w) { return smoothstep(w + 0.7, w - 0.3, d); }
+float line(float d, float w) { return (1.0 - smoothstep(w - 0.3, w + 0.7, d)); }
 // One trace axis: runs along x in rows of G px. Returns trace, pad and pulse light.
 vec3 runs(vec2 p, float G, float salt, float lane, float speed) {
   float row = floor(p.y / G);
@@ -36,7 +36,7 @@ vec3 runs(vec2 p, float G, float salt, float lane, float speed) {
 }
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uBuf.y - gl_FragCoord.y) * (uSize / uBuf);
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = (1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX)));
   vec3 col = uBoard * mix(1.0, 0.8, lane);
   col += uTrace * 0.05 * (step(fract(px.x / 6.0), 0.17) * step(fract(px.y / 6.0), 0.17));
   vec3 a = runs(px, 22.0, 1.7, lane, 0.2);

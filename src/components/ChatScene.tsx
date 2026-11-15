@@ -21,7 +21,7 @@ const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
   warp: () => import("@/scenes/warp"),
   circuit: () => import("@/scenes/circuit"),
 };
-export const SCENE_NAME: Record<SceneId, MessageKey> = { lagoon: "settings.skin.lagoon", snow: "settings.skin.snow", "neon-grid": "settings.skin.neonGrid" };
+export const SCENE_NAME: Record<SceneId, MessageKey> = { lagoon: "settings.skin.lagoon", snow: "settings.skin.snow", "neon-grid": "settings.skin.neonGrid", "samurai-ink": "settings.skin.samuraiInk", "night-rain": "settings.skin.nightRain", warp: "settings.skin.warp", circuit: "settings.skin.circuit" };
 const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 
 export const sceneOf = (skin: SkinId): SceneId | undefined => SCENE_SKINS[skin];

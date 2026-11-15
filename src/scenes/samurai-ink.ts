@@ -173,11 +173,11 @@ float ribbon(vec2 p, vec2 a, float L, float w0, float lift, float ph, float u) {
   if (s < 0.0 || s > 1.0) return 0.0;
   float y = a.y - lift * s * s * L + sin(s * 7.0 - uT * TAU * 0.75 + ph) * s * 3.2 * u + sin(s * 13.0 - uT * TAU * 1.25 + ph * 2.0) * s * 1.1 * u;
   float w = mix(w0, 0.25 * u, pow(s, 0.8));
-  return smoothstep(w + 0.8, w - 0.4, abs(p.y - y));
+  return (1.0 - smoothstep(w - 0.4, w + 0.8, abs(p.y - y)));
 }
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uBuf.y - gl_FragCoord.y) * (uSize / uBuf);
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = (1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX)));
   vec3 col = texture2D(uTex, px / uSize).rgb;
   vec3 f = figure(uSize);
   float u = f.z;
@@ -196,8 +196,8 @@ void main() {
     float x = fract(px.x / 1100.0 + uT * (0.5 + floor(hr * 3.0) * 0.25) + hr * 5.0);
     float bow = sin(x * 3.14159) * 7.0;
     float y = abs(fract(px.y / 48.0) - 0.5) * 48.0 - bow + 3.5;
-    float body = smoothstep(0.0, 0.05, x) * smoothstep(0.24, 0.02, x);
-    float stroke = body * smoothstep(0.4 + 1.6 * body, 0.0, abs(y));
+    float body = smoothstep(0.0, 0.05, x) * (1.0 - smoothstep(0.02, 0.24, x));
+    float stroke = body * (1.0 - smoothstep(0.0, 0.4 + 1.6 * body, abs(y)));
     col += uPaper * stroke * mix(0.07, 0.16, uFlow);
   }
 
@@ -219,7 +219,7 @@ void main() {
     float sz = (4.5 + fi * 3.5) * (0.7 + hs * 0.5) * max(0.55, uSize.y / 860.0);
     // Two arcs meeting in points: a leaf, not a petal.
     float u2 = q.x / sz;
-    float m = smoothstep(0.7, -0.5, abs(q.y) - sz * 0.38 * (1.0 - u2 * u2)) * step(abs(u2), 1.0);
+    float m = (1.0 - smoothstep(-0.5, 0.7, abs(q.y) - sz * 0.38 * (1.0 - u2 * u2))) * step(abs(u2), 1.0);
     float bg = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(col, bg > 0.45 ? uInk : uPaper * (0.62 + 0.25 * fi), m * 0.92);
   }
@@ -234,9 +234,9 @@ void main() {
     float a = atan(-d.y, -d.x);
     float head = mix(-0.9, 2.6, k);
     float along = head - a;
-    float arc = smoothstep(0.0, 0.04, along) * smoothstep(1.5, 0.0, along);
-    float w = (1.0 + 2.4 * smoothstep(1.5, 0.0, along)) * u;
-    float edge = smoothstep(w + 1.0, w * 0.2, abs(length(d) - R));
+    float arc = smoothstep(0.0, 0.04, along) * (1.0 - smoothstep(0.0, 1.5, along));
+    float w = (1.0 + 2.4 * (1.0 - smoothstep(0.0, 1.5, along))) * u;
+    float edge = (1.0 - smoothstep(w * 0.2, w + 1.0, abs(length(d) - R)));
     col = mix(col, uSlash, edge * arc * (1.0 - k * k) * uFlow);
   }
   col *= mix(1.0, 0.6, lane);
