@@ -53,6 +53,7 @@ export function remoteSlot(host, panes, at, random = randomInt) {
   const there = panes.filter((pane) => pane.host === host);
   const used = new Set(there.map((pane) => pane.port));
   const free = Array.from({ length: PORT_COUNT }, (_, index) => FIRST_PORT + index).filter((port) => !used.has(port));
+  if (free.length === 0) throw new Error(`All ${PORT_COUNT} tunnel ports on ${host} are in use. Close a finished pane with terminal_close or open it on another PC with host.`);
   return { host, port: free[random(free.length)], at, starting: startingPanes(there, at).length };
 }
 

@@ -54,6 +54,12 @@ test("picks a free tunnel port per host and counts the panes still starting ther
   assert.equal(remoteSlot("work", busy, at, () => 0).port, 40065);
 });
 
+test("a host with every tunnel port in use fails that one open plainly", () => {
+  const full = Array.from({ length: 9_000 }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
+  assert.throws(() => remoteSlot("work", full, 1_000_000), /^Error: All 9000 tunnel ports on work are in use\./);
+  assert.equal(remoteSlot("dad", full, 1_000_000, () => 0).port, 40000);
+});
+
 test("the launch line splices the pane's env at run time and never types a grant", () => {
   const line = remoteLaunchLine({ host: WORK, port: 40123, cwd: "D:\\wink-remote\\wt\\it's", args: " --dangerously-skip-permissions 'Read card.md'" });
   assert.doesNotMatch(line, /[\r\n]/);
