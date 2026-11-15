@@ -95,16 +95,6 @@ export function usePhoneHeaderNameFloor(
       node.style.setProperty(key, value);
     };
     const controlsOf = () => header.lastElementChild instanceof HTMLElement && header.lastElementChild !== cluster ? header.lastElementChild : null;
-    const compact = (gap = 4) => {
-      const { chip } = chipOf();
-      const controls = controlsOf();
-      for (const node of [header, cluster, controls, chip]) if (node) tighten(node, "column-gap", `${gap}px`);
-      for (const node of [cluster, chip, ...[...controls?.children ?? []].map(child => child instanceof HTMLButtonElement ? child : child.querySelector("button"))]) {
-        if (!(node instanceof HTMLElement) || node.getBoundingClientRect().width < 1) continue;
-        const style = getComputedStyle(node);
-        for (const side of ["Left", "Right"] as const) if (px(style[`padding${side}`]) > 4) tighten(node, `padding-${side.toLowerCase()}`, "4px");
-      }
-    };
     const chipOf = () => {
       const label = header.querySelector("[data-model-label]");
       const effort = header.querySelector("[data-model-effort]");
@@ -116,6 +106,16 @@ export function usePhoneHeaderNameFloor(
         chip,
         wrapper: chip?.parentElement,
       };
+    };
+    const compact = (gap = 4) => {
+      const { chip } = chipOf();
+      const controls = controlsOf();
+      for (const node of [header, cluster, controls, chip]) if (node) tighten(node, "column-gap", `${gap}px`);
+      for (const node of [cluster, chip, ...[...controls?.children ?? []].map(child => child instanceof HTMLButtonElement ? child : child.querySelector("button"))]) {
+        if (!(node instanceof HTMLElement) || node.getBoundingClientRect().width < 1) continue;
+        const style = getComputedStyle(node);
+        for (const side of ["Left", "Right"] as const) if (px(style[`padding${side}`]) > 4) tighten(node, `padding-${side.toLowerCase()}`, "4px");
+      }
     };
     const clearChip = () => {
       const { label, effort, chip, wrapper } = chipOf();
@@ -176,7 +176,7 @@ export function usePhoneHeaderNameFloor(
         const { label, effort, chip, wrapper } = chipOf();
         if (effort) effort.style.display = slot.showEffort ? "" : "none";
         const minimum = slot.truncateLabel && chip && label
-          ? Math.ceil(chip.getBoundingClientRect().width - label.getBoundingClientRect().width + (px(getComputedStyle(label).fontSize) || rem))
+          ? Math.max(0, Math.ceil(chip.getBoundingClientRect().width - label.getBoundingClientRect().width + (px(getComputedStyle(label).fontSize) || rem)))
           : 0;
         if (wrapper) wrapper.style.minWidth = minimum ? `${minimum}px` : "";
         if (label) {

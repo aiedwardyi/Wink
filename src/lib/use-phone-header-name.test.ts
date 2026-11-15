@@ -11,6 +11,7 @@ let compactAvailable = 0;
 let nameWidth = 120;
 let phone = true;
 let crowded: "cluster" | "child" | null = null;
+let chipWidth = 132;
 
 function Harness({ botName = "A long bot name" }: { botName?: string }) {
   const cluster = useRef<HTMLDivElement>(null);
@@ -37,6 +38,7 @@ beforeEach(() => {
   nameWidth = 120;
   phone = true;
   crowded = null;
+  chipWidth = 132;
   const matchMedia = window.matchMedia.bind(window);
   vi.spyOn(window, "matchMedia").mockImplementation(query => {
     const media = matchMedia(query);
@@ -54,7 +56,7 @@ beforeEach(() => {
       const overlaps = crowded === "cluster" && this.hasAttribute("data-controls") || crowded === "child" && this.hasAttribute("data-chip");
       const controls = this.hasAttribute("data-controls") ? this : this.parentElement;
       left = overlaps && !controls?.style.columnGap ? 150 : 260;
-      width = 132;
+      width = this.hasAttribute("data-chip") ? chipWidth : 132;
     }
     else if (this.hasAttribute("data-model-label")) {
       const room = host.querySelector<HTMLElement>("[data-controls]")?.style.columnGap && compactAvailable ? compactAvailable : available;
@@ -118,6 +120,14 @@ it.each(["cluster", "child"] as const)("compacts an overlapping %s and restores 
   await act(async () => window.dispatchEvent(new Event("resize")));
   expect(header.style.columnGap).toBe("");
   expect(controls.style.columnGap).toBe("");
+});
+
+it("never writes a negative min-width when the chip is narrower than its label", async () => {
+  chipWidth = 20;
+  await act(async () => root.render(createElement(Harness)));
+  expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
+  expect(host.querySelector<HTMLElement>("[data-chip]")!.style.minWidth).toBe("max-content");
+  expect(host.querySelector<HTMLElement>("[data-controls]")!.style.minWidth).toBe("");
 });
 
 it("leaves desktop sizing alone", async () => {
