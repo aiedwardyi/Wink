@@ -9,7 +9,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Typing a reply while a question is open folds that question the moment your message sends, in chats and rooms.
 
 ### Fixed
-- On a phone, swiping between chats follows the sidebar order, never skips a chat and keeps following after a small sideways swipe.
+- On a phone, swiping goes through every bot chat in sidebar order, also with a section folded or a search typed, and the chat keeps following after a small sideways swipe.
 - On a phone, turning the screen keeps the open chat, and the side menu no longer gets stuck.
 - An app update no longer reloads Wink in the middle of a call; it waits until the call ends.
 - Tapping a notification while Wink is offline opens its chat, and closes any open menu or picker.
