@@ -1245,6 +1245,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (buf.size) scheduleDeltaFlush();
     releaseSettled();
   };
+  // Stop: the thread's next frame lands its text whole, other threads keep typing.
+  const landTyping = (threadId: string | undefined) => {
+    if (!threadId) return;
+    const pending = deltaBuffer.current.get(threadId);
+    if (pending?.ramps) deltaBuffer.current.set(threadId, { ...pending, ramps: undefined });
+  };
   const scheduleDeltaFlush = () => {
     if (deltaFlush.current !== null) return;
     deltaFlush.current = requestAnimationFrame(() => {
@@ -1862,8 +1868,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           break;
         case "interrupt": {
-          // Stop lands whatever is still typing.
-          flushDeltas();
+          landTyping(stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
@@ -1930,7 +1935,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "interruptGroup":
-          flushDeltas();
+          landTyping(stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId);
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {

@@ -272,14 +272,16 @@ export type StreamRamp = readonly [chars: number, at: number, ms: number];
 
 /** `backlog` is the text not yet on screen, this delta included; `shown` is what the reply already shows. A burst swaps every ramp for one that types the backlog at an even pace. */
 export function rampStream(ramps: readonly StreamRamp[], chars: number, backlog: number, shown: number, now: number): StreamRamp[] {
+  // A steady engine's opening lump is paced too: on arrival it looks the same as a short reply sent whole.
+  const opening = shown <= STREAM_BURST_CHARS;
   let fresh = chars;
-  let pacing = shown <= STREAM_BURST_CHARS;
+  let chained = false;
   for (const [count, at, ms] of ramps) {
     if (now - at >= STREAM_BURST_MS) continue;
     fresh += count;
-    pacing ||= ms > STREAM_REVEAL_MS;
+    chained ||= ms > STREAM_REVEAL_MS;
   }
-  if (fresh <= STREAM_BURST_CHARS || !(pacing || fresh > STREAM_LUMP_CHARS)) return [...ramps, [chars, now, STREAM_REVEAL_MS]];
+  if (fresh <= STREAM_BURST_CHARS || !(opening || chained || fresh > STREAM_LUMP_CHARS)) return [...ramps, [chars, now, STREAM_REVEAL_MS]];
   return [[backlog, now, Math.min(STREAM_PACE_MS, Math.max(STREAM_REVEAL_MS, backlog / STREAM_PACE_CHARS_PER_MS))]];
 }
 

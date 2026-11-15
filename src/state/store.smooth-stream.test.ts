@@ -197,10 +197,19 @@ describe("live reply typing", () => {
     expect(shown()).toBe(120 + 250);
   });
 
-  it("shows everything at once on Stop", async () => {
-    await typingBurst();
+  it("lands the stopped reply on the next frame and leaves another bot's reply typing", async () => {
+    await mount(async () => Response.json({ bots: [bot, { ...bot, id: "b2", threadId: "t2" }], groups: [], computerControl: {} }));
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    await emit(started);
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t2", turnId: "turn2" } });
+    await delta(BURST);
+    await emit({ kind: "runtime", event: { type: "content.delta", threadId: "t2", turnId: "turn2", streamKind: "assistant_text", delta: BURST } });
+    await advance(16);
     await act(async () => store.dispatch({ type: "interrupt", botId: "b1" }));
+    await advance(16);
     expect(shown()).toBe(BURST.length);
+    expect(stream.streaming.t2.length).toBeGreaterThan(0);
+    expect(stream.streaming.t2.length).toBeLessThan(BURST.length);
   });
 
   it("never shows half an emoji while typing", async () => {
