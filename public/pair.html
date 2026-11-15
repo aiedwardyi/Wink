@@ -214,11 +214,14 @@
         const submit = $("submit");
         const status = $("status");
         const google = $("google");
-        $("title").textContent = t("title");
         $("google-label").textContent = t("google");
         help.textContent = t("help");
         input.setAttribute("aria-label", t("code"));
         submit.textContent = t("submit");
+
+        const goGoogle = new URLSearchParams(location.search).get("g") === "1";
+        // ?g=1 hands straight to the sign-in page, so this page draws nothing of its own unless Google is out.
+        if (!goGoogle) $("title").textContent = t("title");
 
         const fragment = new URLSearchParams(location.hash.slice(1));
         const qrToken = fragment.get("k");
@@ -276,26 +279,27 @@
 
         const startGoogle = () => location.assign("/api/phone/google/start");
 
-        /** Shows the Google button when this PC can take a Google sign-in; `go` continues with it at once. */
-        async function offerGoogle(go) {
+        /** Whether this PC can take a Google sign-in; `go` says why not after ?g=1. */
+        async function googleReady(go) {
           try {
             const res = await fetch("/api/phone/google/start", { method: "HEAD", credentials: "same-origin", cache: "no-store" });
             if (go && res.status === 409) say(t("google-not-ready"));
-            if (res.status !== 204) return;
+            return res.status === 204;
           } catch {
-            return;
+            return false;
           }
-          if (go) return startGoogle();
-          google.hidden = false;
         }
 
-        function showForm(go = false) {
+        function showForm(ready = googleReady(false)) {
+          $("title").textContent = t("title");
           help.hidden = false;
           form.hidden = false;
           submit.disabled = false;
           input.value = "";
           input.focus();
-          void offerGoogle(go);
+          void Promise.resolve(ready).then((yes) => {
+            google.hidden = !yes;
+          });
         }
 
         async function run(credential) {
@@ -330,8 +334,10 @@
           void runGoogle(googleToken);
         } else if (qrToken) {
           void run(qrToken);
+        } else if (goGoogle) {
+          void googleReady(true).then((ready) => (ready ? startGoogle() : showForm(false)));
         } else {
-          showForm(new URLSearchParams(location.search).get("g") === "1");
+          showForm();
         }
       })();
     </script>
