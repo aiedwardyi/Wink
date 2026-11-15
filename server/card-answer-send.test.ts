@@ -91,14 +91,16 @@ it("the model still reads a tapped answer on replay", async () => {
 });
 
 it.each([
-  { name: "without choices", card: { options: [], staysOpen: true as const } },
-  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const } },
-  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] } },
-])("the client saves a typed answer only when its line leaves a question $name open", async ({ card }) => {
+  { name: "without choices", card: { options: [], staysOpen: true as const }, text: "Polaris", saves: false },
+  { name: "with choices that stays open", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Polaris", saves: true },
+  { name: "with choices that closes", card: { options: ["Can't tonight", "Sure"] }, text: "Polaris", saves: false },
+  { name: "with choices that stays open, typed as a choice", card: { options: ["Can't tonight", "Sure"], staysOpen: true as const }, text: "Can't tonight", saves: false },
+])("the client saves a typed answer only when its line leaves a question $name open", async ({ card, text, saves }) => {
   const h = harness();
   const asked = h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which star?", askUser: true, ...card } });
-  const byLine = lineSettles(h.store.activePath(h.bot.threadId), asked, "Polaris");
+  const byLine = lineSettles(h.store.activePath(h.bot.threadId), asked, text);
+  expect(byLine).toBe(!saves);
   h.busy();
-  expect((await h.send({ text: "Polaris" })).steered).toBe(true);
-  expect(await h.patchCard(asked.id, { answered: "Polaris" })).toBe(byLine ? 409 : 200);
+  expect((await h.send({ text })).steered).toBe(true);
+  expect(await h.patchCard(asked.id, { answered: text })).toBe(byLine ? 409 : 200);
 });
