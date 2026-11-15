@@ -307,6 +307,21 @@ describe("steer-queue module", () => {
     expect(run.mock.calls[0][5]).toEqual({ groupId: "room-instr", hop: 0, instructionId: "msg-1" });
   });
 
+  it("carries a room recheck through drain, unless a plain participation folds in", () => {
+    const skye = fakeBot("skye-ready", "skye-ready-1to1", true);
+    const nova = fakeBot("nova-ready", "nova-ready-1to1", true);
+    const store = fakeStore([skye, nova]);
+    const ready = async () => false;
+    queueRoomParticipation(skye.id, "room-ready", { groupId: "room-ready", ready });
+    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain", ready });
+    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain" });
+    skye.busy = false;
+    nova.busy = false;
+    const run = vi.fn();
+    drainSteeredMessages(store, run);
+    expect(run.mock.calls.map((call) => [call[1], call[5].ready])).toEqual([["room-ready", ready], ["room-plain", undefined]]);
+  });
+
   it("passes a room dispatch-error hook through drain without appending", () => {
     const skye = fakeBot("skye-card", "skye-card-1to1", true);
     const store = fakeStore([skye]);

@@ -186,8 +186,6 @@ export function owedRoomResponders<T extends { id: string }, M extends { id: str
   const at = messages.findIndex((message) => message.id === instructionId);
   if (at < 0) return [];
   const responders = respondersFor(messages[at]);
-  // a line routed outside the room rule (a card's asker) owes nobody else
-  if (!responders.some((bot) => bot.id === resumedId)) return [];
   const replied = new Set(
     messages.slice(at + 1).flatMap((message) => (message.role === "bot" && (message.kind === "text" || message.kind === "options") && message.from?.botId ? [message.from.botId] : [])),
   );

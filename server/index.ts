@@ -7034,8 +7034,9 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
     const asker = members.find((member) => !member.hidden && member.id === line.askedBy);
     return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
   };
-  const owed = owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
-  for (const bot of owed) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId });
+  const owed = () => owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
+  // rechecked at dispatch: an earlier recovered member may have brought this one in
+  for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {

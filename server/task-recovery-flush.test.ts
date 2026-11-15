@@ -91,10 +91,13 @@ describe("room answers owed after a restart", () => {
     expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
   });
 
-  it("owes nobody when the line is gone or was not routed by the room rule", () => {
-    const rows = [text("line"), text("b-half", "b")];
-    expect(owedRoomResponders(rows, "missing", all, "b")).toEqual([]);
-    expect(owedRoomResponders(rows, "line", () => [{ id: "a" }], "b")).toEqual([]);
+  it("owes nobody when the line is gone", () => {
+    expect(owedRoomResponders([text("line"), text("b-half", "b")], "missing", all, "b")).toEqual([]);
+  });
+
+  it("owes the rest when a member brought in by a mention was the one cut off", () => {
+    const rows = [text("line"), text("a1", "a"), text("b-half", "b")];
+    expect(owedRoomResponders(rows, "line", () => [{ id: "a" }, { id: "c" }], "b")).toEqual([{ id: "c" }]);
   });
 });
 

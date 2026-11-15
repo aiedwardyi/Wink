@@ -163,7 +163,18 @@ describe("a room turn cut off mid-line", () => {
     reply(kai, "Kai's plan");
     reply(ray, "Ray's half");
     run();
-    expect(queueRoomParticipation.mock.calls).toEqual([[zed.id, group.threadId, { groupId: group.id, hop: 0, instructionId: line.id }]]);
+    expect(queueRoomParticipation.mock.calls).toEqual([[zed.id, group.threadId, { groupId: group.id, hop: 0, instructionId: line.id, ready: expect.any(Function) }]]);
+  });
+
+  it("drops a queued member that an earlier recovered one brought in", async () => {
+    const { queueRoomParticipation, run } = owed();
+    reply(ray, "Ray's half");
+    run();
+    const ready = Object.fromEntries(queueRoomParticipation.mock.calls.map((call) => [call[0], call[2].ready]));
+    reply(kai, "Kai's plan, over to Zed");
+    expect(await ready[zed.id]()).toBe(true);
+    reply(zed, "Zed's plan");
+    expect(await ready[zed.id]()).toBe(false);
   });
 
   it("skips a member the resumed one brought in itself", () => {

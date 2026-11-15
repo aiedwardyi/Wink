@@ -45,6 +45,7 @@ interface RoomItem {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  ready?: () => Promise<boolean>;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -194,6 +195,7 @@ export interface RoomDrain {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  ready?: () => Promise<boolean>;
 }
 
 export type DrainRun = (
@@ -269,6 +271,7 @@ export function queueRoomParticipation(
     onDispatchError?: (message: string) => void;
     instructionId?: string;
     askId?: string;
+    ready?: () => Promise<boolean>;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
@@ -282,6 +285,8 @@ export function queueRoomParticipation(
     }
     existing.onDispatchError ??= options.onDispatchError;
     existing.instructionId ??= options.instructionId;
+    // a recheck may only drop the turn when every participation folded in here carries one
+    if (!options.ready) existing.ready = undefined;
     return { id: existing.messageId };
   }
   const id = newId();
@@ -294,6 +299,7 @@ export function queueRoomParticipation(
     cardContinuation: options.cardContinuation,
     onDispatchError: options.onDispatchError,
     instructionId: options.instructionId,
+    ready: options.ready,
     ...(options.askId ? { askId: options.askId } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
@@ -402,6 +408,7 @@ export function drainSteeredMessages(
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
     if (room.askId) roomDrain.askId = room.askId;
+    if (room.ready) roomDrain.ready = room.ready;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }
