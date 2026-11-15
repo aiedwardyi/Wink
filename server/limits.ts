@@ -10,6 +10,7 @@ const TOKENS = "Runaway loop: this text rides every turn, so it bounds prompt to
 const AUTO = "Runaway loop: automatic model calls or checks with nobody asking.";
 const STATE = "Data loss: internal history or cache that would grow without end; nothing is refused.";
 const DISPLAY = "Display only; nothing is refused.";
+const JOINER = "Crash: shipped joiner builds fail to parse the whole room past this (guest-client.ts state schema), so every joiner goes blank and offline.";
 const PROMPT = "Prompt wording that guides the model; nothing is refused.";
 
 /** Real limits, kept on purpose. */
@@ -83,7 +84,7 @@ export const KEPT_LIMITS: Limits = {
   "server/room-lane.ts": { MAX_ROOM_LANES: "Crash: each lane is another engine process; extra turns wait, never refused." },
   "server/rooms/door-streams.ts": { MAX_BACKLOG_BYTES: OUTSIDER },
   "server/rooms/door.ts": { MAX_STREAMS: OUTSIDER },
-  "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER },
+  "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER, MAX_PEOPLE: `${JOINER} 100 people loaded, 101 went blank (measured).` },
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
@@ -166,9 +167,6 @@ export const PENDING_LIMITS: Limits = {
   "server/phone-devices.ts": { MAX_PHONES: "Follow-up: 21st phone refused; pairing brute force is already MAX_PAIRING_ATTEMPTS." },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
   "server/rooms/guest-client.ts": { MAX_VIEW_ENTRIES: "Parked for Edward: caps the user's own view of a joined room at 10,000 local rows; not host input." },
-  "server/rooms/invites.ts": {
-    MAX_PEOPLE: "Raised 20 -> 100, the most people every joiner's room state parses; a 101st left joiners unable to load (measured). Not yet registered.",
-  },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
   "server/team-manifest.ts": {
     MAX_TEAM_MEMBERS: "Owned by CREATE-BOT-OPEN (bot count from an imported team).",
@@ -190,6 +188,7 @@ export const NAMED_GUARDS: Limits = {
   "server/drivers/claude.ts": {
     NATIVE_IMAGE_MAX_COUNT: "Crash: past 20 image blocks the Claude API rejects the request on its many-image dimension limit (vision docs); later images stay path tags the bot can Read.",
   },
+  "server/rooms/db.ts": { ROOM_TEXT_MAX: `${JOINER} A 20,001-character line was dropped for live joiners (measured).` },
   "server/rooms/my-room-bots.ts": { "Room Stop": "The room Stop button: bot lines wake no bot until a person or the host speaks." },
   "server/http-helpers.ts": { "413": BODY },
   "server/uploads.ts": { disk_full: "Data loss: a big upload that would fill the disk." },
