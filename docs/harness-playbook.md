@@ -74,6 +74,7 @@ What to build or fix, and why. Two to five lines. Quote the user's latest words 
   rules differ: comments only for a footgun, one line, about the code: never who asked or liked it, session dates, or internal card names; new logic in a
   focused file, not a large one.
 - If a choice this card does not cover would change the result, stop and report BLOCKED with the question.
+- Fix the cause: no timer, retry or comment patching around it, else BLOCKED.
 - Files must allow every edit Acceptance needs: mocks and source-scan tests that quote changed code, and for a trace, the one file it proves.
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
 - No OS-level input (synthetic keys, global hotkeys, focus changes, real dialogs, clipboard writes): it lands in the user's live apps.
@@ -106,6 +107,7 @@ The exact shape of its final message, plus one line: what it reused.
   exactly what the card says.
 - A visible change: the card says how it looks in the user's words and which existing on-screen element it reuses.
   Any look detail the user did not specify, tell them in one plain line (or a quick mock) before the card launches, not in the after pictures.
+- A repeat mistake gets a failing check (lint rule naming the fix, type or test), not a rule line.
 - Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.
 - Parallel cards: split shared ids, routes and names between them up front.
 - If their branches must work together, end with one INTEGRATE card: merge the
@@ -114,8 +116,6 @@ The exact shape of its final message, plus one line: what it reused.
   sha in each file.
 
 ## Token budget
-
-Every step re-reads the worker's whole context, so long runs cost more.
 
 - Size each card so its worker finishes under about 200k tokens of context.
   Split research or probes and the build into separate cards.
@@ -152,7 +152,6 @@ git -C "<repo>" worktree add "{{WORKTREE}}" -b <branch> <base>
 ```
 
 - Create it before the spawn and pass it as the pane cwd.
-- `<name>` matches the nickname in lowercase.
 - A read-only review of a plain folder that is not a repo runs in a scratch copy of it, never in place: workers run unsandboxed, so a stray edit there could not be undone.
 - An editing job in a plain folder gets no worktree: one worker edits it in place, and you leave the folder alone until it reports.
 - The same goes for a checkout with uncommitted changes (`git status --short` lists files): a worktree starts from a commit and would miss them. Check before you write the card, and keep cards outside the repo so they never count.
@@ -198,7 +197,7 @@ When a worker reports done, check its work yourself before anything moves:
    typecheck, with the commands the repo's own instructions give.
 4. Don't run the full test suite or boot the app's server unless the repo's
    instructions say that's safe.
-5. Read the diff for the acceptance items. A report is a claim, not proof. An
+5. Read the diff for the acceptance items. A report is a claim; proof is test output, pictures or clips. An
    unmet item fails even when the worker says it was already like that.
 6. Run new regression tests on the base commit first. They must fail with the
    exact old bug.
@@ -212,7 +211,6 @@ When a worker reports done, check its work yourself before anything moves:
    checkout is still clean on `<base>` and the app is not running,
    `git -C "<repo>" merge --squash <branch>` leaves the changes there
    uncommitted, as if you had made them. Otherwise ask the user first.
-10. After a merge, deploy or release, check the live result yourself before you call it done.
 
 An in-place worker has no branch: instead of steps 1 and 2, compare the files it
 changed with the safety copy, or with `git diff` for files that were clean. Skip
