@@ -4935,8 +4935,8 @@ describe("startTurn presence boundary", () => {
 // deliberately different turn state must therefore carry the same bytes here:
 // anything interpolated into the block costs a cold start on every send.
 describe("corpus search discipline instructions", () => {
-  const BLOCK_START = "When you search a corpus";
-  const BLOCK_END = "an unlucky query.";
+  const BLOCK_START = "When searching any corpus";
+  const BLOCK_END = "a true negative.";
 
   const corpusBlock = (system: string): string => {
     const start = system.indexOf(BLOCK_START);
@@ -4977,7 +4977,7 @@ describe("corpus search discipline instructions", () => {
       const second = await systemForTurn(decorated.id, "who is BANQUE GENEVOISE SA");
 
       expect(first).toContain("match case-insensitively");
-      expect(first).toContain("try at least one different search strategy or tool class");
+      expect(first).toContain("try another search strategy or tool class");
       expect(first).toContain("Never state an unqualified absence");
       // the two prompts are genuinely different turns, so the comparison below
       // is not two copies of one string
