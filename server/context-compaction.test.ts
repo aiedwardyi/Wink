@@ -2388,6 +2388,33 @@ describe("planCompaction", () => {
     if (fits.needed || fits.status !== "fits") throw new Error("expected a fitting plan");
     expect(fits.transcript).toHaveLength(6);
   });
+
+  it("buys many turns with one summary once the token budget binds", async () => {
+    const messages: Message[] = [];
+    const push = (patch: Partial<Message> & { text?: string }) => {
+      const row = message(`m${messages.length + 1}`, patch.text ?? "", { parentId: messages.at(-1)?.id ?? null, ...patch });
+      messages.push(row);
+    };
+    const summarizedAt: number[] = [];
+    for (let turn = 1; turn <= 60; turn++) {
+      push({ text: `question ${turn} ${"word ".repeat(40)}` });
+      const prepared = await prepareModelContext({
+        messages,
+        contextWindow: 128_000,
+        taskRecordText: "Goal: long answers",
+        summarize: async () => `SUMMARY\n${"fact ".repeat(4_000)}`,
+      });
+      if (prepared.status !== "ready") throw new Error(prepared.status);
+      if (prepared.compaction) {
+        summarizedAt.push(turn);
+        push({ role: "bot", kind: "compaction", compaction: prepared.compaction });
+      }
+      push({ role: "bot", text: `answer ${turn} ${"x ".repeat(6_000)}` });
+    }
+    const gaps = summarizedAt.slice(1).map((turn, index) => turn - summarizedAt[index]!);
+    expect(gaps.length).toBeGreaterThan(0);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(8);
+  });
 });
 
 describe("summary grace context", () => {
@@ -2746,19 +2773,20 @@ describe("typed values block", () => {
 
   it("takes the block's room from the tail only when the chat has typed values", () => {
     const chat = (text: string) => Array.from({ length: 40 }, (_, index) => [
-      message(`m${index * 2}`, `${text}\n\n${"detail ".repeat(1_200)}`),
-      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(1_200)}`, { role: "bot" }),
+      message(`m${index * 2}`, `${text}\n\n${"detail ".repeat(350)}`),
+      message(`m${index * 2 + 1}`, `reply ${"detail ".repeat(350)}`, { role: "bot" }),
     ]).flat();
-    const valued = planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 200_000 });
-    const plain = planCompaction({ messages: chat("the budget is unset"), contextWindow: 200_000 });
+    const valued = planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 128_000 });
+    const plain = planCompaction({ messages: chat("the budget is unset"), contextWindow: 128_000 });
 
     if (!valued.needed || !plain.needed) throw new Error("expected plans");
     expect(plain).toMatchObject({ valuesRoom: 0, typedLines: [] });
     expect(valued.valuesRoom).toBe(2_400);
     expect(valued.typedLines.length).toBeGreaterThan(0);
-    expect(estimateContextTokens(plain.tail)).toBeGreaterThan(plain.budgetTokens - plain.summaryBudget - 2_400);
-    expect(estimateContextTokens(valued.tail)).toBeLessThanOrEqual(valued.budgetTokens - valued.summaryBudget - 2_400);
-    expect(plain.tail.length - valued.tail.length).toBe(2);
+    const tailRoom = (plan: typeof plain) => Math.floor((plan.budgetTokens - plan.summaryBudget - 2_400) * 0.4);
+    expect(estimateContextTokens(plain.tail)).toBeGreaterThan(tailRoom(plain));
+    expect(estimateContextTokens(valued.tail)).toBeLessThanOrEqual(tailRoom(valued));
+    expect(plain.tail.length).toBeGreaterThan(valued.tail.length);
     expect(planCompaction({ messages: chat("the budget is 40,000"), contextWindow: 16_384 })).toMatchObject({ needed: true, valuesRoom: 327 });
   });
 
