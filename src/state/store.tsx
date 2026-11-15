@@ -45,7 +45,7 @@ import { trackReplyText, trackStream } from "@/lib/usage-stats";
 import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
-import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
+import { botDraftId, recoverFailedComposerSend, returnSendsToComposer, takeClosedRoomHold, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
 import { isShownMessage } from "@/lib/shown-message";
 import { arrivalChatForFrame, arrivalChatForRoutinePatch, noteArrival } from "@/lib/arrival-glow";
@@ -53,6 +53,7 @@ import {
   acceptedSendPaint,
   applyOptimisticBusy,
   clearAcceptedThinking,
+  composerIsBusy,
   dropIdleAcceptedThinking,
   forgetAcceptedSend,
   hasAcceptedThinking,
@@ -262,8 +263,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
     }
     case "groupPatched": {
-      const exists = state.groups.some((g) => g.id === action.group.id);
-      const groups = exists
+      const before = state.groups.find((g) => g.id === action.group.id);
+      const groups = before
         ? state.groups.map((g) =>
             g.id === action.group.id
               ? { ...g, ...action.group, messages: action.group.messages ?? g.messages, hasMore: action.group.messages ? action.group.hasMore : g.hasMore }
@@ -271,8 +272,10 @@ export function reducer(state: AppState, action: Action): AppState {
           )
         : [{ ...(action.group as Group), messages: action.group.messages ?? [] }, ...state.groups];
       const patchedGroup = groups.find((group) => group.id === action.group.id);
+      // a turn that fails before any member starts ends without a busyBotId frame
+      const settled = Boolean(before?.working) && patchedGroup?.working === false;
       const acceptedSends =
-        patchedGroup?.busyBotId
+        patchedGroup && (patchedGroup.busyBotId || settled)
           ? clearAcceptedThinking(state.acceptedSends, patchedGroup.threadId)
           : state.acceptedSends;
       return { ...state, groups, acceptedSends };
@@ -280,7 +283,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "groupDeleted": {
       const groups = state.groups.filter((g) => g.id !== action.groupId);
       if (state.selectedId !== action.groupId) return { ...state, groups };
-      return { ...reducer(state, { type: "toggleSettings", open: false }), groups, selectedId: state.bots[0]?.id ?? "" };
+      return { ...reducer(state, { type: "toggleSettings", open: false }), groups, selectedId: state.bots.find((b) => !b.hidden)?.id ?? state.bots[0]?.id ?? "" };
     }
     case "instances":
       return {
@@ -1605,7 +1608,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
-            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId }); }));
+            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }); }));
           break;
         }
         case "dismissGroupCard":
@@ -1754,7 +1757,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -1951,6 +1954,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (owner.id !== fresh.selectedId) dispatch({ type: "select", id: owner.id });
     switchToNotificationThread(dispatch, target, fresh);
   }, [dispatch, state.hydrated]);
+
+  // a held room line goes out when its room settles, even with that room closed
+  useEffect(() => {
+    // a cached snapshot can show a room idle that is still mid-turn
+    if (!state.hydrated) return;
+    for (const group of state.groups) {
+      if (composerIsBusy(Boolean(group.working), state.acceptedSends[group.threadId])) continue;
+      const draftId = `group:${group.id}:${group.threadId}`;
+      const hold = takeClosedRoomHold(draftId);
+      if (!hold) continue;
+      const { text, requestText, sendId, threadId, revision, replyToId, attachments } = hold;
+      dispatch({
+        type: "sendGroup",
+        groupId: group.id,
+        text: requestText,
+        sendId,
+        replyToId,
+        threadId,
+        onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
+      });
+    }
+  }, [dispatch, state.hydrated, state.groups, state.acceptedSends]);
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {

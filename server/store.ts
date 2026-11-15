@@ -202,6 +202,8 @@ export interface Message {
   sendId?: string;
   /** group threads: which member said this (sender attribution). */
   from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
+  /** group threads: the member whose question card this user line answers; recovery reads who it was for. */
+  askedBy?: string;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
@@ -944,7 +946,8 @@ export class Store {
       if (!target) continue;
       const existing = this.taskPacket(target.threadId);
       if (existing) {
-        this.writeTaskPacket({ ...existing, flushReason: "crash" });
+        // a room packet names the line's first responder; Continue has to run the member that was cut off
+        this.writeTaskPacket({ ...existing, botId, flushReason: "crash" });
         continue;
       }
       const instruction = lastUserInstruction(this.messagesFor(target.threadId));
