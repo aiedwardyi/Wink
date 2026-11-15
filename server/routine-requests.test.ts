@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  RoutineRequestError,
   RoutineRequestService,
   routineRequestFingerprint,
   type RoutineProposalInput,
@@ -486,7 +485,32 @@ describe("RoutineRequestService", () => {
     })).toMatchObject({ claimed: true, state: "invalid", status: 403 });
   });
 
-  it("applies update, pause, resume, run-now, and delete only to the owning bot", async () => {
+  it("lets any of the user's bots update, pause, run and delete another bot's routine", async () => {
+    const { service, routines } = harness();
+    const routine = routines.create({
+      botId: "bot-a",
+      name: "Old name",
+      prompt: "Old instructions",
+      schedule: { type: "daily", time: "10:00", weekdays: [1] },
+      durationMinutes: 30,
+    });
+    const apply = async (proposal: RoutineProposalInput) => {
+      const card = await service.propose({ botId: "bot-b", threadId: "thread-b", proposal });
+      expect(service.resolve({ botId: "bot-b", threadId: "thread-b", requestId: card.requestId, behavior: "allow" }).state).toBe("applied");
+    };
+
+    await apply({ action: "update", routineId: routine.id, changes: { name: "New name" } });
+    expect(routines.listRoutines()[0]).toMatchObject({ name: "New name", botId: "bot-a" });
+    await apply({ action: "pause", routineId: routine.id });
+    expect(routines.listRoutines()[0]!.enabled).toBe(false);
+    await apply({ action: "resume", routineId: routine.id });
+    await apply({ action: "run_now", routineId: routine.id });
+    expect(routines.listRuns()[0]).toMatchObject({ routineId: routine.id, botId: "bot-a" });
+    await apply({ action: "delete", routineId: routine.id });
+    expect(routines.listRoutines()).toHaveLength(0);
+  });
+
+  it("applies update, pause, resume, run-now, and delete", async () => {
     const { service, routines, store } = harness();
     const routine = routines.create({
       botId: "bot-a",
@@ -495,12 +519,6 @@ describe("RoutineRequestService", () => {
       schedule: { type: "daily", time: "10:00", weekdays: [1] },
       durationMinutes: 30,
     });
-
-    await expect(service.propose({
-      botId: "bot-b",
-      threadId: "thread-b",
-      proposal: { action: "pause", routineId: routine.id },
-    })).rejects.toThrow(RoutineRequestError);
 
     const apply = async (proposal: RoutineProposalInput) => {
       const card = await service.propose({ botId: "bot-a", threadId: "thread-a", proposal });
