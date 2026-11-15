@@ -105,18 +105,21 @@ describe("trashing a bot that is answering in a room", () => {
   it("stops its room turn while the room still names it", () => {
     store.patchGroup(group.id, { busyBotId: kai.id });
     const order: string[] = [];
-    const stopMember = vi.fn(async () => { order.push("stop"); });
+    const turnEpochByBot = new Map<string, number>();
+    const stopMember = vi.fn(async () => { order.push("stop"); turnEpochByBot.set(kai.id, 1); });
     class BotTrash {
       trash(botId: string) {
         order.push("trash");
         store.deleteBot(botId);
+        turnEpochByBot.delete(botId);
         return { botId };
       }
     }
-    const ServerBotTrash = load("ServerBotTrash", { BotTrash, store, groupRoutes: { stopMember }, stopBotWork: async () => {} });
+    const ServerBotTrash = load("ServerBotTrash", { BotTrash, store, groupRoutes: { stopMember }, stopBotWork: async () => {}, turnEpochByBot, currentTurnEpoch: (id: string) => turnEpochByBot.get(id) ?? 0 });
     new ServerBotTrash().trash(kai.id);
     expect(stopMember).toHaveBeenCalledWith(group.threadId, kai.id);
     expect(order).toEqual(["stop", "trash"]);
+    expect(turnEpochByBot.get(kai.id)).toBe(1);
     expect(store.group(group.id)?.busyBotId).toBeNull();
   });
 });
@@ -193,14 +196,15 @@ describe("a room turn cut off mid-line", () => {
     expect(queueRoomParticipation).not.toHaveBeenCalled();
   });
 
-  it("queues them once the resumed turn ends, and not after a Stop", async () => {
+  it("queues them once the resumed turn ends, and not after a Stop or a stall", async () => {
     const queueOwedRoomTurns = vi.fn();
     const groupTaskResumes = new Map();
     const operation = { cancelled: false };
+    let ran = true;
     const taskResumes = load("taskResumes", {
       TaskResumeScheduler, groupTaskResumes, store, queueOwedRoomTurns,
       botHasActiveTurn: () => false, hasQueuedSendBefore: () => false, resumePaneWakes: () => {}, rootForStart: () => null,
-      runGroupMemberTurn: async () => true, isBusyRejection: () => false, broadcast: () => {}, drainQueuedSends: () => {},
+      runGroupMemberTurn: async () => ran, isBusyRejection: () => false, broadcast: () => {}, drainQueuedSends: () => {},
     });
     const resume = async () => {
       groupTaskResumes.set(`${ray.id}\0${group.threadId}`, { groupId: group.id, operation, prompt: "resume", ready: true, release: () => {}, owedLine: "line-1" });
@@ -209,6 +213,8 @@ describe("a room turn cut off mid-line", () => {
     await resume();
     expect(queueOwedRoomTurns.mock.calls).toEqual([[group.id, group.threadId, ray.id, "line-1"]]);
     operation.cancelled = true;
+    await resume();
+    [operation.cancelled, ran] = [false, false];
     await resume();
     expect(queueOwedRoomTurns).toHaveBeenCalledTimes(1);
   });

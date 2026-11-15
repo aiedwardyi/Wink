@@ -289,7 +289,8 @@ export function queueRoomParticipation(
     existing.onDispatchError ??= options.onDispatchError;
     existing.instructionId ??= options.instructionId;
     // a recovery's recheck and answered set only hold when every participation folded in here carries them
-    if (!options.ready) existing.ready = undefined;
+    const [held, added] = [existing.ready, options.ready];
+    existing.ready = held && added ? async () => (await held()) || (await added()) : undefined;
     if (!options.spoken) existing.spoken = undefined;
     return { id: existing.messageId };
   }

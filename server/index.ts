@@ -4805,9 +4805,10 @@ const taskResumes = new TaskResumeScheduler({
       resumePaneWakes(botId);
       let failure: string | undefined;
       return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled, undefined, undefined, rootForStart(threadId, { kind: "automatic" }))
-        .then(() => {
+        .then((ran) => {
           if (failure) throw new Error(failure);
-          if (room.owedLine && !room.operation.cancelled) queueOwedRoomTurns(group.id, threadId, botId, room.owedLine);
+          // false means a stalled turn may still own the thread
+          if (ran && room.owedLine && !room.operation.cancelled) queueOwedRoomTurns(group.id, threadId, botId, room.owedLine);
         });
     }
     if (bot.threadId !== threadId) {
@@ -6165,10 +6166,12 @@ class ServerBotTrash extends BotTrash {
   override trash(botId: string, opts?: { syncId?: string; deletedAt?: number }): TrashEntry {
     const bot = store.bot(botId);
     // leaving its rooms clears busyBotId, so a room turn has to be stopped while the room still names it
-    for (const group of store.groups) {
-      if (group.busyBotId === botId) void groupRoutes.stopMember(group.threadId, botId).catch((error) => console.warn("bot trash: room stop failed", error));
-    }
+    const rooms = store.groups.filter((group) => group.busyBotId === botId);
+    for (const group of rooms) void groupRoutes.stopMember(group.threadId, botId).catch((error) => console.warn("bot trash: room stop failed", error));
+    const epoch = currentTurnEpoch(botId);
     const entry = super.trash(botId, opts);
+    // bot.deleted forgets the epoch; a room dispatch still waiting has to keep seeing that stop
+    if (rooms.length) turnEpochByBot.set(botId, epoch);
     if (bot) void stopBotWork(bot).catch((error) => console.warn("bot trash: stop failed", error));
     return entry;
   }

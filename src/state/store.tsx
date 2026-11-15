@@ -1957,6 +1957,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // a held room line goes out when its room settles, even with that room closed
   useEffect(() => {
+    // a cached snapshot can show a room idle that is still mid-turn
+    if (!state.hydrated) return;
     for (const group of state.groups) {
       if (composerIsBusy(Boolean(group.working), state.acceptedSends[group.threadId])) continue;
       const draftId = `group:${group.id}:${group.threadId}`;
@@ -1973,7 +1975,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
       });
     }
-  }, [dispatch, state.groups, state.acceptedSends]);
+  }, [dispatch, state.hydrated, state.groups, state.acceptedSends]);
 
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
