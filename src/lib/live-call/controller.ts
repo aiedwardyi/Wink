@@ -726,6 +726,8 @@ export class LiveCall {
     };
     const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, upto: this.stats.userLines, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
     this.pending = pending;
+    this.closing = false;
+    clearTimeout(this.closeTimer);
     this.set({ pending: { order, expiresAt }, ...(replaced ? {} : { notice: undefined }) });
     if (yes) void this.answer(true);
   }
@@ -961,13 +963,14 @@ export class LiveCall {
       return;
     }
     this.postLines([{ who: "user", text, at: this.now() }]);
+    // Talk while it was told to be quiet is not for it.
+    if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
+    // Hanging up sends what is still open, so only a bare yes with nothing else open closes the call.
     if (this.deps.opener && ended) {
-      this.closing = !this.pending && consentOf(text) === "yes";
+      this.closing = !this.pending && bareYes(text) && !this.open.text();
       if (this.closing) this.closeIn(CLOSE_WAIT_MS);
       else clearTimeout(this.closeTimer);
     }
-    // Talk while it was told to be quiet is not for it.
-    if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
     const consent = consentOf(text);
     if (consent === "yes") req.accounted = true;

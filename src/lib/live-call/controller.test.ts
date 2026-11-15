@@ -261,6 +261,27 @@ describe("LiveCall a bot rang for", () => {
     expect(s.call.state().status).toBe("ended");
   });
 
+  it("stays on, sending nothing, when their okay brings new work", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Okay, delete the logs.", "Delete all of them?");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(s.call.state().status).not.toBe("ended");
+    expect(s.posts.some((p) => p.path === "/api/bots/b1/messages")).toBe(false);
+  });
+
+  it("stays on when the voice proposes an order after the yes", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    s.engine().events.heard("Okay.");
+    s.engine().events.turnDone();
+    s.engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Delete the logs." } }]);
+    s.audio.onStart();
+    s.audio.onIdle();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(s.call.state().status).not.toBe("ended");
+  });
+
   it("stays on while they ask something back", async () => {
     const s = await rang();
     s.engine().events.turnDone();

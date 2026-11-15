@@ -41,3 +41,22 @@ it("leaves a plain alert's open alone", async () => {
   expect(answerCall(undefined, "Sign in")).toBeNull();
   expect(contexts).toEqual([]);
 });
+
+it("waits for the switch to the rung thread before it starts the call", async () => {
+  const { answerOnThread } = await import("./active");
+  const ring = { botId: "b1", threadId: "t2", opener: "Sign in on Home." };
+  expect(answerOnThread([{ ...bot, threadId: "t1" }], ring)).toBeNull();
+  expect(answerOnThread([{ ...bot, threadId: "t1" }])).toBeNull();
+  expect(answerOnThread([{ ...bot, threadId: "t2" }])).toMatchObject({ botId: "b1", opener: "Sign in on Home." });
+  expect(contexts).toHaveLength(1);
+});
+
+it("drops a rung call whose switch never lands", async () => {
+  vi.useFakeTimers();
+  const { answerOnThread } = await import("./active");
+  answerOnThread([{ ...bot, threadId: "t1" }], { botId: "b1", threadId: "t2", opener: "Sign in on Home." });
+  vi.advanceTimersByTime(31_000);
+  expect(answerOnThread([{ ...bot, threadId: "t2" }])).toBeNull();
+  expect(contexts).toEqual([]);
+  vi.useRealTimers();
+});

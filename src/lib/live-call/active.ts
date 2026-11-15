@@ -45,6 +45,22 @@ export function answerCall(bot: Bot | undefined, opener: string | null): ActiveC
   return placeCall(bot, ctx, opener);
 }
 
+type Rung = { botId: string; threadId: string; opener: string | null };
+const RUNG_MS = 30_000;
+let rung: (Rung & { at: number }) | null = null;
+
+/** The voice briefs from the bot's active thread, so a tapped call waits for the switch to its thread to land; one that never lands lapses. */
+export function answerOnThread(bots: readonly Bot[], next?: Rung): ActiveCall | null {
+  if (next) rung = next.opener ? { ...next, at: Date.now() } : null;
+  const want = rung;
+  if (!want) return null;
+  if (Date.now() - want.at > RUNG_MS) return (rung = null);
+  const bot = bots.find((candidate) => candidate.id === want.botId);
+  if (bot?.threadId !== want.threadId) return null;
+  rung = null;
+  return answerCall(bot, want.opener);
+}
+
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */
 export function dropCall(ended: ActiveCall, text?: string) {
   if (call !== ended) return;
