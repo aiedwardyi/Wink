@@ -109,8 +109,9 @@ const TONGUE = { en: "English", ko: "Korean" };
 const CLOSE_MS = 2_000;
 // Long enough for the reply to start; a voice that says nothing still hangs up.
 const CLOSE_WAIT_MS = 6_000;
-const openerLine = (botName: string, note: string, app: "en" | "ko") =>
-  `[Wink] You called them because ${botName} is stuck until they act: "${note}". In ${TONGUE[app]}, say what they need to do in one or two short, plain sentences, then wait for their answer. Nothing else.`;
+// The voice is the bot calling, so it asks for itself: "I need you to...", never its own name.
+const openerLine = (note: string, app: "en" | "ko") =>
+  `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
 const wrongTongue = (app: "en" | "ko") => `[Wink] Wrong language: speak only ${TONGUE[app]}. In ${TONGUE[app]}, ask them in a few words to say that again.`;
 const misheardMsg = (app: "en" | "ko") => `not sent: that line was in another language, so it is likely a mis-hear. In ${TONGUE[app]}, ask them in one short line to say that again`;
 // A barge-in with no words yet may be his voice or the speaker's echo: the voice turns down this long, then back up.
@@ -446,7 +447,7 @@ export class LiveCall {
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
         // Sound from the tap may be a quick call or a click: the greeting waits a beat for his words, and goes only if none came.
-        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.botName, this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
+        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
       },

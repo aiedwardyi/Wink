@@ -211,7 +211,15 @@ describe("LiveCall a bot rang for", () => {
     const { engine } = await rang();
     expect(engine().texts).toHaveLength(1);
     expect(engine().texts[0]).toContain(`"${NOTE}"`);
-    expect(engine().texts[0]).toMatch(/^\[Wink\] You called them because Nova is stuck until they act/);
+    expect(engine().texts[0]).toMatch(/^\[Wink\] You are the caller/);
+  });
+
+  it("has the voice say the blocker as the caller, in first person", async () => {
+    const { engine } = await rang();
+    const line = engine().texts[0]!;
+    expect(line).toContain("in first person");
+    expect(line).toContain(`"I need you to`);
+    expect(line).not.toMatch(/Nova (?:is|needs)/);
     expect(engine().texts[0]).not.toContain("The call just started");
   });
 
