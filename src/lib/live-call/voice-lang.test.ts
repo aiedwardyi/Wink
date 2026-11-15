@@ -494,6 +494,16 @@ describe("late review threads", () => {
     expect(guard.reasks("Should the timeout be 30 seconds?", ["Should the timeout be 30 seconds?"], true)).toBe("yes");
   });
 
+  it("a short lookup with no end mark survives hanging up", async () => {
+    expect(guard.misheard("Search cats")).toBe(false);
+    const { call, engine, posts } = await live();
+    engine().events.heard("Search cats");
+    engine().events.answering();
+    call.end();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sentToBot(posts)).toEqual(["Search cats"]);
+  });
+
   it("a numeric follow-up after his answer still plays", async () => {
     const { audio, engine } = await live();
     engine().events.heard("Raise the timeout.");

@@ -153,7 +153,7 @@ export function offLanguage(text: string): boolean {
 /** A line speech-to-text likely got wrong: another language, or a word or two that trail off with no end mark. Korean transcripts often have none. */
 export function misheard(text: string): boolean {
   if (offLanguage(text)) return true;
-  if (HANGUL.test(text) || bareYes(text) || ordersChange(text)) return false;
+  if (HANGUL.test(text) || bareYes(text) || ordersChange(text) || looksUp(text)) return false;
   return !/[.!?…]["'”’)\]]*\s*$/.test(text) && (text.match(/\p{L}[\p{L}'’-]*/gu)?.length ?? 0) <= 2;
 }
 
