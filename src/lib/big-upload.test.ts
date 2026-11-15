@@ -73,8 +73,16 @@ describe("startUpload", () => {
     const run = startUpload(file());
     await expect(run).rejects.toBeInstanceOf(UploadError);
     await expect(run).rejects.toMatchObject({ key: "composer.uploadDiskFull" });
-    expect(uploadErrorKey("too_big")).toBe("composer.uploadTooBig");
     expect(uploadErrorKey("busy")).toBe("composer.uploadBusy");
+  });
+
+  it("starts an upload past 10 GB and leaves the size to the disk", async () => {
+    const size = 11 * 1024 ** 3;
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ code: "disk_full" }, { status: 507 }));
+    vi.stubGlobal("fetch", fetcher);
+    const huge = { name: "meeting.mp4", type: "video/mp4", lastModified: 7, size, slice: () => new Blob([]) };
+    await expect(startUpload(huge)).rejects.toMatchObject({ key: "composer.uploadDiskFull" });
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ name: "meeting.mp4", size });
   });
 
   it("keeps one screen lock across a reconnect and takes a new one only after the browser drops it", async () => {

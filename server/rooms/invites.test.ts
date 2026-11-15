@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { addPerson, closeRoomsDb, createRoom, RoomError, roomPeople } from "./db.ts";
 import {
-  cancelInvite, closeInvitesDb, createInvite, guestByKey, INVITE_TTL_MS, joinRoom, revokeGuestKeys, roomInvites,
+  cancelInvite, closeInvitesDb, createInvite, guestByKey, INVITE_TTL_MS, joinRoom, revokeGuestKeys, roomCode, roomInvites,
 } from "./invites.ts";
 
 const DAY = 24 * 60 * 60_000;
@@ -97,9 +97,20 @@ describe("invites", () => {
   it("keeps the invite when the room is full or the name was taken since", () => {
     const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     expect(joinRoom(invite.id, secret, [...TAKEN, "MINA"])).toEqual({ ok: false, error: "name-taken" });
-    for (let i = 0; i < 20; i++) addPerson(roomId, `P${i}`, TAKEN);
+    for (let i = 0; i < 100; i++) addPerson(roomId, `P${i}`, TAKEN);
     expect(joinRoom(invite.id, secret, TAKEN)).toEqual({ ok: false, error: "room-full" });
     expect(roomInvites(roomId)).toHaveLength(1);
+  });
+
+  it("takes people past 20, up to the 100 every joiner's room state parses", () => {
+    for (let i = 0; i < 20; i++) addPerson(roomId, `P${i}`, TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
+    expect(joinRoom(invite.id, secret, TAKEN)).toMatchObject({ ok: true });
+    for (let i = 21; i < 99; i++) addPerson(roomId, `P${i}`, TAKEN);
+    const code = roomCode(roomId);
+    expect(joinRoom(code.id, code.secret, TAKEN, { name: "Joon", device: "pc-joon-0123456789abcdef" })).toMatchObject({ ok: true, person: { name: "Joon" } });
+    expect(roomPeople(roomId)).toHaveLength(100);
+    expect(joinRoom(code.id, code.secret, TAKEN, { name: "Sora", device: "pc-sora-0123456789abcdef" })).toEqual({ ok: false, error: "room-full" });
   });
 
   it("leaves no key and no person when join fails midway", () => {

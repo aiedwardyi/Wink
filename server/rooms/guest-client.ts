@@ -55,7 +55,6 @@ const REQUEST_MS = 15_000;
 const REPLY_BYTES = 32 * 1024 * 1024;
 const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
-const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 const MAX_VIEW_ENTRIES = 10_000;
 const UPLOAD_MS = 10 * 60_000;
@@ -373,7 +372,6 @@ export class GuestClient {
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
   send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown, fileIds?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
     const waiting = this.pending.get(roomId) ?? 0;
-    if (waiting >= MAX_PENDING_SENDS) return Promise.resolve(failed(429, "too many messages waiting to send"));
     this.pending.set(roomId, waiting + 1);
     const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId, fileIds));
     const tail = next.catch(() => {}).then(() => {

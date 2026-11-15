@@ -90,15 +90,15 @@ describe("composerBusyChrome", () => {
 
 describe("Composer wiring", () => {
   it("keeps busy sending open without exposing the fallback queue", () => {
-    expect(composer).toContain("disabled={Boolean(approval) || locked}");
-    expect(composer).not.toMatch(/disabled=\{[^}]*busy/);
+    expect(composer).toContain("disabled={locked}");
+    expect(composer).not.toMatch(/disabled=\{[^}]*(?:busy|approval)/);
     expect(composer).not.toContain("pendingSteer.map");
   });
   it("uses composerBusyChrome and does not hard-code the 1:1 wait lecture", () => {
     expect(composer).toContain("composerBusyChrome");
     expect(composer).not.toContain('t("composer.waitHint"');
     expect(composer).not.toContain("composer.waitHint");
-    expect(composer).toContain("disabled={Boolean(approval) || locked}");
+    expect(composer).toContain("disabled={locked}");
     expect(composer).not.toMatch(/disabled=\{[^}]*busy/);
     expect(chatView).toContain("withAcceptedMessages");
     expect(composer).toContain("composerBusySendAction");

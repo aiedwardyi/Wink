@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cloudSyncRoots, createUploads, safeUploadName, UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES, uploadTargetDir, type UploadsOptions } from "./uploads.ts";
+import { cloudSyncRoots, createUploads, safeUploadName, UPLOAD_CHUNK_BYTES, uploadTargetDir, type UploadsOptions } from "./uploads.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -76,9 +76,9 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 }
 
 describe("big-file uploads", () => {
-  it("rejects a file over 10 GiB at create", async () => {
+  it("starts a file over 10 GiB when the disk has room", async () => {
     const { create } = await serve();
-    expect(await create({ name: "huge.mkv", size: UPLOAD_MAX_BYTES + 1 })).toEqual({ status: 413, body: { code: "too_big" } });
+    expect(await create({ name: "huge.mkv", size: 10 * 1024 ** 3 + 1 })).toMatchObject({ status: 201, body: { offset: 0 } });
   });
 
   it("refuses a create that would leave less than 1 GiB free", async () => {

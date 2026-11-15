@@ -1042,7 +1042,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const speakerEngine = state.instances.find((instance) => instance.instanceId === speaker?.modelSelection?.instanceId);
-  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind);
+  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind, speaker?.activity === "no-signal");
   const reveal = stream.reveal?.[group.threadId];
   const waiting = !reveal?.ended && turnPresenceWaiting({
     busy: Boolean(speaker),

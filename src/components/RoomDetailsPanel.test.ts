@@ -210,15 +210,15 @@ describe("Bots", () => {
     expect(section("bots").textContent!.includes("Everyone responds")).toBe(told);
   });
 
-  it.each([["shared", true], ["plain", false]] as const)("taking the last bot out of a %s group: %s", async (kind, allowed) => {
+  it.each(["shared", "plain"] as const)("takes the last bot out of a %s group", async (kind) => {
     mock.state.bots = [bot("b1", "Wink")];
     await open({ group: kind === "shared" ? shared([]) : { ...group, memberIds: ["b1"] } }, () => json({ roomId: "r1", code: CODE, carried: 0, group: shared([]) }));
     const toggle = removeButtons()[0]!;
     expect(toggle.getAttribute("aria-label")).toBe("Remove Wink");
-    expect(toggle.disabled).toBe(!allowed);
-    expect(section("bots").textContent!.includes("A group needs at least one bot.")).toBe(!allowed);
+    expect(toggle.disabled).toBe(false);
+    expect(section("bots").textContent!.includes("A group needs at least one bot.")).toBe(false);
     await act(async () => toggle.click());
-    expect(mock.dispatched.filter((action) => action.type === "patchGroup")).toEqual(allowed ? [{ type: "patchGroup", groupId: "group-1", patch: { memberIds: [] } }] : []);
+    expect(mock.dispatched.filter((action) => action.type === "patchGroup")).toEqual([{ type: "patchGroup", groupId: "group-1", patch: { memberIds: [] } }]);
   });
 
   it.each([

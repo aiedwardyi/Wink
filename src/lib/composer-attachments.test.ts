@@ -364,7 +364,7 @@ describe("big file intake", () => {
       getPath: () => "",
     });
 
-  it("turns pathless big files into upload chips and refuses over 10 GB", async () => {
+  it("turns pathless big files into upload chips, past 10 GB too", async () => {
     const meeting = fake("meeting.mp4", 1.6e9, "video/mp4");
     const docx = fake("plan.docx", 30 * 1024 * 1024);
     const huge = fake("huge.iso", 10 * 1024 ** 3 + 1);
@@ -372,10 +372,11 @@ describe("big file intake", () => {
     expect(out.attachments).toEqual([
       expect.objectContaining({ kind: "upload", name: "meeting.mp4", size: 1.6e9, type: "video/mp4", lastModified: 7, state: "uploading" }),
       expect.objectContaining({ kind: "upload", name: "plan.docx" }),
+      expect.objectContaining({ kind: "upload", name: "huge.iso", size: 10 * 1024 ** 3 + 1 }),
     ]);
-    expect(out.uploads.map((upload) => upload.file)).toEqual([meeting, docx]);
+    expect(out.uploads.map((upload) => upload.file)).toEqual([meeting, docx, huge]);
     expect(out.uploads.map((upload) => upload.id)).toEqual(out.attachments.map((a) => a.id));
-    expect(out.notice).toBe(t("composer.uploadTooBig", { name: "huge.iso" }));
+    expect(out.notice).toBeNull();
   });
 
   it("keeps an oversized image with a path as a file chip", async () => {

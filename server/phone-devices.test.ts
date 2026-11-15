@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as atomic from "./atomic.ts";
 import {
   COOKIE_REFRESH_MS,
-  MAX_PHONES,
   PAIRING_TTL_MS,
   PHONE_IDLE_MS,
   PHONES_FILE,
@@ -135,13 +134,13 @@ describe("phone devices", () => {
     expect(phones.redeem(window.token, "Pixel", "short")).toEqual({ ok: false, error: "no-pairing" });
   });
 
-  it("refuses a 21st phone without spending a guess and keeps the window", () => {
+  it("pairs a 21st phone by code and by Google", () => {
     const { phones } = registry();
-    const paired = Array.from({ length: MAX_PHONES }, (_, i) => pairOne(phones, `phone ${i}`));
+    for (let i = 0; i < 20; i++) pairOne(phones, `phone ${i}`);
     const window = phones.openPairing();
-    expect(phones.redeem(window.code, "extra", undefined)).toEqual({ ok: false, error: "too-many-phones" });
-    expect(phones.revoke(paired[0]!.phone.id)).toBe(true);
     expect(phones.redeem(window.code, "extra", undefined).ok).toBe(true);
+    expect(phones.admit("google phone", "google").ok).toBe(true);
+    expect(phones.list()).toHaveLength(22);
   });
 
   it("keeps phones across a restart but not the pairing window", () => {

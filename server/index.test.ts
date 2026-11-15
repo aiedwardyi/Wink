@@ -426,17 +426,20 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("refuses to empty a room's roster", async () => {
+  it("takes a room's last bot out and still takes a message", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const room = (await api("POST", "/api/groups", { name: "Never empty", memberIds: [bot.id] })).body.group;
+    const room = (await api("POST", "/api/groups", { name: "Empty later", memberIds: [bot.id] })).body.group;
     try {
-      for (const memberIds of [[], ["no-such-bot"]]) {
-        const attempted = await api("PATCH", `/api/groups/${room.id}`, { memberIds });
-        expect(attempted.status).toBe(400);
-        expect(attempted.body.error).toMatch(/at least one bot|unknown room member/i);
-      }
-      const state = (await api("GET", "/api/bots")).body;
-      expect(state.groups.find((group: { id: string }) => group.id === room.id).memberIds).toEqual([bot.id]);
+      const unknown = await api("PATCH", `/api/groups/${room.id}`, { memberIds: ["no-such-bot"] });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.error).toMatch(/unknown room member/i);
+      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [] })).status).toBe(200);
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "anyone here?" })).status).toBe(202);
+      const state = (await api("GET", "/api/bots?messages=20")).body;
+      const empty = state.groups.find((group: { id: string }) => group.id === room.id);
+      expect(empty.memberIds).toEqual([]);
+      expect(empty.messages.at(-2)).toMatchObject({ role: "user", text: "anyone here?" });
+      expect(empty.messages.at(-1)).toMatchObject({ kind: "activity", tool: { ok: false } });
     } finally {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${bot.id}`);
@@ -4832,6 +4835,27 @@ describe("startTurn presence boundary", () => {
       await api("POST", `/api/bots/${target.id}/interrupt`, {}).catch(() => undefined);
       await api("DELETE", `/api/bots/${source.id}`).catch(() => undefined);
       await api("DELETE", `/api/bots/${target.id}`).catch(() => undefined);
+    }
+  });
+
+  it("lets the user's own bot read its worker map", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    const hanging = await hangingModel();
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        modelSelection: { instanceId: "claude", model: hanging.models.default },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "open the map" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const token = z.object({
+        mcpConfig: z.object({ mcpServers: z.object({ agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }) }) }),
+      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8"))).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      const res = await fetch(`${BASE}/api/bots/${bot.id}/map/repo?worker=none`, { headers: { authorization: `Bearer ${token}` } });
+      expect({ status: res.status, body: await res.json() }).toEqual({ status: 404, body: { error: "No such worker" } });
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
+      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
     }
   });
 

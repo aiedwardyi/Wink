@@ -221,12 +221,12 @@ describe("rooms through the fake phone relay", () => {
     }
   });
 
-  it("serves People codes and Remove to the phone while refusing bot invites and the off-relay door", async () => {
+  it("serves People codes and Remove to the phone and the user's own bots, while refusing bot posts as the host and the off-relay door", async () => {
     const base = `/api/rooms/${group.hosted.roomId}`;
     const invite = await call(`${base}/invites`, { method: "POST" });
     expect(invite.status).toBe(200);
     expect(invite.body.code).toMatch(/^wkr1:/);
-    expect((await call(`${base}/invites`, { relay: false, method: "POST", authorization: BOT })).status).toBe(403);
+    expect((await call(`${base}/invites`, { relay: false, method: "POST", authorization: BOT })).status).toBe(200);
     expect((await call(`${base}/send`, { relay: false, method: "POST", authorization: BOT, body: { text: "as the host" } })).status).toBe(403);
     expect((await call("/room/rooms", { relay: false })).status).toBe(404);
     const code = roomCode(group.hosted.roomId);
