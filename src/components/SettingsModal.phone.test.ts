@@ -113,6 +113,18 @@ describe("phone Settings navigation", () => {
     expect(dialog()!.querySelector("[data-settings-page] .overflow-y-auto")).not.toBeNull();
   });
 
+  it("gives the list and page X a 44px touch area without growing it", async () => {
+    await open();
+    const touchArea = (x: HTMLButtonElement) => {
+      expect(x.className).toContain("relative");
+      expect(x.className).toContain("p-1 ");
+      expect(x.className).toContain("pointer-coarse:after:absolute pointer-coarse:after:-inset-[9px]");
+    };
+    touchArea(button("Close Settings")!);
+    await tap("General");
+    touchArea(dialog()!.querySelector<HTMLButtonElement>('[data-settings-page] button[aria-label="Close Settings"]')!);
+  });
+
   it("keeps the other phone Settings pages at their fixed height", async () => {
     await open();
     await tap("General");

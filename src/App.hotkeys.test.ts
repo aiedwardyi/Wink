@@ -68,6 +68,7 @@ describe("phone drawer menu button", () => {
       groups: [],
       selectedId: "b1",
     }));
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
     vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
@@ -86,6 +87,7 @@ describe("phone drawer menu button", () => {
     } finally {
       await act(async () => root.unmount());
       host.remove();
+      vi.restoreAllMocks();
       vi.unstubAllGlobals();
       localStorage.clear();
     }

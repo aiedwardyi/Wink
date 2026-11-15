@@ -49,7 +49,7 @@ import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
-import { isPhone } from "@/lib/phone-swipe";
+import { isPhone, swipeBotIds } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -123,11 +123,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // cancelling them with md:, which would still emit a translate value and
   // turn the aside into a containing block for its fixed descendants (see
   // Sidebar.tsx's className comment).
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWanted, setDrawerOpen] = useState(false);
   // The button is md:hidden: at desktop width its animation never runs, so an
   // ungated glow would sit flagged until a later resize replays it. Gating on
   // visibility consumes the arrival instead.
   const phoneMenuVisible = useIsPhone();
+  // rotating to the wide layout hides the drawer, so it must not keep a Back entry or a scrim there
+  const drawerOpen = phoneMenuVisible && drawerWanted;
   const menuArrival = useArrivalGlow(
     [...state.bots.filter((bot) => !bot.hidden), ...listedGroups(state.groups)]
       .filter((chat) => chat.id !== state.selectedId)
@@ -547,9 +549,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     setDrawerOpen(false);
   }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen, state.revealed]);
 
-  // On a phone the pane and Bot Details are sheets over the chat a tapped notification asks for.
+  // A tapped notification shows its chat: the palette, model picker and message menu cover it everywhere,
+  // and on a phone the pane and Bot Details are sheets over it too.
   useEffect(() => {
-    if (!state.revealed || !isPhone()) return;
+    if (!state.revealed) return;
+    for (const cover of ["orbit:close-palette", "orbit:close-model-picker", "orbit:close-message-menu"]) window.dispatchEvent(new Event(cover));
+    if (!isPhone()) return;
     closePane();
     dispatch({ type: "toggleSettings", open: false });
     dispatch({ type: "toggleInspector", open: false });
@@ -576,7 +581,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     Boolean(bot && state.inspectorOpen);
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
-  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
+  const swipeOrder = () => swipeBotIds(state.bots, state.groups, loadSidebarOrder(), bot?.id);
+  const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef, swipeOrder);
   const closeDrawer = () => {
     setDrawerOpen(false);
     menuButtonRef.current?.focus();

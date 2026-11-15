@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
+import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 
 /** `bot` is the bot as it was when called, for a store that has not listed it yet. */
@@ -11,6 +12,7 @@ let calls = 0;
 let call: ActiveCall | null = null;
 let note: { botId: string; text: string } | null = null;
 let inView = 0;
+let releaseReload: (() => void) | null = null;
 const watchers = new Set<() => void>();
 
 function notify() {
@@ -29,6 +31,7 @@ export function callsSupported(): boolean {
 
 export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
   call = { id: ++calls, botId: bot.id, bot, ctx };
+  releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
   notify();
@@ -39,6 +42,8 @@ export function placeCall(bot: Bot, ctx: AudioContext): ActiveCall {
 export function dropCall(ended: ActiveCall, text?: string) {
   if (call !== ended) return;
   call = null;
+  releaseReload?.();
+  releaseReload = null;
   if (text) note = { botId: ended.botId, text };
   notify();
 }
