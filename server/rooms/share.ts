@@ -118,7 +118,6 @@ export function shareGroup(deps: ShareDeps, groupId: string): Shared {
   const { store } = deps;
   const group = store.group(groupId);
   if (!group) throw statusError(404, "no such group");
-  if (group.dm) throw statusError(400, "bot-to-bot channels can't be shared");
   const relayHost = deps.relayHost();
   if (!relayHost) throw statusError(409, "phone access is off");
   const db = tables(roomsDatabase());

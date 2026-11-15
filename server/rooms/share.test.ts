@@ -96,7 +96,7 @@ describe("sharing a bot group", () => {
     expect(peopleOnlyRoom(first.roomId)).toBe(false);
   });
 
-  it("publishes no room or code while phone access is off, a member works, or for a bot-to-bot channel", () => {
+  it("publishes no room or code while phone access is off or a member works", () => {
     const group = crew();
     say(group, "hello");
     relay = null;
@@ -105,13 +105,21 @@ describe("sharing a bot group", () => {
     working = true;
     expect(statusOf(() => shareGroup(deps(), group.id))?.[0]).toBe(409);
     working = false;
-    const other = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
-    const dm = store.createGroup("Wink & Pip", [wink, other], true);
-    expect(statusOf(() => shareGroup(deps(), dm.id))?.[0]).toBe(400);
     expect(statusOf(() => shareGroup(deps(), "nope"))?.[0]).toBe(404);
     expect(roomCount()).toBe(0);
     expect(store.group(group.id)!.hosted).toBeUndefined();
     expect(shareGroup(deps(), group.id).carried).toBe(1);
+  });
+
+  it("shares a bot-to-bot channel as a team room", () => {
+    const other = store.patchBot(store.createBot().id, { name: "Pip" })!.id;
+    const dm = store.createGroup("Wink & Pip", [wink, other], true);
+    answer(dm, "over to you, Pip");
+    const shared = shareGroup(deps(), dm.id);
+    expect(shared).toMatchObject({ code: expect.stringMatching(/^wkr1:/), carried: 1 });
+    expect(store.group(dm.id)!.hosted).toEqual({ roomId: shared.roomId });
+    expect(rows(shared.roomId).map((entry) => entry.text)).toEqual(["over to you, Pip"]);
+    expect(peopleOnlyRoom(shared.roomId)).toBe(false);
   });
 
   it("carries only settled visible text, with attachment tags removed whole", () => {
