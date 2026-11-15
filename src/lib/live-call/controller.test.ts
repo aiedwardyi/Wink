@@ -2549,6 +2549,60 @@ describe("VOICE-FIX-5: receipts that wait on the bot", () => {
     expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toHaveLength(1);
   });
 
+  it("H1 a row and its reply in one look leave no wait behind", async () => {
+    vi.useFakeTimers();
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    const answered = call.answer(true);
+    await flush();
+    call.observe({ busy: false, messages: [{ ...orderRow("o1", "Fix the login bug."), sendId: "send-1" }, botRow("r1", "Fixed it.")] });
+    await answered;
+    await flush();
+    engine().events.turnDone();
+    await gap();
+    expect(call.state().status).toBe("listening");
+  });
+
+  it("H2 a cancel that beats the queued receipt still ends the wait", async () => {
+    vi.useFakeTimers();
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy the site." } }]);
+    const answered = call.answer(true);
+    await flush();
+    call.dequeued(["send-1"]);
+    receipt.reply({ status: 202, data: { ok: true, queued: true, queueId: "q1" } });
+    await answered;
+    await gap();
+    expect(call.state().status).toBe("listening");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toHaveLength(1);
+  });
+
+  it("H1 a late failure for a send the idle bot already settled ends no other wait", async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    vi.stubGlobal("crypto", { randomUUID: () => `send-${++n}` });
+    const replies: Array<(posted: Posted) => void> = [];
+    const { call, engine } = await started({ "/messages": () => new Promise<Posted>((resolve) => { replies.push(resolve); }) });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Do A." } }]);
+    const a = call.answer(true);
+    await flush();
+    const rows = [{ ...orderRow("oa", "Do A."), sendId: "send-1" }];
+    call.observe({ busy: false, messages: rows });
+    await a;
+    engine().events.toolCall([{ id: "t2", name: "propose_work", args: { order: "Do B." } }]);
+    const b = call.answer(true);
+    await flush();
+    replies[1]!({ status: 202, data: { ok: true, queued: true, queueId: "qb" } });
+    await b;
+    call.observe({ busy: true, messages: rows });
+    call.observe({ busy: false, messages: rows });
+    replies[0]!({ status: 202, data: { ok: true, dispatchFailed: true, error: "boom" } });
+    await flush();
+    expect(call.state().status).toBe("working");
+  });
+
   it("H2 a queued order that ran is no longer cancellable", async () => {
     const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true, queueId: "q1" } } });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy the site." } }]);

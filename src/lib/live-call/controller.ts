@@ -252,12 +252,14 @@ export class LiveCall {
   private askAnswered = new Set<string>();
   private justAnswered = false;
   private awaiting = 0;
+  // Sends whose wait already ended, so a late receipt or failure never counts them again.
+  private over = new Set<string>();
+  private sendOf = new Map<string, string>();
   // A sent row lands before the bot prepares its turn, so it is the receipt.
   private landing = new Map<string, () => void>();
-  // Queued sends have no row until they run; a cancel is their only end.
+  // Queued sends have no row until they run; a cancel is their only end, and can beat the receipt.
   private queuedSends = new Map<string, string>();
-  // Told as never started, so the bot going idle does not tell it again.
-  private unrun = new Set<string>();
+  private cancelledEarly = new Set<string>();
   private busy = false;
   private reported = new Set<string>();
   private settled = new Set<string>();
@@ -859,7 +861,19 @@ export class LiveCall {
     }
   }
 
+  /** Marks one send's wait ended; false when it had already ended. */
+  private finish(sendId: string | undefined) {
+    if (!sendId || this.over.has(sendId)) return false;
+    this.over.add(sendId);
+    return true;
+  }
+
   private accepted(sendId: string, text: string, queued: boolean) {
+    if (queued && this.cancelledEarly.delete(sendId)) {
+      this.unstarted(sendId, text, "not sent: cancelled");
+      return "queued";
+    }
+    if (this.over.has(sendId)) return queued ? "queued" : "sent";
     this.awaiting += 1;
     if (queued) this.queuedSends.set(sendId, text);
     // The row and busy can land before this receipt, leaving no busy render with it awaited.
@@ -871,8 +885,7 @@ export class LiveCall {
 
   /** A send the bot took but never ran: its turn failed to start, or it was cancelled from the queue. */
   private unstarted(sendId: string, text: string, result: string) {
-    if (this.ended) return;
-    this.unrun.add(sendId);
+    if (this.ended || !this.finish(sendId)) return;
     this.awaiting = Math.max(0, this.awaiting - 1);
     this.sent.delete(orderKey(text));
     this.notSent(text, reasonOf(result));
@@ -885,7 +898,10 @@ export class LiveCall {
   dequeued(sendIds: string[]) {
     for (const sendId of sendIds) {
       const text = this.queuedSends.get(sendId);
-      if (text === undefined) continue;
+      if (text === undefined) {
+        if (this.landing.has(sendId)) this.cancelledEarly.add(sendId);
+        continue;
+      }
       this.queuedSends.delete(sendId);
       this.unstarted(sendId, text, "not sent: cancelled");
     }
@@ -1032,6 +1048,7 @@ export class LiveCall {
     this.threadId = input.threadId;
     for (const row of input.messages) {
       if (row.role !== "user" || !row.sendId || row.call?.id !== this.callId) continue;
+      this.sendOf.set(row.id, row.sendId);
       this.landing.get(row.sendId)?.();
       this.queuedSends.delete(row.sendId);
     }
@@ -1148,8 +1165,9 @@ export class LiveCall {
     this.ran = false;
     const lost: string[] = [];
     for (const row of messages) {
-      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || row.queued || this.settled.has(row.id) || (row.sendId && this.unrun.has(row.sendId)) || !row.text?.trim()) continue;
+      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || row.queued || this.settled.has(row.id) || (row.sendId && this.over.has(row.sendId)) || !row.text?.trim()) continue;
       this.settled.add(row.id);
+      this.finish(row.sendId);
       this.awaiting = Math.max(0, this.awaiting - 1);
       if (newNeed || (askedAt !== undefined && askedAt >= row.at)) continue;
       this.sent.delete(orderKey(row.text));
@@ -1210,6 +1228,7 @@ export class LiveCall {
     for (const id of orders) {
       if (this.settled.has(id)) continue;
       this.settled.add(id);
+      this.finish(this.sendOf.get(id));
       this.awaiting = Math.max(0, this.awaiting - 1);
     }
     // Later replies still speak after their orders have settled.
