@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const src = join(dirname(fileURLToPath(import.meta.url)), "..");
 const files = readdirSync(src, { recursive: true, encoding: "utf8" })
   .filter((file) => file.endsWith(".tsx") && !file.endsWith(".test.tsx"))
-  .map((file) => ({ file: relative(src, join(src, file)).replaceAll("\\", "/"), code: readFileSync(join(src, file), "utf8") }));
+  .map((file) => ({ file: relative(src, join(src, file)).replaceAll("\\", "/"), code: readFileSync(join(src, file), "utf8").replaceAll(/\/\*[\s\S]*?\*\/|(?:^|\s)\/\/.*$/gm, "") }));
 const renders = (code: string, name: string) => new RegExp(`<${name}[\\s/>]`).test(code);
 
 // A view is a file with a <main> that renders the composer, itself or through a wrapper like TeamRoomComposer.
@@ -21,7 +21,7 @@ function chatViews() {
         views.add(entry);
         continue;
       }
-      for (const [, name] of entry.code.matchAll(/export function ([A-Z]\w*)/g)) {
+      for (const [, name] of entry.code.matchAll(/export (?:function|const) ([A-Z]\w*)/g)) {
         if (composers.has(name)) continue;
         composers.add(name);
         grew = true;
