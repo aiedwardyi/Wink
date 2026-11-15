@@ -165,7 +165,6 @@ export const PENDING_LIMITS: Limits = {
   "server/rooms/door.ts": { MAX_STREAMS: "ROOM-COLLAB-OPEN is editing rooms/; outsider streams (likely keep)." },
   "server/rooms/files.ts": { MAX_MESSAGE_FILES: "Follow-up after ROOM-COLLAB-OPEN: 50 files per room message.", "at most ": "Follow-up after ROOM-COLLAB-OPEN: MAX_MESSAGE_FILES refusal." },
   "server/rooms/guest-client.ts": {
-    MAX_PENDING_SENDS: "Follow-up after ROOM-COLLAB-OPEN: a joiner's 21st queued message.",
     MAX_VIEW_ENTRIES: "ROOM-COLLAB-OPEN is editing rooms/; untrusted host input size (likely keep).",
   },
   "server/rooms/invites.ts": {
