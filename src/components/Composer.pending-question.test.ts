@@ -412,8 +412,8 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     const dismiss = pinButton("Dismiss question").className;
     expect(dismiss).toContain("p-1 ");
-    expect(dismiss).toContain("pointer-coarse:-my-3");
-    expect(dismiss).toContain("pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4");
+    expect(dismiss).toContain("pointer-coarse:after:-inset-y-[11px]");
+    expect(dismiss).not.toMatch(/pointer-coarse:-?(p|m)[xytb]?-/);
   });
 
   it("asks to type the answer while an open question is pinned", async () => {

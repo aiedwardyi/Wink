@@ -5,6 +5,7 @@ import { useStore, visibleMessages, type Bot, type Group, type Message, api } fr
 import { cn } from "@/lib/cn";
 import {
   botDraftId,
+  claimRoomHolds,
   draftRevision,
   forgetFailedComposerSend,
   getRoomHolds,
@@ -607,6 +608,8 @@ export function Composer({
     getRoomHolds(composerDraftStore(), draftId).map((hold) => queuedFromRoomHold(hold, draftId)),
   );
   const queuedRef = useRef<QueuedGroupSend[]>(queued);
+  const holdsRoom = Boolean(group);
+  useEffect(() => (holdsRoom ? claimRoomHolds(draftId) : undefined), [holdsRoom, draftId]);
   const roomFlushLock = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {

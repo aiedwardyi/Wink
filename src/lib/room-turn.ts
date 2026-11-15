@@ -10,5 +10,5 @@ export function useRoomTurnStage(threadId: string, messages: Message[], stream: 
   const live = buffersForTurn(stream, threadId, last?.id);
   const phase = turnPhase({ signal: stream.signal[threadId], lastMessage: last, messages, streaming: live.streaming, reasoning: live.reasoning });
   const noReply = useNoReply(phase === "waiting" ? `${threadId}:${currentTurnId(stream, threadId, last?.id)}:${stream.heard?.[threadId] ?? 0}` : null, driverKind);
-  return { label: turnStageLabel(phase, liveActivityLabel(last, showActivities), busyRetryLabel(last), noReply?.label), noReply };
+  return { label: turnStageLabel(phase, liveActivityLabel(last, showActivities), busyRetryLabel(last), noReply?.label), noReply, responding: phase === "responding" };
 }

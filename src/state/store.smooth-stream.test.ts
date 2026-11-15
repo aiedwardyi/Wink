@@ -19,6 +19,8 @@ class FakeEventSource {
 
 // 2,000 characters: one big engine chunk
 const BURST = "word ".repeat(400);
+// What Claude sends: a 1,284 character reply as 100 deltas inside 90 ms.
+const REPLY = "word ".repeat(257).slice(0, 1284);
 // SAFETY: the store folds only these fields here; the full Bot contract is server-owned.
 const bot = {
   id: "b1", threadId: "t1", name: "Bot", busy: true, unread: false,
@@ -117,38 +119,129 @@ async function typingBurst() {
 }
 
 describe("live reply typing", () => {
-  it("types a 2,000 character burst out over several frames", async () => {
+  it("types a 2,000 character burst out over a second", async () => {
     await live();
     await delta(BURST);
     const frames: number[] = [];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 64; i++) {
       await advance(16);
       frames.push(shown());
     }
     const typing = frames.filter((length) => length < BURST.length);
-    expect(typing.length).toBeGreaterThanOrEqual(5);
+    expect(typing.length).toBeGreaterThanOrEqual(55);
     expect(typing[0]).toBeGreaterThan(0);
     expect(frames).toEqual([...frames].sort((a, b) => a - b));
     expect(frames.at(-1)).toBe(BURST.length);
   });
 
-  it("keeps every character within 150 ms of its arrival", async () => {
+  it("types a reply that arrives in one burst out at an even pace, done a second after the last delta", async () => {
     await live();
+    for (let i = 0; i < 100; i++) {
+      await delta(REPLY.slice(Math.round(i * 12.84), Math.round((i + 1) * 12.84)));
+      if (i % 10 !== 9) await advance(1);
+    }
+    // 240 ms after the first character
+    await advance(150);
+    expect(shown()).toBeGreaterThan(0);
+    expect(shown()).toBeLessThan(REPLY.length / 2);
+    const frames = [shown()];
+    for (let i = 0; i < 40; i++) {
+      await advance(16);
+      frames.push(shown());
+    }
+    expect(Math.max(...frames.slice(1).map((length, i) => length - frames[i]))).toBeLessThan(30);
+    expect(frames.at(-1)).toBeGreaterThan(REPLY.length / 2);
+    expect(frames.at(-1)).toBeLessThan(REPLY.length);
+    // 1.0 s and a frame after the last delta
+    await advance(226);
+    expect(shown()).toBe(REPLY.length);
+  });
+
+  it("types a short reply at 400 characters a second", async () => {
+    await live();
+    await delta("word ".repeat(40));
+    await advance(256);
+    expect(shown()).toBeGreaterThan(80);
+    expect(shown()).toBeLessThan(120);
+    await advance(260);
+    expect(shown()).toBe(200);
+  });
+
+  it("keeps a steady engine's characters within 150 ms of their arrival", async () => {
+    await live();
+    // 500 characters a second, the fast end of Codex and Grok
+    for (let i = 0; i < 25; i++) {
+      await delta("word ".repeat(4));
+      await advance(40);
+    }
+    // deltas older than 150 ms and a frame are all up, the last ones are still typing
+    expect(shown()).toBeGreaterThanOrEqual(440);
+    expect(shown()).toBeLessThan(500);
+    await advance(166);
+    expect(shown()).toBe(500);
+  });
+
+  it("keeps a lump in the middle of a reply within 150 ms of its arrival", async () => {
+    await live();
+    for (let i = 0; i < 3; i++) {
+      await delta("word ".repeat(8));
+      await advance(200);
+    }
+    expect(shown()).toBe(120);
+    // Grok hands over a few sentences at a time
+    await delta("word ".repeat(50));
+    await advance(80);
+    expect(shown()).toBeGreaterThan(120 + 100);
+    expect(shown()).toBeLessThan(120 + 250);
+    await advance(86);
+    expect(shown()).toBe(120 + 250);
+  });
+
+  it("lands the stopped reply on the next frame and leaves another bot's reply typing", async () => {
+    await mount(async () => Response.json({ bots: [bot, { ...bot, id: "b2", threadId: "t2" }], groups: [], computerControl: {} }));
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    await emit(started);
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t2", turnId: "turn2" } });
     await delta(BURST);
-    await advance(100);
-    await delta("more ".repeat(20));
-    // 150 ms and a frame after the burst: all of it is up, the newer text is still typing
-    await advance(66);
-    expect(shown()).toBeGreaterThanOrEqual(BURST.length);
-    expect(shown()).toBeLessThan(BURST.length + 100);
-    await advance(100);
-    expect(shown()).toBe(BURST.length + 100);
+    await emit({ kind: "runtime", event: { type: "content.delta", threadId: "t2", turnId: "turn2", streamKind: "assistant_text", delta: BURST } });
+    await advance(16);
+    await act(async () => store.dispatch({ type: "interrupt", botId: "b1" }));
+    await advance(16);
+    expect(shown()).toBe(BURST.length);
+    expect(stream.streaming.t2.length).toBeGreaterThan(0);
+    expect(stream.streaming.t2.length).toBeLessThan(BURST.length);
+  });
+
+  it("lands a reply on the thread the stopped bot is working on", async () => {
+    await mount(async () => Response.json({ bots: [{ ...bot, workingThreadId: "t2" }], groups: [], computerControl: {} }));
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t2", turnId: "turn2" } });
+    await emit({ kind: "runtime", event: { type: "content.delta", threadId: "t2", turnId: "turn2", streamKind: "assistant_text", delta: BURST } });
+    await advance(16);
+    expect(stream.streaming.t2.length).toBeLessThan(BURST.length);
+    await act(async () => store.dispatch({ type: "interrupt", botId: "b1" }));
+    await advance(16);
+    expect(stream.streaming.t2.length).toBe(BURST.length);
+  });
+
+  it("goes back to 150 ms once a steady engine's opening lump is typed", async () => {
+    await live();
+    await delta("word ".repeat(20));
+    // 500 characters a second, a delta every 40 ms
+    for (let i = 0; i < 50; i++) {
+      await advance(40);
+      await delta("word ".repeat(4));
+    }
+    await advance(40);
+    expect(1100 - shown()).toBeLessThan(80);
+    await advance(126);
+    expect(shown()).toBe(1100);
   });
 
   it("never shows half an emoji while typing", async () => {
     await live();
     await delta("🙂".repeat(200));
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 64; i++) {
       await advance(16);
       // under the u flag a whole pair is one code point, so only a lone surrogate matches
       expect(stream.streaming.t1).not.toMatch(/[\uD800-\uDFFF]/u);
@@ -173,7 +266,7 @@ describe("live reply typing", () => {
     expect(shown()).toBe(typed);
     await advance(16);
     expect(shown()).toBeGreaterThan(typed);
-    await advance(150);
+    await advance(1000);
     expect(stream.streaming.t1).toBeUndefined();
     expect(store.state.bots[0].messages.at(-1)).toMatchObject({ id: "a1", text: BURST });
     expect(stream.signal.t1).toBeUndefined();
@@ -183,7 +276,9 @@ describe("live reply typing", () => {
     await typingBurst();
     await settle();
     await emit({ kind: "message", threadId: "t1", message: { id: "n1", parentId: "a1", at: 3, role: "bot", kind: "note", text: "after" } });
-    await advance(200);
+    await advance(500);
+    expect(store.state.bots[0].messages.map((m) => m.id)).toEqual(["u1"]);
+    await advance(500);
     expect(store.state.bots[0].messages.map((m) => m.id)).toEqual(["u1", "a1", "n1"]);
   });
 

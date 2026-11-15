@@ -105,7 +105,36 @@ it("puts a square per check in the checks box and the details in each stop's tip
   expect(host.querySelector(".map-flow-tip")?.textContent).toBe("1 file changed");
   expect(host.querySelector(".map-flow-list .map-flow-tip")).toBeNull();
   expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
-  expect(host.querySelector(".map-flow-row")?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
+});
+
+it("opens the PR, its checks and its files from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
+  const url = "https://github.com/o/r/pull/1529";
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  const [open, bare] = [...host.querySelectorAll<HTMLElement>(".map-flow-row")];
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: `${url}/files`, merge: url });
+  expect(host.querySelectorAll(".map-flow-rows a[href]:not([target='_blank'])")).toHaveLength(0);
+  expect(open.tagName).toBe("DIV");
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("tabindex")]))).toEqual({ code: "0", commit: "0", push: "0", pr: null, checks: null, review: null, merge: null });
+  expect([...bare.querySelectorAll<HTMLElement>("[data-k]")].map(stop => stop.getAttribute("tabindex"))).toEqual(Array(7).fill("0"));
+  expect(bare.querySelectorAll("[data-k]")).toHaveLength(7);
+  expect(bare.querySelector("[href]")).toBeNull();
+  expect(readFileSync("src/components/MapGitFlow.css", "utf8")).not.toMatch(/cursor: pointer/);
+});
+
+it("gives the clash mark the PR number's own 6px on its right, so it never sits on the list's edge", () => {
+  const css = readFileSync("src/components/MapGitFlow.css", "utf8");
+  expect(css).toContain(".map-flow-end { display: flex; align-items: center; gap: 6px;");
+  expect(css).toContain(".map-flow-clash { padding-right: 6px;");
+});
+
+it("draws passed checks, the done line and added lines in one fixed git green on every theme", () => {
+  const flowCss = readFileSync("src/components/MapGitFlow.css", "utf8");
+  const paneCss = readFileSync("src/components/MapPane.css", "utf8");
+  expect(paneCss).toContain(".map-pane { container: map-pane / inline-size; --map-green: light-dark(#1a7f37, #3fb950); }");
+  expect(flowCss).toContain("--flow-open: var(--map-green);");
+  expect(paneCss).toContain('.map-code-row[data-kind="add"] b { color: var(--map-green); }');
+  expect(flowCss + paneCss).not.toContain("--color-success");
 });
 
 it("shows the detail on a long press without opening the link", async () => {
@@ -187,5 +216,5 @@ it("puts one row per worker in its color, failing CI first, in Korean too", asyn
   expect(rows[0].querySelector(".map-flow-box > b")?.textContent).toBe("체크2개 실패");
   expect(rows[0].style.getPropertyValue("--flow-line")).toMatch(/^light-dark\(/);
   expect(new Set(rows.map(row => row.style.getPropertyValue("--flow-line"))).size).toBe(3);
-  expect(rows[0].getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
+  expect(rows[0].querySelector('[data-k="pr"]')?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
 });

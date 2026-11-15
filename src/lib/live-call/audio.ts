@@ -4,6 +4,7 @@ import { CAPTURE_WORKLET } from "./capture-worklet";
 
 const VOICE_RATE = 24_000;
 const FADE_SAMPLES = 0.3 * VOICE_RATE;
+const DUCK_VOLUME = 0.2;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
@@ -166,7 +167,13 @@ export class CallAudio {
     if (first) this.onStart();
   }
 
+  /** iOS keeps a media element at full volume, so there only the cut on his words applies. */
+  duck(on: boolean) {
+    this.output.volume = on ? DUCK_VOLUME : 1;
+  }
+
   flush() {
+    this.output.volume = 1;
     const had = this.sources.size > 0;
     for (const source of this.sources) {
       source.onended = null;

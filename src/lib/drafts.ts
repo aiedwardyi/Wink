@@ -142,6 +142,28 @@ export function getRoomHolds(store: Store, id: string): PersistedRoomHold[] {
   return holds;
 }
 
+const openRoomComposers = new Map<string, number>();
+
+/** A mounted room Composer flushes its own holds; the store flushes a room nobody has open. */
+export function claimRoomHolds(id: string): () => void {
+  openRoomComposers.set(id, (openRoomComposers.get(id) ?? 0) + 1);
+  return () => {
+    const left = (openRoomComposers.get(id) ?? 1) - 1;
+    if (left > 0) openRoomComposers.set(id, left);
+    else openRoomComposers.delete(id);
+  };
+}
+
+/** Takes the oldest hold of a room with no Composer mounted. An image hold waits for the Composer's engine check. */
+export function takeClosedRoomHold(id: string): PersistedRoomHold | undefined {
+  if (openRoomComposers.has(id)) return undefined;
+  const store = getStore();
+  const [next, ...rest] = getRoomHolds(store, id);
+  if (!next || next.requestText.includes("<attached-image ")) return undefined;
+  setRoomHolds(store, id, rest);
+  return next;
+}
+
 export function setRoomHolds(store: Store, id: string, holds: readonly PersistedRoomHold[]): void {
   const all = read(store, ROOM_HOLDS_KEY);
   if (holds.length) all[id] = holds;

@@ -103,14 +103,15 @@ export class GeminiLive implements LiveEngine {
     this.send({ realtimeInput: { text: [...this.context.splice(0), text].join("\n\n") } });
   }
 
-  // A lone clientContent mid-call leaves the turn open and the voice stops answering speech, so context rides the next text.
+  // A lone clientContent mid-call leaves the turn open and the voice stops answering speech, so context rides the next text or tool result.
   sendContext(text: string) {
     this.context.push(text);
   }
 
-  // All ids in one frame: each frame makes the model speak again.
+  // All ids in one frame: each frame makes the model speak again. Waiting context rides the first result.
   sendToolResult(ids: string[], name: string, result: unknown) {
-    this.send({ toolResponse: { functionResponses: ids.map((id) => ({ id, name, response: { result } })) } });
+    const context = this.context.splice(0).join("\n\n");
+    this.send({ toolResponse: { functionResponses: ids.map((id, index) => ({ id, name, response: { result, ...(context && !index ? { context } : {}) } })) } });
   }
 
   close() {

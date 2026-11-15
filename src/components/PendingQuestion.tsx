@@ -6,14 +6,14 @@
 // answers it only when it has no choices. The row's x or a sideways swipe only
 // hides it here; the bot still waits, and a count on the composer brings it back.
 import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { Fold } from "./Fold";
-import { QuoteRow } from "./ReplyQuote";
+import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
 
 // Per question id, outside the store, so each chat's question stays as it was left.
 const rowQuestions = new Set<string>();
@@ -43,6 +43,12 @@ let stepFocus = 0;
 
 const BADGE = "flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-accent-ink";
 const ARROW = "relative rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent pointer-coarse:after:absolute pointer-coarse:after:-inset-2";
+// the row and the card share these, so folding only tucks the body away
+const FRAME = "rounded-2xl border border-accent/40 bg-card";
+const FILL = "rounded-[15px] bg-control/40 px-4";
+// 44px tall touch targets that split the gap between them, so a tap never lands on both
+const CONTROL = "relative -mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-y-[11px]";
+const CHIP = "rounded-full border border-ink-secondary bg-control text-[13px] text-ink hover:bg-raised-hover";
 
 export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   message,
@@ -122,14 +128,51 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   };
   const card = message.card;
   if (!card || hidden) return null;
+  const lead = count > 1 ? (
+    <span ref={arrows} className="flex shrink-0 items-center gap-0.5">
+      <button type="button" onClick={() => step(-1)} disabled={index <= 0} aria-label={t("ask.previousQuestion")} title={t("ask.previousQuestion")} className={ARROW}>
+        <ChevronLeft size={14} aria-hidden="true" />
+      </button>
+      <span className={cn(BADGE, "tabular-nums")}>{index + 1}/{count}</span>
+      <button type="button" onClick={() => step(1)} disabled={index >= count - 1} aria-label={t("ask.nextQuestion")} title={t("ask.nextQuestion")} className={ARROW}>
+        <ChevronRight size={14} aria-hidden="true" />
+      </button>
+    </span>
+  ) : <span className={BADGE}>{count}</span>;
+  const label = t("ask.asks", { name: askerName });
+  // the row's x only hides it here, the card's x dismisses the question
+  const controls = (open: boolean) => (
+    <>
+      <button
+        type="button"
+        ref={open ? foldButton : undefined}
+        onClick={() => fold(open)}
+        aria-label={t(open ? "ask.foldQuestion" : "ask.expandQuestion")}
+        aria-expanded={open}
+        title={t(open ? "ask.foldQuestion" : "ask.expandQuestion")}
+        className={cn(CONTROL, "pointer-coarse:after:-left-2 pointer-coarse:after:-right-1")}
+      >
+        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronUp size={14} aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        onClick={open ? onDismiss : hide}
+        aria-label={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
+        title={t(open ? "chat.dismissQuestion" : "ask.hideQuestion")}
+        className={cn(CONTROL, "-mr-1 pointer-coarse:after:-left-1 pointer-coarse:after:-right-3")}
+      >
+        <X size={14} aria-hidden="true" />
+      </button>
+    </>
+  );
   return (
     <>
-      <Fold open={folded} className="mb-2 px-1">
-        <QuoteRow
+      <Fold open={folded} className="mb-2">
+        <div
           data-pending-question={message.id}
           data-question-row=""
           data-no-swipe=""
-          className="relative touch-pan-y"
+          className={cn("relative touch-pan-y", FRAME)}
           onTouchStart={(event) => {
             const point = event.touches[0];
             slide.current = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, at: event.timeStamp, axis: null } : null;
@@ -155,37 +198,30 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             slide.current = null;
             event.currentTarget.style.transform = "";
           }}
-          lead={count > 1 && (
-            <span ref={arrows} className="flex shrink-0 items-center gap-0.5">
-              <button type="button" onClick={() => step(-1)} disabled={index <= 0} aria-label={t("ask.previousQuestion")} title={t("ask.previousQuestion")} className={ARROW}>
-                <ChevronLeft size={14} aria-hidden="true" />
-              </button>
-              <span className={cn(BADGE, "tabular-nums")}>{index + 1}/{count}</span>
-              <button type="button" onClick={() => step(1)} disabled={index >= count - 1} aria-label={t("ask.nextQuestion")} title={t("ask.nextQuestion")} className={ARROW}>
-                <ChevronRight size={14} aria-hidden="true" />
-              </button>
-            </span>
-          )}
-          icon={count > 1 ? null : <span className={BADGE}>{count}</span>}
-          label={t("ask.asks", { name: askerName })}
-          text={card.subtitle.trim().split(/\r?\n/, 1)[0]}
-          jump={{
-            ref: rowButton,
-            onClick: () => fold(false),
-            "aria-expanded": false,
-            "aria-label": `${t("ask.expandQuestion")}: ${card.subtitle}`,
-            className: card.options.length ? "min-w-[40%]" : undefined,
-          }}
-          trail={<RowChoices options={card.options} onPick={onPick} />}
-          onClear={hide}
-          clearLabel={t("ask.hideQuestion")}
-        />
+        >
+          <div className={cn("flex min-w-0 items-center gap-2 py-1.5", FILL)}>
+            {lead}
+            <button
+              type="button"
+              ref={rowButton}
+              onClick={() => fold(false)}
+              aria-expanded={false}
+              aria-label={`${t("ask.expandQuestion")}: ${card.subtitle}`}
+              className={cn("min-w-0 flex-1 text-left", card.options.length && "min-w-[40%]")}
+            >
+              <span className={QUOTE_LABEL}>{label}</span>
+              <span className={QUOTE_TEXT}>{card.subtitle.trim().split(/\r?\n/, 1)[0]}</span>
+            </button>
+            <RowChoices options={card.options} onPick={onPick} />
+            {controls(false)}
+          </div>
+        </div>
       </Fold>
       <Fold open={!folded} className="mb-2">
         <div
           ref={fitChoices}
           role="region"
-          aria-label={t("ask.asks", { name: askerName })}
+          aria-label={label}
           data-pending-question={message.id}
           onAnimationEnd={(event) => {
             if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
@@ -206,37 +242,20 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             if (start?.id === message.id && end && end.clientY - start.y > 48 && Math.abs(end.clientX - start.x) < 24) fold(true);
           }}
           onTouchCancel={() => { touch.current = null; }}
-          className={cn("relative flex max-h-[30dvh] flex-col rounded-2xl border border-accent/40 bg-card", glowing && "arrival-glow")}
+          className={cn("relative flex max-h-[30dvh] flex-col", FRAME, glowing && "arrival-glow")}
         >
-          <div className="flex min-h-0 flex-col rounded-[15px] bg-control/40 px-4 py-3">
-            <div className="flex shrink-0 items-start gap-2" aria-live="polite">
-              <span className="min-w-0 flex-1 truncate pt-0.5 text-[11px] uppercase tracking-[0.18em] text-ink-secondary">
-                {t("ask.asks", { name: askerName })}
-              </span>
-              <button
-                type="button"
-                ref={foldButton}
-                onClick={() => fold(true)}
-                aria-label={t("ask.foldQuestion")}
-                aria-expanded={true}
-                title={t("ask.foldQuestion")}
-                className="-mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:-my-3 pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4"
-              >
-                <ChevronDown size={14} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                onClick={onDismiss}
-                aria-label={t("chat.dismissQuestion")}
-                title={t("chat.dismissQuestion")}
-                className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:-my-3 pointer-coarse:-mr-[15px] pointer-coarse:px-[15px] pointer-coarse:pt-[14px] pointer-coarse:pb-4"
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
+          {/* the lead keeps its own column so the question starts where the row's line does */}
+          <div className={cn("flex min-h-0 gap-2 py-3", FILL)}>
+            <span className="flex h-5 shrink-0 items-center">{lead}</span>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-2" aria-live="polite">
+                <span className={cn(QUOTE_LABEL, "min-w-0 flex-1")}>{label}</span>
+                {controls(true)}
+              </div>
+              {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
+              <AskChoices options={card.options} onPick={onPick} />
             </div>
-            {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-            <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
-            <AskChoices options={card.options} onPick={onPick} />
           </div>
         </div>
       </Fold>
@@ -327,7 +346,7 @@ function RowChoices({ options, onPick }: { options: string[]; onPick: (choice: s
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className="relative shrink-0 whitespace-nowrap rounded-full border border-ink-secondary bg-control px-2.5 py-0.5 text-[12px] text-ink hover:bg-raised-hover pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-2.5"
+          className={cn(CHIP, "relative shrink-0 whitespace-nowrap px-2.5 py-0.5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-2.5")}
         >
           {choice}
         </button>
@@ -364,7 +383,7 @@ export function AskChoices({ options, onPick }: { options: string[]; onPick: (ch
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className="max-w-full break-words rounded-full border border-ink-secondary bg-control px-3.5 py-1.5 text-left text-[13px] text-ink hover:bg-raised-hover pointer-coarse:min-h-11"
+          className={cn(CHIP, "max-w-full break-words px-3.5 py-1.5 text-left pointer-coarse:min-h-11")}
         >
           {choice}
         </button>

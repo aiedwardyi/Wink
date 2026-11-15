@@ -79,6 +79,25 @@ describe("plain user links", () => {
   });
 });
 
+describe("a row sent from a call", () => {
+  it.each([["user", "order"], ["user", "ask"], ["bot", "ask"]] as const)("leads a %s %s row's text with a phone and keeps the footer of any other row", async (role, tag) => {
+    const id = "c-0123456789ab";
+    const current = bot([
+      { id: "plain", at: 1, role, kind: "text", text: "Fix the login bug." },
+      { id: "voice", at: 2, role: "bot", kind: "text", text: "Sending it.", call: { id, voice: true } },
+      { id: "sent", at: 3, role, kind: "text", text: "Fix the login bug.", call: { id, [tag]: true } },
+    ]);
+    const host = await mount([current], [], createElement(ChatView, { bot: current }));
+    const time = (mid: string) => host.querySelector(`[data-mid="${mid}"] button.tabular-nums`)!;
+    const content = host.querySelector('[data-mid="sent"] [data-orbit-message-content]')!.innerHTML;
+    expect(content).toContain("lucide-phone");
+    expect(content.indexOf("lucide-phone")).toBeLessThan(content.indexOf("Fix the login bug."));
+    expect(host.querySelectorAll('[data-mid="sent"] svg.lucide-phone')).toHaveLength(1);
+    expect(host.querySelector('[data-mid="plain"] svg.lucide-phone')).toBeNull();
+    expect(time("sent").parentElement!.className).toBe(time("plain").parentElement!.className);
+  });
+});
+
 describe("a question that is only choices", () => {
   it("draws no empty bubble above the chips in a chat", async () => {
     const current = bot([question("q1", "Which one?\n- Red\n- Blue")]);

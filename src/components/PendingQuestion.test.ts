@@ -104,6 +104,64 @@ describe("question folding", () => {
     expect(pill()).toBeNull();
   });
 
+  it("looks the same folded and open: one frame, one label, one chip and one pair of controls", async () => {
+    const look = (el: Element | null | undefined) => [...(el?.classList ?? [])].filter((name) => /^(rounded|border|bg-|text-\[|text-(ink|accent)|font-|tracking|uppercase|hover:)/.test(name)).sort();
+    const label = (scope: Element) => [...scope.querySelectorAll("*")].find((el) => !el.childElementCount && el.textContent === "Wink asks");
+    const chip = (scope: Element) => [...scope.querySelectorAll("button")].find((el) => el.textContent === "Analytics");
+    const controls = (scope: Element) => [...scope.querySelectorAll("button")].filter((el) => el.querySelector("svg") && !el.textContent).slice(-2).map((el) => el.className);
+    // the count badge sits in front of the label, at a count of one too
+    const badge = (scope: Element) => {
+      const found = [...scope.querySelectorAll("span")].find((el) => !el.childElementCount && el.textContent === "1");
+      return found && label(scope)!.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_PRECEDING ? look(found) : [];
+    };
+    const parts = (scope: Element) => ({ frame: look(scope), fill: look(scope.firstElementChild), badge: badge(scope), label: look(label(scope)), chip: look(chip(scope)), controls: controls(scope) });
+    await render("one-look");
+    const open = parts(host.querySelector('[role="region"]')!);
+    await fold();
+    const folded = parts(host.querySelector("[data-question-row]")!);
+    expect(open.frame.length).toBeGreaterThan(0);
+    expect(open.badge).toContain("bg-accent");
+    expect(open.label.length).toBeGreaterThan(0);
+    expect(folded.chip).toContain("text-[13px]");
+    expect(open.controls).toHaveLength(2);
+    expect(folded).toEqual(open);
+  });
+
+  it("gives the chevron and x 44px touch targets at 392 that split their gap and never overlap", async () => {
+    // Tailwind spacing in px: n * 4, or an arbitrary [npx]
+    const size = (cls: string, name: string, variant = "") => {
+      const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
+      return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
+    };
+    const ICON = 14;
+    const FRAME_PAD = 16;
+    const boxes = (scope: Element) => {
+      const [chevron, x] = [...scope.querySelectorAll("button")].filter((el) => el.querySelector("svg") && !el.textContent).slice(-2);
+      const gap = size(x.parentElement!.className, "gap");
+      // laid out from the right edge of a 392px frame's padding box, as flex puts them
+      const xRight = 392 - FRAME_PAD - size(x.className, "mr");
+      const box = (button: HTMLButtonElement, right: number) => {
+        const width = ICON + 2 * size(button.className, "p");
+        const after = (side: string) => -size(button.className, side, "pointer-coarse:after:");
+        return { buttonLeft: right - width, buttonRight: right, left: right - width - after("left"), right: right + after("right"), height: width + 2 * after("inset-y") };
+      };
+      const xBox = box(x, xRight);
+      return { chevron: box(chevron, xBox.buttonLeft - gap), x: xBox, gap };
+    };
+    await render("hit-boxes");
+    const open = boxes(host.querySelector('[role="region"]')!);
+    await fold();
+    const folded = boxes(host.querySelector("[data-question-row]")!);
+    expect(folded).toEqual(open);
+    const { chevron, x, gap } = open;
+    expect(chevron.height).toBeGreaterThanOrEqual(44);
+    expect(x.height).toBeGreaterThanOrEqual(44);
+    expect(chevron.right).toBeLessThanOrEqual(x.left);
+    expect(chevron.right - chevron.buttonRight).toBe(gap / 2);
+    expect(x.buttonLeft - x.left).toBe(gap / 2);
+    expect(x.right).toBeLessThanOrEqual(392);
+  });
+
   it("localizes folding and reopening in Korean", async () => {
     applyLocale("ko");
     await render("fold-korean");

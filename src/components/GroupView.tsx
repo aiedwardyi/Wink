@@ -1036,7 +1036,7 @@ export function GroupView({ group: live }: { group: Group }) {
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const speakerEngine = state.instances.find((instance) => instance.instanceId === speaker?.modelSelection?.instanceId);
-  const { label: activityLabel, noReply } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind);
+  const { label: activityLabel, noReply, responding } = useRoomTurnStage(group.threadId, group.messages, stream, showActivities, speakerEngine?.driverKind);
   const reveal = stream.reveal?.[group.threadId];
   const waiting = !reveal?.ended && turnPresenceWaiting({
     busy: Boolean(speaker),
@@ -1520,6 +1520,7 @@ export function GroupView({ group: live }: { group: Group }) {
               visible={waiting && !dockLive}
               docked={dockLive}
               label={activityLabel}
+              instant={responding}
               quiet={noReply?.quiet}
               wrap={Boolean(noReply)}
               since={noReply ? undefined : lastUserAt}

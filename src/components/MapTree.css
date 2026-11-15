@@ -32,8 +32,8 @@ button.map-tree-box { font: inherit; color: inherit; text-align: left; cursor: p
 .map-tree-sqs { position: absolute; left: 14px; top: 2px; display: flex; flex-wrap: wrap; gap: 2px; }
 .map-tree-sq { position: relative; width: 7px; height: 7px; background: var(--c); }
 .map-tree-sq::after { content: ""; position: absolute; inset: -1px; }
-.map-tree-pin { position: absolute; left: 0; top: 0; z-index: 3; width: 13px; height: 14px; opacity: 0; pointer-events: none; }
-.map-tree-pin svg { display: block; width: 13px; height: 14px; fill: var(--color-accent); stroke: var(--color-panel); stroke-width: 1.2; }
+.map-tree-pin { position: absolute; left: 0; top: 0; z-index: 3; width: 14px; height: 14px; opacity: 0; pointer-events: none; }
+.map-tree-pin svg { display: block; width: 14px; height: 14px; overflow: visible; fill: var(--color-accent); stroke: var(--color-panel); stroke-width: 1.2; stroke-linejoin: round; }
 .map-tree-team { display: flex; flex-direction: column; gap: 2px; }
 .map-tree-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-bottom: 3px; font: 500 10.5px/16px var(--font-sans, sans-serif); color: var(--color-ink-secondary); }
 .map-tree-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }

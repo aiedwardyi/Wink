@@ -219,7 +219,7 @@ function RoomContextMenu({
     if (!closing) renameRef.current?.focus();
   }, [closing]);
 
-  useListMenuDismiss("[data-room-menu]", closing, onClose);
+  useListMenuDismiss("[data-room-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!group) return null;
   const saveRename = () => {
@@ -358,7 +358,7 @@ function SectionPicker({
     if (!closing) nameRef.current?.focus();
   }, [closing]);
 
-  useListMenuDismiss("[data-section-picker]", closing, onClose);
+  useListMenuDismiss("[data-section-picker]", "[data-sidebar-list]", closing, onClose);
 
   // Hidden bots can carry a stale assignment; don't offer it as a context.
   // Channels and bots share one namespace, so Work or Personal can hold both.
@@ -468,7 +468,7 @@ function BotContextMenu({
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
-  useListMenuDismiss("[data-bot-menu]", closing, onClose);
+  useListMenuDismiss("[data-bot-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -1758,7 +1758,7 @@ export function Sidebar({
       )}
 
       {/* Bot list */}
-      <div ref={touchListRef} className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
+      <div ref={touchListRef} data-sidebar-list className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
         <div className="flex flex-col gap-0.5">
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("palette.noMatch", { query })}</div>

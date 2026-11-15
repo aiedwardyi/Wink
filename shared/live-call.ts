@@ -59,3 +59,6 @@ export const LIVE_TOOLS = [
 export function isVoiceLine(row: { call?: CallTag }): boolean {
   return Boolean(row.call && !row.call.order && !row.call.ask);
 }
+
+/** Leads a voice line wherever it is replayed to a model: the voice checked nothing. */
+export const VOICE_SAID = "[said on a call, unverified]";

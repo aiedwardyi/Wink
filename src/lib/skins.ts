@@ -79,6 +79,7 @@ export const SKIN_IDS = [
   "lagoon-night",
   "snow",
   "snow-night",
+  "neon-grid",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -159,6 +160,7 @@ export const SKINS: readonly Skin[] = [
   { id: "lagoon-night", name: "Lagoon Night", nameKey: "settings.skin.lagoonNight" },
   { id: "snow", name: "Snow", nameKey: "settings.skin.snow" },
   { id: "snow-night", name: "Snow Night", nameKey: "settings.skin.snowNight" },
+  { id: "neon-grid", name: "Neon Grid", nameKey: "settings.skin.neonGrid" },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
