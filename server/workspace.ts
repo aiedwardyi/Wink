@@ -282,7 +282,7 @@ export function memorySystemPrompt(botId: string, readOnly = false, notesEnabled
       ` Your private long-term memory file is ${JSON.stringify(memoryFile)}, with longer notes in ${JSON.stringify(topicDir)}.` +
       readRules + rules +
       laneNotice +
-      (parked.length ? `\n\nMemory sync set aside copies: ${parked.join(", ")}.` : "") +
+      (!readOnly && parked.length ? `\n\nMemory sync set aside copies: ${parked.join(", ")}.` : "") +
       (memory ? `\n\nYour memory (MEMORY.md):\n${memory.text}${memory.truncated ? "\n[MEMORY.md was cut off here.]" : ""}` : "")
     );
   }

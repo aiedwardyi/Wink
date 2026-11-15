@@ -54,7 +54,10 @@ describe("memory notes prompt", () => {
         expect(prompt).toContain("Do not send them to settings to edit it.");
       }
       if (["missing", "seed"].includes(kind)) expect(prompt).not.toContain("Your memory (MEMORY.md):");
-      if (lane) expect(prompt).toContain("do not edit memory files or files your 1:1 is editing");
+      if (lane) {
+        expect(prompt).toContain("do not edit memory files or files your 1:1 is editing");
+        expect(prompt).not.toContain("MEMORY.conflict-e059d14f.md");
+      }
       if (memory?.truncated) expect(prompt).toContain("[MEMORY.md was cut off here.]");
     }
   });
