@@ -141,6 +141,8 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** A tapped choice's line: the ask_user card it answers. Hidden on screen, kept for the model. */
+  answersCard?: string;
 }
 
 export type GroupDefaultResponder =

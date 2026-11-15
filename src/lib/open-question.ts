@@ -4,9 +4,9 @@
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
 import { isShownMessage } from "./shown-message";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
+import { ANSWERED_IN_CHAT, askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
 
-export { ANSWERED_IN_CHAT } from "../../shared/open-question";
+export { ANSWERED_IN_CHAT };
 export { isAskUserCard, isSentByPerson };
 
 export interface NeedsYou {
@@ -40,6 +40,15 @@ export function openQuestion(messages: readonly Message[]): Message | null {
 
 export function openQuestions(messages: readonly Message[]): readonly Message[] {
   return needsYou(messages).questions;
+}
+
+/** What a typed `text` settles the open question with, at once: its own reply when it answers it, else "Answered in chat". */
+export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string } | null {
+  const question = openQuestion(messages);
+  if (!question) return null;
+  const typed: Message = { id: "", at: 0, role: "user", kind: "text", text };
+  const status = askStates([...messages, typed]).get(question);
+  return { question, answered: status?.state === "answered" ? status.reply : ANSWERED_IN_CHAT };
 }
 
 /** An open permission ask: it takes the composer over, so it hides the pin. */

@@ -4725,6 +4725,7 @@ type StartTurnOptions = {
    * dispatch the same user action twice. */
   sendId?: string;
   call?: CallTag;
+  answersCard?: string;
   onDispatchError?: (message: string) => void;
   /** ask_bot's turn: it has onDispatchError too, but keeps the ask turn limit. */
   commsAsk?: boolean;
@@ -4989,6 +4990,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           replyToId: opts?.replyTo?.id,
           sendId: opts?.sendId,
           call: opts?.call,
+          answersCard: opts?.answersCard,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -7085,11 +7087,12 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
   for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
-function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {
+function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string, answersCard?: string) {
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   // A shared group commits the host's line to the room, then answers it like any group.
-  const shared = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
+  const hosted = group.hosted ? hostSend(group as HostedGroup, text, replyTo, sendId).message : null;
+  const shared = hosted && answersCard ? store.patchMessage(group.threadId, hosted.id, { answersCard }) ?? hosted : hosted;
   if (shared && peopleOnlyRoom((group as HostedGroup).hosted.roomId)) return shared;
   if (!shared && roomSetupPending(group)) {
     throw Object.assign(new Error("finish room setup before sending the first message"), { status: 409 });
@@ -7104,6 +7107,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     replyToId: replyTo?.id,
     sendId,
     ...(askerId ? { askedBy: askerId } : {}),
+    answersCard,
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);

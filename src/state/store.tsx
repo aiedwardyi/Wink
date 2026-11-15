@@ -19,7 +19,7 @@ import {
 import { sameModelSelection } from "../../shared/model-selection";
 import { isVoiceLine } from "../../shared/live-call";
 import { answerText } from "../../shared/open-question";
-import { canAnswerCard } from "@/lib/open-question";
+import { canAnswerCard, typedAnswer } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
@@ -101,6 +101,19 @@ export function visibleMessages(bot: Pick<Bot, "messages" | "activeLeafId" | "ha
   const visible = walkVisible(bot.messages, leafId, hasMore);
   visibleCache.set(bot.messages, { leafId, hasMore, visible });
   return visible;
+}
+
+/** The open question a typed send settles in chat; a queued line's Send now was typed before. */
+function typedPast(state: AppState, action: Action) {
+  if (action.type === "send" && !action.queueId) {
+    const bot = state.bots.find((candidate) => candidate.id === action.botId);
+    return bot ? typedAnswer(visibleMessages(bot), action.text) : null;
+  }
+  if (action.type === "sendGroup" && !action.cardId) {
+    const group = state.groups.find((candidate) => candidate.id === action.groupId);
+    return group ? typedAnswer(group.messages, action.text) : null;
+  }
+  return null;
 }
 
 // Shared across callers, so nobody may mutate the returned array.
@@ -778,7 +791,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case "sendQueuedNow":
       return state;
     case "send": {
-      const dismissed = dismissOnboardingCard(state, action.botId);
+      const typed = typedPast(state, action);
+      const dismissed = dismissOnboardingCard(typed ? patchCard(state, action.botId, typed.question.id, { answered: typed.answered }) : state, action.botId);
       const bot = dismissed.bots.find((candidate) => candidate.id === action.botId);
       if (!bot) return withMascotMotion(dismissed, action.botId, "working");
       const sendId = action.sendId ?? crypto.randomUUID();
@@ -811,12 +825,15 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!group) return state;
       const sendId = action.sendId ?? crypto.randomUUID();
       const paint = acceptedSendPaint({ alreadyBusy: Boolean(group.busyBotId) });
+      const typed = typedPast(state, action);
+      if (typed) state = patchGroupCard(state, action.groupId, typed.question.id, { answered: typed.answered });
       return {
         ...state,
         acceptedSends: rememberAcceptedSend(state.acceptedSends, action.threadId ?? group.threadId, {
           sendId,
           kind: paint.kind,
           text: action.text,
+          answersCard: action.cardId,
         }),
       };
     }
@@ -1344,6 +1361,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type === "updateBot"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
           : undefined;
+      const typedBeforeSend = typedPast(stateRef.current, action);
       const quizBeforeSend = (() => {
         if (action.type !== "send") return undefined;
         const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
@@ -1425,6 +1443,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
+          if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
           if (sendStartsTurnOn) clearStream(sendStartsTurnOn, "sent");
           const threadId =
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
@@ -1594,7 +1613,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(showError);
           } else if (!bot || canAnswerCard(visibleMessages(bot), action.messageId)) {
             const asked = bot?.messages.find((m) => m.id === action.messageId);
-            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId });
+            const body = JSON.stringify({ text: card?.askUser && asked ? answerText(bot!.messages, asked, action.answer) : action.answer, threadId: bot?.threadId, cardId: card?.askUser ? action.messageId : undefined });
             void holdReload(persistCard(action.botId, action.messageId, card?.askUser ? { answered: action.answer } : { answered: action.answer, dismissed: true })
               .then((open) => open && api(`/api/bots/${action.botId}/messages`, { method: "POST", body }).catch(showError)));
           }
@@ -1766,6 +1785,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId;
           if (!sendId) break;
+          if (typedBeforeSend) persistGroupCard(action.groupId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
