@@ -233,6 +233,18 @@ describe("the stage label in a fast tool loop", () => {
     expect(vi.getTimerCount()).toBe(idle);
   });
 
+  it("drops a hint at once when its label turned into one during the hold", async () => {
+    const show = (text: string, wrap = false) => act(async () => root.render(createElement(TurnPresence, { avatar: null, visible: true, label: text, wrap })));
+    await show("Thinking");
+    await advance(500);
+    await show("Claude hasn't replied in 2 min");
+    await show("Claude hasn't replied in 2 min", true);
+    await advance(500);
+    expect(label()).toBe("Claude hasn't replied in 2 min");
+    await show("Waiting for the model");
+    expect(label()).toBe("Waiting for the model");
+  });
+
   it("shows Responding at once", async () => {
     await render(done);
     await advance(100);

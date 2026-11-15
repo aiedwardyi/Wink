@@ -189,9 +189,10 @@ function useHeldLabel(label: string, instant: boolean, hint: boolean): string {
   if (label !== held.label && !holding) setHeld(stamp());
   useEffect(() => {
     if (!holding) return;
-    const timer = setTimeout(() => setHeld(stamp()), held.at + STAGE_HOLD_MS - Date.now());
+    // The timer captures no props: it only wakes the render, which stamps from the current ones.
+    const timer = setTimeout(() => setHeld((shown) => ({ ...shown })), held.at + STAGE_HOLD_MS - Date.now());
     return () => clearTimeout(timer);
-  }, [holding, label, held.at]);
+  }, [holding, held]);
   return holding ? held.label : label;
 }
 
