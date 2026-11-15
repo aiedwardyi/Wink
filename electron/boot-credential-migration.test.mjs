@@ -7,12 +7,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const XAI_SECRET = "xai-plaintext-secret";
 const COMPOSIO_SECRET = "ak_plaintext_installation_identity";
 
-const h = vi.hoisted(() => ({ home: "", encryptionAvailable: true, writes: [], packaged: true, handlers: new Map(), saveCard: null }));
+const h = vi.hoisted(() => ({ home: "", encryptionAvailable: true, writes: [], packaged: true, handlers: new Map(), saveCard: null, cleanupWorkers: [] }));
+
+// Each main.mjs import starts a pane-cleanup worker thread that writes into the temp home.
+vi.mock("./pane-cleanup.mjs", async (original) => {
+  const module = await original();
+  return { ...module, createPaneCleanupWorker: (options) => {
+    const worker = module.createPaneCleanupWorker(options);
+    h.cleanupWorkers.push(worker);
+    return worker;
+  } };
+});
 
 vi.mock("./terminal-bridge.mjs", async (original) => {
   const module = await original();
@@ -102,6 +112,7 @@ async function bootPackagedCredentials(stored = {}) {
 
 describe("packaged boot credential migration", () => {
   let previousDataDir;
+  const removedHomes = [];
 
   beforeEach(() => {
     h.home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-boot-credentials-"));
@@ -117,12 +128,19 @@ describe("packaged boot credential migration", () => {
     process.env.OMB_DATA_DIR = path.join(h.home, "data");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (previousDataDir === undefined) delete process.env.OMB_DATA_DIR;
     else process.env.OMB_DATA_DIR = previousDataDir;
+    await Promise.all(h.cleanupWorkers.splice(0).map((worker) => worker.dispose()));
     fs.rmSync(h.home, { recursive: true, force: true });
+    removedHomes.push(h.home);
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  // a writer still running after cleanup recreates the home, and on Windows fails rmSync with ENOTEMPTY
+  afterAll(() => {
+    expect(removedHomes.filter((home) => fs.existsSync(home))).toEqual([]);
   });
 
   it("encrypts the xai and composio keys before config.json loses them", async () => {

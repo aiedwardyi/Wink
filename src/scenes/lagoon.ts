@@ -54,7 +54,7 @@ void main() {
   float b = cell(q * 1.63 + 4.2, uT * 0.42 + 1.7);
   float la = exp(-a * 11.0), lb = exp(-b * 13.0);
   float c = la * 0.55 + lb * 0.35 + la * lb * 1.2 + exp(-a * 3.5) * 0.16;
-  float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+  float lane = 1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX));
   float gain = mix(1.0, uCalm, lane);
   vec2 uv = px / uSize;
   float depth = clamp(uv.y * 0.55 + length((uv - vec2(0.5, 0.3)) * vec2(1.2, 1.0)) * 0.7, 0.0, 1.0);

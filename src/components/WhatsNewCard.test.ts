@@ -182,8 +182,10 @@ describe("whats new card", () => {
   it.each([
     ["en", "lagoon", "Lagoon moves while your bot works. It costs 0 tokens."],
     ["en", "snow", "Snow moves while your bot works. It costs 0 tokens."],
+    ["en", "neon-grid", "Neon Grid moves while your bot works. It costs 0 tokens."],
     ["ko", "lagoon", "라군 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
     ["ko", "snow", "스노우 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
+    ["ko", "neon-grid", "네온 그리드 테마는 봇이 일하는 동안 움직여요. 토큰 사용량은 0이에요."],
   ] as const)("shows an animated theme as one row in %s (%s), closed by its X", (locale, theme, line) => {
     applyLocale(locale);
     act(() => root.render(createElement(WhatsNewCard, { theme, closing: false, onClose })));

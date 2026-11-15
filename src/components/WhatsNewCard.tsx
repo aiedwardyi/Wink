@@ -5,7 +5,7 @@ import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
-import { sceneOf, type SceneId } from "./ChatScene";
+import { SCENE_NAME, sceneOf, type SceneId } from "./ChatScene";
 import { Miniature } from "./SkinPicker";
 import "./WhatsNewCard.css";
 
@@ -109,7 +109,7 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
   const { t, locale } = useI18n();
   const { dispatch } = useStore();
   const entry = release ? WHATS_NEW[release] : undefined;
-  const title = theme ? t("whatsNew.themeMoves", { name: t(`settings.skin.${theme}`) }) : entry?.title[locale];
+  const title = theme ? t("whatsNew.themeMoves", { name: t(SCENE_NAME[theme]) }) : entry?.title[locale];
   const skin = useSkin();
   const card = useRef<HTMLElement>(null);
   const visible = useSeen(card);

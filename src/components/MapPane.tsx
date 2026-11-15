@@ -15,15 +15,16 @@ import { Segmented } from "./Segmented";
 import "./MapPane.css";
 
 const copy = {
-  en: { empty: "No live workers", walk: (total: number) => `${total.toLocaleString("en-US")} files · Not a git folder`, workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>Changed {n} of {total.toLocaleString("en-US")} files</>,
+  en: { empty: "No live workers", walk: (total: number) => `${total.toLocaleString("en-US")} files · Not a git folder`, plain: "Not a git folder", more: (n: number) => `+${n.toLocaleString("en-US")} more ${n === 1 ? "file" : "files"}`, workers: "Choose worker", all: "Follow all workers", changed: (n: number) => `${n} ${n === 1 ? "file" : "files"} changed`, of: (n: ReactNode, total: number) => <>Changed {n} of {total.toLocaleString("en-US")} files</>,
     team: (workers: number, n: number, total: number, clashes: number) => <><b>{workers}</b> workers · <b>{n}</b> of {total.toLocaleString("en-US")} files changed{clashes > 0 && <> · <b>{clashes}</b> {clashes === 1 ? "clash" : "clashes"}</>}</>, crew: (n: number) => `${n} workers`,
     tree: { folders: (n: number) => `+${n} ${n === 1 ? "folder" : "folders"}`, files: (n: number) => `+${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`, count: (n: number, shown: string) => `${shown} ${n === 1 ? "file" : "files"}`, more: (n: number) => `+${n} more`, same: "same lines", different: "different lines" }, following: (nick: string) => `Following ${nick}`, follow: (nick: string) => `Follow ${nick}`, unchanged: (n: number) => `${n} lines unchanged`, capped: "Large diff folded", binary: "Binary file", failed: "Could not load changes", lost: "Could not load all files", loading: "Loading changes", retry: "Retry", whole: "Whole file", changes: "Changes only", expand: "Expand file", showTree: "Show tree" },
-  ko: { empty: "실행 중인 작업자가 없어요", walk: (total: number) => `파일 ${total.toLocaleString("ko-KR")}개 · Git 폴더가 아니에요`, workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>,
+  ko: { empty: "실행 중인 작업자가 없어요", walk: (total: number) => `파일 ${total.toLocaleString("ko-KR")}개 · Git 폴더가 아니에요`, plain: "Git 폴더가 아니에요", more: (n: number) => `외 파일 ${n.toLocaleString("ko-KR")}개`, workers: "작업자 선택", all: "모든 작업자 따라가기", changed: (n: number) => `파일 ${n}개 변경`, of: (n: ReactNode, total: number) => <>파일 {total.toLocaleString("ko-KR")}개 중 {n}개 변경</>,
     team: (workers: number, n: number, total: number, clashes: number) => <>작업자 <b>{workers}</b>명 · 파일 {total.toLocaleString("ko-KR")}개 중 <b>{n}</b>개 변경{clashes > 0 && <> · 겹침 <b>{clashes}</b>개</>}</>, crew: (n: number) => `작업자 ${n}명`,
     tree: { folders: (n: number) => `폴더 +${n}`, files: (n: number) => `파일 +${n.toLocaleString("ko-KR")}`, count: (_n: number, shown: string) => `파일 ${shown}개`, more: (n: number) => `외 ${n}개`, same: "같은 줄", different: "다른 줄" }, following: (nick: string) => `${nick} 따라가는 중`, follow: (nick: string) => `${nick} 따라가기`, unchanged: (n: number) => `변경 없는 ${n}줄`, capped: "큰 변경 내용은 일부 접었어요", binary: "바이너리 파일", failed: "변경 내용을 불러오지 못했어요", lost: "전체 파일을 불러오지 못했어요", loading: "변경 내용 불러오는 중", retry: "다시 시도", whole: "전체 파일", changes: "변경만", expand: "파일 펼치기", showTree: "트리 보기" },
 };
 const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
+const RECONNECT = 5_000;
 type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
 const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
@@ -46,6 +47,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [connection, setConnection] = useState(0);
+  const [link, setLink] = useState(0);
   const liveReady = useRef(false);
   const [live, setReady] = useState(!botId);
   const ready = live || snapshot.workers.length > 0;
@@ -63,7 +65,10 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const changed = useMemo(() => new Set(onTree.flatMap(worker => worker.files.map(file => file.path))), [onTree]);
   const changedKey = [...changed].join("\0");
   const clashes = useMemo(() => team ? mapClashes(snapshot.workers) : [], [team, snapshot.workers]);
-  const repoWorker = team ? snapshot.workers[0]?.id : worker?.id;
+  // A team's tree never hangs off a folder without git.
+  const source = team ? snapshot.workers.find(item => item.git) ?? worker : worker;
+  const repoWorker = source?.id;
+  const more = onTree.reduce((sum, item) => sum + (item.more ?? 0), 0);
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
   const lost = !paths && !!repoWorker && repoFailed === repoWorker;
   // A worker switch keeps the last tree up until the new one lands.
@@ -92,20 +97,29 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     liveReady.current = false;
     if (!base || !active) return;
     setReady(false);
-    const stream = new EventSource(`${base}/live`);
-    stream.onmessage = event => {
-      try {
-        const data: MapSnapshot = JSON.parse(event.data);
-        if (!liveReady.current) setConnection(value => value + 1);
-        liveReady.current = true;
-        setSnapshot(data);
-        setConnectionFailed(false);
-        setReady(true);
-      } catch { setConnectionFailed(true); }
+    let stream: EventSource;
+    let reopen: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      stream = new EventSource(`${base}/live`);
+      stream.onmessage = event => {
+        try {
+          const data: MapSnapshot = JSON.parse(event.data);
+          if (!liveReady.current) setConnection(value => value + 1);
+          liveReady.current = true;
+          setSnapshot(data);
+          setConnectionFailed(false);
+          setReady(true);
+        } catch { setConnectionFailed(true); }
+      };
+      stream.onerror = () => {
+        liveReady.current = false; setConnectionFailed(true); setReady(true);
+        // A refused stream stays closed: only a dropped one reconnects by itself.
+        if (stream.readyState === 2) reopen = setTimeout(connect, RECONNECT);
+      };
     };
-    stream.onerror = () => { liveReady.current = false; setConnectionFailed(true); setReady(true); };
-    return () => { liveReady.current = false; stream.close(); };
-  }, [base, active]);
+    connect();
+    return () => { liveReady.current = false; clearTimeout(reopen); stream.close(); };
+  }, [base, active, link]);
 
   useEffect(() => {
     if (!active || !liveReady.current || !base || !repoWorker) return;
@@ -146,6 +160,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
   }, [menu]);
 
+  const again = () => connectionFailed || snapshot.error || worker?.error ? setLink(link + 1) : setRetry(retry + 1);
+  const failure = <>{c.failed} <button type="button" onClick={again}>{c.retry}</button></>;
   // A worker switch keeps the last diff up, still tagged with its own worker, until the new one lands.
   const held = !!diff && !!worker?.git && !!chosen.path && diff.worker !== worker.id;
   const loaded = !failed && diff && (held || diff.worker === worker?.id) ? diff : null;
@@ -215,7 +231,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
   return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
-    {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? c.failed : c.empty}</p> : <>
+    {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? failure : c.empty}</p> : <>
       <header className="map-head">
         <div ref={menuRef} className="map-worker-menu">
           <button type="button" className="map-worker" onClick={() => setMenu(!menu)} aria-label={c.workers} aria-haspopup="menu" aria-expanded={menu}><i /><span>{worker.nick}</span><ChevronDown size={12} /></button>
@@ -227,11 +243,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       </header>
       <div ref={topRef} className="map-top">
         <div className="map-where">
-          <span>{!index || lost ? c.changed(files.length) : !worker.git ? c.walk(index.size) : team ? c.team(snapshot.workers.length, changed.size, index.size, clashes.length) : c.of(<b>{files.length}</b>, index.size)}</span>
+          <span>{!index || lost || worker.error && !worker.git ? c.changed(files.length) : !source?.git ? index.size ? c.walk(index.size) : c.plain : team ? c.team(snapshot.workers.length, changed.size, index.size, clashes.length) : c.of(<b>{files.length}</b>, index.size)}{more > 0 && <> · {c.more(more)}</>}</span>
           <span>{[paths && repo?.name, team ? c.crew(snapshot.workers.length) : worker.nick].filter(Boolean).join(" / ")}</span>
         </div>
         {lost && <p className="map-empty" role="status">{c.lost} <button type="button" onClick={() => setRepoRetry(repoRetry + 1)}>{c.retry}</button></p>}
-        {index && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
+        {worker.error && !(worker.git && files.length > 0) && <p className="map-empty" role="status">{failure}</p>}
+        {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
       {worker.git && files.length > 0 && <>
@@ -249,7 +266,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
           {step?.reason && <p>{shown}</p>}
         </div>}
         <div ref={codeRef} className="map-code" aria-busy={!failed && (held || loaded?.path !== chosen.path || loaded.whole !== whole)}>
-          {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
+          {failed || connectionFailed || snapshot.error || worker.error ? <p className="map-empty" role="status">{failure}</p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
             {loaded.data.lines.map((line, index) => {
               if (line.kind !== "fold") return codeRow(line, index);
               const start = line.line ?? 1;
