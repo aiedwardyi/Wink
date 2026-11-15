@@ -319,7 +319,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         data-team-room-transcript
         data-orbit-transcript
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
-        onWheel={(event) => { if (event.deltaY < 0) reaching.current = true; }}
+        onWheel={(event) => { reaching.current = event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight; }}
         onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; reaching.current = false; }}
         onTouchMove={(event) => {
           const y = event.touches[0]?.clientY ?? touchY.current;
@@ -329,7 +329,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         onTouchEnd={() => { reaching.current = false; }}
         onTouchCancel={() => { reaching.current = false; }}
         onKeyDown={(event) => {
-          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) reaching.current = true;
+          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) reaching.current = event.currentTarget.scrollHeight > event.currentTarget.clientHeight;
         }}
         tabIndex={0}
         onClick={(e) => {

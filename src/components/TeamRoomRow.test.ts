@@ -61,6 +61,21 @@ it.each(["a room too short to scroll", "a sideways swipe that drifts down"])("ke
   expect(document.querySelector("[data-jump-latest]")).toBeNull();
 });
 
+it.each(["wheel", "keydown"])("keeps following after an upward %s in a room too short to scroll", async (type) => {
+  const { pane, grow, shorten } = await mount();
+  shorten();
+  await act(async () => resize());
+  const event = new Event(type, { bubbles: true });
+  Object.defineProperties(event, { deltaY: { value: -100 }, key: { value: "ArrowUp" } });
+  await act(async () => pane.dispatchEvent(event));
+  grow();
+  grow();
+  await act(async () => pane.dispatchEvent(new Event("scroll", { bubbles: true })));
+  await act(async () => resize());
+  expect(pane.scrollHeight - pane.scrollTop - pane.clientHeight).toBe(0);
+  expect(document.querySelector("[data-jump-latest]")).toBeNull();
+});
+
 it("a finger that scrolls up while a picture grows stops following and shows Jump", async () => {
   const { pane, grow } = await mount();
   await act(async () => resize());
