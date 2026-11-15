@@ -37,7 +37,7 @@ Phone: `open phone`, open Atlas from the drawer, then the same steps. On phone C
 
 ## Gotchas
 
-- Older pages load as you scroll up (#1377); the `Show earlier messages` button is gone.
+- Older pages load as you scroll up (#1377); the `Show earlier messages` button still renders as a fallback but is rarely reached, since scroll loading starts first.
 - The load point is an unlabelled row above the first message, with no selector; prove loads with the rows `scroll` prints.
 - A load starts while the top is still two viewports away, so the oldest row was never on screen when it began. Check the row `scroll` reports, not the first row.
 - Rows are `display: contents`, with no box of their own; `expect in-view` measures what a row holds.
