@@ -58,4 +58,13 @@ describe("system ledger", () => {
     ledger.record("accepted", "First section\nSecond section");
     expect(ledger.prompt("accepted", "Second section\nFirst section")).toBe("Second section\nFirst section");
   });
+
+  it("resends budgets moved between projects even when the status also changes", () => {
+    const ledger = systemLedger(true);
+    const rules = "Approval boundaries stay unchanged. ".repeat(100);
+    const first = `${rules}\n## Project A\nBudget: 500 dollars.\n## Project B\nBudget: 740 dollars.\nStatus: draft.`;
+    const second = `${rules}\n## Project A\nBudget: 740 dollars.\n## Project B\nBudget: 500 dollars.\nStatus: final.`;
+    ledger.record("accepted", first);
+    expect(ledger.prompt("accepted", second)).toBe(second);
+  });
 });
