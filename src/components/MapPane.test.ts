@@ -491,7 +491,7 @@ it("drops a fold response from an earlier edit and keeps lines a capped file lef
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);
   pending.shift()!([]);
-  await click(".map-whole");
+  await click('.map-crumbs [role="radio"][aria-checked="false"]');
   await click("button.map-gap");
   await emit([{ ...workers[0], editedAt: 5 }]);
   await act(async () => pending.shift()!([{ kind: "context", text: "stale", line: 1 }, { kind: "context", text: "stale", line: 2 }]));
@@ -513,15 +513,15 @@ it("opens the whole file by default, flips to changes only, and opens a folded r
   await emit([workers[0]]);
   expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
   expect(String(reads().at(-1)?.[0])).toContain("whole=1");
-  expect(host.querySelector(".map-whole")?.textContent).toBe("변경만");
-  await click(".map-whole");
-  expect(host.querySelector(".map-whole")?.textContent).toBe("전체 파일");
+  expect(host.querySelector('.map-crumbs [role="radio"][aria-checked="true"]')?.textContent).toBe("전체 파일");
+  await click('.map-crumbs [role="radio"][aria-checked="false"]');
+  expect([...host.querySelectorAll('.map-crumbs [role="radio"]')].map(side => [side.textContent, side.getAttribute("aria-checked")])).toEqual([["변경만", "true"], ["전체 파일", "false"]]);
   expect(rows()).toEqual(["변경 없는 2줄", "edit in src/a.ts"]);
   await click("button.map-gap");
   expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
   await click('[data-map-file="src/manual.ts"]');
   expect(rows()).toEqual(["변경 없는 2줄", "edit in src/manual.ts"]);
-  await click(".map-whole");
+  await click('.map-crumbs [role="radio"][aria-checked="false"]');
   expect(rows()).toEqual(["one", "two", "edit in src/manual.ts"]);
   await click('[data-map-file="src/a.ts"]');
   expect(rows()).toEqual(["one", "two", "edit in src/a.ts"]);
@@ -545,7 +545,7 @@ it("scrolls the whole file to its first change and falls back to changes only pa
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);
   expect(host.querySelector(".map-code")?.scrollTop).toBe(800);
-  expect(host.querySelector(".map-whole")?.textContent).toBe("Changes only");
+  expect(host.querySelector('.map-crumbs [role="radio"][aria-checked="true"]')?.textContent).toBe("Whole file");
   await click('[data-map-file="src/manual.ts"]');
   expect(rows()).toEqual(["9000 lines unchanged", "late edit", "Large diff folded"]);
   expect(reads().slice(-2).map(([url]) => new URL(String(url), "http://test").searchParams.get("whole"))).toEqual(["1", null]);
@@ -585,6 +585,56 @@ it("expands the file over the tree and brings the tree back with the same file, 
   expect(expand()?.getAttribute("aria-label")).toBe("파일 펼치기");
   await click(".map-expand");
   expect(expand()?.getAttribute("aria-label")).toBe("트리 보기");
+});
+
+it("shows one line and a labeled example on an empty Map, with no calls, until a worker starts", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  expect(host.querySelector(".map-example")).toBeNull();
+  await emit([]);
+  expect(host.querySelector(".map-empty")?.textContent).toBe("No live workers");
+  expect(host.querySelector(".map-example > p")?.textContent).toBe("Your workers' changes show here live");
+  expect(host.querySelector(".map-example small")?.textContent).toBe("Example");
+  expect(host.querySelector(".map-example > div")?.hasAttribute("inert")).toBe(true);
+  const file = () => host.querySelector(".map-example .map-code")?.textContent;
+  const first = file();
+  await act(async () => { vi.advanceTimersByTime(2400); });
+  expect(file()).not.toBe(first);
+  await act(async () => { vi.advanceTimersByTime(2400); });
+  expect(file()).toBe(first);
+  expect(fetch).not.toHaveBeenCalled();
+  await emit([workers[0]]);
+  expect(host.querySelector(".map-example")).toBeNull();
+  vi.useRealTimers();
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "other" })); });
+  await emit([]);
+  expect(host.querySelector(".map-example")?.textContent).toContain("예시");
+});
+
+it("keeps the last tree and diff up, with no loading line, while a picked worker's own load", async () => {
+  const pending: (() => void)[] = [];
+  vi.mocked(fetch).mockImplementation(async url => {
+    const query = new URL(String(url), "http://test").searchParams;
+    if (query.get("worker") === "b") await new Promise<void>(done => pending.push(done));
+    return query.get("path") ? Response.json({ lines: [{ kind: "add", text: `edit by ${query.get("worker")}`, line: 1 }] }) : Response.json({ ...repo, name: `repo-${query.get("worker")}` });
+  });
+  const rows = () => [...host.querySelectorAll(".map-code-row code")].map(row => row.textContent);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit();
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(2)');
+  expect(rows()).toEqual(["edit by a"]);
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(3)');
+  expect(host.querySelector(".map-worker")?.textContent).toBe("BETA");
+  expect(rows()).toEqual(["edit by a"]);
+  expect(host.querySelector(".map-code")?.getAttribute("aria-busy")).toBe("true");
+  expect(host.querySelector(".map-tree")).not.toBeNull();
+  expect(host.textContent).not.toContain("Loading changes");
+  await act(async () => { for (const done of pending.splice(0)) done(); });
+  expect(rows()).toEqual(["edit by b"]);
+  expect(host.querySelector(".map-code")?.getAttribute("aria-busy")).toBe("false");
+  expect(host.querySelector(".map-where")?.textContent).toContain("repo-b");
 });
 
 it("lists a clash once per file with all its workers and caps the list with many workers", async () => {
