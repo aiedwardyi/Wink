@@ -1005,6 +1005,20 @@ function checkedModelSelection(
   return { ok: true, selection };
 }
 
+function createdBotSelection(chief: ModelSelection, model: unknown, effort: unknown): ReturnType<typeof checkedModelSelection> {
+  if (model === undefined) return effort === undefined ? { ok: true, selection: { ...chief } } : checkedModelSelection({ ...chief, effort });
+  const engines = [chief.instanceId, ...registry.instances().map((instance) => instance.instanceId)];
+  const instanceId = engines.find((id) => instanceOffersModel(id, String(model)));
+  if (!instanceId) {
+    const valid = new Set(engines.filter((id) => !accounts.get(id)).flatMap((id) => {
+      const models = registry.get(id)?.models;
+      return models ? [models.default, ...models.options.map((option) => option.id)].filter(Boolean) : [];
+    }));
+    return { ok: false, status: 400, error: `model "${String(model)}" is not offered; valid ids: ${[...valid].join(", ")}` };
+  }
+  return checkedModelSelection({ instanceId, model, mode: "pinned", effort }, false, true);
+}
+
 function checkedGroupResponder(value: unknown, memberIds: string[]): GroupDefaultResponder | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const responder = value as { kind?: unknown; botId?: unknown };
@@ -7591,6 +7605,7 @@ const internalRoutes = createInternalRoutes({
   computerControl,
   askBotAndWait,
   checkedMemberIds,
+  createdBotSelection,
   store,
   keepGoing,
   wireBot,
