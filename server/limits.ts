@@ -192,6 +192,9 @@ export const NAMED_GUARDS: Limits = {
     MAX_COMMS_DEPTH: "Runaway loop: the bot-to-bot reply-loop guard.",
   },
   "server/comms-root.ts": { ROOT_TURNS: "Runaway loop: bot-to-bot turns after one human message; resets on the next one." },
+  "server/drivers/claude.ts": {
+    NATIVE_IMAGE_MAX_COUNT: "Crash: past 20 image blocks the Claude API rejects the request on its many-image dimension limit (vision docs); later images stay path tags the bot can Read.",
+  },
   "server/rooms/my-room-bots.ts": { "Room Stop": "The room Stop button: bot lines wake no bot until a person or the host speaks." },
   "server/http-helpers.ts": { "413": BODY },
   "server/uploads.ts": { disk_full: "Data loss: a big upload that would fill the disk." },
