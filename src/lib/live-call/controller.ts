@@ -7,7 +7,7 @@ import { openQuestion } from "@/lib/open-question";
 import type { Message } from "@/state/store-types";
 import { bareYes, claimsDone, consentOf } from "./consent";
 import type { LiveEngine, LiveEvents, LiveSession, LiveToolCall } from "./engine";
-import { asksAboutDone, asksAboutWork, asksForChange, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, reasks, repeatsAsk, restates } from "./guard";
+import { asksAboutDone, asksAboutWork, asksForQuiet, asksToRepeat, backchannel, backs, callsVoice, claimOf, echoOf, looksUp, misheard, offLanguage, ordersChange, ordersOther, reasks, repeatsAsk, restates } from "./guard";
 import { answersCard, GAP_MS, greets } from "./manners";
 import { EarlyMic, OpenLines, takesBack } from "./quick";
 
@@ -506,6 +506,9 @@ export class LiveCall {
         this.dropping = this.offTongue = this.checkAsk = false;
         const said = spokenText(this.saidBuf);
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
+        // "I'm here. I'm here." is a repeat inside one turn.
+        const parts = said.split(/(?<=[.!?])\s+/).map(lineKey).filter(Boolean);
+        if (new Set(parts).size < parts.length && lineKey(said) !== this.lastLine) this.stats.repeats += 1;
         const spoke = this.turnHadAudio || Boolean(said);
         // His late words clear the last line, so they go first: this answer is the line a later turn must not repeat.
         this.flushHeard();
@@ -758,7 +761,7 @@ export class LiveCall {
     if (!question) return this.toolResult(ids, tool, question, "not sent: no question");
     if (this.req.misheard) return this.toolResult(ids, tool, question, misheardMsg(this.app));
     if (this.cardTakes) return this.toolResult(ids, tool, question, this.notNeeded);
-    if (asksForChange(question)) return this.toolResult(ids, tool, question, CHANGE_ASK);
+    if (ordersChange(question, [this.deps.botName, ...this.aliases])) return this.toolResult(ids, tool, question, CHANGE_ASK);
     const req = this.req;
     req.accounted = true;
     req.asked.push(question);
@@ -939,7 +942,8 @@ export class LiveCall {
     // Talk while it was told to be quiet is not for it.
     if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
-    const consent = consentOf(text);
+    const reply = consentOf(text);
+    const consent = reply === "yes" && ordersOther(text, this.pending.order) ? null : reply;
     if (consent === "yes") req.accounted = true;
     if (consent) void this.answer(consent === "yes", true);
   }
