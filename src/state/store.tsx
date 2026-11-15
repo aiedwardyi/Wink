@@ -73,6 +73,7 @@ import {
   liveTurnIdAfter,
   liveTurnIdAfterDispatch,
   nextStreamState,
+  rampStream,
   rememberStreamTail,
   retargetStreamTurn,
   revealStream,
@@ -1127,6 +1128,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // state is intentionally OUTSIDE the reducer so token frames re-render
   // only StreamContext consumers
   const [stream, setStream] = useState<TurnStreamState>(EMPTY_STREAM);
+  const streamRef = useRef(stream);
+  streamRef.current = stream;
   const deltaBuffer = useRef(new Map<string, PendingDeltas>());
   const deltaFlush = useRef<number | null>(null);
   // A settled reply waits for its live text to finish typing; the thread's
@@ -1244,6 +1247,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     if (buf.size) scheduleDeltaFlush();
     releaseSettled();
+  };
+  // Stop: each thread's next frame lands its text whole, other threads keep typing.
+  const landTyping = (threadIds: readonly (string | null | undefined)[]) => {
+    for (const threadId of threadIds) {
+      const pending = threadId ? deltaBuffer.current.get(threadId) : undefined;
+      if (threadId && pending?.ramps) deltaBuffer.current.set(threadId, { ...pending, ramps: undefined });
+    }
   };
   const scheduleDeltaFlush = () => {
     if (deltaFlush.current !== null) return;
@@ -1862,6 +1872,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           break;
         case "interrupt": {
+          // Like the server's Stop: the bot's chat, the thread it is working on and a room it is busy in.
+          const stopped = stateRef.current.bots.find((bot) => bot.id === action.botId);
+          landTyping([stopped?.threadId, stopped?.workingThreadId, ...stateRef.current.groups.filter((group) => group.busyBotId === action.botId).map((group) => group.threadId)]);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
@@ -1928,6 +1941,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "interruptGroup":
+          landTyping([stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId]);
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
@@ -2178,7 +2192,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         held.push(() => handleFrame(frame));
         return;
       }
-      // At most STREAM_REVEAL_MS: the tail types out, then the settled reply takes over.
+      // At most STREAM_PACE_MS: the tail types out, then the settled reply takes over.
       if (
         frame.kind === "message" &&
         frame.message?.role === "bot" &&
@@ -2354,7 +2368,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (event.streamKind === "assistant_text") {
                 trackReplyText(event.threadId);
                 next.ramps = loadReplyStyle() === "live" && event.threadId in liveTurns.current
-                  ? [...(base.ramps ?? []), [event.delta.length, performance.now()]]
+                  ? rampStream(base.ramps ?? [], event.delta.length, next.streaming?.length ?? 0, streamRef.current.streaming[event.threadId]?.length ?? 0, performance.now())
                   : undefined;
               }
               buf.set(event.threadId, next);

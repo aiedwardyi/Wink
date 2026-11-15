@@ -280,22 +280,49 @@ export function applyStreamDelta(buffers: StreamBuffers, kind: StreamKind, delta
   return { ...buffers, reasoning: (buffers.reasoning ?? "") + delta };
 }
 
-/** How long a live delta takes to type out, so the screen never trails the engine by more. */
+/** How long a live delta takes to type out, so the screen never trails a steady engine by more. */
 export const STREAM_REVEAL_MS = 150;
 
-export type StreamRamp = readonly [chars: number, at: number];
+/** A burst types out no later than this after the engine's last delta. */
+export const STREAM_PACE_MS = 1000;
+const STREAM_PACE_CHARS_PER_MS = 0.4;
+// 60 characters in 50 ms opens a burst; 60 over STREAM_REVEAL_MS is the pace floor.
+const STREAM_BURST_MS = 50;
+const STREAM_BURST_CHARS = 60;
+// Grok lands up to 260 characters at once mid-reply; pacing those would trail it by a second.
+const STREAM_LUMP_CHARS = 300;
 
-/** Each delta types out evenly over STREAM_REVEAL_MS from its arrival, so a bigger backlog types faster. */
+/** `arrived` since `since` is what the engine really sent: a pace ramp's `chars` is the whole backlog. */
+export type StreamRamp = readonly [chars: number, at: number, ms: number, arrived: number, since: number];
+
+/** `backlog` is the text not yet on screen, this delta included; `shown` is what the reply already shows. A burst swaps every ramp for one that types the backlog at an even pace. */
+export function rampStream(ramps: readonly StreamRamp[], chars: number, backlog: number, shown: number, now: number): StreamRamp[] {
+  // A steady engine's opening lump is paced too: on arrival it looks the same as a short reply sent whole.
+  const opening = shown <= STREAM_BURST_CHARS;
+  let fresh = chars;
+  let since = now;
+  let chained = false;
+  for (const [, at, ms, arrived, from] of ramps) {
+    chained ||= ms > STREAM_REVEAL_MS && now - at < STREAM_BURST_MS;
+    if (now - from >= STREAM_BURST_MS) continue;
+    fresh += arrived;
+    since = Math.min(since, from);
+  }
+  if (fresh <= STREAM_BURST_CHARS || !(opening || chained || fresh > STREAM_LUMP_CHARS)) return [...ramps, [chars, now, STREAM_REVEAL_MS, chars, now]];
+  return [[backlog, now, Math.min(STREAM_PACE_MS, Math.max(STREAM_REVEAL_MS, backlog / STREAM_PACE_CHARS_PER_MS)), fresh, since]];
+}
+
+/** Each ramp types its characters out evenly from its arrival, so a bigger backlog types faster. */
 export function revealStream(text: string, ramps: readonly StreamRamp[], now: number) {
   let held = 0;
-  for (const [chars, at] of ramps) held += chars * Math.max(0, 1 - (now - at) / STREAM_REVEAL_MS);
+  for (const [chars, at, ms] of ramps) held += chars * Math.max(0, 1 - (now - at) / ms);
   let shown = text.length - Math.min(text.length, Math.floor(held));
   // A cut inside a surrogate pair would paint half an emoji for a frame.
   if ((text.codePointAt(shown - 1) ?? 0) > 0xffff) shown++;
   return {
     shown: text.slice(0, shown),
     rest: text.slice(shown),
-    ramps: ramps.filter(([, at]) => now - at < STREAM_REVEAL_MS),
+    ramps: ramps.filter(([, at, ms]) => now - at < ms),
   };
 }
 
