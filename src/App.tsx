@@ -770,20 +770,20 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
       ) : joinedId ? (
-        <JoinedRoomView key={joinedId} roomId={joinedId} />
+        <JoinedRoomView key={joinedId} roomId={joinedId} hidden={nativeViewOverlayOpen} />
       ) : group && isTeamRoom(group) ? (
         <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-          <TeamRoomView key={group.id} group={group} />
+          <TeamRoomView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
           {watchPanel(nativeViewOverlayOpen)}
         </div>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
-            <GroupView key={group.id} group={group} />
+            <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
             {watchPanel(nativeViewOverlayOpen)}
           </div>
         ) : (
-          <GroupView key={group.id} group={group} />
+          <GroupView key={group.id} group={group} hidden={nativeViewOverlayOpen} />
         )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">

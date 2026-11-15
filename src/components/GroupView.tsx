@@ -5,6 +5,7 @@
 import { ActivityChip, ErrorRow, NoteMessage, PinnedBanner, commPeer } from "./ChatView";
 import { CopyButton, FoldToggle, TimestampLabel, USER_FOLD_CLASS, userTextFolds } from "./ChatBubble";
 import { AppErrorBanner } from "./AppErrorBanner";
+import { ChatScene, sceneOf } from "./ChatScene";
 import { DaySeparator } from "./DaySeparator";
 import { JumpToLatest } from "./JumpToLatest";
 import { VerifyCard } from "./VerifyCard";
@@ -960,7 +961,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
-export function GroupView({ group: live }: { group: Group }) {
+export function GroupView({ group: live, hidden = false }: { group: Group; hidden?: boolean }) {
   const archive = useGroupArchive(live.id);
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
@@ -1032,6 +1033,8 @@ export function GroupView({ group: live }: { group: Group }) {
   const lastGroupMessage = group.messages.at(-1);
   const toolInFlight = lastGroupMessage?.kind === "activity" && lastGroupMessage.tool?.ok === undefined;
   const skin = useSkin();
+  const scene = sceneOf(skin);
+  const sceneSend = useRef<(() => void) | null>(null);
   const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
@@ -1330,7 +1333,8 @@ export function GroupView({ group: live }: { group: Group }) {
 
   return (
     <MediaViewerProvider threadId={group.threadId} messages={shown}>
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
       <GroupCallOverlay group={group} members={members} />
       <div
         className={cn(
@@ -1560,7 +1564,10 @@ export function GroupView({ group: live }: { group: Group }) {
             group={group}
             members={members}
             composerRef={composerInputRef}
-            onSend={jumpToLatest}
+            onSend={() => {
+              jumpToLatest();
+              sceneSend.current?.();
+            }}
             locked={setupPending}
             replyTo={replyTo}
             onClearReply={clearReply}
