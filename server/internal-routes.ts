@@ -18,7 +18,7 @@ import { callerSnapshot, release, reserve, type Reservation } from "./comms-root
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
-import { newId } from "./contracts.ts";
+import { newId, type ModelSelection } from "./contracts.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { appendDecision } from "./decision-log.ts";
 import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
@@ -51,6 +51,7 @@ type InternalRouteDeps = {
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
+  createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -90,6 +91,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     computerControl,
     askBotAndWait,
     checkedMemberIds,
+    createdBotSelection,
     store,
     keepGoing,
     wireBot,
@@ -670,20 +672,22 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (duplicate) {
         return json(res, 409, { error: `@${duplicate.name} already exists in this section; use list_bots` });
       }
+      const selection = createdBotSelection(chief.modelSelection, body.model, body.effort);
+      if (!selection.ok) return json(res, selection.status, { error: selection.error });
       const created = store.createBot(
         {
           name,
           title: role,
           description: instructions,
-          modelSelection: { ...chief.modelSelection },
+          modelSelection: selection.selection,
           section: chief.section,
         },
         { seedMessages: false },
       );
       const safeBot = store.patchBot(created.id, {
-        composio: false,
-        autoApprove: false,
-        approvePeerComms: false,
+        composio: chief.composio !== false,
+        autoApprove: chief.autoApprove === true,
+        approvePeerComms: chief.approvePeerComms === true,
       })!;
       return json(res, 201, {
         id: safeBot.id,

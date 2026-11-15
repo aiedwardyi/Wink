@@ -878,6 +878,11 @@ describe("agents-proxy MCP surface", () => {
     });
   });
 
+  it("forwards create_bot model and effort to the harness", async () => {
+    await callTool("create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things.", model: " grok-4.6 ", effort: "xhigh" });
+    expect(lastCreateBody).toMatchObject({ model: "grok-4.6", effort: "xhigh" });
+  });
+
   it("create_channel tells the model to call the tool instead of scanning localhost", async () => {
     const list = await rpc("tools/list");
     const tool = list.result.tools.find((t: { name: string }) => t.name === "create_channel");
