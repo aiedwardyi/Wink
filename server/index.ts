@@ -15,7 +15,6 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
-import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
@@ -936,7 +935,7 @@ async function defaultSelection() {
 }
 
 const modelSelectionModeSchema = z.enum(["automatic", "pinned"]).optional();
-const botJobSchema = z.string().trim().min(1).max(BOT_PROFILE_LIMITS.description);
+const botJobSchema = z.string().trim().min(1);
 
 function checkedModelSelection(
   raw: unknown,
