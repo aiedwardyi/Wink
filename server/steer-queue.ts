@@ -46,6 +46,7 @@ interface RoomItem {
   instructionId?: string;
   askId?: string;
   ready?: () => Promise<boolean>;
+  spoken?: Set<string>;
 }
 
 type QueueItem = SteerItem | RoomItem;
@@ -196,6 +197,7 @@ export interface RoomDrain {
   instructionId?: string;
   askId?: string;
   ready?: () => Promise<boolean>;
+  spoken?: Set<string>;
 }
 
 export type DrainRun = (
@@ -272,6 +274,7 @@ export function queueRoomParticipation(
     instructionId?: string;
     askId?: string;
     ready?: () => Promise<boolean>;
+    spoken?: Set<string>;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
@@ -285,8 +288,9 @@ export function queueRoomParticipation(
     }
     existing.onDispatchError ??= options.onDispatchError;
     existing.instructionId ??= options.instructionId;
-    // a recheck may only drop the turn when every participation folded in here carries one
+    // a recovery's recheck and answered set only hold when every participation folded in here carries them
     if (!options.ready) existing.ready = undefined;
+    if (!options.spoken) existing.spoken = undefined;
     return { id: existing.messageId };
   }
   const id = newId();
@@ -300,6 +304,7 @@ export function queueRoomParticipation(
     onDispatchError: options.onDispatchError,
     instructionId: options.instructionId,
     ready: options.ready,
+    spoken: options.spoken,
     ...(options.askId ? { askId: options.askId } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
@@ -409,6 +414,7 @@ export function drainSteeredMessages(
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
     if (room.askId) roomDrain.askId = room.askId;
     if (room.ready) roomDrain.ready = room.ready;
+    if (room.spoken) roomDrain.spoken = room.spoken;
     void run(entry.botId, entry.threadId, "", null, [], roomDrain);
   }
 }

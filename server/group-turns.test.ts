@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGroupRoutes } from "./group-routes.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { mentionedBots, roomResponders, Store, type BotRecord, type GroupRecord } from "./store.ts";
-import { owedRoomResponders, packetAfterInterruption, TaskResumeScheduler } from "./task-recovery-flush.ts";
+import { owedRoomResponders, packetAfterInterruption, roomRepliers, TaskResumeScheduler } from "./task-recovery-flush.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
@@ -154,7 +154,7 @@ describe("a room turn cut off mid-line", () => {
     store.patchGroup(group.id, { defaultResponder: { kind: "everyone" } });
     const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "plan this", ...(askedBy ? { askedBy } : {}) });
     const queueRoomParticipation = vi.fn();
-    const queue = load("queueOwedRoomTurns", { store, owedRoomResponders, roomResponders, queueRoomParticipation });
+    const queue = load("queueOwedRoomTurns", { store, owedRoomResponders, roomRepliers, roomResponders, queueRoomParticipation });
     return { line, queueRoomParticipation, run: () => queue(group.id, group.threadId, ray.id, line.id) };
   };
 
@@ -163,7 +163,7 @@ describe("a room turn cut off mid-line", () => {
     reply(kai, "Kai's plan");
     reply(ray, "Ray's half");
     run();
-    expect(queueRoomParticipation.mock.calls).toEqual([[zed.id, group.threadId, { groupId: group.id, hop: 0, instructionId: line.id, ready: expect.any(Function) }]]);
+    expect(queueRoomParticipation.mock.calls).toEqual([[zed.id, group.threadId, { groupId: group.id, hop: 0, instructionId: line.id, spoken: new Set([kai.id, ray.id]), ready: expect.any(Function) }]]);
   });
 
   it("drops a queued member that an earlier recovered one brought in", async () => {

@@ -249,6 +249,7 @@ import {
   owedRoomResponders,
   packetAfterInterruption,
   PendingTurnInterrupts,
+  roomRepliers,
   shutdownStampsForClose,
   TaskResumeScheduler,
   turnCompletionDisposition,
@@ -6365,7 +6366,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean>; askId?: string; spoken?: Set<string> },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (hostedTurnRefused(store.group(room.groupId), threadId, botId, room.askId) || !roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6394,7 +6395,7 @@ function enqueueDrainedRoomTurn(
       threadId,
       botId,
       room.hop,
-      new Set(),
+      room.spoken ?? new Set(),
       room.cardContinuation,
       room.onDispatchError,
       () => operation.cancelled,
@@ -7035,8 +7036,10 @@ function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string
     return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
   };
   const owed = () => owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
+  // one answered set for the recovered turns, as a live line's responders share: a mention must not rerun a member that is done
+  const spoken = new Set([resumedId, ...roomRepliers(store.messagesFor(threadId), instructionId)]);
   // rechecked at dispatch: an earlier recovered member may have brought this one in
-  for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, ready: async () => owed().some((item) => item.id === bot.id) });
+  for (const bot of owed()) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId, spoken, ready: async () => owed().some((item) => item.id === bot.id) });
 }
 
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {

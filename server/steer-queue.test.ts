@@ -307,19 +307,20 @@ describe("steer-queue module", () => {
     expect(run.mock.calls[0][5]).toEqual({ groupId: "room-instr", hop: 0, instructionId: "msg-1" });
   });
 
-  it("carries a room recheck through drain, unless a plain participation folds in", () => {
+  it("carries a room recheck and answered set through drain, unless a plain participation folds in", () => {
     const skye = fakeBot("skye-ready", "skye-ready-1to1", true);
     const nova = fakeBot("nova-ready", "nova-ready-1to1", true);
     const store = fakeStore([skye, nova]);
     const ready = async () => false;
-    queueRoomParticipation(skye.id, "room-ready", { groupId: "room-ready", ready });
-    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain", ready });
+    const spoken = new Set(["kai"]);
+    queueRoomParticipation(skye.id, "room-ready", { groupId: "room-ready", ready, spoken });
+    queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain", ready, spoken });
     queueRoomParticipation(nova.id, "room-plain", { groupId: "room-plain" });
     skye.busy = false;
     nova.busy = false;
     const run = vi.fn();
     drainSteeredMessages(store, run);
-    expect(run.mock.calls.map((call) => [call[1], call[5].ready])).toEqual([["room-ready", ready], ["room-plain", undefined]]);
+    expect(run.mock.calls.map((call) => [call[1], call[5].ready, call[5].spoken])).toEqual([["room-ready", ready, spoken], ["room-plain", undefined, undefined]]);
   });
 
   it("passes a room dispatch-error hook through drain without appending", () => {
