@@ -109,13 +109,20 @@ describe("question folding", () => {
     const label = (scope: Element) => [...scope.querySelectorAll("*")].find((el) => !el.childElementCount && el.textContent === "Wink asks");
     const chip = (scope: Element) => [...scope.querySelectorAll("button")].find((el) => el.textContent === "Analytics");
     const controls = (scope: Element) => [...scope.querySelectorAll("button")].filter((el) => el.querySelector("svg") && !el.textContent).slice(-2).map((el) => el.className);
-    const parts = (scope: Element) => ({ frame: look(scope), fill: look(scope.firstElementChild), label: look(label(scope)), chip: look(chip(scope)), controls: controls(scope) });
+    // the count badge sits in front of the label, at a count of one too
+    const badge = (scope: Element) => {
+      const found = [...scope.querySelectorAll("span")].find((el) => !el.childElementCount && el.textContent === "1");
+      return found && label(scope)!.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_PRECEDING ? look(found) : [];
+    };
+    const parts = (scope: Element) => ({ frame: look(scope), fill: look(scope.firstElementChild), badge: badge(scope), label: look(label(scope)), chip: look(chip(scope)), controls: controls(scope) });
     await render("one-look");
     const open = parts(host.querySelector('[role="region"]')!);
     await fold();
     const folded = parts(host.querySelector("[data-question-row]")!);
     expect(open.frame.length).toBeGreaterThan(0);
+    expect(open.badge).toContain("bg-accent");
     expect(open.label.length).toBeGreaterThan(0);
+    expect(folded.chip).toContain("text-[13px]");
     expect(open.controls).toHaveLength(2);
     expect(folded).toEqual(open);
   });
