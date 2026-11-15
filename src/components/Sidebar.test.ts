@@ -2289,6 +2289,22 @@ describe("Sidebar hold menu", () => {
       }
     });
 
+    it.each(["contextmenu", "hold"])("stays open after %s while another pane scrolls", async (method) => {
+      const view = await mount(kind);
+      const chat = document.body.appendChild(document.createElement("div"));
+      try {
+        if (method === "contextmenu") await view.open();
+        else await view.hold();
+        await act(async () => chat.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).not.toBeNull();
+        await act(async () => view.row().closest("[data-sidebar-list]")!.dispatchEvent(new Event("scroll")));
+        expect(view.menu()).toBeNull();
+      } finally {
+        chat.remove();
+        await view.unmount();
+      }
+    });
+
     it.each(["list", "page"])("keeps scrolling and release guarded when the %s closes a held menu", async (target) => {
       const view = await mount(kind);
       const selected = view.selected();

@@ -7,6 +7,7 @@ import type { UsageBoardAccount } from "@/lib/usage-board";
 import { invalidateUsageBoard } from "@/lib/usage-board-client";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { scrollsAnchor } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { MENU_CLASS } from "./MessageMenu";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
@@ -50,6 +51,7 @@ export function AccountPicker({ accounts, viewedId, select, label, field = false
   const menu = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState({ top: 0, left: 0, width: 248, maxHeight: 288 });
+  const [height, setHeight] = useState(0);
   const presence = usePresence(open);
   const viewed = accounts.find((account) => account.id === viewedId) ?? accounts[0]!;
   const close = () => { setOpen(false); trigger.current?.focus({ preventScroll: field }); };
@@ -74,7 +76,7 @@ export function AccountPicker({ accounts, viewedId, select, label, field = false
     element.style.maxWidth = "";
     const room = desk.getBoundingClientRect().right - element.getBoundingClientRect().left;
     if (room > 0 && room < element.offsetWidth) element.style.maxWidth = `${Math.floor(room)}px`;
-  }, [presence.mounted, open, field]);
+  }, [presence.mounted, open, field, height]);
   useEffect(() => {
     if (!open) return;
     menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
@@ -82,19 +84,25 @@ export function AccountPicker({ accounts, viewedId, select, label, field = false
       if (event.target instanceof Node && !menu.current?.contains(event.target) && !trigger.current?.contains(event.target)) setOpen(false);
     };
     const scroll = (event: Event) => {
-      if (!(event.target instanceof Node) || !menu.current?.contains(event.target)) close();
+      if (scrollsAnchor(event, trigger.current)) close();
+    };
+    // A phone keyboard changes only the height: place again there, close on a real size change.
+    const width = window.innerWidth;
+    const resize = () => {
+      if (window.innerWidth === width) setHeight(window.innerHeight);
+      else close();
     };
     const dismiss = () => setOpen(false);
     window.addEventListener("pointerdown", outside, true);
     if (field) {
       window.addEventListener("scroll", scroll, true);
-      window.addEventListener("resize", close);
+      window.addEventListener("resize", resize);
       window.addEventListener("blur", dismiss);
     }
     return () => {
       window.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("scroll", scroll, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("resize", resize);
       window.removeEventListener("blur", dismiss);
     };
   }, [open, field]);

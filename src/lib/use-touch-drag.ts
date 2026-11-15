@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { hapticTick } from "./phone-swipe";
-import { guardMenuTouch, type HoldMenu } from "./use-hold-menu";
+import { guardMenuTouch, scrollsAnchor, type HoldMenu } from "./use-hold-menu";
 
 export const LONG_PRESS_MS = 400;
 export const LONG_PRESS_SLOP = 8;
@@ -336,7 +336,8 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       e.preventDefault();
       e.stopPropagation();
     };
-    const onScroll = () => {
+    const onScroll = (e: Event) => {
+      if (!scrollsAnchor(e, list)) return;
       if (press?.menu && !press.lifted) {
         if (!press.menuDismissed) {
           press.menuDismissed = true;

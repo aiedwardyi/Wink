@@ -46,7 +46,11 @@ export function guardMenuTouch(doc: Document, released = false): () => void {
   return cleanup;
 }
 
-export function useListMenuDismiss(selector: string, closing: boolean, onClose: () => void) {
+export function scrollsAnchor(event: Event, anchor: Node | null | undefined) {
+  return !(event.target instanceof Node) || (!!anchor && event.target.contains(anchor));
+}
+
+export function useListMenuDismiss(selector: string, anchor: string, closing: boolean, onClose: () => void) {
   useEffect(() => {
     if (closing) return;
     const outside = (event: Event) => !(event.target instanceof Element) || !event.target.closest(selector);
@@ -62,20 +66,23 @@ export function useListMenuDismiss(selector: string, closing: boolean, onClose: 
     const onDown = (event: MouseEvent) => {
       if (outside(event)) onClose();
     };
+    const onScroll = (event: Event) => {
+      if (scrollsAnchor(event, document.querySelector(anchor))) onClose();
+    };
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     document.addEventListener("pointerdown", onPointer, true);
     document.addEventListener("touchstart", onTouch, { capture: true, passive: false });
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onClose, { capture: true, passive: true });
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true });
     window.addEventListener("keydown", onKey);
     window.addEventListener("blur", onClose);
     return () => {
       document.removeEventListener("pointerdown", onPointer, true);
       document.removeEventListener("touchstart", onTouch, true);
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onClose);
     };
-  }, [selector, closing, onClose]);
+  }, [selector, anchor, closing, onClose]);
 }
