@@ -139,12 +139,15 @@ export function callsVoice(heard: string, name: string, aliases: readonly string
 }
 
 // Letters English and Korean never use, and the words a mis-hear lands on ("¿Qué?", "Hola, aquí estoy.").
-const FOREIGN = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]|(?<![\p{L}\p{N}])(?:hola|aquí|estoy|gracias|qué|cómo|está|estás|bueno|claro|perdón|bonjour|merci|oui|danke|hallo|obrigado|olá|ciao|grazie)(?![\p{L}\p{N}])/iu;
+const FOREIGN_SCRIPT = /[¿¡ñЀ-ۿऀ-๿぀-ヿ一-鿿]/iu;
+const FOREIGN_WORDS = /(?<![\p{L}\p{N}])(?:hola|aquí|estoy|gracias|qué|cómo|está|estás|bueno|claro|perdón|bonjour|merci|oui|danke|hallo|obrigado|olá|ciao|grazie)(?![\p{L}\p{N}])/giu;
 const HANGUL = /[가-힣]/;
 
 /** Speech in a third language. The brief keeps the voice to the app's; English and Korean lines are never cut here, he may mix them. */
 export function offLanguage(text: string): boolean {
-  return FOREIGN.test(text);
+  if (FOREIGN_SCRIPT.test(text)) return true;
+  // Capitalized mid-sentence it is a name, like the Bonjour service; "Hola" opening a line is Spanish.
+  return [...text.matchAll(FOREIGN_WORDS)].some((word) => !/^\p{Lu}/u.test(word[0]) || !/\p{L}[^.!?]*$/u.test(text.slice(0, word.index)));
 }
 
 /** A line speech-to-text likely got wrong: another language, or a word or two that trail off with no end mark. Korean transcripts often have none. */

@@ -38,6 +38,9 @@ const SMALL = only([
 const BACK = only(["stop(?: it)?|wait|hold on|never ?mind|forget (?:it|that)|cancel(?: (?:it|that))?|no|nope|scratch that", "그만(?:해요?)?|잠깐만?|됐어요?|아니(?:야|요|다)?|취소(?:해요?)?|하지 ?마|신경 ?쓰지 ?마"]);
 const blank = (text: string) => !/[\p{L}\p{N}]/u.test(text);
 
+/** "never mind", "cancel that": a line that only takes back what he said before it. */
+export const takesBack = (text: string) => !blank(text.replace(SMALL, " ")) && blank(text.replace(SMALL, " ").replace(BACK, " "));
+
 /** His lines that no reply or send has dealt with yet, by line number. */
 export class OpenLines {
   private lines: Array<{ n: number; text: string }> = [];

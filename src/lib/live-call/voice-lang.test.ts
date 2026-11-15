@@ -55,7 +55,7 @@ const ACCEPTED: Posted = { status: 202, data: { ok: true } };
 const pcm = () => new Int16Array(480);
 const flush = () => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(opts: { botName?: string; voice?: LiveVoice; device?: "phone" | "desktop" } = {}) {
+function setup(opts: { botName?: string; voice?: LiveVoice; device?: "phone" | "desktop"; messages?: Posted } = {}) {
   const audio = fakeAudio();
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
@@ -68,7 +68,7 @@ function setup(opts: { botName?: string; voice?: LiveVoice; device?: "phone" | "
     now: () => Date.now(),
     post: async (path, body) => {
       posts.push({ path, body });
-      if (path.endsWith("/messages")) return ACCEPTED;
+      if (path.endsWith("/messages")) return opts.messages ?? ACCEPTED;
       if (path.endsWith("/call/token")) return { status: 200, data: { callId: CALL, url: "wss://x", token: "t", model: "m", voice: opts.voice ?? "Aoede" } };
       return { status: 200, data: {} };
     },
@@ -343,5 +343,147 @@ describe("8 no fake action", () => {
     speak(engine(), "Let me check whether you finished Paradise.");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(fixes(engine())).toEqual([]);
+  });
+});
+
+describe("review threads", () => {
+  const shipCard = (options: string[] = []): Message => ({ id: "q2", role: "bot", kind: "options", at: Date.now(), card: { title: "Your bot has a question", subtitle: "Ship it when?", options, askUser: true } }) as unknown as Message;
+
+  async function cardRead(options: string[] = []) {
+    const s = await live();
+    s.call.observe({ busy: false, messages: [shipCard(options)] });
+    await vi.advanceTimersByTimeAsync(0);
+    speak(s.engine(), "Ship it when?");
+    await vi.advanceTimersByTimeAsync(2_000);
+    return s;
+  }
+
+  it("P1 a never mind still takes back the order before it at hang-up", async () => {
+    const { call, engine, posts } = await live();
+    engine().events.heard("Delete the old branches.");
+    engine().events.answering();
+    engine().events.heard("never mind");
+    call.end();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sentToBot(posts)).toEqual([]);
+  });
+
+  it("echo split across chunks is dropped whole", async () => {
+    const { call, audio, engine, posts } = await live({ device: "phone" });
+    engine().events.heard("Is Primer good?");
+    speak(engine(), "It's excellent if you like complex time travel movies", false);
+    audio.playing = true;
+    engine().events.heard("excellent if you");
+    engine().events.heard(" like complex");
+    expect(audio.flushed).toBe(0);
+    engine().events.turnDone();
+    call.end();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(linesOf(posts).filter((line) => line.startsWith("user: ") && line.includes("complex"))).toEqual([]);
+  });
+
+  it("a hello does not close the card's question, so asking it again still plays", async () => {
+    const { audio, engine } = await cardRead();
+    engine().events.heard("Hi, Jennifer.");
+    const before = audio.played;
+    speak(engine(), "When should I ship it?");
+    expect(audio.played).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).filter((text) => /already asked/.test(text))).toEqual([]);
+  });
+
+  it("a one-word answer to a free-text card is its answer", async () => {
+    const { engine, posts } = await cardRead();
+    engine().events.heard("Friday");
+    engine().events.answering();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentToBot(posts)).toEqual(["Re: “Ship it when?”\nFriday"]);
+  });
+
+  it("a product name is not another language", () => {
+    expect(guard.offLanguage("Why is Bonjour discovery not working?")).toBe(false);
+    expect(guard.offLanguage("Hola, aquí estoy.")).toBe(true);
+    expect(guard.offLanguage("¿Qué?")).toBe(true);
+  });
+
+  it("a card readout dropped unheard is read again, and is not answered meanwhile", async () => {
+    const { call, engine, posts } = await live();
+    call.observe({ busy: false, messages: [shipCard(["Today", "Tomorrow"])] });
+    await vi.advanceTimersByTimeAsync(0);
+    speak(engine(), "Hola, la pregunta es cuándo.");
+    await vi.advanceTimersByTimeAsync(2_000);
+    engine().events.heard("Today.");
+    engine().events.answering();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentToBot(posts)).toEqual([]);
+  });
+
+  it("a yes offer after his answer is a new question, not a re-ask", async () => {
+    const { audio, engine } = await live();
+    engine().events.heard("Delete some files.");
+    speak(engine(), "Which files should I delete?");
+    engine().events.heard("The old logs.");
+    const before = audio.played;
+    engine().events.answering();
+    engine().events.audio(pcm());
+    engine().events.toolCall([{ id: "p1", name: "propose_work", args: { order: "Delete the old log files." } }]);
+    engine().events.said("Would you like me to delete the old log files?");
+    engine().events.turnDone();
+    expect(audio.played).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).filter((text) => /already asked/.test(text))).toEqual([]);
+  });
+
+  it("asked to repeat a question he answered, the voice may say it again", async () => {
+    const { audio, engine } = await live();
+    engine().events.heard("Make a branch for it.");
+    speak(engine(), "Which branch should I use?");
+    engine().events.heard("Main.");
+    speak(engine(), "Got it, main.");
+    engine().events.heard("Repeat the question.");
+    const before = audio.played;
+    speak(engine(), "Which branch should I use?");
+    expect(audio.played).toBe(before + 1);
+  });
+
+  it("a failed ask is not what is being looked into", async () => {
+    const { engine } = await live({ device: "phone", botName: "Rando", messages: { status: 403, data: { error: "forbidden" } } });
+    engine().events.heard("Did I finish Paradise?");
+    engine().events.answering();
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "Did I finish watching Paradise?" } }]);
+    await flush();
+    engine().events.turnDone();
+    speak(engine(), "Let me check your watch history.");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).filter((text) => /being looked into/.test(text))).toEqual([]);
+  });
+
+  it("the answer quoted in the re-ask fix is one short sentence", async () => {
+    const { engine } = await live();
+    engine().events.heard("Make a branch for it.");
+    speak(engine(), "Which branch should I use?");
+    engine().events.heard("Main, because the release branch is frozen until Friday and nobody should touch it at all this week. Also tell the team.");
+    speak(engine(), "Which branch should I use?");
+    await vi.advanceTimersByTimeAsync(2_000);
+    const quoted = fixes(engine()).find((text) => /already asked/.test(text))?.match(/answered "([^"]*)"/)?.[1] ?? "";
+    expect(quoted.length).toBeGreaterThan(0);
+    expect(quoted.length).toBeLessThanOrEqual(80);
+    expect(quoted).not.toContain("tell the team");
+  });
+
+  it("a re-ask streamed word by word is dropped like a whole one", async () => {
+    const { audio, engine, posts } = await live();
+    engine().events.heard("Make a branch for it.");
+    speak(engine(), "Which branch should I use?");
+    engine().events.heard("Main.");
+    const before = audio.played;
+    engine().events.answering();
+    engine().events.audio(pcm());
+    for (const word of ["Which ", "branch ", "should ", "I ", "use?"]) engine().events.said(word);
+    engine().events.turnDone();
+    expect(audio.played).toBe(before);
+    expect(linesOf(posts).filter((line) => line === "voice: Which branch should I use?")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fixes(engine()).at(-1)).toMatch(/already asked/);
   });
 });
