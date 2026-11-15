@@ -72,6 +72,7 @@ import {
   liveTurnIdAfter,
   liveTurnIdAfterDispatch,
   nextStreamState,
+  rampStream,
   rememberStreamTail,
   retargetStreamTurn,
   revealStream,
@@ -1124,6 +1125,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // state is intentionally OUTSIDE the reducer so token frames re-render
   // only StreamContext consumers
   const [stream, setStream] = useState<TurnStreamState>(EMPTY_STREAM);
+  const streamRef = useRef(stream);
+  streamRef.current = stream;
   const deltaBuffer = useRef(new Map<string, PendingDeltas>());
   const deltaFlush = useRef<number | null>(null);
   // A settled reply waits for its live text to finish typing; the thread's
@@ -1859,6 +1862,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           break;
         case "interrupt": {
+          // Stop lands whatever is still typing.
+          flushDeltas();
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
@@ -1925,6 +1930,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "interruptGroup":
+          flushDeltas();
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {
@@ -2153,7 +2159,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         held.push(() => handleFrame(frame));
         return;
       }
-      // At most STREAM_REVEAL_MS: the tail types out, then the settled reply takes over.
+      // At most STREAM_PACE_MS: the tail types out, then the settled reply takes over.
       if (
         frame.kind === "message" &&
         frame.message?.role === "bot" &&
@@ -2329,7 +2335,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (event.streamKind === "assistant_text") {
                 trackReplyText(event.threadId);
                 next.ramps = loadReplyStyle() === "live" && event.threadId in liveTurns.current
-                  ? [...(base.ramps ?? []), [event.delta.length, performance.now()]]
+                  ? rampStream(base.ramps ?? [], event.delta.length, next.streaming?.length ?? 0, streamRef.current.streaming[event.threadId]?.length ?? 0, performance.now())
                   : undefined;
               }
               buf.set(event.threadId, next);
