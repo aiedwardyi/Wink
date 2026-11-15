@@ -17,8 +17,10 @@ type View = { number: number; title: string; state: "OPEN" | "MERGED" | "CLOSED"
 // A compare status starting with "!" fails with that message.
 function fakeGh(views: ReadonlyMap<string, View>, compare: ReadonlyMap<string, string> = new Map()) {
   const calls: string[][] = [];
-  const gh = async (_cwd: string, args: string[]) => {
+  const cwds: string[] = [];
+  const gh = async (cwd: string, args: string[]) => {
     calls.push(args);
+    cwds.push(cwd);
     if (args[0] === "api") {
       const status = compare.get(args[1]!);
       if (!status) throw new Error("HTTP 404");
@@ -29,7 +31,7 @@ function fakeGh(views: ReadonlyMap<string, View>, compare: ReadonlyMap<string, s
     if (!view) throw new Error("no pull requests found");
     return JSON.stringify({ ...view, url: `https://github.com/${view.repo ?? "aiedwardyi/Wink"}/pull/${view.number}` });
   };
-  return { gh, calls };
+  return { gh, calls, cwds };
 }
 
 describe("reportedPrs", () => {
@@ -104,8 +106,8 @@ describe("createUnlandedWork", () => {
   it("lists what is open or not in the installed build and drops merged+installed and closed", async () => {
     const { gh } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toBe(
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toBe(
       "[Wink unlanded - 3 PRs not in the user's build: wink#1642 feat: merged after the installed tag (20h, merged, not in your build); wink#1640 fix: tell bots what has not landed (18h); site#7 fix: other repo (5h, merged, not released). Before saying fixed or asking them to test, check it is merged and released.]",
     );
   });
@@ -113,21 +115,21 @@ describe("createUnlandedWork", () => {
   it("keeps merged PRs listed when the installed version is unknown", async () => {
     const { gh } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "", gh, now: () => NOW });
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
   });
 
   it("asks gh at most every 10 minutes and never again for a settled PR", async () => {
     let at = NOW;
     const { gh, calls } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
-    await work.refresh("bot-1");
+    await work.refresh("bot-1", "t-a");
     const first = calls.length;
     at += UNLANDED_REFRESH_MS - 1;
-    await work.refresh("bot-1");
+    await work.refresh("bot-1", "t-a");
     expect(calls.length).toBe(first);
     at += 1;
-    await work.refresh("bot-1");
+    await work.refresh("bot-1", "t-a");
     expect(calls.slice(first).map((args) => args[2])).toEqual(["1643", "1640"]);
   });
 
@@ -136,12 +138,12 @@ describe("createUnlandedWork", () => {
     const live = views();
     const { gh } = fakeGh(live, compare());
     const work = createUnlandedWork({ reports: () => messages.slice(3, 4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toBe("");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toBe("");
     live.set("1643", { ...allViews["1643"], state: "OPEN" });
     at += UNLANDED_REFRESH_MS;
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toContain("#1643 fix: closed unmerged (10h)");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1643 fix: closed unmerged (10h)");
   });
 
   it("retries a build check that failed and drops the PR once it proves installed", async () => {
@@ -150,12 +152,12 @@ describe("createUnlandedWork", () => {
     checks.set(COMPARE_AAA, "!error connecting to api.github.com");
     const { gh } = fakeGh(views(), checks);
     const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
     checks.set(COMPARE_AAA, "behind");
     at += UNLANDED_REFRESH_MS;
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toBe("");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toBe("");
   });
 
   it("stops asking for a missing version tag or a number that names no PR, and keeps asking for a branch", async () => {
@@ -163,11 +165,11 @@ describe("createUnlandedWork", () => {
     const { gh, calls } = fakeGh(views(), compare());
     const reports = [report(NOW - 3 * HOUR, "PR 1641"), report(NOW - 2 * HOUR, "PR 9999"), report(NOW - HOUR, "pushed", "fix/no-pr-yet")];
     const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.269-dev.1", gh, now: () => at });
-    await work.refresh("bot-1");
-    expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (3h, merged, not released)");
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1641 feat: merged and installed (3h, merged, not released)");
     const first = calls.length;
     at += UNLANDED_REFRESH_MS;
-    await work.refresh("bot-1");
+    await work.refresh("bot-1", "t-a");
     expect(calls.slice(first).map((args) => args[2])).toEqual(["fix/no-pr-yet"]);
   });
 
@@ -177,19 +179,35 @@ describe("createUnlandedWork", () => {
     const { gh: fast } = fakeGh(views(), compare());
     const gh = async (cwd: string, args: string[]) => { await gate; return fast(cwd, args); };
     const work = createUnlandedWork({ reports: () => messages.slice(2, 3), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
-    const pending = work.refresh("bot-1");
+    const pending = work.refresh("bot-1", "t-a");
     const started = performance.now();
-    expect(work.take("bot-1")).toBe("");
+    expect(work.take("t-a")).toBe("");
     expect(performance.now() - started).toBeLessThan(50);
     release();
     await pending;
-    expect(work.take("bot-1")).toContain("#1640 fix: tell bots what has not landed (18h)");
+    expect(work.take("t-a")).toContain("#1640 fix: tell bots what has not landed (18h)");
+  });
+
+  it("gives each task only the PRs its own reports name", async () => {
+    const threads = new Map([["t-a", [report(NOW - 18 * HOUR, "PR 1640")]], ["t-b", [report(NOW - 2 * HOUR, "PR 1642")]]]);
+    const dirs = new Map([["t-a", "D:/repo-a"], ["t-b", "D:/repo-b"]]);
+    const { gh, calls, cwds } = fakeGh(views(), compare());
+    const work = createUnlandedWork({ reports: (threadId) => threads.get(threadId) ?? [], repoDir: (_botId, threadId) => dirs.get(threadId), version: "1.0.268", gh, now: () => NOW });
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("#1640 fix: tell bots what has not landed (18h)");
+    // the user switched to task B before any B turn settled
+    expect(work.take("t-b")).toBe("");
+    await work.refresh("bot-1", "t-b");
+    expect(work.take("t-b")).toContain("#1642 feat: merged after the installed tag");
+    expect(work.take("t-b")).not.toContain("#1640");
+    expect(work.take("t-a")).not.toContain("#1642");
+    expect(calls.map((args, index) => [args[0], args[2], cwds[index]]).filter(([kind]) => kind === "pr")).toEqual([["pr", "1640", "D:/repo-a"], ["pr", "1642", "D:/repo-b"]]);
   });
 
   it("reads only the cache on take, so a send starts no gh", async () => {
     const { gh, calls } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
-    expect(work.take("bot-1")).toBe("");
+    expect(work.take("t-a")).toBe("");
     await new Promise((done) => setImmediate(done));
     expect(calls).toEqual([]);
   });
@@ -197,12 +215,12 @@ describe("createUnlandedWork", () => {
   it("adds no line and no error without gh or a repo", async () => {
     const missing = async () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); };
     const noGh = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh: missing, now: () => NOW });
-    await noGh.refresh("bot-1");
-    expect(noGh.take("bot-1")).toBe("");
+    await noGh.refresh("bot-1", "t-a");
+    expect(noGh.take("t-a")).toBe("");
     const { gh, calls } = fakeGh(views(), compare());
     const noRepo = createUnlandedWork({ reports: () => messages.slice(0, 4), repoDir: () => undefined, version: "1.0.268", gh, now: () => NOW });
-    await noRepo.refresh("bot-1");
-    expect(noRepo.take("bot-1")).toBe("");
+    await noRepo.refresh("bot-1", "t-a");
+    expect(noRepo.take("t-a")).toBe("");
     expect(calls).toEqual([]);
   });
 });
@@ -222,10 +240,11 @@ describe("unlanded wiring", () => {
     expect(typed({ threadId: "t", cardContinuation: true, unattended: true, keepGoingWake: true })).toBe(false);
     expect(typed({ automationSource: "schedule" })).toBe(false);
     expect(typed({ commsDepth: 1 })).toBe(false);
-    expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(bot.id) : "";');
+    expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";');
     expect(source).toContain("...(unlandedNotice ? [unlandedNotice] : [])");
-    expect(source).toContain("void unlandedWork.refresh(bot.id);");
-    expect(source).toContain("const pinned = bot ? store.taskByThread(botId, bot.threadId)?.cwd : undefined;");
+    expect(source).toContain("void unlandedWork.refresh(bot.id, event.threadId);");
+    expect(source).toContain("await unlandedWork.refresh(bot.id, bot.threadId);");
+    expect(source).toContain("const pinned = store.taskByThread(botId, threadId)?.cwd;");
     expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
   });
 });

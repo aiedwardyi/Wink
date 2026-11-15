@@ -78,9 +78,9 @@ export function unlandedHeader(prs: readonly UnlandedPr[], now: number): string 
 }
 
 export interface UnlandedWorkDeps {
-  reports: (botId: string) => ReadonlyArray<{ kind?: string; text?: string; at?: number }>;
-  /** where gh resolves a PR the report names without its repo: the reporting task's folder */
-  repoDir: (botId: string) => string | undefined;
+  reports: (threadId: string) => ReadonlyArray<{ kind?: string; text?: string; at?: number }>;
+  /** where gh resolves a PR the report names without its repo: the folder this task pinned */
+  repoDir: (botId: string, threadId: string) => string | undefined;
   /** the installed app version; empty when unknown */
   version: string;
   gh?: MapGh;
@@ -88,9 +88,9 @@ export interface UnlandedWorkDeps {
 }
 
 export interface UnlandedWork {
-  /** The cached header, "" when none. No I/O. */
-  take(botId: string): string;
-  refresh(botId: string): Promise<void>;
+  /** The header this task's own reports built, "" when none. No I/O. */
+  take(threadId: string): string;
+  refresh(botId: string, threadId: string): Promise<void>;
 }
 
 type Lookup = { at: number; final: boolean; pr: Omit<UnlandedPr, "at"> | null };
@@ -137,10 +137,10 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
     }
   }
 
-  async function run(botId: string) {
-    const dir = deps.repoDir(botId);
+  async function run(botId: string, threadId: string) {
+    const dir = deps.repoDir(botId, threadId);
     const found = new Map<string, UnlandedPr>();
-    for (const ref of reportedPrs(deps.reports(botId))) {
+    for (const ref of reportedPrs(deps.reports(threadId))) {
       if (!ref.repo && !dir) continue;
       const key = `${ref.repo ?? dir}|${ref.number ?? ref.branch}`;
       let entry = lookups.get(key);
@@ -150,20 +150,20 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       const seen = found.get(id);
       if (!seen || ref.at < seen.at) found.set(id, { ...entry.pr, at: ref.at });
     }
-    unlanded.set(botId, [...found.values()]);
+    unlanded.set(threadId, [...found.values()]);
   }
 
-  function refresh(botId: string): Promise<void> {
-    const prior = running.get(botId);
+  function refresh(botId: string, threadId: string): Promise<void> {
+    const prior = running.get(threadId);
     if (prior) return prior;
-    const job = run(botId).catch(() => {}).finally(() => running.delete(botId));
-    running.set(botId, job);
+    const job = run(botId, threadId).catch(() => {}).finally(() => running.delete(threadId));
+    running.set(threadId, job);
     return job;
   }
 
   return {
-    take(botId) {
-      return unlandedHeader(unlanded.get(botId) ?? [], now());
+    take(threadId) {
+      return unlandedHeader(unlanded.get(threadId) ?? [], now());
     },
     refresh,
   };

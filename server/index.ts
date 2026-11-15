@@ -2861,20 +2861,16 @@ const projectNotesCheck = createProjectNotesCheck({
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
 const unlandedWork = createUnlandedWork({
-  reports: (botId) => {
-    const bot = store.bot(botId);
-    return bot ? store.messagesFor(bot.threadId) : [];
-  },
-  // the reports come from the active task, which keeps the folder it pinned; lastProjectCwd is the next task's
-  repoDir: (botId) => {
-    const bot = store.bot(botId);
-    const pinned = bot ? store.taskByThread(botId, bot.threadId)?.cwd : undefined;
-    return pinned === undefined ? bot?.cwd : pinned ?? undefined;
+  reports: (threadId) => store.messagesFor(threadId),
+  // a task keeps the folder it pinned; lastProjectCwd is the next task's
+  repoDir: (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    return pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
   },
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time, so a restart after an update has the list before the first typed turn
-void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id); })();
+void (async () => { for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId); })();
 const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
 for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
@@ -4193,7 +4189,7 @@ bus.subscribe((event: RuntimeEvent) => {
             memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
-            void unlandedWork.refresh(bot.id);
+            void unlandedWork.refresh(bot.id, event.threadId);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
@@ -5770,7 +5766,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const notesPath = opensHostFiles(privateWorkspace) ? bot.projectNotes : undefined;
         const notesNotice = notesPath ? projectNotesCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
         const memoryNotice = privateWorkspace ? memoryHealthCheck.take(bot.id, threadId, resume ? task.resumeCursors[instanceId] : undefined) : "";
-        const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(bot.id) : "";
+        const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
         const system =
