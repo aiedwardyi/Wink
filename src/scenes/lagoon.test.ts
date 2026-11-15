@@ -25,6 +25,7 @@ const run = (scene: ReturnType<typeof start>, ms: number) => {
 
 beforeEach(() => {
   now = 0;
+  uR = new Float32Array(16);
   wake.mockClear();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: () => gl });
@@ -73,6 +74,21 @@ describe("lagoon", () => {
     expect(run(scene, 20_000)).toBe(false);
     expect(now - end).toBeLessThan(8000);
     expect(live()).toBe(0);
+    scene.dispose();
+  });
+
+  it("idles between frames of a busy turn once the send ripple is gone, and plays send and reply at full rate", () => {
+    const scene = start();
+    scene.event({ name: "send", at: layer });
+    scene.event({ name: "busy" });
+    expect(run(scene, 4000)).toBe(true);
+    expect(scene.idle?.()).toBe(0);
+    expect(run(scene, 1000)).toBe(true);
+    expect(scene.idle?.()).toBe(17);
+    expect(run(scene, 10_000)).toBe(true);
+    expect(scene.idle?.()).toBe(17);
+    scene.event({ name: "reply", at: layer });
+    expect(scene.idle?.()).toBe(0);
     scene.dispose();
   });
 });

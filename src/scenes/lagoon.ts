@@ -107,6 +107,7 @@ function create(api: SceneApi) {
   let ripples: Ripple[] = [];
   let busy = false;
   let nextDrop = 0;
+  let burstUntil = -1;
 
   const gl = canvas.getContext("webgl", { alpha: false, antialias: false, preserveDrawingBuffer: false, powerPreference: "low-power" });
   const U = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
@@ -213,6 +214,8 @@ function create(api: SceneApi) {
       // flowTarget too: a first frame with no time passed has not moved flow off 0 yet.
       return flowTarget > 0 || flow > 0 || ripples.length > 0;
     },
+    // A turn can run for minutes; past the send burst its soft ripples read the same at 30 fps.
+    idle: () => (busy && api.time() >= burstUntil ? 17 : 0),
     event(event) {
       if (!ready) return;
       if (event.name === "skin") {
@@ -235,6 +238,7 @@ function create(api: SceneApi) {
         flowUntil = api.time() + 2600;
         api.wake();
       }
+      if (event.name === "send" || event.name === "reply") burstUntil = api.time() + RIPPLE_LIFE * 1000;
       if (event.name === "send") {
         const r = api.rectIn(event.at);
         ripple(r.cx, r.y + 6, 1);
