@@ -79,6 +79,21 @@ describe("plain user links", () => {
   });
 });
 
+describe("a row sent from a call", () => {
+  it.each([["user", "order"], ["user", "ask"], ["bot", "ask"]] as const)("gives a %s %s row the footer of any other row", async (role, tag) => {
+    const id = "c-0123456789ab";
+    const current = bot([
+      { id: "plain", at: 1, role, kind: "text", text: "Fix the login bug." },
+      { id: "voice", at: 2, role: "bot", kind: "text", text: "Sending it.", call: { id, voice: true } },
+      { id: "sent", at: 3, role, kind: "text", text: "Fix the login bug.", call: { id, [tag]: true } },
+    ]);
+    const host = await mount([current], [], createElement(ChatView, { bot: current }));
+    const time = (mid: string) => host.querySelector(`[data-mid="${mid}"] button.tabular-nums`)!;
+    expect(host.querySelector('[data-mid="sent"] svg.lucide-phone')).toBeNull();
+    expect(time("sent").parentElement!.className).toBe(time("plain").parentElement!.className);
+  });
+});
+
 describe("a question that is only choices", () => {
   it("draws no empty bubble above the chips in a chat", async () => {
     const current = bot([question("q1", "Which one?\n- Red\n- Blue")]);
