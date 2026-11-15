@@ -443,6 +443,22 @@ describe("This PC", () => {
     vi.unstubAllGlobals();
   });
 
+  it("signing in waits for Google, then says why it failed in plain words", async () => {
+    let finish: (value: { ok: false; error: string }) => void = () => {};
+    const signIn = vi.fn(() => new Promise<{ ok: false; error: string }>((resolve) => (finish = resolve)));
+    vi.stubGlobal("ogb", { googleAccount: { signIn, cancel: vi.fn(), signOut: vi.fn() } });
+    serve({ "GET /api/phone-relay/status": () => status({ enabled: false, state: "off", host: null }), "GET /api/google-account": () => ({ state: "signed-out" }) });
+    const { host, root } = await renderView();
+    await act(async () => click(button(host, "Sign In")));
+    expect(host.textContent).toContain("Waiting for Google…");
+    expect(button(host, "Sign In").disabled).toBe(false);
+    await act(async () => finish({ ok: false, error: "drive-permission-missing" }));
+    expect(host.textContent).not.toContain("Waiting for Google…");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tick the Google Drive box on Google's page, then sign in again.");
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  });
+
   it("keeps the switch off for an account the relay does not take", async () => {
     serve({ "GET /api/phone-relay/status": () => status({ available: false, configured: false, enabled: false, state: "off", host: null }), "GET /api/google-account": signedIn });
     const { host, root } = await renderView();

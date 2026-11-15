@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Check, Download, Loader2 } from "lucide-react";
+import { Check, Download } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
 import { baseInstances } from "@/lib/cross-model-picker";
@@ -18,7 +18,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   instances: InstanceInfo[];
   onRefresh: () => void | Promise<void>;
   recheckOnFocus?: boolean;
-  footer?: { back: () => void; open: () => void; label?: MessageKey; disabled?: boolean };
+  footer?: { back: () => void; open: () => void; label?: MessageKey; disabled?: boolean; skip?: () => void };
 }) {
   const { t } = useI18n();
   const canInstall = Boolean(window.ogb?.openEngineInstall);
@@ -71,17 +71,17 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
     const paste = working && opened[instance.instanceId];
     const label = checking ? t("engines.checking") : ready ? t("engineConnect.ready", { name: instance.displayName })
       : installed ? t("engineConnect.signIn", { name: instance.displayName })
-        : paste ? t("engine.terminalOpened")
-          : working ? t("engineConnect.installing", { name: instance.displayName })
-            : failed ? t("engineConnect.tryAgain")
-              : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
+        : working ? t("engineConnect.openAgain")
+          : failed ? t("engineConnect.tryAgain")
+            : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
     const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
     const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={label} buttonClassName={buttonClassName}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
-      : <button type="button" disabled={Boolean(ready || checking || working || busy[instance.instanceId])}
+      // Launchers report spawn, not the window's end, so an open window never locks the button.
+      : <button type="button" disabled={Boolean(ready || checking || busy[instance.instanceId])}
       onClick={() => void install(instance)} className={buttonClassName}>
-      {ready || paste ? <Check size={14} /> : working ? <Loader2 size={14} className="animate-spin" /> : recommended && !checking ? <Download size={14} /> : null}
+      {ready ? <Check size={14} /> : recommended && !checking && !working ? <Download size={14} /> : null}
       {label}
     </button>;
     return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
@@ -113,11 +113,14 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
         </div>
       </Fold>
     </div>
-    <div className="mt-4 flex shrink-0 items-center justify-between gap-1">
+    <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-1">
       {footer && <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>}
       <button type="button" aria-expanded={commands} aria-controls={commandsId} onClick={() => setCommands((current) => !current)}
         className="rounded-xl px-3 py-2.5 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink">{t("engineConnect.commands")}</button>
-      {footer && <button type="button" data-engine-connect-primary onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>}
+      {footer && <div className="flex items-center gap-1">
+        {footer.skip && <button type="button" onClick={footer.skip} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.openOrbit")}</button>}
+        <button type="button" data-engine-connect-primary onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>
+      </div>}
     </div>
   </div>;
 }

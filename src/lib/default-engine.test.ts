@@ -66,6 +66,15 @@ describe("defaultModelSelection", () => {
     expect(defaultModelSelection([opusDefault, engine("other")])?.instanceId).toBe("other");
   });
 
+  it("lands on a signed-in engine ahead of a signed-out one", () => {
+    const claude = engine("claude", { snapshot: { state: "available", authenticated: false } });
+    const codex = engine("codex", { snapshot: { state: "available", authenticated: true } });
+    expect(defaultModelSelection([claude, codex])?.instanceId).toBe("codex");
+    const spent = { ...codex, rateLimits: { windows: [{ id: "five_hour", usedPercent: 100, resetsAt: null }], observedAt: new Date(0).toISOString() } };
+    expect(defaultModelSelection([claude, spent])?.instanceId).toBe("codex");
+    expect(defaultModelSelection([claude])?.instanceId).toBe("claude");
+  });
+
   it("treats a past reset as usable again", () => {
     const reset = engine("reset", {
       rateLimits: {
