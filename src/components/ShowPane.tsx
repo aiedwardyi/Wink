@@ -65,7 +65,9 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     else if (next.tab === "map" && source) showMap(source.threadId);
     else if (next.tab === "check") openCheck();
   };
-  const swipe = usePaneSwipe(ref, phone && !hidden && !closing, tab, tabs, choose, closePane, source?.threadId ?? watch?.threadId ?? item?.threadId);
+  const contentId = tab === "show" && item ? JSON.stringify([item.threadId, item.path, item.src])
+    : tab === "check" && watch ? JSON.stringify([watch.threadId, watch.card.runId, watch.live]) : undefined;
+  const swipe = usePaneSwipe(ref, phone && !hidden && !closing, tab, tabs, choose, closePane, source?.threadId ?? watch?.threadId ?? item?.threadId, contentId);
   const marked = swipe.highlight ?? tab;
   const preview = phone ? swipe.preview : null;
   const shownItem = item ?? (preview?.tab === "show" ? again : undefined);

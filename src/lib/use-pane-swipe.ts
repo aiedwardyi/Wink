@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { MediaKind } from "./media-index";
 import { dragOffset, hapticTick, lockAxis, neighborId, reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING, swipeBlocked, swipeStep, type SwipeAxis, type SwipeStep } from "./phone-swipe";
 
@@ -17,7 +17,7 @@ export function paneSwipeTarget(tabs: readonly PaneTab[], tab: PaneTab, step: Sw
     if (step === -1 && kind === "files") return { tab, kind: "photos" };
   }
   const id = neighborId(tabs, tab, step);
-  const next = tabs.find(tab => tab === id);
+  const next = tabs.find(candidate => candidate === id);
   return next ? { tab: next } : null;
 }
 
@@ -34,6 +34,7 @@ export function usePaneSwipe(
   choose: (next: PaneSwipeTarget) => void,
   close: () => void,
   threadId?: string,
+  contentId?: string,
 ) {
   const [preview, setPreview] = useState<PaneSwipeTarget | null>(null);
   const [highlight, setHighlight] = useState<PaneTab | null>(null);
@@ -61,9 +62,13 @@ export function usePaneSwipe(
     paint(drag);
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const panel = ref.current;
     if (!panel || !enabled) return;
+    if (panel.hasAttribute("data-pane-dismissed")) {
+      for (const key of ["transform", "transition", "will-change"]) panel.style.removeProperty(key);
+      delete panel.dataset.paneDismissed;
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settling = false;
     let dismissed = false;
@@ -176,7 +181,7 @@ export function usePaneSwipe(
       panel.removeEventListener("touchcancel", cancel);
       if (!dismissed) reset();
     };
-  }, [ref, enabled, tab, order, threadId]);
+  }, [ref, enabled, tab, order, threadId, contentId]);
 
   return { preview, highlight };
 }

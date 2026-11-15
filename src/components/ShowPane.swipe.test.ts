@@ -94,6 +94,19 @@ it("closes toward the right only from the first available tab", async () => {
   expect(document.querySelector(".show-pane")).toBeNull();
 });
 
+it("keeps a replacement file open when the old file was being dismissed", async () => {
+  const target = current();
+  await act(async () => {
+    touch("touchstart", 30, 200, target);
+    touch("touchmove", 350, 200, target);
+    touch("touchend", 350, 200, target);
+  });
+  await act(async () => showItem({ ...shown, path: "C:\\test\\replacement.png" }));
+  await act(async () => vi.advanceTimersByTime(SWIPE_MOTION_MS));
+  expect(document.querySelector(".show-pane")).not.toBeNull();
+  expect(document.querySelector(".show-frame-name")?.textContent).toBe("replacement.png");
+});
+
 it("lets Map own content starts and pages from the pane header", async () => {
   await act(async () => { await import("./MapPane"); showMap(source.threadId); });
   const map = pane().querySelector(".map-pane")!;

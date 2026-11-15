@@ -294,6 +294,20 @@ describe("pane swipe", () => {
     expect(choose).not.toHaveBeenCalled();
   });
 
+  it("restores a pane reopened during its dismissal exit", async () => {
+    await render();
+    touch("touchstart", 30);
+    touch("touchmove", 350);
+    touch("touchend", 350);
+    await settle();
+    expect(close).toHaveBeenCalledOnce();
+    await render({ closing: true });
+    expect(panel().style.transform).not.toBe("");
+    await render({ closing: false });
+    expect(panel().style.transform).toBe("");
+    expect(panel().hasAttribute("data-pane-dismissed")).toBe(false);
+  });
+
   it("cancels a pending switch when another chat owns the pane", async () => {
     await render();
     touch("touchstart", 350);
