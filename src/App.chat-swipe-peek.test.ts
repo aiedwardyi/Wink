@@ -15,7 +15,7 @@ vi.mock("@/components/ChatView", () => ({
   ChatView: ({ bot }: { bot: Bot }) => createElement("main", { "data-test-chat": bot.id },
     createElement("h1", null, bot.name),
     ...bot.messages.map((message) => createElement("p", { key: message.id }, message.text)),
-    createElement(ChatPeekPart, { part: "composer" }, createElement("footer")),
+    createElement(ChatPeekPart, { part: "composer", children: createElement("footer") }),
   ),
 }));
 vi.mock("@/components/GroupView", () => ({

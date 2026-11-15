@@ -279,10 +279,10 @@ describe("staged chat peek", () => {
   });
   const mids = () => [...host.querySelectorAll("[data-mid]")].map((node) => node.getAttribute("data-mid"));
   const stage = (kind: "bot" | "room" | "people", preview: boolean) => act(async () => root.render(createElement(StoreProvider, null,
-    createElement(ChatPeekParts, { id: kind, preview }, createElement(ChatPreviewContext.Provider, { value: preview },
+    createElement(ChatPeekParts, { id: kind, preview, children: createElement(ChatPreviewContext.Provider, { value: preview },
       kind === "bot" ? createElement(ChatView, { bot: heavyBot, focusComposerBlocked: preview })
         : kind === "room" ? createElement(GroupView, { group: heavyRoom })
-        : createElement(TeamRoomTranscript, { lines: heavyLines, mine: () => false, base: "/api/rooms/peek-lines", label: "People", onReply: () => {} }))),
+        : createElement(TeamRoomTranscript, { lines: heavyLines, mine: () => false, base: "/api/rooms/peek-lines", label: "People", onReply: () => {} })) }),
   )));
 
   it.each(["bot", "room", "people"] as const)("mounts a peeked %s newest row first and keeps it through promotion", async (kind) => {
