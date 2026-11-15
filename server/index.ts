@@ -6349,9 +6349,10 @@ function resolveAndSendRoutine(
 // explicitly @mentions members. Responders run SEQUENTIALLY (one speaker at
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with bounded room context. A member's reply may @mention
-// teammates; those get one chained turn (hop 1), never deeper.
+// teammates, who answer in turn; each tagger-to-tagged pair runs once per user message.
 const groupQueues = new Map<string, Promise<void>>();
-const MAX_GROUP_HOPS = 1;
+// shares the spoken set; a bot id never holds this separator
+const chainEdge = (from: string, to: string) => `${from}>${to}`;
 
 // Same memory-only wait as 1:1 steer-queue while the room remains active.
 // Group Stop drops this queued participation before it can drain later.
@@ -6371,6 +6372,7 @@ function queueBusyRoomMember(
   queueRoomParticipation(bot.id, threadId, {
     groupId,
     hop,
+    spoken,
     rootId: rootId ?? undefined,
     cardContinuation,
     onDispatchError,
@@ -7016,14 +7018,15 @@ async function runClaimedGroupMemberTurn(
     drainSecretResumes();
   }
 
-  // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain
+  if (!isCancelled?.() && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
-      if (spoken.has(next.id)) continue;
+      if (spoken.has(chainEdge(bot.id, next.id))) continue;
+      spoken.add(chainEdge(bot.id, next.id));
       if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
         return false;
       }

@@ -149,9 +149,8 @@ it.each(["folded", "queued"])("adopts every human at the production %s fold and 
   turnRegistry.settle("fold-turn");
 });
 
-it("keeps depth and room-hop caps and wires captured roots into every busy room path", () => {
+it("keeps the comms depth cap and wires captured roots into every busy room path", () => {
   expect(source.text).toContain("const MAX_COMMS_DEPTH = 1;");
-  expect(source.text).toContain("const MAX_GROUP_HOPS = 1;");
   const busy = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "queueBusyRoomMember");
   expect(busy).toHaveLength(3);
   for (const call of busy) expect(call.arguments.slice(-2).map((arg) => arg.getText(source))).toEqual(["rootId", "authority"]);
