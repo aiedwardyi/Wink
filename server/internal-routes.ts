@@ -489,7 +489,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
-        return json(res, 400, { error: "needs a prompt (max 4000 chars) and a supported size and quality" });
+        return json(res, 400, { error: "needs a prompt and a supported size and quality" });
       }
       const roots = botOutputRoots(from, fromThreadId, owner.group?.id);
       let generated: Awaited<ReturnType<typeof generateImageFile>>;
