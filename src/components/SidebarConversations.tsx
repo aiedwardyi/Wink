@@ -328,7 +328,11 @@ function BotListItem({
   const terminalCopy = terminalAttention ? terminalAttentionCopy(terminalAttention.reason, locale) : null;
   const paneLabels = state.terminalPanes[bot.id];
   const workerStatus = useMemo(() => sidebarWorkerStatus(visible, paneLabels ?? [], t), [visible, paneLabels, t]);
-  const elsewhere = turnElsewhere(bot, state.groups, state.routineRuns, useLoadedJoinedRooms());
+  const joinedRooms = useLoadedJoinedRooms();
+  const elsewhere = useMemo(
+    () => turnElsewhere(bot, state.groups, state.routineRuns, joinedRooms),
+    [bot, state.groups, state.routineRuns, joinedRooms],
+  );
   const question = chatNeedsYou(bot.messages);
   const asking = question || routineRinging(state.routineRuns, bot.threadId, bot.tasks);
   const unreadCount = useMemo(() => unreadReplyCount(bot.unread, bot.readAt, visible), [bot.unread, bot.readAt, visible]);
