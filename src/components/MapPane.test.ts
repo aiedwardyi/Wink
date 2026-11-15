@@ -637,6 +637,31 @@ it("keeps the last tree and diff up, with no loading line, while a picked worker
   expect(host.querySelector(".map-where")?.textContent).toContain("repo-b");
 });
 
+it("marks the held diff busy when the picked worker edits the same path, until that worker's own diff lands", async () => {
+  const pending: (() => void)[] = [];
+  vi.mocked(fetch).mockImplementation(async url => {
+    const query = new URL(String(url), "http://test").searchParams;
+    if (query.get("worker") === "b" && query.get("path")) await new Promise<void>(done => pending.push(done));
+    return query.get("path") ? Response.json({ lines: [{ kind: "add", text: `edit by ${query.get("worker")}`, line: 1 }] }) : Response.json(repo);
+  });
+  const rows = () => [...host.querySelectorAll(".map-code-row code")].map(row => row.textContent);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0], { ...workers[1], path: "src/a.ts", files: [{ path: "src/a.ts", added: 1, removed: 0 }] }]);
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(2)');
+  expect(rows()).toEqual(["edit by a"]);
+  expect(host.querySelector(".map-code")?.getAttribute("aria-busy")).toBe("false");
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(3)');
+  expect(host.querySelector(".map-worker")?.textContent).toBe("BETA");
+  expect(host.querySelector(".map-crumbs")?.textContent).toContain("a.ts");
+  expect(rows()).toEqual(["edit by a"]);
+  expect(host.querySelector(".map-code")?.getAttribute("aria-busy")).toBe("true");
+  await act(async () => { for (const done of pending.splice(0)) done(); });
+  expect(rows()).toEqual(["edit by b"]);
+  expect(host.querySelector(".map-code")?.getAttribute("aria-busy")).toBe("false");
+});
+
 it("pins the summary line so a short tree box cannot scroll it away", () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
   expect(css).toContain(".map-where { position: sticky; top: -10px;");

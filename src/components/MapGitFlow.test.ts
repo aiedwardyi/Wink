@@ -115,6 +115,8 @@ it("opens the PR, its checks and its files from their own stops, and nothing fro
   expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: `${url}/files`, merge: url });
   expect(host.querySelectorAll(".map-flow-rows a[href]:not([target='_blank'])")).toHaveLength(0);
   expect(open.tagName).toBe("DIV");
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("tabindex")]))).toEqual({ code: "0", commit: "0", push: "0", pr: null, checks: null, review: null, merge: null });
+  expect([...bare.querySelectorAll<HTMLElement>("[data-k]")].map(stop => stop.getAttribute("tabindex"))).toEqual(Array(7).fill("0"));
   expect(bare.querySelectorAll("[data-k]")).toHaveLength(7);
   expect(bare.querySelector("[href]")).toBeNull();
   expect(readFileSync("src/components/MapGitFlow.css", "utf8")).not.toMatch(/cursor: pointer/);

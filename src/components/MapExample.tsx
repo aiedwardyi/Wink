@@ -24,7 +24,7 @@ export function MapExample({ labels, active }: { labels: ComponentProps<typeof M
   const c = copy[locale];
   const [turn, setTurn] = useState(0);
   useEffect(() => {
-    if (!active || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (!active || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
     const timer = setInterval(() => setTurn(turn => turn + 1), EVERY);
     return () => clearInterval(timer);
   }, [active]);

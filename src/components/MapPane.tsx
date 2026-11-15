@@ -26,7 +26,7 @@ const EMPTY: MapSnapshot = { workers: [] };
 const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: null };
 type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
-const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
+const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
 const fade = (part?: Element | null) => ease(part, [{ opacity: 0.5 }, { opacity: 1 }]);
 
 export function MapPane({ botId, maximized = false, active = true }: { botId?: string; maximized?: boolean; active?: boolean }) {
@@ -35,7 +35,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
   const [selection, setSelection] = useState<MapSelection>(INITIAL);
   const [menu, setMenu] = useState(false);
-  const [diff, setDiff] = useState<{ worker: string; path: string; whole: boolean; data: MapDiff; step?: Step; full?: MapDiff; opened?: number[]; held?: boolean } | null>(null);
+  const [diff, setDiff] = useState<{ worker: string; path: string; whole: boolean; data: MapDiff; step?: Step; full?: MapDiff; opened?: number[] } | null>(null);
   const [whole, setWhole] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const cache = useRef({ key: "", diffs: new Map<string, MapDiff>() });
@@ -58,8 +58,6 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const chosen = mapFollow(selection, snapshot.workers);
   const worker = snapshot.workers.find(worker => worker.id === chosen.worker);
   const files = worker?.files ?? [];
-  // A worker switch keeps the last diff and tree up until the new ones land.
-  if (diff && worker?.git && chosen.path && diff.worker !== worker.id) setDiff({ ...diff, worker: worker.id, held: true });
   const team = !chosen.pinned && snapshot.workers.length > 1;
   const onTree = useMemo(() => team ? snapshot.workers : worker ? [worker] : [], [team, snapshot.workers, worker]);
   const changed = useMemo(() => new Set(onTree.flatMap(worker => worker.files.map(file => file.path))), [onTree]);
@@ -68,6 +66,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const repoWorker = team ? snapshot.workers[0]?.id : worker?.id;
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
   const lost = !paths && !!repoWorker && repoFailed === repoWorker;
+  // A worker switch keeps the last tree up until the new one lands.
   if (repo && repoWorker && (repoFailed === repoWorker ? repo.held : repo.worker !== repoWorker)) setRepo(repoFailed === repoWorker ? null : { ...repo, worker: repoWorker, held: true });
   const known = useMemo(() => new Set(paths), [paths]);
   const extra = changedKey ? changedKey.split("\0").filter(path => !known.has(path)) : [];
@@ -147,19 +146,21 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
   }, [menu]);
 
-  const loaded = !failed && diff?.worker === worker?.id ? diff : null;
+  // A worker switch keeps the last diff up, still tagged with its own worker, until the new one lands.
+  const held = !!diff && !!worker?.git && !!chosen.path && diff.worker !== worker.id;
+  const loaded = !failed && diff && (held || diff.worker === worker?.id) ? diff : null;
   const shown = loaded ? loaded.path : chosen.path;
   const fills = expanded && !!shown && !!worker?.git && files.length > 0;
   useLayoutEffect(() => {
     const code = codeRef.current;
-    const key = loaded && !loaded.held ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
+    const key = loaded && !held ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
     if (!code || scrolled.current.code === code && scrolled.current.key === key) return;
     scrolled.current = { code, key };
     if (!key) return;
     fade(code);
     const row = code.querySelector<HTMLElement>('.map-code-row:not([data-kind="context"])');
     code.scrollTop = row ? code.scrollTop + row.getBoundingClientRect().top - code.getBoundingClientRect().top - code.clientHeight / 4 : 0;
-  }, [loaded]);
+  }, [loaded, held]);
   // The code view slides from where it was (expand, collapse, worker switch) instead of laying out every frame.
   const barRef = useRef<HTMLDivElement>(null);
   const slid = useRef<number | null>(null);
@@ -173,12 +174,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     const from = slid.current;
     const to = barRef.current?.getBoundingClientRect().top;
     if (from === null || to === undefined) return;
-    slid.current = repo?.held || loaded?.held ? to : null;
+    slid.current = repo?.held || held ? to : null;
     if (from !== to) for (let part: Element | null = barRef.current; part; part = part.nextElementSibling) ease(part, [{ transform: `translateY(${from - to}px)` }, { transform: "none" }]);
   });
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
-    if (!base || !loaded || loaded.held) return;
+    if (!base || !loaded || held) return;
     const { worker: id, path, data } = loaded;
     const diffs = cache.current.diffs;
     const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
@@ -247,7 +248,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
           {step && step.editedAt > 0 && <time dateTime={new Date(step.editedAt).toISOString()}>{clock(step.editedAt)}</time>}
           {step?.reason && <p>{shown}</p>}
         </div>}
-        <div ref={codeRef} className="map-code" aria-busy={!failed && (loaded?.path !== chosen.path || loaded.whole !== whole)}>
+        <div ref={codeRef} className="map-code" aria-busy={!failed && (held || loaded?.path !== chosen.path || loaded.whole !== whole)}>
           {failed || connectionFailed || snapshot.error ? <p className="map-empty" role="status">{c.failed} <button type="button" onClick={() => setRetry(retry + 1)}>{c.retry}</button></p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
             {loaded.data.lines.map((line, index) => {
               if (line.kind !== "fold") return codeRow(line, index);

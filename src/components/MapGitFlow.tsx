@@ -172,7 +172,7 @@ export function MapGitFlow({ base, workers, slots, worker, all, active }: { base
     onContextMenu: (event: React.MouseEvent) => { if (press.current.held) event.preventDefault(); },
     onClick: (event: React.MouseEvent) => { if (press.current.held) { event.preventDefault(); press.current.held = false; } },
   });
-  const link = (url: string | undefined) => url ? { href: url, target: "_blank", rel: "noreferrer" } : undefined;
+  const link = (url: string | undefined) => url ? { href: url, target: "_blank", rel: "noreferrer" } : { tabIndex: 0 };
 
   const rows = shown.flatMap(item => flows[item.id] ? [{ item, flow: flows[item.id] }] : [])
     .toSorted((a, b) => Number(failing(b.flow)) - Number(failing(a.flow)));
