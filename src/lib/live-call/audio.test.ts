@@ -214,7 +214,7 @@ describe("CallAudio", () => {
     grant({ getTracks: () => [next], getAudioTracks: () => [next] });
     await expect(healing).resolves.toBe(true);
     expect(output.play).toHaveBeenCalledOnce();
-    expect(getUserMedia.mock.invocationCallOrder[1]).toBeLessThan(output.play.mock.invocationCallOrder[0]!);
+    expect(getUserMedia.mock.invocationCallOrder.at(-1)).toBeLessThan(output.play.mock.invocationCallOrder[0]!);
     audio.close();
   });
 

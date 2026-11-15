@@ -61,7 +61,7 @@ export class CallAudio {
     await this.speak(this.stream);
   }
 
-  // Android gives a stream call or media volume once, as it opens, by whether a mic is open then; the side keys follow the mic.
+  // Takes the open mic as proof: Android gives a stream call or media volume once, as it opens, by whether a mic is open then; the side keys follow the mic.
   private speak(_mic: MediaStream) {
     if (this.output.srcObject !== this.destination.stream) this.output.srcObject = this.destination.stream;
     return this.output.play();
