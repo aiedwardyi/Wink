@@ -715,17 +715,15 @@ const turn = (engine: FakeEngine, heard: string, said: string) => {
   engine.events.turnDone();
 };
 describe("VOICE-SNAGS", () => {
-  it("an interruption with no speech heard lets the received reply play out", async () => {
+  it("an interruption with no speech heard yet still cuts the received reply at once", async () => {
     const audio = fakeAudio();
     const { engine, posts } = await started({}, audio);
     audio.onStart();
     (audio as { playing: boolean }).playing = true;
     engine().events.said("This is a long answer");
     engine().events.interrupted();
-    expect(audio.flushed).toBe(0);
-    expect(posts.filter((p) => p.path.endsWith("/call/lines")).at(-1)?.body.lines[0].text).toBe("This is a long answer");
-    engine().events.heard("Stop.");
     expect(audio.flushed).toBe(1);
+    expect(posts.filter((p) => p.path.endsWith("/call/lines")).at(-1)?.body.lines[0].text).toBe("This is a l…");
   });
 
   it("a spoken yes under an open card counts once speech settles, with no model turn", async () => {
@@ -880,7 +878,7 @@ describe("VOICE-SEND: dropped orders (D1-D7)", () => {
     expect(nudges(engine())).toHaveLength(1);
   });
 
-  it("D3 a yes said over the offer still sends after a talk-over cancel, told as a [Wink] line", async () => {
+  it("D3 a yes said over the offer still sends after a talk-over cancel, told as a [Wink] line when the voice said nothing since", async () => {
     const { call, engine, posts } = await started({ "/messages": { status: 202, data: { ok: true } } });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Open the Orbit folder." } }]);
     engine().events.toolCancel(["t1"]);
@@ -2292,7 +2290,7 @@ describe("VOICE-HUSH: be quiet", () => {
     return audio;
   }
   const ROOM = {
-    ko: { hush: "잠깐만, 조용해.", talk: ["네, 지금 이 새로운 방에 인바이트 할게요.", "Baji Kitchen", "네.", "그걸 딱 클릭하면은 아무 변화가 없어.", "Peter는 뭐예요?", "이거 뺄 거예요. 없애 버려.", "응, 그렇게 해서 해도 돼요."], wake: "헤이, 들려?" },
+    ko: { hush: "잠깐만, 조용해.", talk: ["네, 지금 이 새로운 방에 인바이트 할게요.", "Baji Kitchen", "네.", "그걸 딱 클릭하면은 아무 변화가 없어.", "Peter는 뭐예요?", "이거 뺄 거예요. 없애 버려.", "응, 그렇게 해서 해도 돼요."], wake: "Nova야, 들려?" },
     en: { hush: "Hold on, be quiet.", talk: ["Yeah, so this is the new room.", "Baji Kitchen", "Yes.", "What is Peter?", "Can you remove the dictation button?", "Okay, do it.", "Sure, sounds good."], wake: "Nova, you there?" },
   };
 
@@ -2337,7 +2335,7 @@ describe("VOICE-HUSH: be quiet", () => {
     expect(e.texts.slice(told)).toEqual([expect.stringMatching(/^\[Wink\] Nova asks:/)]);
   });
 
-  it("a tap wakes it, and naming it in the hush line does not", async () => {
+  it("a tap wakes it for the next turn, and naming it in the hush line does not", async () => {
     const audio = speaker();
     const { call, engine } = await started({}, audio);
     engine().events.heard("Nova, stop talking.");
@@ -2348,16 +2346,20 @@ describe("VOICE-HUSH: be quiet", () => {
     call.wake();
     expect(call.state().hushed).toBeUndefined();
     engine().events.audio(pcm);
+    engine().events.turnDone();
+    expect(audio.played).toBe(0);
+    engine().events.answering();
+    engine().events.audio(pcm);
     expect(audio.played).toBe(1);
   });
 
   it("hushes on a command, not on talk about quiet, and wakes on the whole name", () => {
     for (const line of ["잠깐만, 조용해.", "조용히 좀 해줘", "말하지 마세요", "쉿!", "Be quiet.", "Hold on, be quiet.", "Can you stop talking?", "Okay just shut up"]) expect([line, asksForQuiet(line)]).toEqual([line, true]);
     for (const line of ["Can you make the app stop talking when I mute it?", "Do not stop talking", "조용히 말해줘", "조용한 카페 찾아줘", "He told me to be quiet"]) expect([line, asksForQuiet(line)]).toEqual([line, false]);
-    expect(["Nova, you there?", "노바야", "Hey"].map((h) => callsVoice(h, h === "노바야" ? "노바" : "Nova"))).toEqual([true, true, true]);
-    expect(["That's an innovation", "Novas are bright", "Novak said"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false]);
-    expect(callsVoice("Ask R2.D2 now", "R2.D2")).toBe(true);
-    expect(callsVoice("Ask R2xD2 now", "R2.D2")).toBe(false);
+    expect(["Nova, you there?", "노바야", "Hey Nova."].map((h) => callsVoice(h, h === "노바야" ? "노바" : "Nova"))).toEqual([true, true, true]);
+    expect(["Hey", "That's an innovation", "Novas are bright", "Novak said", "Ask Nova now"].map((h) => callsVoice(h, "Nova"))).toEqual([false, false, false, false, false]);
+    expect(callsVoice("R2.D2?", "R2.D2")).toBe(true);
+    expect(callsVoice("R2xD2?", "R2.D2")).toBe(false);
   });
 
   it("hushes only when the quiet phrase is the whole line", () => {
