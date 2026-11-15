@@ -62,7 +62,7 @@ describe("unlandedHeader", () => {
 
   it("lists oldest first, marks merged ones and caps at eight", () => {
     expect(unlandedHeader([pr(12, 18), pr(13, 72, "merged, not released"), pr(14, 0.5, "draft")], NOW)).toBe(
-      "[Wink unlanded - 3 PRs not in the user's build: #13 fix: change number 13 (3d, merged, not released); #12 fix: change number 12 (18h); #14 fix: change number 14 (<1h, draft). Before saying fixed or asking them to test, check it is merged and released.]",
+      "[Wink unlanded - 3 PRs in aiedwardyi/wink not in the user's build: #13 fix: change number 13 (3d, merged, not released); #12 fix: change number 12 (18h); #14 fix: change number 14 (<1h, draft). Before saying fixed or asking them to test, check it is merged and released.]",
     );
     const many = unlandedHeader(Array.from({ length: 11 }, (_, index) => pr(100 + index, 30 - index)), NOW);
     expect(many.match(/#1\d\d /g)).toHaveLength(8);
@@ -70,8 +70,10 @@ describe("unlandedHeader", () => {
     expect(many).toContain("; +3 more.");
   });
 
-  it("names the repo once PRs span more than one", () => {
-    expect(unlandedHeader([pr(1, 2), { ...pr(2, 1), repo: "me/site" }], NOW)).toContain("wink#1 fix: change number 1 (2h); site#2");
+  it("names the one repo, or each PR's owner/repo once they span more than one", () => {
+    expect(unlandedHeader([{ ...pr(7, 2), repo: "me/site" }], NOW)).toContain("1 PR in me/site not in the user's build: #7 fix: change number 7 (2h).");
+    expect(unlandedHeader([pr(1, 2), { ...pr(2, 1), repo: "me/site" }], NOW)).toContain("2 PRs not in the user's build: aiedwardyi/wink#1 fix: change number 1 (2h); me/site#2");
+    expect(unlandedHeader([{ ...pr(1, 2), repo: "alice/site" }, { ...pr(2, 1), repo: "bob/site" }], NOW)).toContain("alice/site#1 fix: change number 1 (2h); bob/site#2");
   });
 
   it("stays small", () => {
@@ -79,8 +81,10 @@ describe("unlandedHeader", () => {
       ({ ...pr(1600 + index, 40 - index, index % 2 ? "merged, not in your build" : "open"), title: "fix: close list and field menus only when their own list scrolls" }));
     const typical = tokens(unlandedHeader(list(3), NOW));
     const max = tokens(unlandedHeader(list(30), NOW));
-    expect(typical).toBeLessThanOrEqual(110);
+    const mixed = tokens(unlandedHeader(list(30).map((item, index) => ({ ...item, repo: index % 2 ? "aiedwardyi/wink" : "aiedwardyi/wink-site" })), NOW));
+    expect(typical).toBeLessThanOrEqual(120);
     expect(max).toBeLessThanOrEqual(240);
+    expect(mixed).toBeLessThanOrEqual(290);
   });
 });
 
@@ -108,7 +112,7 @@ describe("createUnlandedWork", () => {
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1", "t-a");
     expect(work.take("t-a")).toBe(
-      "[Wink unlanded - 3 PRs not in the user's build: wink#1642 feat: merged after the installed tag (20h, merged, not in your build); wink#1640 fix: tell bots what has not landed (18h); site#7 fix: other repo (5h, merged, not released). Before saying fixed or asking them to test, check it is merged and released.]",
+      "[Wink unlanded - 3 PRs not in the user's build: aiedwardyi/wink#1642 feat: merged after the installed tag (20h, merged, not in your build); aiedwardyi/wink#1640 fix: tell bots what has not landed (18h); me/site#7 fix: other repo (5h, merged, not released). Before saying fixed or asking them to test, check it is merged and released.]",
     );
   });
 
@@ -202,6 +206,31 @@ describe("createUnlandedWork", () => {
     expect(work.take("t-b")).not.toContain("#1640");
     expect(work.take("t-a")).not.toContain("#1642");
     expect(calls.map((args, index) => [args[0], args[2], cwds[index]]).filter(([kind]) => kind === "pr")).toEqual([["pr", "1640", "D:/repo-a"], ["pr", "1642", "D:/repo-b"]]);
+  });
+
+  it("keeps the repo of a PR reported from outside the task's folder", async () => {
+    const { gh } = fakeGh(views(), compare());
+    const work = createUnlandedWork({ reports: () => messages.slice(4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    await work.refresh("bot-1", "t-a");
+    expect(work.take("t-a")).toContain("1 PR in me/site not in the user's build: #7 fix: other repo");
+  });
+
+  it("runs again for a report that lands while a refresh waits on gh", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((done) => { release = done; });
+    const { gh: fast, calls } = fakeGh(views(), compare());
+    const gh = async (cwd: string, args: string[]) => { if (args[2] === "1640") await gate; return fast(cwd, args); };
+    const reports = [report(NOW - 18 * HOUR, "PR 1640")];
+    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const first = work.refresh("bot-1", "t-a");
+    reports.push(report(NOW - HOUR, "PR 1642"));
+    const second = work.refresh("bot-1", "t-a");
+    release();
+    await first;
+    await second;
+    expect(calls.filter((args) => args[0] === "pr").map((args) => args[2])).toEqual(["1640", "1642"]);
+    expect(work.take("t-a")).toContain("#1642 feat: merged after the installed tag");
+    expect(work.take("t-a")).toContain("#1640 fix: tell bots what has not landed");
   });
 
   it("reads only the cache on take, so a send starts no gh", async () => {

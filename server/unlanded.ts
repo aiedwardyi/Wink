@@ -67,14 +67,16 @@ const clip = (text: string) => {
 export function unlandedHeader(prs: readonly UnlandedPr[], now: number): string {
   if (!prs.length) return "";
   const ordered = prs.toSorted((left, right) => left.at - right.at);
-  const repos = new Set(prs.map((pr) => pr.repo)).size > 1;
+  // the full owner/repo, so a bot never resolves the number against its own folder's repo
+  const repos = new Set(prs.map((pr) => pr.repo));
+  const only = repos.size === 1 ? prs[0]!.repo : "";
   const items = ordered.slice(0, SHOWN).map((pr) => {
-    const id = `${repos ? pr.repo.split("/")[1] : ""}#${pr.number}`;
+    const id = `${only ? "" : pr.repo}#${pr.number}`;
     return `${id} ${clip(pr.title)} (${age(now - pr.at)}${pr.state === "open" ? "" : `, ${pr.state}`})`;
   });
   const more = ordered.length > SHOWN ? `; +${ordered.length - SHOWN} more` : "";
   const count = prs.length === 1 ? "1 PR" : `${prs.length} PRs`;
-  return `[Wink unlanded - ${count} not in the user's build: ${items.join("; ")}${more}. Before saying fixed or asking them to test, check it is merged and released.]`;
+  return `[Wink unlanded - ${count}${only ? ` in ${only}` : ""} not in the user's build: ${items.join("; ")}${more}. Before saying fixed or asking them to test, check it is merged and released.]`;
 }
 
 export interface UnlandedWorkDeps {
@@ -101,6 +103,8 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   const lookups = new Map<string, Lookup>();
   const unlanded = new Map<string, UnlandedPr[]>();
   const running = new Map<string, Promise<void>>();
+  // asked again mid-run: the running pass read the reports before the new one landed
+  const stale = new Set<string>();
 
   // Only a merge settles a PR, and the installed version is fixed for this process; a closed PR can reopen.
   async function lookup(ref: ReportedPr, dir: string | undefined): Promise<Lookup> {
@@ -155,8 +159,16 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
 
   function refresh(botId: string, threadId: string): Promise<void> {
     const prior = running.get(threadId);
-    if (prior) return prior;
-    const job = run(botId, threadId).catch(() => {}).finally(() => running.delete(threadId));
+    if (prior) {
+      stale.add(threadId);
+      return prior;
+    }
+    const job = (async () => {
+      do {
+        stale.delete(threadId);
+        await run(botId, threadId).catch(() => {});
+      } while (stale.has(threadId));
+    })().finally(() => running.delete(threadId));
     running.set(threadId, job);
     return job;
   }
