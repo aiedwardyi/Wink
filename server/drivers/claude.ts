@@ -1565,6 +1565,51 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         dispatch(o);
       };
 
+      const resumeRejected = (t: NonNullable<Session["turn"]>, diagnostic: string) => Boolean(
+        t.launch &&
+        sessionId &&
+        t.launch.request.resumeFallback &&
+        !t.sawStreamDelta &&
+        isResumeCursorRejected(diagnostic),
+      );
+
+      const startFresh = (t: NonNullable<Session["turn"]>) => {
+        const launch = t.launch!;
+        session.broker?.pause();
+        session.broker?.close();
+        if (session.mcpConfigPath) {
+          try {
+            rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+          session.mcpConfigPath = null;
+        }
+        sessions.delete(threadId);
+        t.narrationNotice = undefined;
+        session.turn = null;
+        active.delete(threadId);
+        retryState.delete(threadId);
+        emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
+        void sendTurn({
+          ...launch.request,
+          text: launch.request.resumeFallback!.text,
+          resumeCursor: undefined,
+          resumeFallback: undefined,
+        }, t.turnId).catch((error) => {
+          emit({
+            ...base(threadId, t.turnId),
+            type: "runtime.error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          t.timer.mark("turnDone");
+          t.timer.finish();
+          emit({ ...base(threadId, t.turnId), type: "turn.completed",
+            ok: false,
+            stopReason: "resume_fallback_failed",
+            cost: null,
+          });
+        });
+      };
+
       const dispatch = (o: any) => {
         // a closed or replaced process outlives its turns; its output belongs to none
         if (session.closing || sessions.get(threadId) !== session) {
@@ -1836,6 +1881,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             if (o.is_error === true) {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
+              // the CLI reports a missing session here, before it exits
+              if (session.turn && resumeRejected(session.turn, text)) {
+                startFresh(session.turn);
+                killCliTree(child);
+                break;
+              }
               if (!injected.injected && isSignOut(text)) {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
@@ -1904,47 +1955,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           const message = `claude exited ${code} before result${session.stderr ? `: ${session.stderr.trim().slice(-300)}` : ""}`;
           t.usageFailure ??= t.usageStderr;
           const limit = chatUsageLimit("claude", t.usageFailure, t.usageWindows, !injected.injected);
-          const resumeRejected = Boolean(
-            launch &&
-            sessionId &&
-            launch.request.resumeFallback &&
-            !t.sawStreamDelta &&
-            isResumeCursorRejected(session.stderr),
-          );
-          if (launch && resumeRejected) {
-            session.broker?.pause();
-            session.broker?.close();
-            if (session.mcpConfigPath) {
-              try {
-                rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
-              } catch {}
-              session.mcpConfigPath = null;
-            }
-            sessions.delete(threadId);
-            t.narrationNotice = undefined;
-            session.turn = null;
-            active.delete(threadId);
-            retryState.delete(threadId);
-            emit({ ...base(threadId, t.turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "resume_cursor" });
-            void sendTurn({
-              ...launch.request,
-              text: launch.request.resumeFallback!.text,
-              resumeCursor: undefined,
-              resumeFallback: undefined,
-            }, t.turnId).catch((error) => {
-              emit({
-                ...base(threadId, t.turnId),
-                type: "runtime.error",
-                message: error instanceof Error ? error.message : String(error),
-              });
-              t.timer.mark("turnDone");
-              t.timer.finish();
-              emit({ ...base(threadId, t.turnId), type: "turn.completed",
-                ok: false,
-                stopReason: "resume_fallback_failed",
-                cost: null,
-              });
-            });
+          if (resumeRejected(t, session.stderr)) {
+            startFresh(t);
             return;
           }
           const verdict = classifyError({ exitCode: code, stderr: message });

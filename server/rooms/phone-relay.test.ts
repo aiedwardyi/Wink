@@ -132,7 +132,7 @@ beforeAll(async () => {
     peopleRoute, hostFileRoute, joinedRoute, joinedFileRoute, commsCallers: { resolve: (value: string) => value === BOT },
     traceOpenBots: () => {}, pageSize: () => undefined, OPEN_CHAT_HEADER: "x-open-chat", offscreenLimit: () => 0,
     publicBotRecord: (bot: unknown) => bot, messagePage: (id: string) => ({ messages: store.messagesFor(id) }), publicGroupState: (group: unknown) => group,
-    computerControl: { snapshot: () => ({ held: false }) }, STREAM_ID: "s", lastSeq: 0,
+    computerControl: { snapshot: () => ({ held: false }) }, waitingSends: () => ({}), STREAM_ID: "s", lastSeq: 0,
     groupRoutes: createGroupRoutes({ store, publicGroupState: (group: GroupRecord) => group } as unknown as Parameters<typeof createGroupRoutes>[0]),
     threadRoutes: createThreadRoutes({ store, dataDir: DATA_DIR, threadSyncGate: { enabled: false }, pullSyncedThread: () => {}, DEFAULT_PAGE: 200,
       pageSize: () => undefined, messagePage: (id: string) => ({ messages: store.messagesFor(id) }),

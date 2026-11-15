@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reportOwnerHash, type TeamReport } from "../shared/team-report.ts";
 import { paneNotesSinceLastUserTurn } from "./context-compaction.ts";
 import { admitPaneWake } from "./mail.ts";
-import { hasLocalUndeliveredPaneNote, paneWakeEnabled, PaneWakeScheduler, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP } from "./pane-wake.ts";
+import { hasLocalUndeliveredPaneNote, paneWakeEnabled, PaneWakeScheduler, PANE_WAKE_DEBOUNCE_MS } from "./pane-wake.ts";
 import { Store } from "./store.ts";
 import { claimTeamReports, reportOwnerPost } from "./team-report-owner.ts";
 import { postChiefNote } from "./team-snags-owner.ts";
@@ -26,18 +26,18 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "report-wake-"));
   const held = (value: TeamReport) => ({ report: value, label: "k3v5q2m7x4b6n2tq", subHash: "sender", received: 1, filed: false });
   let reports = [held(report)], busy = false, ackFails = false;
-  const wake = vi.fn(), warn = vi.fn();
+  const wake = vi.fn();
   const scheduler = new PaneWakeScheduler({
     enabled: (bot, thread) => paneWakeEnabled(store, bot, thread), busy: () => busy,
     hasNotes: (thread) => paneNotesSinceLastUserTurn(store.activePath(thread), new Set(), store.taskByThread(chief.id, thread)?.paneNotesDeliveredId ?? undefined, true).length > 0,
-    admit: (bot, thread) => admitPaneWake(store, bot, thread), wake, warn,
+    admit: (bot, thread) => admitPaneWake(store, bot, thread), wake,
   });
   const schedule = vi.fn((bot: string, thread: string) => scheduler.noteArrived(bot, thread));
   const fetchImpl = vi.fn<typeof fetch>(async (url) => String(url).endsWith("/claim")
     ? Response.json({ reports }) : Response.json({}, { status: ackFails ? 503 : 200 }));
   const options = { dir, base: () => "team.example", baked: null, owner, email: () => email,
     tokens: { idToken: () => null, freshIdToken: async () => "token" }, fetchImpl, ...reportOwnerPost(store, "owner-device", schedule) };
-  return { store, chief, dir, scheduler, wake, warn, schedule, options,
+  return { store, chief, dir, scheduler, wake, schedule, options,
     reports: (values: TeamReport[]) => { reports = values.map(held); }, busy: (value: boolean) => { busy = value; }, failAck: () => { ackFails = true; } };
 }
 
@@ -68,17 +68,14 @@ describe("team report wake", () => {
     expect(f.wake).toHaveBeenCalledOnce();
   });
 
-  it("keeps the existing hourly cap", async () => {
+  it("wakes for every report, however many land in an hour", async () => {
     const f = fixture();
-    for (let index = 0; index <= PANE_WAKE_HOURLY_CAP; index++) {
+    for (let index = 0; index < 21; index++) {
       f.reports([{ ...report, id: index.toString(16).padStart(32, "0") }]);
       await claimTeamReports(f.options);
       await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     }
-    expect(f.wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
-    expect(f.warn).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(f.wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP + 1);
+    expect(f.wake).toHaveBeenCalledTimes(21);
   });
 
   it("wakes a posted note even when acknowledgement fails, without re-waking on restart", async () => {

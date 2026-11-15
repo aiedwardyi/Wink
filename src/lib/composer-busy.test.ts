@@ -122,7 +122,7 @@ describe("Composer wiring", () => {
     expect(paste).toContain("pasteImages(imageFiles)");
     expect(paste).not.toContain("showImageSupportNotice");
     const pick = composer.slice(composer.indexOf("const pickFiles = "), composer.indexOf("const idlePlaceholder = "));
-    expect(pick).toContain("uploadImage: pasteImageAttachment");
+    expect(pick).toContain("intakeFiles(picked");
     expect(pick).not.toContain("showImageSupportNotice");
   });
 });

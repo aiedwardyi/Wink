@@ -104,7 +104,7 @@ describe("root budget through reply wakes", () => {
       markMailRead(store, threadId, mailForTurn(store, threadId), `wake-${wake.mock.calls.length}`);
     });
     const scheduler = new PaneWakeScheduler({ enabled: () => true, busy: () => false, hasNotes: () => unreadMail(store, from.threadId).length > 0,
-      admit: (botId, threadId) => admitPaneWake(store, botId, threadId), wake, warn: () => {} });
+      admit: (botId, threadId) => admitPaneWake(store, botId, threadId), wake });
     for (let i = 0; i < 6; i++) {
       recordDelegationReceipt({ id: `task-${i}`, sourceThreadId: from.threadId, toBotId: target.id, toBotName: target.name, status: "done", root: rootId });
       registerReplyWake(store.appendMessage(from.threadId, { role: "bot", kind: "activity", text: `@${from.name}, which file?`, comm: { groupId: "dm", withBotId: target.id, withName: target.name, withColor: "blue", peer: "reply", taskId: `task-${i}`, mailKey: `task-${i}:reply:${from.threadId}`, state: "done", wake: true } }));

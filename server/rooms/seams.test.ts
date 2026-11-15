@@ -82,7 +82,7 @@ describe("team rooms on the phone", () => {
     const deps = (relay: boolean) => ({
       relay, store, json, traceOpenBots: () => {}, pageSize: () => undefined, OPEN_CHAT_HEADER: "x-open-chat", offscreenLimit: () => 0,
       publicBotRecord: (bot: unknown) => bot, messagePage: () => ({}), publicGroupState: (group: GroupRecord) => group,
-      computerControl: { snapshot: () => ({ held: false }) }, STREAM_ID: "s", lastSeq: 0,
+      computerControl: { snapshot: () => ({ held: false }) }, waitingSends: () => ({}), STREAM_ID: "s", lastSeq: 0,
     });
     const run = (relay: boolean) => routeBlock('path === "/api/bots"', deps(relay))({ headers: {} }, {}, "/api/bots", "GET", new URL("http://x/api/bots"));
     expect((await run(true)).body.groups.map((g: GroupRecord) => g.id)).toEqual([hosted.id, plain.id]);

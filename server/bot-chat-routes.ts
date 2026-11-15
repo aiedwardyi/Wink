@@ -427,6 +427,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         if (result.running) return json(res, 200, { cancelled: false, running: true });
         return json(res, 404, { error: "no such queued message" });
       }
+      if (result.send) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: [result.send] });
       return json(res, 200, { ok: true, cancelled: true });
     },
     edit: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {

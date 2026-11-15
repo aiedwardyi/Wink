@@ -34,6 +34,7 @@ import {
   takeQueuedSteers,
   _queuedCount,
   _resetSteerQueue,
+  waitingSends,
   type SteerStore,
 } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
@@ -116,6 +117,20 @@ describe("steer-queue module", () => {
     expect(start).toHaveBeenLastCalledWith("new message");
     cancelQueuedSends(bot.id);
     expect(isSendCancelled("send_abcdefghijklmnop")).toBe(false);
+  });
+
+  it("lists each thread's waiting sends for a window that did not send them", () => {
+    const first = queueSteeredMessage("bot-w", "thread-w", "first", { sendId: "send_1234567890123456" });
+    const second = queueSteeredMessage("bot-w", "thread-w", "second", { replyToId: "reply-1", syncUntil: 1 });
+    queueSteeredMessage("bot-w", "thread-w", "stopped", { sendId: "send_abcdefghijklmnop" });
+    markSendCancelled("send_abcdefghijklmnop");
+    queueRoomParticipation("bot-w", "thread-room", { groupId: "group-w" });
+    expect(waitingSends()).toEqual({
+      "thread-w": [
+        { queueId: first.id, text: "first", sendId: "send_1234567890123456" },
+        { queueId: second.id, text: "second", replyToId: "reply-1", reason: "sync" },
+      ],
+    });
   });
 
   it("does not append a queued user message until drain", () => {
@@ -218,7 +233,7 @@ describe("steer-queue module", () => {
     const store = fakeStore([bot]);
     const first = queueSteeredMessage(bot.id, bot.threadId, "keep me");
     const second = queueSteeredMessage(bot.id, bot.threadId, "drop me");
-    expect(cancelSteeredMessage(bot.id, second.id)).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, second.id)).toMatchObject({ cancelled: true });
     expect(cancelSteeredMessage(bot.id, "missing")).toEqual({ cancelled: false, running: false });
     expect(_queuedCount("thread-cancel")).toBe(1);
 
@@ -252,7 +267,7 @@ describe("steer-queue module", () => {
     bot.threadId = "thread-new-cancel";
     expect(cancelSteeredMessage("some-other-bot", queued.id)).toEqual({ cancelled: false, running: false });
     expect(_queuedCount("thread-original-cancel")).toBe(1);
-    expect(cancelSteeredMessage(bot.id, queued.id)).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, queued.id)).toMatchObject({ cancelled: true });
     expect(_queuedCount("thread-original-cancel")).toBe(0);
   });
 
@@ -418,7 +433,7 @@ describe("steer-queue module", () => {
   it("cancels a waiting send by client sendId as well as queue messageId", () => {
     const bot = fakeBot("bot-sendid-cancel", "thread-sendid-cancel", true);
     const queued = queueSteeredMessage(bot.id, bot.threadId, "hold", { sendId: "send_cancelbyid0001" });
-    expect(cancelSteeredMessage(bot.id, "send_cancelbyid0001")).toEqual({ cancelled: true });
+    expect(cancelSteeredMessage(bot.id, "send_cancelbyid0001")).toMatchObject({ cancelled: true });
     expect(_queuedCount("thread-sendid-cancel")).toBe(0);
     expect(queuedSteeredMessage(bot.id, bot.threadId, "send_cancelbyid0001")).toBeNull();
     expect(queued.id).toEqual(expect.any(String));

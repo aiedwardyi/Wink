@@ -405,6 +405,21 @@ describe("task resume during cancelled preparation", () => {
     expect(failure.frames).toContainEqual({ kind: "task.resume", botId: failure.bot.id, threadId: failure.bot.threadId, error: "model unavailable" });
   });
 
+  it("tells every client which queued send a cancel dropped", async () => {
+    const f = rig({ live: true });
+    const queued = queueSteeredMessage(f.bot.id, f.bot.threadId, "from phone", { sendId: "send_1234567890123456" });
+    const frames: unknown[] = [];
+    const cancel = botChatRoute("deleteQueued", {
+      store: { bot: () => f.bot }, cancelSteeredMessage, broadcast: (frame: unknown) => frames.push(frame),
+      json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
+    });
+    expect(await cancel({}, ["", f.bot.id, queued.id])).toMatchObject({ status: 200, body: { cancelled: true } });
+    expect(frames).toEqual([{
+      kind: "queue.cancelled", botId: f.bot.id,
+      sends: [{ threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" }],
+    }]);
+  });
+
   it("tells every client which queued sends Stop handed back", async () => {
     const f = rig({ live: true });
     const queued = queueSteeredMessage(f.bot.id, f.bot.threadId, "from phone");

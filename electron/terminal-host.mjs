@@ -185,8 +185,10 @@ function normalizeTerminalText(text) {
 // Real limit screens only: Claude's line sits at the start of its gutter row, Codex's starts the "■" error block. Quoted sentences in diffs, greps and logs carry a prefix.
 const CLAUDE_LIMIT_RE = /^\s*(?:⎿\s+)?You['’]ve hit your [^·\n]*limit\s*·\s*resets (\S.*)$/i;
 const CODEX_LIMIT_RE = /^\s*■\s+You['’]ve hit your usage limit\..{0,400}?try again at (.+?)\.(?: |$)/i;
+// A model cap names the model and no reset: "You've reached your Fable limit. Switch to another model, ..., to continue."
+const CLAUDE_MODEL_LIMIT_RE = /^\s*(?:⎿\s+)?You['’]ve (?:hit|reached) your (?!(?:usage|session|weekly) )([a-z][\w.-]*) limit\..*to continue\.$/i;
 
-const LIMIT_START = { claude: /^\s*(?:⎿\s+)?You['’]ve hit your /i, codex: /^\s*■\s+You['’]ve hit your usage limit\./i };
+const LIMIT_START = { claude: /^\s*(?:⎿\s+)?You['’]ve (?:hit|reached) your /i, codex: /^\s*■\s+You['’]ve hit your usage limit\./i };
 const LIMIT_IDLE_RE = /^(?:What do you want to do\?|[❯›]?\s*\d+\. .+|Approaching rate limits|Switch to .+|Fast and affordable .+|enter select · esc back|› .*|\d+ background terminals? running · \/ps to view.*|\? for shortcuts.*|(?:gpt|GPT)-.+|\d+(?:\.\d+)?% context left.*|⏵.*|[❯›?]|[─━]+|● Usage limit reached · .+|\/usage-credits .+|✻ \S+ for \d.+)$/u;
 const CLAUDE_RESUME_RE = /^● Usage limit reached · continuing automatically at (.+?)(?: · |$)/u;
 
@@ -206,7 +208,8 @@ function usageLimit(screenText, engine, cols = 80) {
   let end = start;
   let text = tail[start];
   let reset = reader.exec(text)?.[1];
-  while ((!reset || (reset.includes("(") && !reset.includes(")"))) && end + 1 < tail.length) {
+  const model = () => engine === "claude" && !reset ? CLAUDE_MODEL_LIMIT_RE.exec(text)?.[1] : undefined;
+  while ((!reset || (reset.includes("(") && !reset.includes(")"))) && !model() && end + 1 < tail.length) {
     const next = tail[end + 1];
     if (!next.trim() || LIMIT_IDLE_RE.test(next.trim())) break;
     text += next;
@@ -220,13 +223,14 @@ function usageLimit(screenText, engine, cols = 80) {
   if (after.some((line) => line.trim() && !LIMIT_IDLE_RE.test(line.trim()))) return null;
   reset = reset?.trim();
   const resumes = after.map((line) => CLAUDE_RESUME_RE.exec(line.trim())?.[1]).find(Boolean);
-  return reset ? { engine: engine === "claude" ? "Claude" : "Codex", reset, resumes } : null;
+  return reset || model() ? { engine: engine === "claude" ? "Claude" : "Codex", reset, resumes, model: model() } : null;
 }
 
 // A turn that dies on a usage limit or a menu runs no engine hook, so the screen is the only signal.
 function stallNoteText(screenText, stallMs, cwd, engine, cols) {
   const lines = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
   const limit = usageLimit(screenText, engine, cols);
+  if (limit?.model) return `LIMIT: ${limit.engine} hit its ${limit.model} limit. Its work so far stays in ${cwd}. Switch it to another model, or move the job to another engine.`;
   if (limit) return `LIMIT: ${limit.engine} hit its usage limit (resets ${limit.reset}). Its work so far stays in ${cwd}. ${limit.resumes ? `It resumes by itself at ${limit.resumes}.` : 'Send "continue" after the reset, or move the job to another engine.'}`;
   const tail = lines.join("\n");
   return `STALLED: no screen change for ${Math.max(1, Math.round(stallMs / 60_000))} min and no report. It may be stuck on a usage limit, a menu or an error. terminal_read its pane, then act or tell the user. Last lines:\n${tail}`;
@@ -798,7 +802,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
       }
       const limit = usageLimit(text, session.engine, session.cols);
-      const limitKey = limit ? JSON.stringify([session.engine, limit.reset.replace(/\s+/g, "")]) : null;
+      // A model cap names no reset, so it is told once per task, not once per pane.
+      const limitKey = limit ? JSON.stringify([session.engine, limit.reset?.replace(/\s+/g, "") ?? [limit.model, session.stallArmedAt]]) : null;
       if (session.stallDirty) {
         session.stallDirty = false;
         const signature = limitKey ?? stallSignature(text);
@@ -925,7 +930,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     session.stopPromise = (async () => {
       const leftovers = stopLeftovers(session);
+      // Quit cannot wait out a Windows process list, which takes seconds.
       if (leftovers && platform !== "win32") await timeout(leftovers, SHUTDOWN_TIMEOUT_MS, "Process snapshot timed out").catch(() => {});
+      else if (leftovers && !disposed) await leftovers.catch(() => {});
       if (forceKill || session.exitCode === null) {
         try {
           if (!session.workerReady) {
@@ -954,7 +961,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     })();
     return session.stopPromise;
   };
-  // Windows keeps a dead parent's pid on its children, so its slower snapshot can run alongside the kill; POSIX reparents them, so ps runs first.
+  // The list comes before the kill: a process is traced to the pane only through parents still in the table, and the kill takes the CLI.
   const stopLeftovers = (session) => {
     const root = session.pty.pid;
     if (!processes || !session.botPane || !Number.isInteger(root)) return null;

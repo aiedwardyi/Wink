@@ -585,6 +585,7 @@ export type Action =
       groups: Group[];
       botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
+      queued?: AppState["pendingQueued"];
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
