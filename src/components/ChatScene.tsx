@@ -1,6 +1,7 @@
 // The animated backdrop of the scene themes. Each scene is its own lazy chunk,
 // so other themes load and run none of it.
 import { useEffect, useRef, type RefObject } from "react";
+import type { MessageKey } from "@/lib/i18n-catalog";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { SKINS, SKIN_CHANGE_EVENT, type SkinId } from "@/lib/skins";
 import { startScene, type SceneHost, type SceneModule } from "@/scenes/scene-host";
@@ -15,6 +16,7 @@ const LOAD: Record<SceneId, () => Promise<{ default: SceneModule }>> = {
   snow: () => import("@/scenes/snow"),
   "neon-grid": () => import("@/scenes/neon-grid"),
 };
+export const SCENE_NAME: Record<SceneId, MessageKey> = { lagoon: "settings.skin.lagoon", snow: "settings.skin.snow", "neon-grid": "settings.skin.neonGrid" };
 const BUBBLES = '[data-orbit-message="bot"] [data-orbit-message-content]';
 
 export const sceneOf = (skin: SkinId): SceneId | undefined => SCENE_SKINS[skin];
