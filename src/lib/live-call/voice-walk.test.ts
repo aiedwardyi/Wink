@@ -486,3 +486,129 @@ describe("his 15:56 call, replayed", () => {
     expect(engine().contexts.join("\n")).toContain("do not read it out");
   });
 });
+
+describe("his 11-15 calls, replayed: a turn he did not prompt never says his last line again", () => {
+  const INVESTIGATING = "I'm actively investigating the code that manages your typing preferences right now.";
+  const voiced = (posts: Array<{ path: string; body: any }>) => posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines).filter((line: any) => line.who === "voice").map((line: any) => line.text);
+  const prompts = (engine: FakeEngine) => engine.texts.filter((text) => !GREETING.test(text));
+  const speak = (engine: FakeEngine, said: string) => {
+    engine.events.answering();
+    engine.events.audio(new Int16Array([1]));
+    engine.events.said(said);
+    engine.events.turnDone();
+  };
+  const offer = (engine: FakeEngine, heard: string, said: string, order: string) => {
+    engine.events.heard(heard);
+    engine.events.answering();
+    engine.events.audio(new Int16Array([1]));
+    engine.events.said(said);
+    engine.events.toolCall([{ id: "p1", name: "propose_work", args: { order } }]);
+    engine.events.turnDone();
+  };
+
+  it.each(["the result lands first", "the voice answers first"])("12:18 a spoken no to an open offer is answered once (%s)", async (order) => {
+    const { audio, engine, posts, tick } = await live();
+    const e = engine();
+    turn(e, "Hey, can you hear me?", "Hey, I'm here and I can hear you perfectly.");
+    offer(e, "Do you know why it keeps reverting to paragraph?", "Want me to check the code that manages your typing preferences?", "Check the code that manages my typing preferences.");
+    const play = vi.spyOn(audio, "play");
+    e.events.heard("No, I think you're already doing it.");
+    if (order === "the result lands first") await tick(1_200);
+    speak(e, INVESTIGATING);
+    expect(e.results).toEqual([{ id: "p1", result: "declined. They already heard you answer: say nothing more." }]);
+    speak(e, INVESTIGATING);
+    await tick(0);
+    // One tool result is all the app sent after his "No": no [Wink] line, no context.
+    expect(prompts(e)).toEqual([]);
+    expect(e.contexts).toEqual([]);
+    expect(voiced(posts).slice(2)).toEqual([INVESTIGATING]);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("12:24 a spoken yes gets one On it, with the stray marker turn between dropped", async () => {
+    const { audio, call, engine, posts, tick } = await live();
+    const e = engine();
+    offer(e, "Yeah, let's do that.", "Want me to add the connecting sign removal and greeting design to your board?", "Remove the connection sign and add a greeting design to the board.");
+    const play = vi.spyOn(audio, "play");
+    e.events.heard("Yeah.");
+    speak(e, "On it.");
+    await tick(10);
+    expect(e.results).toEqual([{ id: "p1", result: "sent. They already heard you answer: say nothing more." }]);
+    e.events.answering();
+    e.events.said("{instruction:none");
+    e.events.turnDone();
+    speak(e, "On it.");
+    await tick(0);
+    expect(prompts(e)).toEqual([]);
+    expect(voiced(posts).slice(1)).toEqual(["On it."]);
+    expect(play).toHaveBeenCalledTimes(1);
+    call.end();
+    await tick(1_100);
+    expect(ended(posts)[0].stats.repeats).toBe(1);
+  });
+
+  it.each([
+    ["Nothing has failed so far.", "Nothing has failed so far, except the login test."],
+    ["It's done, except the tests.", "It's done."],
+    ["3 of the tests passed.", "4 of the tests passed."],
+    ["The fix is not merged yet.", "The fix is merged."],
+  ])("a new fact that only looks like the last line is still said: %s -> %s", async (first, second) => {
+    const { audio, engine, posts, tick } = await live();
+    const play = vi.spyOn(audio, "play");
+    engine().events.heard("How is it going?");
+    speak(engine(), first);
+    speak(engine(), second);
+    await tick(0);
+    expect(voiced(posts)).toEqual([first, second]);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("asked again, he hears the same answer again, even when his words arrive after the voice starts", async () => {
+    const { audio, engine, posts, tick } = await live();
+    const e = engine();
+    const play = vi.spyOn(audio, "play");
+    e.events.heard("Is it done?");
+    speak(e, "Not yet.");
+    e.events.heard("Is it done?");
+    speak(e, "Not yet.");
+    e.events.answering();
+    e.events.audio(new Int16Array([1]));
+    e.events.heard("Sorry, is it done?");
+    e.events.said("Not yet.");
+    e.events.turnDone();
+    await tick(0);
+    expect(voiced(posts)).toEqual(["Not yet.", "Not yet.", "Not yet."]);
+    expect(play).toHaveBeenCalledTimes(3);
+  });
+
+  it("a line cut off by noise is said again in full", async () => {
+    const { audio, engine, posts, tick } = await live();
+    const e = engine();
+    const play = vi.spyOn(audio, "play");
+    e.events.heard("Is it done?");
+    e.events.answering();
+    e.events.audio(new Int16Array([1]));
+    e.events.said("Not yet, the tests are");
+    e.events.interrupted();
+    speak(e, "Not yet, the tests are");
+    await tick(0);
+    expect(voiced(posts)).toEqual(["Not yet, the tests are", "Not yet, the tests are"]);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["hangs up", "cuts in"])("a repeat still held back when he %s is never played or kept", async (how) => {
+    const { audio, call, engine, posts, tick } = await live();
+    const e = engine();
+    e.events.heard("Is it done?");
+    speak(e, "Not yet.");
+    const play = vi.spyOn(audio, "play");
+    e.events.answering();
+    e.events.audio(new Int16Array([1]));
+    e.events.said("Not yet.");
+    if (how === "cuts in") e.events.interrupted();
+    call.end();
+    await tick(1_100);
+    expect(voiced(posts)).toEqual(["Not yet."]);
+    expect(play).not.toHaveBeenCalled();
+  });
+});

@@ -150,9 +150,9 @@ function cardNotice(botName: string, card: Message["card"]): string {
     : `[Wink] ${botName} asks: ${question} Read it out, then wait for their answer.`;
 }
 
-/** Transcript text without the model's markers ("<no speech>", "{pause}"); empty if nothing speakable is left. */
+/** Transcript text without the model's markers ("<no speech>", "{pause}", a "{instruction:none" left open); empty if nothing speakable is left. */
 export function spokenText(text: string): string {
-  const clean = text.replace(/<[^>]*>|\{[^}]*\}/g, " ").replace(/\s+/g, " ").trim();
+  const clean = text.replace(/<[^>]*>|\{[^}]*\}?/g, " ").replace(/\s+/g, " ").trim();
   return /[\p{L}\p{N}]/u.test(clean) ? clean : "";
 }
 
@@ -186,6 +186,9 @@ export class LiveCall {
   private heardBuf = "";
   private saidBuf = "";
   private lastSaid = "";
+  // The voice's last whole line while he has said nothing since; a turn he did not prompt is held in `echo` until its words differ.
+  private lastLine = "";
+  private echo?: Int16Array[];
   private softCut = false;
   private settleTimer?: ReturnType<typeof setTimeout>;
   private lines = 0;
@@ -235,7 +238,7 @@ export class LiveCall {
   private missed = false;
   private letters = { hangul: 0, all: 0 };
   private stats = {
-    turns: 0, userLines: 0, voiceLines: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
+    turns: 0, userLines: 0, voiceLines: 0, repeats: 0, interrupted: 0, doneGuard: 0, reconnects: 0, micGaps: 0, unheard: 0,
     orders: { proposed: 0, confirmed: 0, declined: 0, expired: 0, replaced: 0, cancelled: 0, dropped: 0, failed: 0, retried: 0 },
     asks: { sent: 0, retried: 0, answered: 0 },
     guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
@@ -403,13 +406,17 @@ export class LiveCall {
       audio: (pcm) => {
         if (!mine()) return;
         this.stir();
-        if (!this.snapshot.hushed) this.deps.audio.play(pcm);
+        if (this.snapshot.hushed) return;
+        if (this.echo) this.echo.push(pcm);
+        else this.deps.audio.play(pcm);
       },
       heard: (text) => {
         if (draining()) return void (this.heardBuf += text);
         if (!mine()) return;
         this.stir();
         this.heardBuf += text;
+        // His words can arrive after the voice starts answering them.
+        if (spokenText(this.heardBuf)) this.unhold(true);
         this.caption("user", this.heardBuf);
         if (this.snapshot.hushed && callsVoice(spokenText(this.heardBuf), this.deps.botName, this.aliases)) this.wake(0);
         if (this.softCut && this.deps.audio.playing) {
@@ -424,7 +431,8 @@ export class LiveCall {
         this.stir();
         if (this.snapshot.hushed) return;
         this.saidBuf += text;
-        this.caption("voice", this.saidBuf);
+        if (this.echo && !this.lastLine.startsWith(orderKey(spokenText(this.saidBuf)))) this.unhold(true);
+        if (!this.echo) this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && !this.doneTold && claimsDone(this.saidBuf)) {
           this.doneTold = true;
           this.stats.doneGuard += 1;
@@ -438,15 +446,23 @@ export class LiveCall {
         this.generating = true;
         this.softCut = false;
         this.flushHeard();
+        this.echo = this.lastLine ? [] : undefined;
         this.replyTo = this.stats.userLines;
         if (this.cutHold === "heard") this.cutHold = "answering";
       },
       turnDone: () => {
         if (!mine()) return;
         this.stats.turns += 1;
-        const spoke = this.turnHadAudio || Boolean(spokenText(this.saidBuf));
+        if (this.echo) {
+          const repeat = orderKey(spokenText(this.saidBuf)) === this.lastLine;
+          if (repeat) this.stats.repeats += 1;
+          this.unhold(!repeat);
+        }
+        const said = spokenText(this.saidBuf);
+        const spoke = this.turnHadAudio || Boolean(said);
+        if (said) this.lastLine = orderKey(said);
         this.flushHeard();
-        this.guard(spokenText(this.saidBuf));
+        this.guard(said);
         this.flushSaid(1);
         this.ackOut();
         this.turnHadAudio = false;
@@ -477,6 +493,7 @@ export class LiveCall {
         if (!mine()) return;
         this.stir();
         this.stats.interrupted += 1;
+        this.unhold(false);
         this.cutHold = "cut";
         // Echo or noise can trip barge-in; with no speech heard the received reply plays out.
         if (!spokenText(this.heardBuf)) {
@@ -810,6 +827,7 @@ export class LiveCall {
     this.lineIds.user = 0;
     if (quiet) this.hush();
     if (!text) return;
+    this.lastLine = "";
     if (this.cutHold) this.cutHold = "heard";
     if (this.snapshot.notice) this.set({ notice: undefined });
     this.stats.userLines += 1;
@@ -1093,6 +1111,7 @@ export class LiveCall {
 
   // Its line is already flushed, so only words after the hush can wake it: "Nova, be quiet" stays quiet.
   private hush() {
+    this.unhold(false);
     const share = this.deps.audio.heardShare();
     this.deps.audio.flush();
     this.flushSaid(share);
@@ -1140,6 +1159,15 @@ export class LiveCall {
     const { item } = this.playing;
     this.playing = undefined;
     item.played?.();
+  }
+
+  /** Ends the hold on a turn he did not prompt: played late when it says something new, dropped unheard when it does not. */
+  private unhold(play: boolean) {
+    const frames = this.echo;
+    this.echo = undefined;
+    if (!frames) return;
+    if (play) return frames.forEach((pcm) => this.deps.audio.play(pcm));
+    this.saidBuf = "";
   }
 
   private cutPlaying() {
@@ -1227,6 +1255,7 @@ export class LiveCall {
     this.engine = null;
     this.connected = false;
     const at = this.now();
+    this.unhold(false);
     const share = this.deps.audio.heardShare();
     if (this.pending) clearTimeout(this.pending.timer);
     clearTimeout(this.status?.timer);

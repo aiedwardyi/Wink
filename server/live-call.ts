@@ -58,6 +58,7 @@ const statsSchema = z.object({
   turns: count,
   userLines: count,
   voiceLines: count,
+  repeats: count,
   hangulShare: z.number().min(0).max(1),
   ttfaMs: z.object({ p50: ms.nullable(), p90: ms.nullable() }),
   interrupted: count,
