@@ -1,5 +1,5 @@
 // What the voice's turn claims, one sentence at a time: a promise of work, a refusal, a dodge, or an honest "not sent".
-import { bareYes } from "./consent";
+import { afterYes, bareYes, YES_KO } from "./consent";
 
 export type Claim = "promise" | "cant" | "unsure" | "failed";
 
@@ -63,6 +63,21 @@ export function ordersChange(heard: string, names: readonly string[] = []): bool
   const lead = [LEAD_EN, ...names.map(escaped).filter(Boolean)].join("|");
   const said = heard.replace(new RegExp(`^\\s*(?:(?:${lead})(?![\\p{L}\\p{N}])[\\s,.!]*)+`, "iu"), "");
   return asksForChange(said) || NEED_EN.test(heard) || COMMAND_KO.test(heard);
+}
+
+// What a yes may add and still mean the offered order: "Yes, go ahead and send it."
+const SAME_ORDER = new RegExp(`^(?:${CHANGES}|do|go|ahead|and|then|please|just|it|that|this|them|those|one|now|right|away)$`, "i");
+
+/** A yes word that goes on to give another order: "Okay, delete the logs instead" does not confirm "Merge PR 12". */
+export function ordersOther(said: string, order: string): boolean {
+  if (bareYes(said)) return false;
+  const rest = afterYes(said);
+  if (/\binstead\b|대신/i.test(rest)) return true;
+  if (!ordersChange(rest)) return false;
+  const known = order.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  // A Korean verb alone ("배포해줘") says yes in its own words.
+  const words = (rest.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !SAME_ORDER.test(word) && !YES_KO.includes(word) && !FILLER_WORDS.has(word) && !/^[a-z]{1,2}$/.test(word) && !/[가-힣](?:해|줘|봐|라|요|세요)$/.test(word));
+  return words.some((word) => !known.some((was) => sameWord(word, was)));
 }
 
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;

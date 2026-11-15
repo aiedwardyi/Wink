@@ -14,7 +14,7 @@ describe("consentOf", () => {
 
   it.each([
     "no", "No, wait", "don't", "stop", "cancel that",
-    "아니", "아니요", "아냐", "하지 마", "하지마", "취소", "취소해", "잠깐만요", "아니 보내", "응 아니",
+    "아니", "아니요", "아냐", "하지 마", "하지마", "취소", "취소해", "아니 보내", "응 아니",
   ])("%s is no", (said) => expect(consentOf(said)).toBe("no"));
 
   it.each([
@@ -33,4 +33,9 @@ describe("claimsDone", () => {
   it.each(["I'll send it now.", "Shall I send that?", "보낼게요", "고쳐 드릴까요?", "It is not done yet"])("%s does not", (said) => {
     expect(claimsDone(said)).toBe(false);
   });
+});
+
+describe("O11 consent says what he meant", () => {
+  it.each(["Do that.", "Go.", "해봐", "어 그렇게 해줘", "No problem, go ahead.", "No worries, send it."])("%s is yes", (said) => expect(consentOf(said)).toBe("yes"));
+  it.each(["잠깐만", "잠깐만요", "아니면 내일 해줘", "Go to the settings page."])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
 });
