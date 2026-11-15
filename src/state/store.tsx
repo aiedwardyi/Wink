@@ -1245,11 +1245,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (buf.size) scheduleDeltaFlush();
     releaseSettled();
   };
-  // Stop: the thread's next frame lands its text whole, other threads keep typing.
-  const landTyping = (threadId: string | undefined) => {
-    if (!threadId) return;
-    const pending = deltaBuffer.current.get(threadId);
-    if (pending?.ramps) deltaBuffer.current.set(threadId, { ...pending, ramps: undefined });
+  // Stop: each thread's next frame lands its text whole, other threads keep typing.
+  const landTyping = (threadIds: readonly (string | null | undefined)[]) => {
+    for (const threadId of threadIds) {
+      const pending = threadId ? deltaBuffer.current.get(threadId) : undefined;
+      if (threadId && pending?.ramps) deltaBuffer.current.set(threadId, { ...pending, ramps: undefined });
+    }
   };
   const scheduleDeltaFlush = () => {
     if (deltaFlush.current !== null) return;
@@ -1868,7 +1869,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
           break;
         case "interrupt": {
-          landTyping(stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId);
+          // Like the server's Stop: the bot's chat, the thread it is working on and a room it is busy in.
+          const stopped = stateRef.current.bots.find((bot) => bot.id === action.botId);
+          landTyping([stopped?.threadId, stopped?.workingThreadId, ...stateRef.current.groups.filter((group) => group.busyBotId === action.botId).map((group) => group.threadId)]);
           const release = () => rawDispatch({ type: "stopReleased", botId: action.botId, until: action.until! });
           window.setTimeout(release, STOP_HOLD_MS);
           api(`/api/bots/${action.botId}/interrupt`, { method: "POST", ...(action.switchThreadId ? { body: JSON.stringify({ threadId: action.switchThreadId, requireSettled: true }) } : {}) })
@@ -1935,7 +1938,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "interruptGroup":
-          landTyping(stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId);
+          landTyping([stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId]);
           api(`/api/groups/${action.groupId}/interrupt`, { method: "POST" }).catch(showError);
           break;
         case "updateBot": {

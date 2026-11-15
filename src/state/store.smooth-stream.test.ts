@@ -212,6 +212,32 @@ describe("live reply typing", () => {
     expect(stream.streaming.t2.length).toBeLessThan(BURST.length);
   });
 
+  it("lands a reply on the thread the stopped bot is working on", async () => {
+    await mount(async () => Response.json({ bots: [{ ...bot, workingThreadId: "t2" }], groups: [], computerControl: {} }));
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t2", turnId: "turn2" } });
+    await emit({ kind: "runtime", event: { type: "content.delta", threadId: "t2", turnId: "turn2", streamKind: "assistant_text", delta: BURST } });
+    await advance(16);
+    expect(stream.streaming.t2.length).toBeLessThan(BURST.length);
+    await act(async () => store.dispatch({ type: "interrupt", botId: "b1" }));
+    await advance(16);
+    expect(stream.streaming.t2.length).toBe(BURST.length);
+  });
+
+  it("goes back to 150 ms once a steady engine's opening lump is typed", async () => {
+    await live();
+    await delta("word ".repeat(20));
+    // 500 characters a second, a delta every 40 ms
+    for (let i = 0; i < 50; i++) {
+      await advance(40);
+      await delta("word ".repeat(4));
+    }
+    await advance(40);
+    expect(1100 - shown()).toBeLessThan(80);
+    await advance(126);
+    expect(shown()).toBe(1100);
+  });
+
   it("never shows half an emoji while typing", async () => {
     await live();
     await delta("🙂".repeat(200));
