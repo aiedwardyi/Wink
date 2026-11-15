@@ -148,6 +148,30 @@ it.each(["Who answers", "Switch engine", "Change model", "Kai's voice"])("dismis
   expect(patches).not.toHaveBeenCalled();
 });
 
+it.each(["Who answers", "Switch engine", "Change model", "Kai's voice"])("keeps %s open while another pane scrolls", async (label) => {
+  await render();
+  const chat = document.body.appendChild(document.createElement("div"));
+  await open(label);
+  await act(async () => chat.dispatchEvent(new Event("scroll")));
+  expect(menu()).not.toBeNull();
+  await act(async () => host.dispatchEvent(new Event("scroll")));
+  expect(menu()).toBeNull();
+  chat.remove();
+});
+
+it("keeps a field menu open when the keyboard changes the window height, and closes it on a width change", async () => {
+  await render();
+  await open("Change model");
+  const { innerWidth, innerHeight } = window;
+  window.innerHeight = innerHeight + 300;
+  await act(async () => window.dispatchEvent(new Event("resize")));
+  expect(menu()).not.toBeNull();
+  window.innerWidth = innerWidth + 300;
+  await act(async () => window.dispatchEvent(new Event("resize")));
+  expect(menu()).toBeNull();
+  Object.assign(window, { innerWidth, innerHeight });
+});
+
 it("uses Enter once, keeps the wizard open on menu Escape and makes closing rows inert", async () => {
   await render();
   const escaped = vi.fn();
