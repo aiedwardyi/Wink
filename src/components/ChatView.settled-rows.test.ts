@@ -8,11 +8,13 @@ const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body])
 const declaring = (property: string) => rules.filter((rule) => new RegExp(`(^|;|\\s)${property}:`).test(rule.body));
 
 describe("settled transcript rows", () => {
-  it("skips only settled rows", () => {
+  it("skips settled rows outside compact tails and landing", () => {
     expect(declaring("content-visibility").map((rule) => rule.selector)).toEqual([
       "[data-orbit-transcript] [data-settled] > *",
+      "[data-orbit-transcript][data-compact-transcript] [data-settled] > *",
       "[data-orbit-transcript] [data-settled][data-landing] > *",
     ]);
+    for (const rule of declaring("content-visibility").slice(1)) expect(rule.body).toMatch(/content-visibility:\s*visible/);
   });
 
   it("remembers the newest row's size before it settles", () => {

@@ -129,7 +129,7 @@ function PhoneChatPages({ id, enabled, menuVisible, hidden, rider, onSelect, chi
   return <div ref={bindStage} className="relative flex min-h-0 min-w-0 flex-1" inert={hidden} aria-hidden={hidden}>
     {[{ key: slot, id, preview: false }, ...(neighbor ? [{ key: 1 - slot, id: neighbor.id, preview: true }] : [])].map((page) =>
       <div key={page.key} data-phone-chat-page={page.id} className="flex min-h-0 min-w-0 flex-1"
-        style={page.preview ? { position: "absolute", top: 0, bottom: 0, left: `${neighbor!.step * 100}%`, width: "100%" } : undefined}
+        style={page.preview ? { position: "absolute", top: 0, bottom: 0, left: `${(neighbor?.step ?? 0) * 100}%`, width: "100%" } : undefined}
         inert={page.preview} aria-hidden={page.preview || undefined}>
         {children(page.id, page.preview)}
       </div>,

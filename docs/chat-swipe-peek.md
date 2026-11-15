@@ -43,10 +43,12 @@ The held bot peek adds about 309 DOM nodes and 0.6-1.3 MiB used JS heap in the c
 ## Correctness evidence
 
 - Red first on the exact base: 16 assertion failures / 4 passes for peek, order and seamless land. Additional viewport, tail-follow and slop tests were observed red before their fixes.
-- 28 focused suites: 631 unique tests pass. The final scheduling change re-ran the 78 hook, App and real-renderer cases. TypeScript and isolated production builds pass.
+- 32 focused suites: 718 unique tests pass. Scheduling and review checks re-ran the hook, App and real-renderer cases without double counting. TypeScript and isolated production builds pass.
 - Both final browser runs: zero page, console or HTTP errors. Six real header fit cases cover short, long and Korean names with theme and Verdana fonts; ten composer cases cover phone and desktop sizing.
 - Classic and joined rooms: order, title swipes, bell guard/toggle, announcement guard/fold, bubble-only Reply/Translate, gap-only page gesture, cold header/empty background without detail fetch, cached preview without read, retained incoming DOM, scrollback, reversal, cancellation, vertical lock and reduced motion.
 - Fresh phone reload followed by desktop resize restores the normal window at the bottom; desktop drag does not page. The member reorder hook named by the card is absent at this base.
+
+The native captures are from the feature commit before the final compatibility corrections. The later production diff only adds a fallback comment and an equivalent optional neighbor access; the other changes update test fixtures and source contracts. The corrected call fixture exercises Korean locale changes through the production provider.
 
 ## Artifacts and limits
 

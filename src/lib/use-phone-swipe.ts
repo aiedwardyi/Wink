@@ -168,6 +168,7 @@ export function usePhoneSwipe(
         }
         offset = to;
         animations = settle(stages(), from, to);
+        // Some animate implementations lack the finished promise and need the timer fallback.
         if (animations.length && animations.every((animation) => animation.finished)) {
           void Promise.all(animations.map((animation) => animation.finished)).then(finish, () => {});
         } else if (animations.length) {
