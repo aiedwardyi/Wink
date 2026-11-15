@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 import { asksAboutWork, claimOf, ordersChange } from "./guard";
+import { answersCard } from "./manners";
 
 const CALL = "c-0123456789ab";
 
@@ -396,4 +397,57 @@ describe("S04 a sentence said twice in one turn is a repeat", () => {
     await tick(1_100);
     expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats.repeats).toBe(1);
   });
+});
+
+describe("review: other orders, refusals and option words", () => {
+  const offer = async (order: string) => {
+    const s = await live();
+    s.engine().events.heard(order);
+    s.engine().events.answering();
+    s.engine().events.toolCall([{ id: "p1", name: "propose_work", args: { order } }]);
+    await s.tick(10);
+    s.engine().events.turnDone();
+    return s;
+  };
+
+  it.each([
+    ["Send it to Alice.", "Okay, send it to Bob."],
+    ["Delete branch qa.", "Okay, delete branch ui."],
+    ["Deploy server1.", "Okay, deploy server2."],
+  ])("%s then %s sends nothing", async (order, said) => {
+    const { call, engine, posts, tick } = await offer(order);
+    engine().events.heard(said);
+    await tick(1_300);
+    engine().events.answering();
+    await tick(10);
+    expect(sent(posts)).toEqual([]);
+    expect(call.state().pending?.order).toBe(order);
+  });
+
+  it.each(["No, delete the logs instead.", "아니, 대신 로그 지워줘."])("%s declines the offer", async (said) => {
+    const { call, engine, posts, tick } = await offer("Merge pull request twelve.");
+    engine().events.heard(said);
+    await tick(1_300);
+    engine().events.answering();
+    await tick(10);
+    expect(sent(posts)).toEqual([]);
+    expect(call.state().pending).toBeUndefined();
+  });
+
+  it("a turn said twice, twice inside, is one repeat", async () => {
+    const { call, engine, posts, tick } = await live();
+    turn(engine(), "Are you there?", "I'm here. I'm here.");
+    engine().events.answering();
+    engine().events.said("I'm here. I'm here.");
+    engine().events.turnDone();
+    call.end();
+    await tick(1_100);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats.repeats).toBe(2);
+  });
+});
+
+describe("review: a hold word that is an option still picks it", () => {
+  it("Wait. picks Wait", () => expect(answersCard("Wait.", ["Ship it", "Wait"])).toBe(true));
+  it("다음 picks 다음", () => expect(answersCard("다음", ["다음", "이전"])).toBe(true));
+  it("Wait. alone answers nothing", () => expect(answersCard("Wait.", [])).toBe(false));
 });

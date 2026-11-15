@@ -66,18 +66,21 @@ export function ordersChange(heard: string, names: readonly string[] = []): bool
 }
 
 // What a yes may add and still mean the offered order: "Yes, go ahead and send it."
-const SAME_ORDER = new RegExp(`^(?:${CHANGES}|do|go|ahead|and|then|please|just|it|that|this|them|those|one|now|right|away)$`, "i");
+const SAME_ORDER = new RegExp(`^(?:${CHANGES}|do|go|ahead|and|then|please|just|it|that|this|them|those|one|now|right|away|a|an|to|of|on|in|at|by|as|so|up|me|my|us|is|be|ok)$`, "i");
+const CHANGE_WORD = new RegExp(`\\b(?:${CHANGES})\\b`, "i");
 
 /** A yes word that goes on to give another order: "Okay, delete the logs instead" does not confirm "Merge PR 12". */
 export function ordersOther(said: string, order: string): boolean {
   if (bareYes(said)) return false;
   const rest = afterYes(said);
   if (/\binstead\b|대신/i.test(rest)) return true;
-  if (!ordersChange(rest)) return false;
+  // "Okay, send it to Bob": the yes words took the verb, the line still had one.
+  if (!ordersChange(rest) && !(rest && CHANGE_WORD.test(said))) return false;
   const known = order.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   // A Korean verb alone ("배포해줘") says yes in its own words.
-  const words = (rest.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !SAME_ORDER.test(word) && !YES_KO.includes(word) && !FILLER_WORDS.has(word) && !/^[a-z]{1,2}$/.test(word) && !/[가-힣](?:해|줘|봐|라|요|세요)$/.test(word));
-  return words.some((word) => !known.some((was) => sameWord(word, was)));
+  const words = (rest.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !SAME_ORDER.test(word) && !YES_KO.includes(word) && !FILLER_WORDS.has(word) && !/[가-힣](?:해|줘|봐|라|요|세요)$/.test(word));
+  // "server2" is not "server1".
+  return words.some((word) => !known.some((was) => /\p{N}/u.test(word + was) ? word === was : sameWord(word, was)));
 }
 
 const LOOKUP_EN = /^\s*(?:please\s+)?(?:search|look\s+(?:up|into)|look\s+(?:it|that|this|him|her|them)\s+up|google|research|find\s+out)\b/i;

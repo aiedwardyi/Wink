@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { claimsDone, consentOf } from "./consent";
+import { bareYes, claimsDone, consentOf } from "./consent";
 
 describe("consentOf", () => {
   it.each([
@@ -38,4 +38,10 @@ describe("claimsDone", () => {
 describe("O11 consent says what he meant", () => {
   it.each(["Do that.", "Go.", "해봐", "어 그렇게 해줘", "No problem, go ahead.", "No worries, send it."])("%s is yes", (said) => expect(consentOf(said)).toBe("yes"));
   it.each(["잠깐만", "잠깐만요", "아니면 내일 해줘", "Go to the settings page."])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
+});
+
+describe("review: holds and alternatives never confirm", () => {
+  it.each(["응, 잠깐만.", "네, 잠깐만요.", "아니면 해줘.", "어! 어, 잠깐"])("%s keeps waiting", (said) => expect(consentOf(said)).toBeNull());
+  it.each(["어, 어, 보내줘.", "어… 어, 보내줘!"])("%s is yes", (said) => expect(consentOf(said)).toBe("yes"));
+  it("Go. is a bare yes", () => expect(bareYes("Go.")).toBe(true));
 });

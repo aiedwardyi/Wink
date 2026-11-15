@@ -508,7 +508,7 @@ export class LiveCall {
         if (said) this.asked.push(...said.split(/(?<=[.!?])\s+/).filter((part) => /\?\s*$/.test(part) && !OFFER_EN.test(part) && !CONFIRM_EN.test(part)));
         // "I'm here. I'm here." is a repeat inside one turn.
         const parts = said.split(/(?<=[.!?])\s+/).map(lineKey).filter(Boolean);
-        if (new Set(parts).size < parts.length) this.stats.repeats += 1;
+        if (new Set(parts).size < parts.length && lineKey(said) !== this.lastLine) this.stats.repeats += 1;
         const spoke = this.turnHadAudio || Boolean(said);
         // His late words clear the last line, so they go first: this answer is the line a later turn must not repeat.
         this.flushHeard();
@@ -942,7 +942,8 @@ export class LiveCall {
     // Talk while it was told to be quiet is not for it.
     if (!this.snapshot.hushed && (!unsure || takesBack(text))) this.open.add(this.stats.userLines, text);
     if (!this.pending || !ended || this.snapshot.hushed || offTongue) return;
-    const consent = ordersOther(text, this.pending.order) ? null : consentOf(text);
+    const reply = consentOf(text);
+    const consent = reply === "yes" && ordersOther(text, this.pending.order) ? null : reply;
     if (consent === "yes") req.accounted = true;
     if (consent) void this.answer(consent === "yes", true);
   }
