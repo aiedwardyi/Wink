@@ -216,9 +216,10 @@ export async function shrunkImagePath(
   }
 }
 
-async function uploadAttachmentFile(
+export async function uploadAttachmentFile(
   file: Pick<File, "name" | "type" | "arrayBuffer">,
   document = false,
+  signal?: AbortSignal,
 ): Promise<{ path: string; name?: string; mime: string; bytes: number }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const headers = new Headers({ "content-type": file.type || "application/octet-stream" });
@@ -228,6 +229,7 @@ async function uploadAttachmentFile(
       method: "POST",
       headers,
       body: bytes,
+      signal,
     }),
   );
   if (!response.ok) {

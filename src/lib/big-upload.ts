@@ -238,7 +238,7 @@ export type UploadJob = {
   save?: (result: UploadDone, uploadId?: string) => void;
   shrink?: boolean;
   /** Sends the file some other way than in chunks. */
-  send?: () => Promise<UploadDone>;
+  send?: (signal: AbortSignal) => Promise<UploadDone>;
 };
 
 // Module-level so an upload keeps going while its composer is unmounted;
@@ -273,7 +273,7 @@ function pump() {
   running = id;
   setJob(id, { phase: "uploading" });
   let uploadId = job.uploadId;
-  const upload = (job.send?.() ?? Promise.all([
+  const base = job.send?.(job.controller.signal) ?? Promise.all([
     startUpload(job.file, {
       uploadId,
       signal: job.controller.signal,
@@ -285,7 +285,8 @@ function pump() {
       onPhase: (phase) => setJob(id, { phase }),
     }),
     job.shrink && job.file instanceof Blob ? shrunkPicture(job.file) : undefined,
-  ]).then(([done, preview]) => (preview ? { ...done, preview } : done))).then((result) => {
+  ]).then(([done, preview]) => (preview ? { ...done, preview } : done));
+  const upload = base.then((result) => {
     if (jobs.has(id)) job.save?.(result, uploadId);
     return result;
   });

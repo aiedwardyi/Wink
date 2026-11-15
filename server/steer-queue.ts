@@ -167,7 +167,7 @@ export interface QueuedSteer {
 }
 
 export type CancelSteerResult =
-  | { cancelled: true }
+  | { cancelled: true; send?: ReturnedSend }
   | { cancelled: false; running: true }
   | { cancelled: false; running: false };
 
@@ -591,7 +591,9 @@ export function cancelSteeredMessage(botId: string, messageId: string): CancelSt
     if (items.length === 0) queues.delete(key);
     else queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
     saveQueuedSends();
-    return { cancelled: true };
+    return removed && !isRoomItem(removed)
+      ? { cancelled: true, send: { threadId: entry.threadId, queueId: removed.messageId, sendId: removed.sendId, text: removed.text } }
+      : { cancelled: true };
   }
   for (const entry of queues.values()) {
     if (entry.botId === botId) continue;

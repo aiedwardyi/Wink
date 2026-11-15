@@ -37,10 +37,10 @@ import {
   isImageFile,
   isLongPaste,
   pasteAttachment,
-  pasteImageAttachment,
   rereadEmptyImages,
   shrinksImage,
   uploadAttachment,
+  uploadAttachmentFile,
   visibleComposerNotice,
   type Attachment,
   type ComposerThreadNotice,
@@ -139,10 +139,9 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture
 const saveUpload = (draftId: string, chipId: string) => (result: UploadDone, uploadId?: string) =>
   updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId, a.picture) : a));
 
-const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (): Promise<UploadDone> => {
-  const saved = await pasteImageAttachment(file, chip.picture === "image");
-  if (saved?.kind !== "image" && saved?.kind !== "file") throw new Error("not a picture");
-  return { path: saved.path, name: saved.name, size: saved.size, type: saved.kind === "image" ? saved.mime : file.type };
+const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
+  const saved = await uploadAttachmentFile(file, false, signal);
+  return { path: saved.path, name: file.name || "pasted image", size: saved.bytes, type: saved.mime };
 } : undefined;
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
@@ -361,7 +360,7 @@ export function Composer({
   // an upload chip with no job is from before a reload.
   const jobs = useSyncExternalStore(onUploadJobs, uploadJobs, uploadJobs);
   useEffect(() => {
-    for (const a of attachments) if (a.kind === "file" && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
+    for (const a of attachments) if ((a.kind === "file" || a.kind === "image") && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
     const changed = attachments.filter((a) => {
       const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
       return job && a.kind === "upload" && (job.phase === "done" || (job.uploadId && job.uploadId !== a.uploadId));
