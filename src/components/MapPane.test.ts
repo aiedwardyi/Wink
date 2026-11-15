@@ -25,7 +25,7 @@ const workers = [
 ];
 const repo = { name: "wink", paths: ["README.md", "b.ts", "src/a.ts", "src/manual.ts", "src/z.ts", "server/x.ts"] };
 const reads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/file?"));
-const emit = (items = workers) => act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: items }) }); });
+const emit = (items: object[] = workers) => act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: items }) }); });
 const click = (selector: string) => act(async () => { host.querySelector<HTMLButtonElement>(selector)!.click(); });
 type Spot = { x: number; y: number };
 const offLine = (points: Spot[], a: Spot, b: Spot) => Math.max(...points.map(p => {
@@ -42,7 +42,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/repo?") ? Response.json(repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] })));
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); applyLocale("en"); });
 
 it("labels root and folder counts in both languages", async () => {
   const paths = [...Array.from({ length: 1100 }, (_, i) => `src/${i}.ts`), "src/a.ts", "src/manual.ts", "server/x.ts"];
@@ -600,4 +600,71 @@ it("lists a clash once per file with all its workers and caps the list with many
     `a.tsW0 + W1 + W2 + W3 + W4 + W5 + W6 + W7 + W8 + W9 · different lines`,
     "+2 more",
   ]);
+});
+
+it("reopens the stream from Retry when the snapshot failed, in the viewer and in the empty state", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers, error: true }) }); });
+  expect(host.querySelector(".map-code")?.textContent).toBe("Could not load changes Retry");
+  await click(".map-code .map-empty button");
+  expect(EventSource).toHaveBeenCalledTimes(2);
+  expect(close).toHaveBeenCalledOnce();
+  await emit();
+  expect(host.querySelector(".map-code")?.textContent).toContain("const edited = true;");
+  await act(async () => { stream.onmessage?.({ data: JSON.stringify({ workers: [], error: true }) }); });
+  expect(host.querySelector(".map-empty")?.textContent).toBe("Could not load changes Retry");
+  await click(".map-empty button");
+  expect(EventSource).toHaveBeenCalledTimes(3);
+});
+
+it("reconnects a stream the server refused", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await act(async () => { Object.assign(stream, { readyState: 2 }); stream.onerror?.(); });
+  expect(host.textContent).toBe("Could not load changes Retry");
+  await act(async () => { vi.advanceTimersByTime(5000); });
+  expect(EventSource).toHaveBeenCalledTimes(2);
+  await emit();
+  expect(host.querySelector(".map-code")?.textContent).toContain("const edited = true;");
+});
+
+it("shows a failed worker's error on that worker alone, with a Retry that reopens the stream", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(new URL(String(url), "http://test").searchParams.get("worker") === "gone" ? { name: "", paths: [] } : repo) : Response.json({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], error: true }, workers[1]]);
+  expect(host.querySelector(".map-code")?.textContent).toContain("const edited = true;");
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(2)');
+  expect(host.querySelector(".map-code")?.textContent).toBe("Could not load changes Retry");
+  await click(".map-code .map-empty button");
+  expect(EventSource).toHaveBeenCalledTimes(2);
+  await emit([{ id: "gone", nick: "GONE", git: false, editedAt: 0, files: [], error: true }]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("0 files changedGONE");
+  expect(host.querySelector(".map-top .map-empty")?.textContent).toBe("Could not load changes Retry");
+  expect(host.querySelector(".map-tree")).toBeNull();
+});
+
+it("builds a team's tree from its first git worker and shows a remote worker as not a git folder alone", async () => {
+  const asked = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/repo?")).map(([url]) => new URL(String(url), "http://test").searchParams.get("worker"));
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(new URL(String(url), "http://test").searchParams.get("worker") === "r" ? { name: "", paths: [] } : repo) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ id: "r", nick: "REMOTE", git: false, editedAt: 0, files: [] }, ...workers]);
+  expect(asked()).toEqual(["a"]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("3 workers · 3 of 6 files changedwink / 3 workers");
+  expect(host.querySelector(".map-tree-box b")?.textContent).toBe("wink");
+  await click(".map-worker");
+  await click('[role="menuitemradio"]:nth-child(2)');
+  expect(host.querySelector(".map-where")?.textContent).toBe("Not a git folderREMOTE");
+  expect(host.querySelector(".map-tree")).toBeNull();
+});
+
+it("says how many new files a capped worker left out", async () => {
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], more: 4800 }]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("Changed 2 of 6 files · +4,800 more fileswink / ALPHA");
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => { applyLocale("ko"); root.render(createElement(MapPane, { botId: "bot" })); });
+  await emit([{ ...workers[0], more: 4800 }]);
+  expect(host.querySelector(".map-where")?.textContent).toBe("파일 6개 중 2개 변경 · 외 파일 4,800개wink / ALPHA");
 });
