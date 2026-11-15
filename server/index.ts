@@ -7249,17 +7249,7 @@ function routineProposalPersistence(botId: string, threadId: string) {
   if (!connectorThread(botId, threadId)) {
     return { ok: false as const, status: 403, error: "source conversation does not belong to sender" };
   }
-  // Only cards on the visible branch can be acted on from the composer.
-  // Abandoned branches must not permanently consume the proposal quota.
-  const openRequests = store.activePath(threadId).filter(
-    (message) =>
-      message.card?.routineRequest?.botId === botId &&
-      !message.card.answered &&
-      !message.card.dismissed,
-  ).length;
-  return openRequests >= 8
-    ? { ok: false as const, status: 429, error: "confirm or cancel an existing routine proposal first" }
-    : { ok: true as const };
+  return { ok: true as const };
 }
 
 function connectorMessage(botId: string, threadId: string, messageId: string) {

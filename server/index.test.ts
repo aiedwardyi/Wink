@@ -3796,6 +3796,19 @@ describe("harness HTTP API", () => {
       expect(duplicate.body.alreadySettled).toBe(true);
       expect((await api("GET", "/api/routines")).body.routines
         .filter((routine: { botId: string }) => routine.botId === bot.id)).toHaveLength(1);
+      for (let i = 1; i <= 9; i++) {
+        const more = await fetch(`${BASE}/api/internal/routine-requests`, {
+          method: "POST",
+          headers: internalHeaders,
+          body: JSON.stringify({
+            fromBotId: bot.id,
+            fromThreadId: bot.threadId,
+            action: "create",
+            routine: { name: `Brief ${i}`, instructions: "Summarize.", schedule: { type: "weekly", time: "09:00", weekdays: ["monday"] }, runOn: "maus", durationMinutes: 30 },
+          }),
+        });
+        expect(more.status).toBe(201);
+      }
 
       // The initial fixture turn is deliberately hung. Once it is stopped,
       // force a deterministic dispatch failure by choosing the configured
