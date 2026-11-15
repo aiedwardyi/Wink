@@ -1502,7 +1502,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
     <main data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} sendRef={sceneSend} />}
+      {scene && <ChatScene scene={scene} skin={skin} working={waiting} threadId={bot.threadId} hidden={hidden} sendRef={sceneSend} />}
       {/* Call mode covers the thread while the bot is on the line */}
       {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
