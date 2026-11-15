@@ -4,10 +4,14 @@ import type { MapDiff, MapDiffLine, MapRepo, MapSnapshot } from "../../shared/ma
 import { request } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
 import { mapFollow, type MapSelection } from "@/lib/map-follow";
+import { EASE_STANDARD, MOTION_MODERATE_MS } from "@/lib/motion";
 import { mapClashes, treeIndex, treeOrder } from "@/lib/map-tree";
 import { mapWorkerSlots } from "@/lib/map-worker-colors";
+import { MapExample } from "./MapExample";
 import { MapGitFlow } from "./MapGitFlow";
+import { MapSplit } from "./MapSplit";
 import { MapTree } from "./MapTree";
+import { Segmented } from "./Segmented";
 import "./MapPane.css";
 
 const copy = {
@@ -23,6 +27,8 @@ const INITIAL: MapSelection = { follow: true, worker: null, path: null, pinned: 
 const RECONNECT = 5_000;
 type Step = { reason?: string; editedAt: number };
 const clock = (at: number) => new Date(at).toLocaleTimeString("en-GB", { hour12: false });
+const ease = (part: Element | null | undefined, frames: Keyframe[]) => { if (!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) part?.animate?.(frames, { duration: MOTION_MODERATE_MS, easing: EASE_STANDARD }); };
+const fade = (part?: Element | null) => ease(part, [{ opacity: 0.5 }, { opacity: 1 }]);
 
 export function MapPane({ botId, maximized = false, active = true }: { botId?: string; maximized?: boolean; active?: boolean }) {
   const { locale } = useI18n();
@@ -34,7 +40,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [whole, setWhole] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const cache = useRef({ key: "", diffs: new Map<string, MapDiff>() });
-  const [repo, setRepo] = useState<(MapRepo & { worker: string }) | null>(null);
+  const [repo, setRepo] = useState<(MapRepo & { worker: string; held?: boolean }) | null>(null);
   const [repoFailed, setRepoFailed] = useState<string | null>(null);
   const [repoRetry, setRepoRetry] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -43,7 +49,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const [connection, setConnection] = useState(0);
   const [link, setLink] = useState(0);
   const liveReady = useRef(false);
-  const [ready, setReady] = useState(!botId);
+  const [live, setReady] = useState(!botId);
+  const ready = live || snapshot.workers.length > 0;
   const topRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const slots = useRef<ReadonlyMap<string, number>>(new Map());
@@ -64,6 +71,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
   const more = onTree.reduce((sum, item) => sum + (item.more ?? 0), 0);
   const paths = repo?.worker === repoWorker ? repo?.paths : undefined;
   const lost = !paths && !!repoWorker && repoFailed === repoWorker;
+  // A worker switch keeps the last tree up until the new one lands.
+  if (repo && repoWorker && (repoFailed === repoWorker ? repo.held : repo.worker !== repoWorker)) setRepo(repoFailed === repoWorker ? null : { ...repo, worker: repoWorker, held: true });
   const known = useMemo(() => new Set(paths), [paths]);
   const extra = changedKey ? changedKey.split("\0").filter(path => !known.has(path)) : [];
   const extraKey = extra.join("\0");
@@ -153,21 +162,40 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
 
   const again = () => connectionFailed || snapshot.error || worker?.error ? setLink(link + 1) : setRetry(retry + 1);
   const failure = <>{c.failed} <button type="button" onClick={again}>{c.retry}</button></>;
-  const loaded = !failed && diff?.worker === worker?.id ? diff : null;
+  // A worker switch keeps the last diff up, still tagged with its own worker, until the new one lands.
+  const held = !!diff && !!worker?.git && !!chosen.path && diff.worker !== worker.id;
+  const loaded = !failed && diff && (held || diff.worker === worker?.id) ? diff : null;
   const shown = loaded ? loaded.path : chosen.path;
   const fills = expanded && !!shown && !!worker?.git && files.length > 0;
   useLayoutEffect(() => {
     const code = codeRef.current;
-    const key = loaded ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
+    const key = loaded && !held ? `${loaded.worker}\0${loaded.path}\0${loaded.whole}` : "";
     if (!code || scrolled.current.code === code && scrolled.current.key === key) return;
     scrolled.current = { code, key };
-    if (!loaded) return;
+    if (!key) return;
+    fade(code);
     const row = code.querySelector<HTMLElement>('.map-code-row:not([data-kind="context"])');
     code.scrollTop = row ? code.scrollTop + row.getBoundingClientRect().top - code.getBoundingClientRect().top - code.clientHeight / 4 : 0;
-  }, [loaded]);
+  }, [loaded, held]);
+  // The code view slides from where it was (expand, collapse, worker switch) instead of laying out every frame.
+  const barRef = useRef<HTMLDivElement>(null);
+  const slid = useRef<number | null>(null);
+  const scope = !worker ? null : team ? "" : worker.id;
+  const scoped = useRef(scope);
+  const mark = () => { slid.current = barRef.current?.getBoundingClientRect().top ?? null; };
+  useLayoutEffect(() => {
+    const top = topRef.current;
+    if (top && scoped.current !== null && scope !== null && scoped.current !== scope) { fade(top); fade(top.parentElement?.querySelector(":scope > .map-flow-rows")); }
+    scoped.current = scope;
+    const from = slid.current;
+    const to = barRef.current?.getBoundingClientRect().top;
+    if (from === null || to === undefined) return;
+    slid.current = repo?.held || held ? to : null;
+    if (from !== to) for (let part: Element | null = barRef.current; part; part = part.nextElementSibling) ease(part, [{ transform: `translateY(${from - to}px)` }, { transform: "none" }]);
+  });
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
-    if (!base || !loaded) return;
+    if (!base || !loaded || held) return;
     const { worker: id, path, data } = loaded;
     const diffs = cache.current.diffs;
     const show = (full: MapDiff) => setDiff(current => current?.worker === id && current.path === path && current.data === data ? { ...current, full, opened: [...current.opened ?? [], line] } : current);
@@ -208,8 +236,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         <div ref={menuRef} className="map-worker-menu">
           <button type="button" className="map-worker" onClick={() => setMenu(!menu)} aria-label={c.workers} aria-haspopup="menu" aria-expanded={menu}><i /><span>{worker.nick}</span><ChevronDown size={12} /></button>
           {menu && <div role="menu" className="map-menu">
-            <button type="button" role="menuitemradio" aria-checked={!chosen.pinned} onClick={() => { setSelection({ ...chosen, follow: true, pinned: null }); setMenu(false); }}>{c.all}</button>
-            {snapshot.workers.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={chosen.pinned === item.id} onClick={() => { setSelection({ ...chosen, worker: item.id, pinned: item.id, follow: true }); setMenu(false); }}>{item.nick}</button>)}
+            <button type="button" role="menuitemradio" aria-checked={!chosen.pinned} onClick={() => { mark(); setSelection({ ...chosen, follow: true, pinned: null }); setMenu(false); }}>{c.all}</button>
+            {snapshot.workers.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={chosen.pinned === item.id} onClick={() => { mark(); setSelection({ ...chosen, worker: item.id, pinned: item.id, follow: true }); setMenu(false); }}>{item.nick}</button>)}
           </div>}
         </div>
       </header>
@@ -224,11 +252,12 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
       </div>
       <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
       {worker.git && files.length > 0 && <>
-        <div className="map-crumbs">
+        <MapSplit target={topRef} />
+        <div ref={barRef} className="map-crumbs">
           <span className="map-path" title={shown ?? undefined}>{crumbs.map((part, index) => index === crumbs.length - 1 ? <b key={index}>{part}</b> : <span key={index}>{part} / </span>)}</span>
-          <button type="button" className="map-whole" onClick={() => setWhole(!whole)}>{whole ? c.changes : c.whole}</button>
+          <Segmented label={`${c.changes} / ${c.whole}`} value={whole ? "whole" : "changes"} options={[{ id: "changes", label: c.changes }, { id: "whole", label: c.whole }]} onChange={id => setWhole(id === "whole")} />
           <button type="button" className="map-follow" aria-pressed={chosen.follow} onClick={() => setSelection({ ...chosen, follow: !chosen.follow })}><i />{chosen.follow ? c.following(worker.nick) : c.follow(worker.nick)}</button>
-          <button type="button" className="verify-watch-icon map-expand" onClick={() => setExpanded(!fills)} disabled={!shown} aria-label={fills ? c.showTree : c.expand} title={fills ? c.showTree : c.expand}>{fills ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
+          <button type="button" className="verify-watch-icon map-expand" onClick={() => { mark(); setExpanded(!fills); }} disabled={!shown} aria-label={fills ? c.showTree : c.expand} title={fills ? c.showTree : c.expand}>{fills ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         </div>
         {shown && <div key={`${shown}:${step?.editedAt}`} className="map-step">
           <i />
@@ -236,7 +265,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
           {step && step.editedAt > 0 && <time dateTime={new Date(step.editedAt).toISOString()}>{clock(step.editedAt)}</time>}
           {step?.reason && <p>{shown}</p>}
         </div>}
-        <div ref={codeRef} className="map-code" aria-busy={!failed && (loaded?.path !== chosen.path || loaded.whole !== whole)}>
+        <div ref={codeRef} className="map-code" aria-busy={!failed && (held || loaded?.path !== chosen.path || loaded.whole !== whole)}>
           {failed || connectionFailed || snapshot.error || worker.error ? <p className="map-empty" role="status">{failure}</p> : !loaded ? <p className="map-empty" role="status">{c.loading}</p> : loaded.data.binary ? <p className="map-empty">{c.binary}</p> : <>
             {loaded.data.lines.map((line, index) => {
               if (line.kind !== "fold") return codeRow(line, index);
@@ -250,5 +279,6 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         </div>
       </>}
     </>}
+    {base && ready && !worker && !connectionFailed && !snapshot.error && <MapExample labels={c.tree} active={active} />}
   </section>;
 }

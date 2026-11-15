@@ -21,7 +21,7 @@ interface MapTreeProps {
 
 interface Motion { fx: number; fy: number; tx: number; ty: number; x: number; y: number; t0: number }
 
-// The arrow's tip: path point (2, 1) of the 18x20 viewBox drawn at 13x14.
+// The arrow's tip: path point (2, 1) of the 20x20 viewBox drawn at 14x14.
 const TIP = { x: 1.4, y: 0.7 };
 // It rests 1px off the bottom-right corner of the row's 7px square, so its halo clears the square.
 const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
@@ -286,7 +286,7 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
           {it.hidden ? <span className="map-tree-hidden" style={{ top: 2 + it.files.length * TREE.LINE }}>{labels.files(it.hidden)}</span> : null}
         </div>}
       </div>)}
-      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 18 20"><path d="M2 1L16 12L9 13L5 19Z" /></svg></span>
+      <span ref={pin} className="map-tree-pin" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M2 1L18.5 7L10 9L8 17.5Z" /></svg></span>
     </div>
   </>;
 });
