@@ -505,6 +505,27 @@ export function queuedSteeredMessage(
   return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}) } : null;
 }
 
+/** Every thread's waiting sends, as the window that sent them shows them. */
+export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; reason?: "sync" }>> {
+  const waiting: Record<string, Array<SteerItem & { threadId: string }>> = {};
+  for (const entry of queues.values()) {
+    for (const item of entry.items) {
+      if (isRoomItem(item) || isSendCancelled(item.sendId)) continue;
+      (waiting[entry.threadId] ??= []).push({ ...item, threadId: entry.threadId });
+    }
+  }
+  return Object.fromEntries(Object.entries(waiting).map(([threadId, items]) => [
+    threadId,
+    items.sort((a, b) => a.seq - b.seq).map((item) => ({
+      queueId: item.messageId,
+      text: item.text,
+      sendId: item.sendId,
+      replyToId: item.replyToId,
+      ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}),
+    })),
+  ]));
+}
+
 /** Keep the durable hold out of drains until the ordinary send path settles. */
 export async function withQueuedSend<T extends { ok: true; queued?: boolean }>(
   botId: string,

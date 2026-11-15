@@ -34,6 +34,7 @@ import {
   takeQueuedSteers,
   _queuedCount,
   _resetSteerQueue,
+  waitingSends,
   type SteerStore,
 } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
@@ -116,6 +117,20 @@ describe("steer-queue module", () => {
     expect(start).toHaveBeenLastCalledWith("new message");
     cancelQueuedSends(bot.id);
     expect(isSendCancelled("send_abcdefghijklmnop")).toBe(false);
+  });
+
+  it("lists each thread's waiting sends for a window that did not send them", () => {
+    const first = queueSteeredMessage("bot-w", "thread-w", "first", { sendId: "send_1234567890123456" });
+    const second = queueSteeredMessage("bot-w", "thread-w", "second", { replyToId: "reply-1", syncUntil: 1 });
+    queueSteeredMessage("bot-w", "thread-w", "stopped", { sendId: "send_abcdefghijklmnop" });
+    markSendCancelled("send_abcdefghijklmnop");
+    queueRoomParticipation("bot-w", "thread-room", { groupId: "group-w" });
+    expect(waitingSends()).toEqual({
+      "thread-w": [
+        { queueId: first.id, text: "first", sendId: "send_1234567890123456" },
+        { queueId: second.id, text: "second", replyToId: "reply-1", reason: "sync" },
+      ],
+    });
   });
 
   it("does not append a queued user message until drain", () => {
