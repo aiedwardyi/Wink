@@ -39,6 +39,8 @@ export type UploadAttachment = {
   state: "uploading" | "resuming" | "failed" | "repick";
   /** A big picture whose upload also saves a smaller copy. */
   shrink?: boolean;
+  /** A picture sent whole to the image route; the chip it becomes. */
+  picture?: "image" | "file";
 };
 
 export type ImageAttachment = {
@@ -507,14 +509,13 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
   _opts: {
     allowImages: boolean;
     getPath: (file: T) => string;
-    uploadImage: (file: T, allowImages: boolean) => Promise<Attachment | null>;
     /** Saves a big picture's smaller copy; the browser passes shrunkPicture. */
     shrunkPath?: (file: T) => Promise<string | undefined>;
     t: (key: "composer.uploadTooBig" | "composer.uploadFailed", vars?: Record<string, string | number>) => string;
   },
 ): Promise<{ attachments: Attachment[]; uploads: { id: string; file: T }[]; notice: string | null }> {
   const files = [..._files];
-  const { allowImages, getPath, uploadImage, t } = _opts;
+  const { allowImages, getPath, t } = _opts;
   const shrunkPath = _opts.shrunkPath ?? (async () => undefined);
   const attachments: Attachment[] = [];
   const uploads: { id: string; file: T }[] = [];
@@ -546,12 +547,11 @@ export async function intakeFiles<T extends DroppedFile & Pick<File, "arrayBuffe
       } else {
         // A pathless image (phone, web) has no other way to reach the bot, so
         // it uploads even when the engine cannot read it inline, same as paste.
-        try {
-          const attachment = await uploadImage(file, allowImages);
-          if (attachment) attachments.push(attachment);
-        } catch (err) {
-          uploadErrors.push(`${file.name}: ${err instanceof Error ? err.message : t("composer.uploadFailed")}`);
-        }
+        // Its chip shows at once, so Send waits for it.
+        const chip = uploadAttachment({ name: file.name || "pasted image", size: file.size, type: file.type, lastModified: file.lastModified ?? 0 });
+        chip.picture = allowImages ? "image" : "file";
+        attachments.push(chip);
+        uploads.push({ id: chip.id, file });
       }
       continue;
     }

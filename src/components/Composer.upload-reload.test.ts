@@ -88,6 +88,37 @@ describe("update reload during an upload", () => {
   });
 });
 
+describe("picture still uploading", () => {
+  const draft = () => getDraftAttachments(localStorage, "bot::");
+
+  it.each(intakes)("%s shows its chip at once and Send waits for it", async (_name, intake) => {
+    const { host, answer, uploads } = await mountComposer();
+    const box = host.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "look at this");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => intake(host));
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    expect(host.querySelector<HTMLButtonElement>('button[title="Send after the upload finishes"]')?.disabled).toBe(true);
+    await act(async () => box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true })));
+    expect(box.value).toBe("look at this");
+    await act(async () => answer());
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+    expect(host.querySelector('[aria-label="Remove file"]')).not.toBeNull();
+  });
+
+  it("keeps its chip when the chat is left mid-upload", async () => {
+    const { host, answer, uploads } = await mountComposer();
+    await act(async () => intakes[0]![1](host));
+    await vi.waitFor(() => expect(uploads()).toBe(1));
+    await unmount?.();
+    unmount = null;
+    await act(async () => answer());
+    await vi.waitFor(() => expect(draft()).toEqual([expect.objectContaining({ kind: "file", path: "/tmp/shot.png" })]));
+  });
+});
+
 describe("big file upload", () => {
   it("blocks Send while the upload runs and allows it once the chip is a file", async () => {
     let finish!: () => void;

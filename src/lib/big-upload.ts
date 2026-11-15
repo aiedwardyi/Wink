@@ -237,6 +237,8 @@ export type UploadJob = {
   /** Stores the finished chip in its draft before the reload hold lets go. */
   save?: (result: UploadDone, uploadId?: string) => void;
   shrink?: boolean;
+  /** Sends the file some other way than in chunks. */
+  send?: () => Promise<UploadDone>;
 };
 
 // Module-level so an upload keeps going while its composer is unmounted;
@@ -271,7 +273,7 @@ function pump() {
   running = id;
   setJob(id, { phase: "uploading" });
   let uploadId = job.uploadId;
-  const upload = Promise.all([
+  const upload = (job.send?.() ?? Promise.all([
     startUpload(job.file, {
       uploadId,
       signal: job.controller.signal,
@@ -283,8 +285,7 @@ function pump() {
       onPhase: (phase) => setJob(id, { phase }),
     }),
     job.shrink && job.file instanceof Blob ? shrunkPicture(job.file) : undefined,
-  ]).then(([done, preview]) => {
-    const result = preview ? { ...done, preview } : done;
+  ]).then(([done, preview]) => (preview ? { ...done, preview } : done))).then((result) => {
     if (jobs.has(id)) job.save?.(result, uploadId);
     return result;
   });
@@ -302,9 +303,9 @@ function pump() {
     });
 }
 
-export function queueUpload(id: string, file: UploadFile, uploadId?: string, save?: UploadJob["save"], shrink = false): void {
+export function queueUpload(id: string, file: UploadFile, uploadId?: string, save?: UploadJob["save"], shrink = false, send?: UploadJob["send"]): void {
   const next = new Map(jobs);
-  next.set(id, { file, uploadId, sent: 0, phase: "queued", controller: new AbortController(), save, shrink });
+  next.set(id, { file, uploadId, sent: 0, phase: "queued", controller: new AbortController(), save, shrink, send });
   jobs = next;
   listeners.forEach((listener) => listener());
   pump();
