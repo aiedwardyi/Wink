@@ -1045,7 +1045,6 @@ export const en = {
 
   "composer.placeholder": "Message {name}",
   "composer.finishSetup": "Finish group setup to start chatting",
-  "composer.answerApproval": "Answer the approval above to continue",
   "composer.listening": "Listening…",
   "composer.messageAria": "Message {name}",
   "composer.stopTurn": "Stop this turn",
@@ -2881,7 +2880,6 @@ export const ko = {
 
   "composer.placeholder": "{name}에게 메시지 보내기",
   "composer.finishSetup": "대화를 시작하려면 그룹 설정을 마치세요",
-  "composer.answerApproval": "계속하려면 위의 승인 요청에 답하세요",
   "composer.listening": "듣는 중…",
   "composer.messageAria": "{name}에게 메시지 보내기",
   "composer.stopTurn": "이번 차례 중지",
