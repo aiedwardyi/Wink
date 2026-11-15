@@ -5,7 +5,7 @@
 // the real thing misbehaves:
 //
 //   FAKE_CLAUDE_MODE   happy (default) | exit-early | resume-fails | resume-fails-multiline
-//                      | resume-fails-unknown | hang | malformed
+//                      | resume-fails-unknown | resume-fails-real | hang | malformed
 //                      | stream (partial-message text deltas before the
 //                        whole-message frame, plus subagent noise to drop)
 //                      | edit (a Write then a Bash, gated like the real CLI)
@@ -718,6 +718,16 @@ const playTurn = (prompt: JsonValue, held = false) => {
         : null;
   if (resumeDiagnostic && argv.includes("--resume")) {
     process.stderr.write(resumeDiagnostic, () => process.exit(4));
+    return;
+  }
+  // the installed CLI's own shape: stderr line, then an error result frame, then exit 1
+  if (mode === "resume-fails-real" && argv.includes("--resume")) {
+    const missing = `No conversation found with session ID: ${sessionId}`;
+    process.stderr.write(`${missing}
+`, () => {
+      out({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: sessionId, total_cost_usd: 0, errors: [missing] });
+      setTimeout(() => process.exit(1), 50);
+    });
     return;
   }
   // transient-failure script for retry tests. FAKE_CLAUDE_TRANSIENTS is how

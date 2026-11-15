@@ -1399,6 +1399,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     ["session not found", "resume-fails"],
     ["invalid session across lines", "resume-fails-multiline"],
     ["unknown conversation", "resume-fails-unknown"],
+    ["no conversation found, as the real CLI reports it", "resume-fails-real"],
   ])("starts fresh with portable context for %s", async (diagnostic, mode) => {
     await create(mode);
     const dump = join(scratch, "resume-fallback.json");

@@ -61,10 +61,11 @@ async function mount(
   },
   bots: Bot[] = [bot],
   groups: Group[] = [group],
+  snapshot: object = {},
 ) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
-    if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {} });
+    if (path === "/api/bots?messages=200") return Response.json({ bots, groups, computerControl: {}, ...snapshot });
     if (init?.method === "POST" && (path.endsWith("/messages") || path.endsWith("/respond"))) return post(init);
     const page = path.match(/^\/api\/threads\/([\w-]+)\/messages\?/);
     if (page) return threadPage(page[1]!, init);
@@ -499,6 +500,15 @@ describe("send while the server holds the thread", () => {
     expect(bodies).toEqual([expect.objectContaining({ sendId: "s2" }), expect.objectContaining({ sendId: "s2" })]);
     expect(onError).not.toHaveBeenCalled();
     expect(store.state.error).toBeNull();
+  });
+
+  it("paints a send another window queued, once, from the snapshot", async () => {
+    await mount(() => Response.json({ messages: [], hasMore: false }), undefined, [bot], [group], {
+      queued: { [bot.threadId]: [{ queueId: "q1", text: "after this", sendId: "s1" }] },
+    });
+    await vi.waitFor(() => expect(store.state.pendingQueued[bot.threadId]).toHaveLength(1));
+    const painted = withAcceptedMessages([], store.state.acceptedSends[bot.threadId], store.state.pendingQueued[bot.threadId]);
+    expect(painted.map((message) => message.text)).toEqual(["after this"]);
   });
 
   it("asks only an after-this-turn send to wait, and paints it waiting", async () => {

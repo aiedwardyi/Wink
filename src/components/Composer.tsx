@@ -37,14 +37,15 @@ import {
   isImageFile,
   isLongPaste,
   pasteAttachment,
-  pasteImageAttachment,
   rereadEmptyImages,
   shrinksImage,
   uploadAttachment,
+  uploadAttachmentFile,
   visibleComposerNotice,
   type Attachment,
   type ComposerThreadNotice,
   type FileAttachment,
+  type ImageAttachment,
   type PasteAttachment,
   type UploadAttachment,
 } from "@/lib/composer-attachments";
@@ -124,9 +125,10 @@ const roomPicture = (id: string) => {
 };
 
 const fromUpload = (attachment: Attachment) =>
-  attachment.kind === "upload" || (attachment.kind === "file" && Boolean(attachment.uploadId));
+  (attachment.kind === "upload" && !attachment.picture) || (attachment.kind === "file" && Boolean(attachment.uploadId));
 
-function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAttachment {
+function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture?: UploadAttachment["picture"]): FileAttachment | ImageAttachment {
+  if (picture === "image") return { kind: "image", id, path: result.path, name: result.name, size: result.size, mime: result.type };
   const file = fileAttachment(result.name, result.path, result.size, result.type);
   file.id = id;
   file.uploadId = uploadId;
@@ -135,7 +137,12 @@ function uploadedFile(id: string, result: UploadDone, uploadId?: string): FileAt
 }
 
 const saveUpload = (draftId: string, chipId: string) => (result: UploadDone, uploadId?: string) =>
-  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId) : a));
+  updateDraftAttachment(draftId, chipId, (a) => (a.kind === "upload" ? uploadedFile(chipId, result, uploadId, a.picture) : a));
+
+const sendPicture = (file: File, chip: UploadAttachment) => chip.picture ? async (signal: AbortSignal): Promise<UploadDone> => {
+  const saved = await uploadAttachmentFile(file, false, signal);
+  return { path: saved.path, name: file.name || "pasted image", size: saved.bytes, type: saved.mime };
+} : undefined;
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
   reply: Message | null;
@@ -326,13 +333,13 @@ export function Composer({
     (next: Attachment[], uploads: { id: string; file: File }[] = [], startedAt = 0) => {
       if (startedAt > noticeAt.current) setAttachmentNotice(null);
       let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
-      const kept = next.filter((a) => a.kind !== "upload" || room-- > 0);
+      const kept = next.filter((a) => a.kind !== "upload" || a.picture || room-- > 0);
       if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
       if (kept.length) trackFeature("attach.add", { n: kept.length });
       flushSync(() => editAttachments((prev) => [...prev, ...kept]));
       for (const upload of uploads) {
         const chip = kept.find((a) => a.id === upload.id);
-        if (chip) queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.kind === "upload" && chip.shrink);
+        if (chip?.kind === "upload") queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.shrink, sendPicture(upload.file, chip));
       }
     },
     [draftId, editAttachments, showNotice, t],
@@ -353,7 +360,7 @@ export function Composer({
   // an upload chip with no job is from before a reload.
   const jobs = useSyncExternalStore(onUploadJobs, uploadJobs, uploadJobs);
   useEffect(() => {
-    for (const a of attachments) if (a.kind === "file" && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
+    for (const a of attachments) if ((a.kind === "file" || a.kind === "image") && jobs.get(a.id)?.phase === "done") forgetUpload(a.id);
     const changed = attachments.filter((a) => {
       const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
       return job && a.kind === "upload" && (job.phase === "done" || (job.uploadId && job.uploadId !== a.uploadId));
@@ -363,7 +370,7 @@ export function Composer({
       prev.map((a) => {
         const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
         if (a.kind !== "upload" || !job) return a;
-        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId);
+        if (job.phase === "done" && job.result) return uploadedFile(a.id, job.result, job.uploadId, a.picture);
         return job.uploadId ? { ...a, uploadId: job.uploadId } : a;
       }),
     );
@@ -403,7 +410,7 @@ export function Composer({
     }
     // the saved session answers with its finished file or its offset
     if (file.name === target.name && file.size === target.size && file.lastModified === target.lastModified) {
-      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink);
+      queueUpload(target.id, file, target.uploadId, saveUpload(draftId, target.id), target.shrink, sendPicture(file, target));
       return;
     }
     dropUpload(target.id, target.uploadId);
@@ -676,7 +683,6 @@ export function Composer({
       t,
       allowImages: engineSupportsImages,
       getPath: pathForFile,
-      uploadImage: pasteImageAttachment,
       shrunkPath: shrunkPicture,
     });
     if (added.length) addAttachments(added, uploads, startedAt);

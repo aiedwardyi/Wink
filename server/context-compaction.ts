@@ -34,6 +34,8 @@ const SUMMARY_BUDGET_SHARE = 0.35;
 // Both count user turns: bot bubbles and tool lines are bounded by tokens.
 const MAX_CONTEXT_MESSAGES = 60;
 const MAX_TAIL_MESSAGES = 24;
+// The token trigger's gap, as 24 of 60 is the turn trigger's: a full tail put the next summary one long turn away.
+const TAIL_FILL_SHARE = 0.4;
 const MAX_SUMMARY_TOKENS = 8_192;
 // Haiku overshoots a token ask by 6-18%, so the prompt asks for words well under the budget.
 const SUMMARY_ASK_SHARE = 0.7;
@@ -1103,7 +1105,7 @@ export function planCompaction(input: {
   const typedLines = typedValueLines(input.messages, input.excludeIds);
   const valuesRoom = valuesRoomFor(typedLines, budgetTokens);
   const tailBudget = budgetTokens - summaryBudget - valuesRoom;
-  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
+  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : Math.floor(tailBudget * TAIL_FILL_SHARE));
   if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
     old = units;

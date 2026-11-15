@@ -211,6 +211,7 @@ import {
   queueMark,
   queueRoomParticipation,
   queuedRoomBotIds,
+  waitingSends,
 } from "./steer-queue.ts";
 import { startedTurn } from "./send-receipt.ts";
 import "./send-deliver.ts";
@@ -8289,6 +8290,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
           }),
         ),
+        queued: waitingSends(),
         cursor: `${STREAM_ID}:${lastSeq}`,
         ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });

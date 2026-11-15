@@ -188,12 +188,19 @@ export function reducer(state: AppState, action: Action): AppState {
         state.selectedId && known(state.selectedId)
           ? state.selectedId
           : preferredStartupSelectionId(action.bots, action.groups, action.sidebarOrder);
+      const pendingQueued = { ...state.pendingQueued };
+      for (const [threadId, entries] of Object.entries(action.queued ?? {})) {
+        const held = pendingQueued[threadId] ?? [];
+        const fresh = entries.filter((entry) => !state.consumedQueueIds[entry.queueId] && !held.some((shown) => shown.queueId === entry.queueId));
+        if (fresh.length) pendingQueued[threadId] = [...held, ...fresh];
+      }
       const hydrated = reconcileSnapshotQueues(
         {
           ...state,
           bots: action.bots.map((b) => (b.messages ? { ...b, messages: keepNewestScreenFrames(b.messages) } : b)),
           groups: action.groups,
           olderPatches: {},
+          pendingQueued,
           snapshots: state.snapshots + 1,
           terminalAttention: Object.fromEntries(
             Object.entries(state.terminalAttention).filter(([, attention]) => action.bots.some((bot) => bot.id === attention.botId)),
@@ -2105,6 +2112,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           bots,
           groups: groups ?? [],
           botsUnreadable: snapshot.botsUnreadable,
+          queued: snapshot.queued,
           sidebarOrder: loadSidebarOrder(),
         });
         // Snapshot has busy, not StreamState.signal. Without SSE replay a
