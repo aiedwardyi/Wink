@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { composeMessage, intakeFiles } from "./composer-attachments";
+import { intakeFiles, uploadAttachmentFile } from "./composer-attachments";
 import { applyLocale, t } from "./i18n";
 
 type Fake = Pick<File, "name" | "size" | "type" | "text" | "arrayBuffer">;
@@ -19,20 +19,22 @@ afterEach(() => {
 });
 
 describe("browser document intake", () => {
-  it.each(["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "csv", "json"])("uploads a pathless .%s as a file chip", async (ext) => {
+  it.each(["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "csv", "json"])("shows a pathless .%s as an upload chip before any byte is sent", async (ext) => {
     const saved = { path: `/host/attachments/random.${ext}`, name: `윙크.${ext}`, bytes: 8, mime: "application/octet-stream" };
     const fetcher = vi.fn(async () => Response.json(saved, { status: 201 }));
     vi.stubGlobal("fetch", fetcher);
     const picked = new File(["contents"], `윙크.${ext}`);
     const out = await intakeFiles([picked], { t, allowImages: false, getPath: () => "" });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(out.attachments).toEqual([expect.objectContaining({ kind: "upload", name: picked.name, document: true, state: "uploading" })]);
+    expect(out.uploads).toEqual([{ id: out.attachments[0]!.id, file: picked }]);
+    expect(out.notice).toBeNull();
+    expect(await uploadAttachmentFile(picked, true)).toEqual(saved);
     expect(fetcher).toHaveBeenCalledWith("/api/attachments", expect.objectContaining({
       method: "POST",
       headers: new Headers({ "content-type": "application/octet-stream", "x-attachment-name": encodeURIComponent(picked.name) }),
       body: new TextEncoder().encode("contents"),
     }));
-    expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", path: saved.path, name: saved.name, size: 8 })]);
-    expect(composeMessage("read", out.attachments)).toContain(`<attached-file path="${saved.path}" name="${saved.name}" size="8" />`);
-    expect(out.notice).toBeNull();
   });
 
   it.each(["en", "ko"] as const)("localizes a file over 10 GB in %s", async (locale) => {
@@ -60,15 +62,16 @@ describe("browser document intake", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("keeps successful files in order when a document upload fails", async () => {
-    vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(Response.json({ error: "disk full" }, { status: 500 }))
-      .mockResolvedValueOnce(Response.json({ path: "/host/random.txt", name: "notes.txt", bytes: 8, mime: "application/octet-stream" })));
-    const out = await intakeFiles([file("bad.docx", ""), file("notes.txt", "text/plain"), file("shot.png", "image/png")], {
+  it("keeps documents and pictures in order, each on the upload queue", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const out = await intakeFiles([file("plan.docx", ""), file("notes.txt", "text/plain"), file("shot.png", "image/png")], {
       t, allowImages: true, getPath: () => "",
     });
-    expect(out.attachments.map((a) => "name" in a && a.name)).toEqual(["notes.txt", "shot.png"]);
-    expect(out.notice).toContain("bad.docx");
+    expect(out.attachments.map((a) => "name" in a && a.name)).toEqual(["plan.docx", "notes.txt", "shot.png"]);
+    expect(out.uploads.map((upload) => upload.id)).toEqual(out.attachments.map((a) => a.id));
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(out.notice).toBeNull();
   });
 });
 
