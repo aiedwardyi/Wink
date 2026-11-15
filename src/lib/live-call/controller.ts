@@ -153,10 +153,25 @@ export function asRequest(order: string): string {
   return text.replace(/\s?드릴까요\s*\?*$/, "줘.").replace(/할까요\s*\?*$/, "해줘.");
 }
 
-/** "Sent: X", "Not sent: X (why)": how a result reads aloud and in the chat. */
+/** Why a receipt says the send never reached the bot, if it does. */
+function failure(sent: Posted): string | undefined {
+  if (sent.status >= 400) return `not sent: ${String(sent.data.error ?? sent.status)}`;
+  if (sent.data.cancelled) return "not sent: cancelled";
+  if (sent.data.dispatchFailed) return `not sent: ${sent.data.error ?? "dispatch failed"}`;
+}
+
+const NOTICE = {
+  en: { sent: "Sent", queued: "Queued", notSent: "Not sent", notConfirmed: "Not confirmed", callEnded: "Not sent (call ended)", reasons: {} as Record<string, string> },
+  ko: { sent: "보냄", queued: "대기 중", notSent: "보내지 않음", notConfirmed: "확인 안 됨", callEnded: "보내지 않음 (통화 종료)", reasons: { expired: "시간 초과", cancelled: "취소됨", declined: "거절됨", "needs a yes": "확인 필요" } as Record<string, string> },
+};
+const notice = () => NOTICE[activeLocale() === "ko" ? "ko" : "en"];
+
+/** "Sent: X", "Not sent: X (why)": how a result reads in the chat, in the app's language. */
 export function told(result: string, subject: string): string {
-  if (reached(result) || result === "already sent") return `${result === "queued" ? "Queued" : "Sent"}: ${subject}`;
-  return `${result.startsWith("not confirmed") ? "Not confirmed" : "Not sent"}: ${subject} (${reasonOf(result)})`;
+  const words = notice();
+  if (reached(result) || result === "already sent") return `${result === "queued" ? words.queued : words.sent}: ${subject}`;
+  const why = reasonOf(result);
+  return `${result.startsWith("not confirmed") ? words.notConfirmed : words.notSent}: ${subject} (${words.reasons[why] ?? why})`;
 }
 
 /** How the bot's open card reads aloud: its question and options, never just the title. */
@@ -211,7 +226,7 @@ export class LiveCall {
   private talkedOver = false;
   private settleTimer?: ReturnType<typeof setTimeout>;
   private lines = 0;
-  private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
+  private lineIds: Record<"user" | "voice", number> = { user: 0, voice: 0 };
   private guarded = false;
   private doneTold = false;
   private generating = false;
@@ -237,6 +252,10 @@ export class LiveCall {
   private askAnswered = new Set<string>();
   private justAnswered = false;
   private awaiting = 0;
+  // A sent row lands before the bot prepares its turn, so it is the receipt.
+  private landing = new Map<string, () => void>();
+  // Queued sends have no row until they run; a cancel is their only end.
+  private queuedSends = new Map<string, string>();
   private busy = false;
   private reported = new Set<string>();
   private settled = new Set<string>();
@@ -694,7 +713,7 @@ export class LiveCall {
       pending.req.accounted = false;
       // The bar says not sent, so a hang-up must not send it either.
       this.open.settle(pending.upto);
-      this.postLines([{ who: "voice", text: told("expired", order), at: this.now() }]);
+      this.postLines([{ who: "notice", text: told("expired", order), at: this.now() }]);
       this.answerTool("expired");
     };
     const pending = { order, toolIds: [...(replaced?.toolIds ?? []), ...ids], req: this.req, upto: this.stats.userLines, timer: setTimeout(expire, ORDER_EXPIRY_MS) };
@@ -751,7 +770,7 @@ export class LiveCall {
       this.stats.orders.failed += 1;
       pending.req.accounted = req.accounted = false;
       req.asked = req.asked.filter((asked) => asked !== pending.order);
-      this.postLines([{ who: "voice", text: told(result, pending.order), at: this.now() }]);
+      this.postLines([{ who: "notice", text: told(result, pending.order), at: this.now() }]);
     }
     this.toolResult(pending.toolIds, "propose_work", pending.order, result, reached(result) && (spoken || this.stats.voiceLines > said) ? HEARD : undefined, said);
   }
@@ -775,7 +794,7 @@ export class LiveCall {
         if (!reached(result)) {
           req.accounted = false;
           req.asked = req.asked.filter((asked) => asked !== question);
-          this.postLines([{ who: "voice", text: told(result, question), at: this.now() }]);
+          this.postLines([{ who: "notice", text: told(result, question), at: this.now() }]);
         }
         return result;
       });
@@ -801,35 +820,72 @@ export class LiveCall {
     // The bot reads the call lines before the prompt, so the heard line must land first.
     await Promise.all([...this.writes]);
     const body = { text, sendId, ...(threadId ? { threadId } : {}), call: { id: this.callId, ...tag } };
+    const landed = new Promise<"landed">((resolve) => this.landing.set(sendId, () => resolve("landed")));
     let reason = "";
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (attempt) {
-        this.stats["order" in tag ? "orders" : "asks"].retried += 1;
-        await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (attempt) {
+          this.stats["order" in tag ? "orders" : "asks"].retried += 1;
+          await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+        }
+        const posting = this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/messages`, body);
+        let sent: Posted | "landed";
+        try {
+          sent = await Promise.race([posting, landed]);
+        } catch (error) {
+          reason = error instanceof Error ? error.message : String(error);
+          continue;
+        }
+        if (sent === "landed") {
+          void posting.then((late) => {
+            const failed = failure(late);
+            if (failed) this.unstarted(text, failed);
+          }, () => {});
+          return this.accepted(sendId, text, false);
+        }
+        if (sent.status >= 500) {
+          reason = String(sent.data.error ?? sent.status);
+          continue;
+        }
+        const failed = failure(sent);
+        if (failed) return failed;
+        return this.accepted(sendId, text, Boolean(sent.data.queued));
       }
-      let sent: Posted;
-      try {
-        sent = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/messages`, body);
-      } catch (error) {
-        reason = error instanceof Error ? error.message : String(error);
-        continue;
-      }
-      const error = String(sent.data.error ?? sent.status);
-      if (sent.status >= 500) {
-        reason = error;
-        continue;
-      }
-      if (sent.status >= 400) return `not sent: ${error}`;
-      if (sent.data.cancelled) return "not sent: cancelled";
-      if (sent.data.dispatchFailed) return `not sent: ${sent.data.error ?? "dispatch failed"}`;
-      this.awaiting += 1;
-      // The row and busy can land before this receipt, leaving no busy render with it awaited.
-      if (this.busy) this.ran = true;
-      this.set({ notice: undefined });
-      this.refresh();
-      return sent.data.queued ? "queued" : "sent";
+      return `not confirmed: ${reason}`;
+    } finally {
+      this.landing.delete(sendId);
     }
-    return `not confirmed: ${reason}`;
+  }
+
+  private accepted(sendId: string, text: string, queued: boolean) {
+    this.awaiting += 1;
+    if (queued) this.queuedSends.set(sendId, text);
+    // The row and busy can land before this receipt, leaving no busy render with it awaited.
+    if (this.busy) this.ran = true;
+    this.set({ notice: undefined });
+    this.refresh();
+    return queued ? "queued" : "sent";
+  }
+
+  /** A send the bot took but never ran: its turn failed to start, or it was cancelled from the queue. */
+  private unstarted(text: string, result: string) {
+    if (this.ended) return;
+    this.awaiting = Math.max(0, this.awaiting - 1);
+    this.sent.delete(orderKey(text));
+    this.notSent(text, reasonOf(result));
+    this.held.push({ text: `[Wink] Not run: "${text}" never started (${reasonOf(result)}). Tell them plainly; they can ask again.` });
+    this.release();
+    this.refresh();
+  }
+
+  /** The server cancelled these queued sends before they ran. */
+  dequeued(sendIds: string[]) {
+    for (const sendId of sendIds) {
+      const text = this.queuedSends.get(sendId);
+      if (text === undefined) continue;
+      this.queuedSends.delete(sendId);
+      this.unstarted(text, "not sent: cancelled");
+    }
   }
 
   /** A promise of work with nothing behind it gets one nudge per request, then a line saying it was not sent. */
@@ -865,12 +921,12 @@ export class LiveCall {
     }
     req.told = true;
     this.stats.guard.failLines += 1;
-    this.postLines([{ who: "voice", text: `Not sent: ${req.text}`, at: this.now() }]);
+    this.postLines([{ who: "notice", text: `${notice().notSent}: ${req.text}`, at: this.now() }]);
     this.notSent(req.text);
     this.held.push({ text: `[Wink] Not sent: "${req.text}" never reached ${this.deps.botName}, so nothing is running. Tell them plainly it was not sent.`, fix: true });
   }
 
-  private caption(who: CallLine["who"], buf: string) {
+  private caption(who: "user" | "voice", buf: string) {
     const text = spokenText(buf);
     if (!text) return;
     this.lineIds[who] ||= ++this.lines;
@@ -971,6 +1027,11 @@ export class LiveCall {
   observe(input: { busy: boolean; messages: Message[]; threadId?: string; needs?: { id: string; short: string } }) {
     this.busy = input.busy;
     this.threadId = input.threadId;
+    for (const row of input.messages) {
+      if (row.role !== "user" || !row.sendId || row.call?.id !== this.callId) continue;
+      this.landing.get(row.sendId)?.();
+      this.queuedSends.delete(row.sendId);
+    }
     if (input.busy && this.awaiting) this.ran = true;
     if (!this.connected || this.snapshot.startedAt === undefined || this.ended) return this.refresh();
     const startedAt = this.snapshot.startedAt;
@@ -1418,16 +1479,16 @@ export class LiveCall {
     const words = hangUp ? left : "";
     if (this.pending && !words) {
       this.stats.orders.dropped += 1;
-      this.postLines([{ who: "voice", text: `Not sent (call ended): ${this.pending.order}`, at }]);
+      this.postLines([{ who: "notice", text: `${notice().callEnded}: ${this.pending.order}`, at }]);
     } else if (!hangUp && left) {
       // A drop is no yes: his words stay on screen, unsent.
-      this.postLines([{ who: "voice", text: `Not sent (call ended): ${left}`, at }]);
+      this.postLines([{ who: "notice", text: `${notice().callEnded}: ${left}`, at }]);
       this.notSent(left, "call ended");
     }
     this.pending = undefined;
     if (words) {
       const result = await this.send(words, { order: true });
-      if (!reached(result)) this.postLines([{ who: "voice", text: told(result, words), at: this.now() }]);
+      if (!reached(result)) this.postLines([{ who: "notice", text: told(result, words), at: this.now() }]);
     }
     // Hung up before it connected, the call still ends on the server, timed from the tap.
     if (!this.callId || (this.snapshot.startedAt === undefined && !hangUp)) return;

@@ -48,7 +48,7 @@ type LiveCallDeps = {
 
 type ModelCatalogLookup = (instanceId: string) => { models: { options: readonly { id: string; label: string }[] } } | null | undefined;
 
-const lineSchema = z.object({ who: z.enum(["user", "voice"]), text: z.string(), at: z.number().finite().optional() });
+const lineSchema = z.object({ who: z.enum(["user", "voice", "notice"]), text: z.string(), at: z.number().finite().optional() });
 const linesSchema = z.object({ callId: z.string().regex(CALL_ID), lines: z.array(lineSchema).min(1).max(LINES_MAX) });
 const count = z.number().int().nonnegative();
 const ms = z.number().finite().nonnegative();
@@ -181,7 +181,7 @@ export function callLinesSinceLastUserTurn(messages: Message[], excludeIds: Read
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === boundId) break;
-    if (excludeIds.has(message.id) || message.kind !== "text" || !message.text?.trim()) continue;
+    if (excludeIds.has(message.id) || message.kind !== "text" || !message.text?.trim() || message.call?.notice) continue;
     if (!isVoiceLine(message)) {
       if (message.role === "user" && !message.quick) break;
       continue;
@@ -297,7 +297,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
       const row = store.appendMessage(bot.threadId, line.who === "user"
         ? { role: "user", kind: "text", text, call: { id: callId }, ...(at ? { at } : {}) }
         // Gemini Live speaks the call, whatever engine the bot chats on.
-        : { role: "bot", kind: "text", text, engine: "geminiAgent", call: { id: callId, voice: true }, ...(at ? { at } : {}) });
+        : { role: "bot", kind: "text", text, engine: "geminiAgent", call: { id: callId, voice: true, ...(line.who === "notice" ? { notice: true as const } : {}) }, ...(at ? { at } : {}) });
       ids.push(row.id);
     }
     return json(res, 200, { ids });
@@ -324,7 +324,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
   // Once per call: the first row keeps the length and summary, so no device asks again.
   const recap = async (bot: BotRecord, callId: string, ms: number | undefined) => {
     const rows = () => store.activePath(bot.threadId).filter((row) => row.call?.id === callId);
-    const said = rows().filter((row) => isVoiceLine(row) && row.text?.trim());
+    const said = rows().filter((row) => isVoiceLine(row) && !row.call?.notice && row.text?.trim());
     if (!said.length || rows()[0]!.call!.ms !== undefined) return;
     const length = ms ?? said.at(-1)!.at - said[0]!.at;
     const key = cfg.gemini?.apiKey?.trim();

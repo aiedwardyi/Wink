@@ -114,12 +114,25 @@ describe("composer stop", () => {
 });
 
 describe("composer stop on a call", () => {
-  it("leaves End as the only stop-shaped control while a call is on", async () => {
+  it("keeps Stop reachable on the far side from End while a call is on", async () => {
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
-    await act(async () => root!.render(createElement(Composer, { bot, call: () => createElement("button", { "aria-label": "End call" }) })));
-    expect(host.querySelector('button[aria-label="End call"]')).not.toBeNull();
+    await act(async () => root!.render(createElement(Composer, { bot, call: () => createElement("div", { className: "col-start-2 row-start-3" }, createElement("button", { "aria-label": "End call" })) })));
+    const end = host.querySelector('button[aria-label="End call"]')!;
+    expect(end).not.toBeNull();
+    expect(stopButton().className).toEqual(expect.stringContaining("bg-ink text-app"));
+    expect(stopButton().parentElement!.className).toContain("col-start-1");
+    expect(stopButton().compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => stopButton().click());
+    expect(interrupts()).toHaveLength(1);
+  });
+
+  it("shows no Stop on a call once the bot is idle", async () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(Composer, { bot: { ...bot, busy: false, activity: "idle" }, call: () => createElement("button", { "aria-label": "End call" }) })));
     expect(host.querySelector('button[aria-label="Stop this turn"]')).toBeNull();
   });
 });

@@ -978,6 +978,37 @@ export function Composer({
     setRecording((r) => !r);
   };
 
+  // Beside a call's End it gets tapped as the hang-up, so a call moves it to the far side.
+  const callStop = stoppable && !locked && callSlot.mounted;
+  const stopButton = (
+    <button
+      onClick={() => {
+        if (stopTooSoon()) return;
+        if (room?.onStop) room.onStop();
+        else if (group) stopRoom(group.id);
+        else if (bot && !stopping) {
+          const botId = bot.id;
+          setStoppingBotId(botId);
+          dispatch({
+            type: "interrupt",
+            botId,
+            onSettled: () => setStoppingBotId((current) => (current === botId ? null : current)),
+          });
+        }
+      }}
+      aria-label={t("composer.stopTurn")}
+      aria-busy={stopping}
+      data-orbit-composer-stop=""
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-app hover:opacity-80",
+        stopping && "animate-pulse",
+      )}
+      title={t("composer.stop")}
+    >
+      <Square size={12} className="fill-current" />
+    </button>
+  );
+
   return (
     <div className="pointer-events-none relative px-5 pb-3">
       {/* No fill or hairline on this wrapper — those were the black frame
@@ -1263,9 +1294,9 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!sendBlocked && !room?.offline && (
+          {((!sendBlocked && !room?.offline) || callStop) && (
             <div className="col-start-1 row-start-3 mt-1 flex items-center gap-1">
-              <button
+              {!sendBlocked && !room?.offline && <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
                 aria-label={t("composer.attach")}
@@ -1273,7 +1304,8 @@ export function Composer({
                 className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
               >
                 <Paperclip size={17} />
-              </button>
+              </button>}
+              {callStop && stopButton}
             </div>
           )}
           {callSlot.mounted && callSlot.value?.({ closing: callSlot.closing })}
@@ -1392,35 +1424,7 @@ export function Composer({
             className="col-span-full row-start-2 max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto self-center bg-transparent px-1 py-1 text-[15px] leading-6 text-ink placeholder:text-ink-secondary focus:outline-none max-md:text-[16px]"
           />
         <div className="col-start-3 row-start-3 mt-1 flex items-center gap-1">
-          {/* A Stop beside a call's End gets tapped as the hang-up and kills the turn. */}
-          {stoppable && !locked && !callSlot.mounted && (
-          <button
-            onClick={() => {
-              if (stopTooSoon()) return;
-              if (room?.onStop) room.onStop();
-              else if (group) stopRoom(group.id);
-              else if (bot && !stopping) {
-                const botId = bot.id;
-                setStoppingBotId(botId);
-                dispatch({
-                  type: "interrupt",
-                  botId,
-                  onSettled: () => setStoppingBotId((current) => (current === botId ? null : current)),
-                });
-              }
-            }}
-            aria-label={t("composer.stopTurn")}
-            aria-busy={stopping}
-            data-orbit-composer-stop=""
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-app hover:opacity-80",
-              stopping && "animate-pulse",
-            )}
-            title={t("composer.stop")}
-          >
-            <Square size={12} className="fill-current" />
-          </button>
-        )}
+          {stoppable && !locked && !callSlot.mounted && stopButton}
         {!sendBlocked && !stoppable && !hasContent && !callSlot.mounted && capabilities.dictation.available && (
           <button
             onClick={toggleMic}

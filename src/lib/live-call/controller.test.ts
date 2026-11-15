@@ -2464,3 +2464,101 @@ describe("MIC-HINT", () => {
     expect(call.state().micSilent).toBeUndefined();
   });
 });
+
+describe("VOICE-FIX-5: receipts that wait on the bot", () => {
+  const slow = () => {
+    let reply!: (posted: Posted) => void;
+    return { post: () => new Promise<Posted>((resolve) => { reply = resolve; }), reply: (posted: Posted) => reply(posted) };
+  };
+
+  it("H1 a yes is sent once its row lands, not after the turn prepares", async () => {
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    const answered = call.answer(true);
+    await flush();
+    expect(engine().results).toEqual([]);
+    call.observe({ busy: false, messages: [{ ...orderRow("o1", "Fix the login bug."), sendId: "send-1" }] });
+    await answered;
+    expect(engine().results).toEqual([{ id: "t1", result: "sent" }]);
+    expect(call.state().status).toBe("working");
+    receipt.reply({ status: 202, data: { ok: true } });
+    await flush();
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toEqual([]);
+  });
+
+  it("H1 a landed ask is answered at once", async () => {
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "ask", args: { question: "Is the build green?" } }]);
+    await flush();
+    call.observe({ busy: false, messages: [{ ...askRow("a1", "Is the build green?"), sendId: "send-1" }] });
+    await flush();
+    expect(engine().results.map((r) => r.id)).toEqual(["t1"]);
+  });
+
+  it("H1 a landed send whose turn then fails to start is told and stops Working", async () => {
+    vi.useFakeTimers();
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    const answered = call.answer(true);
+    await flush();
+    call.observe({ busy: false, messages: [{ ...orderRow("o1", "Fix the login bug."), sendId: "send-1" }] });
+    await answered;
+    receipt.reply({ status: 202, data: { ok: true, dispatchFailed: true, error: "context preparation failed" } });
+    await flush();
+    await gap();
+    expect(call.state().status).toBe("listening");
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug.", why: "context preparation failed" });
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toEqual(['[Wink] Not run: "Fix the login bug." never started (context preparation failed). Tell them plainly; they can ask again.']);
+  });
+
+  it("H2 a queued order cancelled before it runs settles Working and is told", async () => {
+    vi.useFakeTimers();
+    const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true, queueId: "q1" } } });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy the site." } }]);
+    await call.answer(true);
+    expect(call.state().status).toBe("working");
+    call.dequeued(["other"]);
+    expect(call.state().status).toBe("working");
+    call.dequeued(["send-1"]);
+    await gap();
+    expect(call.state().status).toBe("listening");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toEqual(['[Wink] Not run: "Deploy the site." never started (cancelled). Tell them plainly; they can ask again.']);
+    call.dequeued(["send-1"]);
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toHaveLength(1);
+  });
+
+  it("H2 a queued order that ran is no longer cancellable", async () => {
+    const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true, queueId: "q1" } } });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Deploy the site." } }]);
+    await call.answer(true);
+    call.observe({ busy: true, messages: [{ ...orderRow("o1", "Deploy the site."), sendId: "send-1" }] });
+    call.dequeued(["send-1"]);
+    expect(call.state().status).toBe("working");
+    expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toEqual([]);
+  });
+});
+
+describe("VOICE-FIX-5: the app's own lines", () => {
+  it("K1 a not-sent line is posted as a notice, not the voice's words", async () => {
+    const { call, engine, posts } = await started({ "/messages": { status: 409, data: { error: "busy" } } });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Check the build." } }]);
+    await call.answer(true);
+    const lines = posts.filter((p) => p.path.endsWith("/call/lines")).flatMap((p) => p.body.lines);
+    expect(lines).toEqual([{ who: "notice", text: "Not sent: Check the build. (busy)", at: expect.any(Number) }]);
+  });
+
+  it("K1 a Korean app reads its notices in Korean", async () => {
+    const i18n = await import("@/lib/i18n");
+    const spy = vi.spyOn(i18n, "activeLocale").mockReturnValue("ko");
+    try {
+      expect(told("expired", "배포해 줘")).toBe("보내지 않음: 배포해 줘 (시간 초과)");
+      expect(told("queued", "배포해 줘")).toBe("대기 중: 배포해 줘");
+      expect(told("not confirmed: network down", "배포해 줘")).toBe("확인 안 됨: 배포해 줘 (network down)");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
