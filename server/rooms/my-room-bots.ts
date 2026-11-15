@@ -84,13 +84,11 @@ export class MyRoomBotTurns {
     const room = joinedRoom(roomId);
     const state = room?.state;
     if (room?.status !== "joined" || !state?.teamBots || entry.author.kind === "bot") return;
-    const mine = new Map(myRoomBots(roomId).map((bot) => [bot.id, bot]));
-    const own = state.teamBots.filter((bot) => bot.owner === room.me.id && mine.has(bot.id));
-    if (!own.length) return;
-    const others = state.teamBots.filter((bot) => !own.includes(bot)).map((bot) => bot.name);
     const quote = entry.replyToId ? joinedEntry(roomId, entry.replyToId) : null;
-    const hit = roomResponder(entry.text, [...state.bots, ...own], [state.host, ...state.people.map((person) => person.name), ...others], quote?.author.kind === "bot" ? quote.author.id : undefined, false);
-    this.queue(roomId, hit && mine.get(hit.id), entry);
+    // resolve against every bot first so each PC picks the same one
+    const hit = roomResponder(entry.text, [...state.bots, ...state.teamBots], [state.host, ...state.people.map((person) => person.name)], quote?.author.kind === "bot" ? quote.author.id : undefined, false);
+    const own = hit && state.teamBots.some((bot) => bot.id === hit.id && bot.owner === room.me.id);
+    this.queue(roomId, own ? myRoomBots(roomId).find((bot) => bot.id === hit.id) : undefined, entry);
   }
 
   /** A live line from someone else: a member's wakes this PC's bot like its owner's; a bot's wakes the bot it @'s when that bot is this PC's. */
@@ -164,7 +162,8 @@ export class MyRoomBotTurns {
       const room = joinedRoom(row.roomId);
       const bot = myRoomBots(row.roomId).find((candidate) => candidate.id === row.id && candidate.botId === row.botId);
       const listed = room?.state?.teamBots?.find((candidate) => candidate.id === row.id && candidate.owner === room.me.id);
-      const asker = row.entry.author.kind !== "bot" || !this.halted(row.roomId, row.entry.seq);
+      const { author } = row.entry;
+      const asker = author.kind === "bot" ? !this.halted(row.roomId, row.entry.seq) : author.kind === "host" || author.id === room?.me.id || Boolean(room?.state?.people.some((person) => person.id === author.id));
       if (room?.status !== "joined" || !asker || !bot || !listed || !this.deps.bot(row.botId)) {
         this.waiting.splice(this.waiting.indexOf(row), 1);
         this.set(row.roomId, row.id, undefined);

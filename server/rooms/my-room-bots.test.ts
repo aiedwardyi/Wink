@@ -225,6 +225,29 @@ describe("this PC's bot in a joined room", () => {
     expect(deps.startTurn.mock.calls[1]![2]).toContain('"Mina" asked you: now the totals');
   });
 
+  it("stays quiet when a reply to its line @'s another PC's bot", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    const answer = line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "Chart's up.", { at: Date.now() });
+    turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Mini please take over", { at: Date.now(), replyToId: answer.id }));
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("drops a teammate's waiting ask once they leave the room", async () => {
+    let busy = true;
+    Object.assign(deps, { busy: () => busy });
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder hi", { at: Date.now() }));
+    await settle();
+    expect(turns.turn(ROOM, PETE.id)).toEqual({ waiting: true });
+    setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME], bots: [{ id: "b1", name: "EdBot", color: "blue" }], teamBots: [PETE] });
+    busy = false;
+    await turns.settled("private-task", true);
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
+    expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
+  });
+
   it("never tells its bot only its owner can ask it", async () => {
     setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE] });
     const turns = new MyRoomBotTurns(deps);
