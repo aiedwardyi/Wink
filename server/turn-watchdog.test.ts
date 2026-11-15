@@ -5,14 +5,12 @@ import { describe, expect, it } from "vitest";
 import { TurnWatchdog, type WatchedTurn } from "./turn-watchdog.ts";
 
 const STALL = 10_000;
-const TOOL_CAP = 30_000;
 
 function rig() {
   let now = 0;
   const stalls: WatchedTurn[] = [];
   const dog = new TurnWatchdog({
     stallMs: STALL,
-    toolCapMs: TOOL_CAP,
     checkMs: 60_000,
     onStall: (turn) => stalls.push(turn),
     now: () => now,
@@ -63,16 +61,16 @@ describe("TurnWatchdog", () => {
     expect(stalls).toHaveLength(1);
   });
 
-  it("holds the clock for a tool in flight, up to the absolute cap", () => {
+  it("never stalls a turn with a tool in flight, however long it runs", () => {
     const { dog, stalls, tick } = rig();
     dog.watch("t1", "bot1");
     dog.toolStarted("t1", "call-1");
     tick(STALL * 2);
     dog.sweep();
     expect(stalls).toHaveLength(0);
-    tick(TOOL_CAP);
+    tick(2 * 60 * 60_000);
     dog.sweep();
-    expect(stalls).toEqual([expect.objectContaining({ threadId: "t1" })]);
+    expect(stalls).toHaveLength(0);
   });
 
   it("stalls a silent turn once its tool completes", () => {

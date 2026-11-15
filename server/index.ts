@@ -3162,17 +3162,9 @@ const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
 const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
-// A tool that is still running keeps the turn alive past TURN_STALL_MS - a long
-// build emits nothing between item.started and item.completed. This is the
-// ceiling on that exemption, for a tool that never returns at all.
-const TURN_TOOL_CAP_MS = Math.max(
-  TURN_STALL_MS,
-  Number(process.env.OMB_TURN_TOOL_CAP_MS) || 60 * 60_000,
-);
 const roomStallCompletions = new RoomTurnStallRegistry();
 const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
-  toolCapMs: TURN_TOOL_CAP_MS,
   checkMs: 60_000,
   onStall: (turn) => {
     repeats.settle(turn.threadId);

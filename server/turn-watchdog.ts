@@ -11,8 +11,7 @@
 // on a human approval are exempt — waiting on a person is not a stall. So is
 // a turn with a tool still in flight: a long build or test run emits nothing
 // between item.started and item.completed, and killing it mid-call loses the
-// whole turn. `toolCapMs` bounds that exemption so a tool that never returns
-// still trips.
+// whole turn.
 export interface WatchedTurn {
   threadId: string;
   botId: string;
@@ -25,8 +24,6 @@ export interface WatchedTurn {
 
 export interface TurnWatchdogOptions {
   stallMs: number;
-  /** Silence ceiling that applies even with a tool in flight. */
-  toolCapMs: number;
   checkMs: number;
   /** Called once per stalled turn, after the entry is removed. */
   onStall: (turn: WatchedTurn) => void;
@@ -112,10 +109,8 @@ export class TurnWatchdog {
   sweep(): void {
     const at = this.now();
     for (const turn of this.turns.values()) {
-      if (turn.waitingOnHuman) continue;
-      const silent = at - turn.lastEventAt;
-      if (silent < this.opts.stallMs) continue;
-      if (turn.toolsInFlight.size > 0 && silent < this.opts.toolCapMs) continue;
+      if (turn.waitingOnHuman || turn.toolsInFlight.size > 0) continue;
+      if (at - turn.lastEventAt < this.opts.stallMs) continue;
       this.turns.delete(turn.threadId);
       this.opts.onStall(turn);
     }

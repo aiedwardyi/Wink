@@ -34,7 +34,7 @@ function fakeBot(busy = false): BotRecord {
 }
 
 function rig(bot: BotRecord, claimed = false) {
-  const watchdog = new TurnWatchdog({ stallMs: 10_000, toolCapMs: 30_000, checkMs: 60_000, onStall: () => {} });
+  const watchdog = new TurnWatchdog({ stallMs: 10_000, checkMs: 60_000, onStall: () => {} });
   const disowned: string[] = [];
   const deps: ContinuationDeps = {
     botByThread: (threadId) => (threadId === bot.threadId ? bot : null),
