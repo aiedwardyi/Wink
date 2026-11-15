@@ -1,5 +1,5 @@
 // PRs that worker reports name and that are not in the user's installed build.
-// take() never waits on gh: it returns the last header and refreshes behind it.
+// take() never waits on gh: it returns what the last refresh found.
 import { z } from "zod";
 
 import { parsePaneNote } from "../shared/pane-note.ts";
@@ -17,6 +17,7 @@ const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
 const BRANCH = / branch=(\S+)/;
 const NOT_PR_BRANCH = new Set(["none", "HEAD", "main", "master"]);
+const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
 
 const viewSchema = z.object({
   number: z.number(), title: z.string(), url: z.string(), state: z.enum(["OPEN", "MERGED", "CLOSED"]),
@@ -78,7 +79,7 @@ export function unlandedHeader(prs: readonly UnlandedPr[], now: number): string 
 
 export interface UnlandedWorkDeps {
   reports: (botId: string) => ReadonlyArray<{ kind?: string; text?: string; at?: number }>;
-  /** where gh resolves a PR the report names without its repo */
+  /** where gh resolves a PR the report names without its repo: the reporting task's folder */
   repoDir: (botId: string) => string | undefined;
   /** the installed app version; empty when unknown */
   version: string;
@@ -87,7 +88,7 @@ export interface UnlandedWorkDeps {
 }
 
 export interface UnlandedWork {
-  /** The cached header, "" when none; starts a refresh and never waits for it. */
+  /** The cached header, "" when none. No I/O. */
   take(botId: string): string;
   refresh(botId: string): Promise<void>;
 }
@@ -101,7 +102,7 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
   const unlanded = new Map<string, UnlandedPr[]>();
   const running = new Map<string, Promise<void>>();
 
-  // Merged and closed never change, and the installed version is fixed for this process.
+  // Only a merge settles a PR, and the installed version is fixed for this process; a closed PR can reopen.
   async function lookup(ref: ReportedPr, dir: string | undefined): Promise<Lookup> {
     const at = now();
     const target = ref.number ? String(ref.number) : ref.branch!;
@@ -111,24 +112,28 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
       ]));
       const view = viewSchema.parse(raw);
       const repo = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(view.url)?.[1]?.toLowerCase();
-      if (!repo || view.state === "CLOSED") return { at, final: true, pr: null };
+      if (!repo) return { at, final: true, pr: null };
+      if (view.state === "CLOSED") return { at, final: false, pr: null };
       const base = { repo, number: view.number, title: view.title };
       if (view.state === "OPEN") return { at, final: false, pr: { ...base, state: view.isDraft ? "draft" : "open" } };
-      const build = await inBuild(repo, view.mergeCommit?.oid);
-      return { at, final: true, pr: build === true ? null : { ...base, state: build === false ? "merged, not in your build" : "merged, not released" } };
-    } catch {
-      return { at, final: false, pr: null };
+      const { build, final } = await inBuild(repo, view.mergeCommit?.oid);
+      return { at, final, pr: build === true ? null : { ...base, state: build === false ? "merged, not in your build" : "merged, not released" } };
+    } catch (error) {
+      // a branch can get its PR after the report; a number that names no PR never will
+      return { at, final: Boolean(ref.number) && NOT_FOUND.test(String(error)), pr: null };
     }
   }
 
-  /** null when the installed build can't be compared */
-  async function inBuild(repo: string, oid: string | undefined): Promise<boolean | null> {
-    if (repo !== APP_REPO || !deps.version || !oid) return null;
+  /** build is null when the installed build can't be compared; not final when that may change */
+  async function inBuild(repo: string, oid: string | undefined): Promise<{ build: boolean | null; final: boolean }> {
+    if (repo !== APP_REPO || !deps.version || !oid) return { build: null, final: true };
     try {
       const status = (await gh(process.cwd(), ["api", `repos/${repo}/compare/v${deps.version}...${oid}`, "--jq", ".status"])).trim();
-      return status === "behind" || status === "identical" ? true : status === "ahead" || status === "diverged" ? false : null;
-    } catch {
-      return null;
+      const build = status === "behind" || status === "identical" ? true : status === "ahead" || status === "diverged" ? false : null;
+      return { build, final: build !== null };
+    } catch (error) {
+      // a dev build has no tag; anything else may be a dropped connection
+      return { build: null, final: NOT_FOUND.test(String(error)) };
     }
   }
 
@@ -158,8 +163,6 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
 
   return {
     take(botId) {
-      // reading the thread's reports waits too, so the send never runs it
-      setImmediate(() => void refresh(botId));
       return unlandedHeader(unlanded.get(botId) ?? [], now());
     },
     refresh,

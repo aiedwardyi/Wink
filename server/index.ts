@@ -2865,7 +2865,12 @@ const unlandedWork = createUnlandedWork({
     const bot = store.bot(botId);
     return bot ? store.messagesFor(bot.threadId) : [];
   },
-  repoDir: (botId) => store.bot(botId)?.cwd ?? store.bot(botId)?.lastProjectCwd,
+  // the reports come from the active task, which keeps the folder it pinned; lastProjectCwd is the next task's
+  repoDir: (botId) => {
+    const bot = store.bot(botId);
+    const pinned = bot ? store.taskByThread(botId, bot.threadId)?.cwd : undefined;
+    return pinned === undefined ? bot?.cwd : pinned ?? undefined;
+  },
   version: process.env.OMB_APP_VERSION ?? "",
 });
 // one bot at a time, so a restart after an update has the list before the first typed turn

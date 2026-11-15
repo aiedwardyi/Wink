@@ -10,21 +10,22 @@ const NOW = new Date(2026, 10, 15, 9).getTime();
 const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
 const report = (at: number, body: string, branch = "fix/x") =>
   ({ kind: "note", at, text: `[pane 1234abcd] [CARD] from Mentor (bot-1): DONE CARD branch=${branch} sha=abc1234 dirty=no\n${body}` });
-const flush = () => new Promise((done) => setImmediate(done));
 
 type StartOpts = { threadId?: string; cardContinuation?: boolean; paneNoteWake?: boolean; unattended?: boolean; keepGoingWake?: boolean; automationSource?: string; commsDepth?: number };
 type View = { number: number; title: string; state: "OPEN" | "MERGED" | "CLOSED"; isDraft?: boolean; mergeCommit?: { oid: string } | null; repo?: string };
 
-function fakeGh(views: Record<string, View>, compare: Record<string, string> = {}) {
+// A compare status starting with "!" fails with that message.
+function fakeGh(views: ReadonlyMap<string, View>, compare: ReadonlyMap<string, string> = new Map()) {
   const calls: string[][] = [];
   const gh = async (_cwd: string, args: string[]) => {
     calls.push(args);
     if (args[0] === "api") {
-      const status = compare[args[1]!];
+      const status = compare.get(args[1]!);
       if (!status) throw new Error("HTTP 404");
+      if (status.startsWith("!")) throw new Error(status.slice(1));
       return `${status}\n`;
     }
-    const view = views[args[2]!];
+    const view = views.get(args[2]!);
     if (!view) throw new Error("no pull requests found");
     return JSON.stringify({ ...view, url: `https://github.com/${view.repo ?? "aiedwardyi/Wink"}/pull/${view.number}` });
   };
@@ -82,14 +83,16 @@ describe("unlandedHeader", () => {
 });
 
 describe("createUnlandedWork", () => {
-  const views = {
+  const allViews = {
     "1640": { number: 1640, title: "fix: tell bots what has not landed", state: "OPEN" },
     "1641": { number: 1641, title: "feat: merged and installed", state: "MERGED", mergeCommit: { oid: "aaa" } },
     "1642": { number: 1642, title: "feat: merged after the installed tag", state: "MERGED", mergeCommit: { oid: "bbb" } },
     "1643": { number: 1643, title: "fix: closed unmerged", state: "CLOSED" },
     "7": { number: 7, title: "fix: other repo", state: "MERGED", mergeCommit: { oid: "ccc" }, repo: "me/site" },
   } satisfies Record<string, View>;
-  const compare = { "repos/aiedwardyi/wink/compare/v1.0.268...aaa": "behind", "repos/aiedwardyi/wink/compare/v1.0.268...bbb": "ahead" };
+  const COMPARE_AAA = "repos/aiedwardyi/wink/compare/v1.0.268...aaa";
+  const views = () => new Map<string, View>(Object.entries(allViews));
+  const compare = () => new Map([[COMPARE_AAA, "behind"], ["repos/aiedwardyi/wink/compare/v1.0.268...bbb", "ahead"]]);
   const messages = [
     report(NOW - 30 * HOUR, "PR 1641"),
     report(NOW - 20 * HOUR, "PR 1642"),
@@ -99,7 +102,7 @@ describe("createUnlandedWork", () => {
   ];
 
   it("lists what is open or not in the installed build and drops merged+installed and closed", async () => {
-    const { gh } = fakeGh(views, compare);
+    const { gh } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
     await work.refresh("bot-1");
     expect(work.take("bot-1")).toBe(
@@ -108,7 +111,7 @@ describe("createUnlandedWork", () => {
   });
 
   it("keeps merged PRs listed when the installed version is unknown", async () => {
-    const { gh } = fakeGh(views, compare);
+    const { gh } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "", gh, now: () => NOW });
     await work.refresh("bot-1");
     expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
@@ -116,7 +119,7 @@ describe("createUnlandedWork", () => {
 
   it("asks gh at most every 10 minutes and never again for a settled PR", async () => {
     let at = NOW;
-    const { gh, calls } = fakeGh(views, compare);
+    const { gh, calls } = fakeGh(views(), compare());
     const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
     await work.refresh("bot-1");
     const first = calls.length;
@@ -125,23 +128,70 @@ describe("createUnlandedWork", () => {
     expect(calls.length).toBe(first);
     at += 1;
     await work.refresh("bot-1");
-    expect(calls.slice(first)).toEqual([["pr", "view", "1640", "--json", "number,title,url,state,isDraft,mergeCommit"]]);
+    expect(calls.slice(first).map((args) => args[2])).toEqual(["1643", "1640"]);
+  });
+
+  it("brings back a closed PR once it reopens", async () => {
+    let at = NOW;
+    const live = views();
+    const { gh } = fakeGh(live, compare());
+    const work = createUnlandedWork({ reports: () => messages.slice(3, 4), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    await work.refresh("bot-1");
+    expect(work.take("bot-1")).toBe("");
+    live.set("1643", { ...allViews["1643"], state: "OPEN" });
+    at += UNLANDED_REFRESH_MS;
+    await work.refresh("bot-1");
+    expect(work.take("bot-1")).toContain("#1643 fix: closed unmerged (10h)");
+  });
+
+  it("retries a build check that failed and drops the PR once it proves installed", async () => {
+    let at = NOW;
+    const checks = compare();
+    checks.set(COMPARE_AAA, "!error connecting to api.github.com");
+    const { gh } = fakeGh(views(), checks);
+    const work = createUnlandedWork({ reports: () => messages.slice(0, 1), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => at });
+    await work.refresh("bot-1");
+    expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (30h, merged, not released)");
+    checks.set(COMPARE_AAA, "behind");
+    at += UNLANDED_REFRESH_MS;
+    await work.refresh("bot-1");
+    expect(work.take("bot-1")).toBe("");
+  });
+
+  it("stops asking for a missing version tag or a number that names no PR, and keeps asking for a branch", async () => {
+    let at = NOW;
+    const { gh, calls } = fakeGh(views(), compare());
+    const reports = [report(NOW - 3 * HOUR, "PR 1641"), report(NOW - 2 * HOUR, "PR 9999"), report(NOW - HOUR, "pushed", "fix/no-pr-yet")];
+    const work = createUnlandedWork({ reports: () => reports, repoDir: () => "D:/repo", version: "1.0.269-dev.1", gh, now: () => at });
+    await work.refresh("bot-1");
+    expect(work.take("bot-1")).toContain("#1641 feat: merged and installed (3h, merged, not released)");
+    const first = calls.length;
+    at += UNLANDED_REFRESH_MS;
+    await work.refresh("bot-1");
+    expect(calls.slice(first).map((args) => args[2])).toEqual(["fix/no-pr-yet"]);
   });
 
   it("never makes a send wait on a slow gh", async () => {
     let release = () => {};
     const gate = new Promise<void>((done) => { release = done; });
-    const { gh: fast } = fakeGh(views, compare);
+    const { gh: fast } = fakeGh(views(), compare());
     const gh = async (cwd: string, args: string[]) => { await gate; return fast(cwd, args); };
     const work = createUnlandedWork({ reports: () => messages.slice(2, 3), repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    const pending = work.refresh("bot-1");
     const started = performance.now();
-    expect(work.take("bot-1")).toBe("");
-    await flush();
     expect(work.take("bot-1")).toBe("");
     expect(performance.now() - started).toBeLessThan(50);
     release();
-    await work.refresh("bot-1");
+    await pending;
     expect(work.take("bot-1")).toContain("#1640 fix: tell bots what has not landed (18h)");
+  });
+
+  it("reads only the cache on take, so a send starts no gh", async () => {
+    const { gh, calls } = fakeGh(views(), compare());
+    const work = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh, now: () => NOW });
+    expect(work.take("bot-1")).toBe("");
+    await new Promise((done) => setImmediate(done));
+    expect(calls).toEqual([]);
   });
 
   it("adds no line and no error without gh or a repo", async () => {
@@ -149,7 +199,7 @@ describe("createUnlandedWork", () => {
     const noGh = createUnlandedWork({ reports: () => messages, repoDir: () => "D:/repo", version: "1.0.268", gh: missing, now: () => NOW });
     await noGh.refresh("bot-1");
     expect(noGh.take("bot-1")).toBe("");
-    const { gh, calls } = fakeGh(views, compare);
+    const { gh, calls } = fakeGh(views(), compare());
     const noRepo = createUnlandedWork({ reports: () => messages.slice(0, 4), repoDir: () => undefined, version: "1.0.268", gh, now: () => NOW });
     await noRepo.refresh("bot-1");
     expect(noRepo.take("bot-1")).toBe("");
@@ -162,7 +212,9 @@ describe("unlanded wiring", () => {
 
   it("rides only turns the user typed, beside the other turn notices", () => {
     const start = source.indexOf("function turnStartedByUser");
-    const fn = ts.transpileModule(source.slice(start, source.indexOf("const SHOW_IMAGE_GUIDANCE", start)), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const end = source.indexOf("const SHOW_IMAGE_GUIDANCE", start);
+    if (start < 0 || end < start) throw new Error("index.ts no longer has turnStartedByUser before SHOW_IMAGE_GUIDANCE; update this slice");
+    const fn = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     // SAFETY: the code is index.ts's own turnStartedByUser, only stripped of types.
     const typed = runInNewContext(`${fn}turnStartedByUser`) as (opts: StartOpts) => boolean;
     expect(typed({})).toBe(true);
@@ -173,5 +225,7 @@ describe("unlanded wiring", () => {
     expect(source).toContain('const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(bot.id) : "";');
     expect(source).toContain("...(unlandedNotice ? [unlandedNotice] : [])");
     expect(source).toContain("void unlandedWork.refresh(bot.id);");
+    expect(source).toContain("const pinned = bot ? store.taskByThread(botId, bot.threadId)?.cwd : undefined;");
+    expect(source).not.toContain("store.bot(botId)?.lastProjectCwd");
   });
 });
