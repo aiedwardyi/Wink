@@ -1,13 +1,18 @@
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { getOrCreateChannel, mirrorExchange, mirrorReply } from "../comms-visibility.ts";
 import { DATA_DIR } from "../config.ts";
+import type { DelegationReceipt } from "../delegations.ts";
+import { publishPeerReply, replyDestinations } from "../peer-reply-publication.ts";
 import { Store, type GroupRecord, type Message } from "../store.ts";
 import type { HostedGroup } from "./asks.ts";
 import { closeRoomsDb, recentRoomEntries } from "./db.ts";
+import { goLive, openDoorStream } from "./door-streams.ts";
 import { hostedRoomView, linkedFilesClosed } from "./guards.ts";
 import { closeInvitesDb, roomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
@@ -120,6 +125,40 @@ describe("sharing a bot group", () => {
     expect(store.group(dm.id)!.hosted).toEqual({ roomId: shared.roomId });
     expect(rows(shared.roomId).map((entry) => entry.text)).toEqual(["over to you, Pip"]);
     expect(peopleOnlyRoom(shared.roomId)).toBe(false);
+  });
+
+  it("commits a shared channel's later peer exchange and sends it to joiners", () => {
+    const from = store.bot(wink)!;
+    const pip = store.patchBot(store.createBot().id, { name: "Pip" })!;
+    const { roomId } = shareGroup(deps(), getOrCreateChannel(store, from, pip).id);
+    const res = Object.assign(new EventEmitter(), { written: [] as string[], writableLength: 0, write(chunk: string) { this.written.push(chunk); return true; } });
+    goLive(openDoorStream(roomId, "p", res as unknown as ServerResponse), 0);
+    const bus = { store, broadcast: () => {} };
+    const channel = getOrCreateChannel(store, from, pip);
+    mirrorExchange(bus, from, pip, "check the build", channel);
+    mirrorReply(bus, pip, "build is green", channel);
+    expect(rows(roomId).map((entry) => [entry.author.name, entry.text])).toEqual([["Wink", "check the build"], ["Pip", "build is green"]]);
+    expect(res.written.map((chunk) => JSON.parse(chunk.slice(6)).entry.text)).toEqual(["check the build", "build is green"]);
+    expect(store.messagesFor(channel.threadId).map((message) => [message.text, Boolean(message.roomEntryId)])).toEqual([["check the build", true], ["build is green", true]]);
+    res.emit("close");
+  });
+
+  it("commits a shared channel's later task reply once, keeping its mail row", () => {
+    const from = store.bot(wink)!;
+    const pip = store.patchBot(store.createBot().id, { name: "Pip" })!;
+    const channel = getOrCreateChannel(store, from, pip);
+    const { roomId } = shareGroup(deps(), channel.id);
+    const bus = { store, broadcast: () => {} };
+    const receipt: DelegationReceipt = {
+      id: "task-1", sourceThreadId: from.threadId, toBotId: pip.id, toBotName: "Pip", status: "done", state: "done", result: "build is green",
+      finishedAt: 1, kind: "delegation", deliver: "queued", source: { botId: from.id, threadId: from.threadId, turnId: "" },
+    };
+    receipt.publish = replyDestinations(bus, receipt);
+    publishPeerReply(bus, receipt);
+    publishPeerReply(bus, receipt, true);
+    expect(rows(roomId).map((entry) => [entry.author.name, entry.text])).toEqual([["Pip", "build is green"]]);
+    const line = store.messagesFor(channel.threadId).filter((message) => message.text === "build is green");
+    expect(line).toEqual([expect.objectContaining({ roomEntryId: rows(roomId)[0].id, comm: expect.objectContaining({ peer: "reply", mailKey: "task-1:reply:" + channel.threadId }) })]);
   });
 
   it("carries only settled visible text, with attachment tags removed whole", () => {
