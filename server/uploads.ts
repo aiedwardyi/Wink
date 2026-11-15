@@ -27,7 +27,6 @@ import { sendJson } from "./compression.ts";
 
 export const UPLOAD_MAX_BYTES = 10 * 1024 ** 3;
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 ** 2;
-export const MAX_OPEN_UPLOADS = 4;
 
 const UPLOADING_DIR = ".uploading";
 const DISK_RESERVE_BYTES = 1024 ** 3;
@@ -247,7 +246,6 @@ export function createUploads(options: UploadsOptions) {
     const lastModified = typeof body?.lastModified === "number" && Number.isFinite(body.lastModified) ? body.lastModified : 0;
     const open = sessions().filter(([, record]) => !record.path);
     const match = lastModified > 0 ? open.find(([, r]) => r.name === name && r.size === size && r.lastModified === lastModified) : undefined;
-    if (!match && open.length >= MAX_OPEN_UPLOADS) return json(res, 429, { code: "busy" });
     mkdirSync(sessionsDir(), { recursive: true });
     const written = match ? sizeOf(partPath(match[0])) : 0;
     const owed = open.reduce((sum, [id, r]) => (id === match?.[0] ? sum : sum + Math.max(0, r.size - sizeOf(partPath(id)))), 0);

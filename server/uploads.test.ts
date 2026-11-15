@@ -219,7 +219,7 @@ describe("big-file uploads", () => {
     expect(uploadTargetDir(control, roots, data)).toBe(join(control, "Wink"));
   });
 
-  it("caps a chunk at 8 MiB and open sessions at 4", async () => {
+  it("caps a chunk at 8 MiB and opens any number of sessions", async () => {
     const { base, create, chunk, status } = await serve();
     const { body } = await create({ name: "a.mp4", size: 20 * 1024 ** 2 });
     expect(await chunk(body.id, 0, Buffer.alloc(UPLOAD_CHUNK_BYTES + 1))).toEqual({ status: 413, body: { code: "too_big" } });
@@ -231,7 +231,6 @@ describe("big-file uploads", () => {
     });
     expect(streamed).toBe(413);
     expect((await status(body.id)).offset).toBe(0);
-    for (const name of ["b.mp4", "c.mp4", "d.mp4"]) expect((await create({ name, size: 10 })).status).toBe(201);
-    expect(await create({ name: "e.mp4", size: 10 })).toEqual({ status: 429, body: { code: "busy" } });
+    for (const name of ["b.mp4", "c.mp4", "d.mp4", "e.mp4", "f.mp4", "g.mp4"]) expect((await create({ name, size: 10 })).status).toBe(201);
   });
 });
