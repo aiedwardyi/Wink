@@ -64,6 +64,7 @@ export function TurnPresence({
   visible,
   docked = false,
   label = "Thinking",
+  instant = false,
   quiet = false,
   wrap = false,
   since,
@@ -74,6 +75,8 @@ export function TurnPresence({
   /** The mascot moved under live reply text: leave at once, no exit fade. */
   docked?: boolean;
   label?: string;
+  /** Reply text is arriving: the label changes without the hold. */
+  instant?: boolean;
   /** Label changes that screen readers should not hear again. */
   quiet?: boolean;
   /** A second line instead of an ellipsis when the label does not fit. */
@@ -101,7 +104,7 @@ export function TurnPresence({
     <div className="turn-presence flex flex-col items-start">
       <div data-turn-mascot className={cn("flex max-w-full items-center gap-2", terminal ? "text-[14px]" : "text-[13px]", visible ? "turn-mascot-in" : "turn-mascot-out")}>
         {terminal ? <TermGlyph ring={visible} /> : ringFace(avatar, visible)}
-        {visible ? <WorkingLabel label={label} quiet={quiet} wrap={wrap} /> : null}
+        {visible ? <WorkingLabel label={label} instant={instant} quiet={quiet} wrap={wrap} /> : null}
         {visible && onSwitch ? <SwitchModelAction onClick={onSwitch} /> : null}
         {visible && since ? <Elapsed since={since} /> : null}
       </div>
@@ -176,7 +179,24 @@ function Elapsed({ since }: { since: number }) {
   return <span className="shrink-0 text-[13px] leading-none whitespace-nowrap text-ink-secondary tabular-nums">({termElapsed(now - since)})</span>;
 }
 
-function WorkingLabel({ label, quiet = false, wrap = false }: { label: string; quiet?: boolean; wrap?: boolean }) {
+const STAGE_HOLD_MS = 1000;
+
+/** A fast tool loop flips the stage several times a second; each label keeps the screen for STAGE_HOLD_MS. The no-reply hint never holds: an engine event drops it at once. */
+function useHeldLabel(label: string, instant: boolean, hint: boolean): string {
+  const stamp = () => ({ label, at: hint ? 0 : Date.now() });
+  const [held, setHeld] = useState(stamp);
+  const holding = label !== held.label && !instant && Date.now() - held.at < STAGE_HOLD_MS;
+  if (label !== held.label && !holding) setHeld(stamp());
+  useEffect(() => {
+    if (!holding) return;
+    const timer = setTimeout(() => setHeld(stamp()), held.at + STAGE_HOLD_MS - Date.now());
+    return () => clearTimeout(timer);
+  }, [holding, label, held.at]);
+  return holding ? held.label : label;
+}
+
+function WorkingLabel({ label: stage, instant = false, quiet = false, wrap = false }: { label: string; instant?: boolean; quiet?: boolean; wrap?: boolean }) {
+  const label = useHeldLabel(stage, instant, wrap);
   return (
     <span className={cn("thinking-shimmer min-w-0 text-[13px]", wrap ? "leading-snug" : "leading-none whitespace-nowrap text-ellipsis")} aria-live={quiet ? "off" : "polite"}>
       {label}

@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { liveActivityLabel } from "@/lib/live-activity";
+import { turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import type { Message } from "@/state/store";
 import { DockedPresence, TurnPresence } from "./TurnPresence";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -154,5 +157,99 @@ describe("turn presence", () => {
       await act(async () => root.unmount());
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("the stage label in a fast tool loop", () => {
+  const HOLD = 1_000;
+  const running: Message = { id: "a1", at: 2, role: "bot", kind: "activity", tool: { name: "Bash: ls" } };
+  const done: Message = { ...running, tool: { name: "Bash: ls", ok: true } };
+  let host: HTMLDivElement;
+  let root: Root;
+  const render = (lastMessage: Message, streaming?: string, visible = true) => {
+    const phase = turnPhase({ signal: "started", lastMessage, streaming });
+    const label = turnStageLabel(phase, liveActivityLabel(lastMessage));
+    return act(async () => root.render(createElement(TurnPresence, { avatar: null, visible, since: 34_000, label, instant: phase === "responding" })));
+  };
+  const advance = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
+  const label = () => host.querySelector(".thinking-shimmer")?.firstChild?.textContent;
+  const seconds = () => {
+    const [, m, s] = host.textContent?.match(/\((?:(\d+)m )?(\d+)s\)/) ?? [];
+    return Number(m ?? 0) * 60 + Number(s);
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    host = document.createElement("div");
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps each label up for the hold while the turn timer counts on", async () => {
+    await render(done);
+    expect(host.textContent).toContain("Waiting for the model(1m 6s)");
+    const spans: number[] = [];
+    let shown = label();
+    let since = Date.now();
+    let clock = seconds();
+    for (let step = 0; step < 200; step++) {
+      if (step % 5 === 0) await render(step % 10 === 0 ? running : done);
+      if (label() !== shown) {
+        spans.push(Date.now() - since);
+        shown = label();
+        since = Date.now();
+      }
+      expect(seconds() - clock).toBeGreaterThanOrEqual(0);
+      expect(seconds() - clock).toBeLessThanOrEqual(1);
+      clock = seconds();
+      await advance(50);
+    }
+    expect(spans.length).toBeGreaterThan(0);
+    expect(Math.min(...spans)).toBeGreaterThanOrEqual(HOLD);
+    expect(seconds()).toBe(76);
+  });
+
+  it("drops a stage that ends inside the hold and lands one that outlasts it", async () => {
+    await render(done);
+    const idle = vi.getTimerCount();
+    await advance(500);
+    await render(running);
+    await advance(30);
+    await render(done);
+    expect(label()).toBe("Waiting for the model");
+    expect(vi.getTimerCount()).toBe(idle);
+    await render(running);
+    await advance(HOLD - 531);
+    expect(label()).toBe("Waiting for the model");
+    await advance(1);
+    expect(label()).toBe("Thinking");
+    expect(vi.getTimerCount()).toBe(idle);
+  });
+
+  it("shows Responding at once", async () => {
+    await render(done);
+    await advance(100);
+    await render(done, "");
+    expect(label()).toBe("Responding");
+  });
+
+  it("starts the hold over when the label comes back on screen", async () => {
+    await render(done);
+    await advance(100);
+    await render(done, undefined, false);
+    await advance(5_000);
+    await render(running);
+    expect(label()).toBe("Thinking");
+    await render(done);
+    expect(label()).toBe("Thinking");
+    await advance(HOLD);
+    expect(label()).toBe("Waiting for the model");
   });
 });
