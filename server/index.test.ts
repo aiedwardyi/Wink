@@ -4835,6 +4835,27 @@ describe("startTurn presence boundary", () => {
     }
   });
 
+  it("lets the user's own bot read its worker map", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    const hanging = await hangingModel();
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        modelSelection: { instanceId: "claude", model: hanging.models.default },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "open the map" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const token = z.object({
+        mcpConfig: z.object({ mcpServers: z.object({ agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }) }) }),
+      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8"))).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      const res = await fetch(`${BASE}/api/bots/${bot.id}/map/repo?worker=none`, { headers: { authorization: `Bearer ${token}` } });
+      expect({ status: res.status, body: await res.json() }).toEqual({ status: 404, body: { error: "No such worker" } });
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
+      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
+    }
+  });
+
   it("announces a new wait when a drained queued send calls startTurn", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const hanging = await hangingModel();

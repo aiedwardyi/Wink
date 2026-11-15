@@ -8543,7 +8543,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/map\/(live|file|repo|flow)$/);
     if (m) {
-      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       return await workerMap.handle(req, res, m[1], m[2], url);
     }
