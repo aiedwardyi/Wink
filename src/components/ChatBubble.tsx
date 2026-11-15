@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, RefreshCw, Webhook } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -318,6 +318,10 @@ const Bubble = memo(function Bubble({
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
   const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
+  // floated beside markdown: shorter than a line, so only the first line makes room
+  const callMark = message.call && (
+    <Phone size={12} className={cn("mr-1.5 text-ink-secondary/70", user ? "inline align-[-1px]" : "float-left mt-[calc((1lh-12px)/2)]")} />
+  );
 
   if (user && editing && !webhookView) {
     return (
@@ -482,6 +486,7 @@ const Bubble = memo(function Bubble({
                 <AttachedImageGallery paths={attachedImages.images} />
               )}
               <div className={cn(collapsible && USER_FOLD_CLASS)}>
+                {callMark}
                 <LinkedText text={visibleText} />
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
@@ -494,6 +499,7 @@ const Bubble = memo(function Bubble({
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
+              {callMark}
               <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
             </MessageBoundary>
           ) : null}
