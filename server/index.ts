@@ -50,6 +50,7 @@ import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
+import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
@@ -3526,6 +3527,7 @@ const usageStats = createUsageStats({
 });
 // Before the handler below, which settles the state a finished turn is read from.
 bus.subscribe(usageStats.runtime);
+watchLoopStalls();
 startupTiming.onDone((spans) => { if (!spans.closed) usageStats.launched(spans); });
 
 bus.subscribe((event: RuntimeEvent) => {
