@@ -391,18 +391,32 @@ describe("room settings", () => {
   const bodies = () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) => init?.method === "PATCH").map(([path, init]) => [path, JSON.parse(String(init.body))]);
 
   it.each([
-    ["en", "Folder", "Each bot's own folder"],
-    ["ko", "폴더", "봇마다 자신의 폴더"],
-  ] as const)("sets the room's folder from the Room section in %s", async (locale, label, empty) => {
+    ["en", "Folder", "Clear"],
+    ["ko", "폴더", "지우기"],
+  ] as const)("changes and clears the room's shared folder from the Room section in %s", async (locale, label, clear) => {
     mock.state.bots = [bot("b1", "Kai"), bot("b2", "Ray")];
     vi.stubGlobal("ogb", { pickFolder: async () => "/Users/mina/work/wink-release-crew" });
-    await open({ group: kaiRay }, () => json({ group: { ...kaiRay, cwd: "/Users/mina/work/wink-release-crew" } }), locale);
+    await open({ group: { ...kaiRay, cwd: "/Users/mina/work/wink" } }, () => json({ group: kaiRay }), locale);
     const row = section("room").querySelector<HTMLElement>("[data-room-folder]")!;
     expect(row.textContent).toContain(label);
-    expect(row.textContent).toContain(empty);
+    expect(row.textContent).toContain("wink");
     await act(async () => row.querySelector<HTMLButtonElement>("button")!.click());
     await settle();
-    expect(bodies()).toEqual([["/api/groups/group-1", { cwd: "/Users/mina/work/wink-release-crew" }]]);
+    await act(async () => [...row.querySelectorAll("button")].find((each) => each.textContent === clear)!.click());
+    await settle();
+    expect(bodies()).toEqual([["/api/groups/group-1", { cwd: "/Users/mina/work/wink-release-crew" }], ["/api/groups/group-1", { cwd: null }]]);
+  });
+
+  it.each([
+    ["in the app", true, {}],
+    ["in a browser", false, {}],
+    ["once its folder is fixed", true, { pinnedCwd: null }],
+  ] as const)("has no folder row without a shared folder %s", async (_, picker, patch) => {
+    mock.state.bots = [bot("b1", "Kai"), bot("b2", "Ray")];
+    if (picker) vi.stubGlobal("ogb", { pickFolder: async () => null });
+    await open({ group: { ...kaiRay, ...patch } });
+    expect(section("room").querySelector('[role="switch"]')).not.toBeNull();
+    expect(host.querySelector("[data-room-folder]")).toBeNull();
   });
 
   it("shows the folder a room already works in, fixed", async () => {
