@@ -117,15 +117,11 @@ export type RoomBotStatus = { id: string; text: string; failed?: boolean };
 /** A people room: same box, but its sends upload through the room route. `offline` keeps the box but holds Send and files. `onStop` backs the box's Stop. `chain` counts a live bot handoff. */
 export type ComposerRoom = { name: string; base: string; draftId: string; people?: readonly RoomPerson[]; bots?: readonly RoomPerson[]; offline?: boolean; status?: readonly RoomBotStatus[]; onStop?: () => void; chain?: number };
 
-const MAX_UPLOADS_PER_MESSAGE = 5;
 
 const roomPicture = (id: string) => {
   const file = roomFile(id);
   return file && { file, picture: isRoomPicture(file) };
 };
-
-const fromUpload = (attachment: Attachment) =>
-  (attachment.kind === "upload" && !attachment.picture) || (attachment.kind === "file" && Boolean(attachment.uploadId));
 
 function uploadedFile(id: string, result: UploadDone, uploadId?: string, picture?: UploadAttachment["picture"]): FileAttachment | ImageAttachment {
   if (picture === "image") return { kind: "image", id, path: result.path, name: result.name, size: result.size, mime: result.type };
@@ -332,17 +328,14 @@ export function Composer({
   const addAttachments = useCallback(
     (next: Attachment[], uploads: { id: string; file: File }[] = [], startedAt = 0) => {
       if (startedAt > noticeAt.current) setAttachmentNotice(null);
-      let room = MAX_UPLOADS_PER_MESSAGE - attachmentsRef.current.filter(fromUpload).length;
-      const kept = next.filter((a) => a.kind !== "upload" || a.picture || room-- > 0);
-      if (kept.length < next.length) showNotice(t("composer.uploadTooMany"));
-      if (kept.length) trackFeature("attach.add", { n: kept.length });
-      flushSync(() => editAttachments((prev) => [...prev, ...kept]));
+      if (next.length) trackFeature("attach.add", { n: next.length });
+      flushSync(() => editAttachments((prev) => [...prev, ...next]));
       for (const upload of uploads) {
-        const chip = kept.find((a) => a.id === upload.id);
+        const chip = next.find((a) => a.id === upload.id);
         if (chip?.kind === "upload") queueUpload(upload.id, upload.file, undefined, saveUpload(draftId, upload.id), chip.shrink, sendPicture(upload.file, chip));
       }
     },
-    [draftId, editAttachments, showNotice, t],
+    [draftId, editAttachments],
   );
   const removeAttachment = useCallback(
     (id: string) => {

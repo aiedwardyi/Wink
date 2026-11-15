@@ -3,7 +3,6 @@ import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import * as budget from "./comms-budget.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import * as roots from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
@@ -17,8 +16,6 @@ import { turnRegistry } from "./turn-registry.ts";
 
 const EXHAUSTED = "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.";
 const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
-// The branch point still clears its per-turn ask count on turn.completed; replayed here so both builds see a settled turn.
-const settleTurn = (threadId: string) => (budget as unknown as { clearAskBudget?: (id: string) => void }).clearAskBudget?.(threadId);
 
 let store: Store;
 let from: ReturnType<Store["createBot"]>;
@@ -85,7 +82,6 @@ describe("root budget through the ask route", () => {
       startTurn(`turn-${turn}`, roots.rootForStart(from.threadId, { kind: "automatic" }));
       for (let i = 0; i < 4; i++) expect((await ask(askBotAndWait)).limit).toBeUndefined();
       turnRegistry.settle(`turn-${turn}`);
-      settleTurn(from.threadId);
     }
     expect(askBotAndWait).toHaveBeenCalledTimes(24);
     for (const turnId of ["wake", "keep-going"]) {
@@ -93,7 +89,6 @@ describe("root budget through the ask route", () => {
       expect((await ask(askBotAndWait)).limit).toBe(EXHAUSTED);
       expect(turnRegistry.get(turnId)).toBeDefined();
       turnRegistry.settle(turnId);
-      settleTurn(from.threadId);
     }
     expect(askBotAndWait).toHaveBeenCalledTimes(24);
     expect(store.messagesFor(from.threadId).filter((row) => row.tool?.name === PAUSED)).toHaveLength(1);
@@ -143,7 +138,6 @@ function human(key = "send-1") {
 }
 const UNAVAILABLE = "Bot messaging paused. Send a message to reset it.";
 const RESERVED = "This request's remaining bot turns are reserved. Collect pending replies before asking again.";
-const WAITING = "You already have 4 teammate messages waiting. Collect those replies first.";
 const lines = (threadId: string | undefined, name = PAUSED) => threadId ? store.messagesFor(threadId).filter((row) => row.tool?.name === name) : [];
 const channelThread = () => store.dmGroup(from.id, target.id)?.threadId;
 function replyRow(taskId: string, rootId?: string) {
@@ -314,27 +308,22 @@ describe("accounting", () => {
 });
 
 describe("open asks", () => {
-  it("fifth busy-target ask is refused until a queued ask settles", async () => {
+  it("queues every busy-target ask past four, up to the root budget", async () => {
     human();
     store.bot(target.id)!.busy = true;
     const askBotAndWait = completingAsk();
-    const queued: string[] = [];
-    for (let index = 0; index < 4; index++) queued.push((await ask(askBotAndWait)).taskId!);
-    expect((await ask(askBotAndWait)).limit).toBe(WAITING);
-    for (let index = 0; index < 2; index++) finishDelegatedTurn(bus(), settle(queued[1]!, { ask: true }), true, "answer");
-    expect((await ask(askBotAndWait)).taskId).toBeDefined();
-    expect((await ask(askBotAndWait)).limit).toBe(WAITING);
+    const answers = [];
+    for (let index = 0; index < 8; index++) answers.push(await ask(askBotAndWait));
+    expect(answers.map((answer) => answer.limit)).toEqual(Array(8).fill(undefined));
+    expect(answers.every((answer) => answer.taskId)).toBe(true);
     expect(askBotAndWait).not.toHaveBeenCalled();
   });
 
-  it("timeout adoption keeps its open slot", async () => {
+  it("queues a fifth and sixth delegation from one turn", async () => {
     human();
-    const adopt = vi.fn(async (..._args: unknown[]) => ({ replied: false, text: "", taskId: (_args[4] as { taskId: string }).taskId }));
-    const adopted: string[] = [];
-    for (let index = 0; index < 4; index++) adopted.push((await call("askBot", adopt)).taskId!);
-    expect((await call("askBot", adopt)).limit).toBe(WAITING);
-    finishDelegatedTurn(bus(), settle(adopted[0]!, { ask: true }), true, "answer");
-    expect((await call("askBot", adopt)).limit).toBeUndefined();
+    const ids = [];
+    for (let index = 0; index < 6; index++) ids.push(await delegate());
+    expect(new Set(ids).size).toBe(6);
   });
 });
 

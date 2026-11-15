@@ -15,7 +15,6 @@ import {
   botNotifyIconPath,
   DEFAULT_MASCOT_STYLE,
 } from "../shared/bot-avatar.ts";
-import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
@@ -939,7 +938,7 @@ async function defaultSelection() {
 }
 
 const modelSelectionModeSchema = z.enum(["automatic", "pinned"]).optional();
-const botJobSchema = z.string().trim().min(1).max(BOT_PROFILE_LIMITS.description);
+const botJobSchema = z.string().trim().min(1);
 
 function checkedModelSelection(
   raw: unknown,
@@ -4352,8 +4351,8 @@ bus.subscribe((event: RuntimeEvent) => {
 const askHold = watchAskHold(store, bus);
 watchSkippedQuestions(store, (threadId, change) => {
   const current = taskPacketForWrite(threadId);
-  const asks = current && change(current.asks);
-  if (current && asks) persistTaskPacket({ ...current, asks, updatedAt: Date.now(), updatedBy: "harness" });
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 });
 
 // Drain queued delegations for a source thread after its turn settles.
@@ -6365,9 +6364,10 @@ function resolveAndSendRoutine(
 // explicitly @mentions members. Responders run SEQUENTIALLY (one speaker at
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with bounded room context. A member's reply may @mention
-// teammates; those get one chained turn (hop 1), never deeper.
+// teammates, who answer in turn; each tagger-to-tagged pair runs once per user message.
 const groupQueues = new Map<string, Promise<void>>();
-const MAX_GROUP_HOPS = 1;
+// shares the spoken set; a bot id never holds this separator
+const chainEdge = (from: string, to: string) => `${from}>${to}`;
 
 // Same memory-only wait as 1:1 steer-queue while the room remains active.
 // Group Stop drops this queued participation before it can drain later.
@@ -6387,6 +6387,7 @@ function queueBusyRoomMember(
   queueRoomParticipation(bot.id, threadId, {
     groupId,
     hop,
+    spoken,
     rootId: rootId ?? undefined,
     cardContinuation,
     onDispatchError,
@@ -7032,14 +7033,15 @@ async function runClaimedGroupMemberTurn(
     drainSecretResumes();
   }
 
-  // chained mentions: a member's reply can summon teammates — one hop only
-  if (!isCancelled?.() && hop < MAX_GROUP_HOPS && replyText.trim()) {
+  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain
+  if (!isCancelled?.() && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
-      if (spoken.has(next.id)) continue;
+      if (spoken.has(chainEdge(bot.id, next.id))) continue;
+      spoken.add(chainEdge(bot.id, next.id));
       if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
         return false;
       }
@@ -7263,17 +7265,7 @@ function routineProposalPersistence(botId: string, threadId: string) {
   if (!connectorThread(botId, threadId)) {
     return { ok: false as const, status: 403, error: "source conversation does not belong to sender" };
   }
-  // Only cards on the visible branch can be acted on from the composer.
-  // Abandoned branches must not permanently consume the proposal quota.
-  const openRequests = store.activePath(threadId).filter(
-    (message) =>
-      message.card?.routineRequest?.botId === botId &&
-      !message.card.answered &&
-      !message.card.dismissed,
-  ).length;
-  return openRequests >= 8
-    ? { ok: false as const, status: 429, error: "confirm or cancel an existing routine proposal first" }
-    : { ok: true as const };
+  return { ok: true as const };
 }
 
 function connectorMessage(botId: string, threadId: string, messageId: string) {

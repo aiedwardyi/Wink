@@ -248,8 +248,7 @@ const TOOLS = [
         goal: { type: "string", minLength: 1, maxLength: 500, pattern: "\\S", description: "The user's durable outcome, at most 500 characters. Omit when unchanged." },
         plan: {
           type: "array",
-          maxItems: 20,
-          description: "The current concise plan, at most 20 steps. At most one step may be active.",
+          description: "The current concise plan, at most 20 steps.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -271,7 +270,6 @@ const TOOLS = [
           pause_automatic_wakes: { type: "boolean", description: "Set true only when the user asks you to stop or pause. Holds worker-report wake-ups until their next message; does not stop workers or end your current turn." },
         blockers: {
           type: "array",
-          maxItems: 10,
           description: "Current blockers, at most 10. Send an empty array when prior blockers are resolved.",
           items: {
             type: "object",
@@ -285,7 +283,6 @@ const TOOLS = [
         },
         artifacts: {
           type: "array",
-          maxItems: 20,
           description: "New files created inside this task's working folder, at most 20.",
           items: {
             type: "object",
@@ -299,8 +296,7 @@ const TOOLS = [
         },
         asks: {
           type: "array",
-          maxItems: 20,
-          description: "The user's asks, at most 20 per call. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
           items: {
             type: "object",
             additionalProperties: false,

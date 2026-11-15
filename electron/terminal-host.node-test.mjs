@@ -4858,10 +4858,11 @@ for (const [name, command, screen, note] of [
 }
 
 test("a save line that never shows gets no Enter and the chief gets the note", async (t) => {
-  const f = stallFixture();
+  const f = trustFixture(t);
   t.after(() => f.host.dispose());
   await f.host.openForBot("bot-1", { label: "W", command: "codex go" });
   f.children[0].data(busyScreen("  Context 40% left"));
+  await f.advance(10_000);
   await f.advance(10_000);
   await f.advance(10_000);
   assert.deepEqual(f.children[0].writes, ["codex go\r", SAVE_LINE]);

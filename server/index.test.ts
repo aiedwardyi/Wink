@@ -1300,13 +1300,12 @@ describe("harness HTTP API", () => {
     const missing = await api("PATCH", "/api/bots/does-not-exist", { name: "x" });
     expect(missing.status).toBe(404);
 
-    // persona fields are bounded at the write boundary — they reach system
-    // prompts (Chief roster, room rosters), so an unbounded PATCH is a
-    // token-burn and prompt-injection surface
+    // names and titles are bounded at the write boundary; instructions are the
+    // user's own and other bots' rosters clip them
     expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "N".repeat(101) })).status).toBe(400);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "   " })).status).toBe(400);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { title: "T".repeat(201) })).status).toBe(400);
-    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(400);
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { description: "D".repeat(4001) })).status).toBe(200);
     expect((await api("PATCH", `/api/bots/${bot.id}`, { description: 7 })).status).toBe(400);
 
     // the per-bot composio gate is a boolean, and it round-trips
@@ -3797,6 +3796,19 @@ describe("harness HTTP API", () => {
       expect(duplicate.body.alreadySettled).toBe(true);
       expect((await api("GET", "/api/routines")).body.routines
         .filter((routine: { botId: string }) => routine.botId === bot.id)).toHaveLength(1);
+      for (let i = 1; i <= 9; i++) {
+        const more = await fetch(`${BASE}/api/internal/routine-requests`, {
+          method: "POST",
+          headers: internalHeaders,
+          body: JSON.stringify({
+            fromBotId: bot.id,
+            fromThreadId: bot.threadId,
+            action: "create",
+            routine: { name: `Brief ${i}`, instructions: "Summarize.", schedule: { type: "weekly", time: "09:00", weekdays: ["monday"] }, runOn: "maus", durationMinutes: 30 },
+          }),
+        });
+        expect(more.status).toBe(201);
+      }
 
       // The initial fixture turn is deliberately hung. Once it is stopped,
       // force a deterministic dispatch failure by choosing the configured
