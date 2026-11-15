@@ -328,6 +328,14 @@ describe("room alerts on the host", () => {
     expect(alert.mock.calls).toEqual([line("Sora", "hi")]);
   });
 
+  it("sends one ping with the latest line for lines inside one wait", () => {
+    hostedSend(group, person("chat"), "first");
+    vi.advanceTimersByTime(1_000);
+    hostedSend(group, person("trusted"), "second");
+    vi.advanceTimersByTime(3_000);
+    expect(alert.mock.calls).toEqual([line("Mina", "second")]);
+  });
+
   it("never pings the host's own line", () => {
     hostedSend(group, { kind: "host" }, "sure");
     store.patchGroup(group.id, { unread: true });
