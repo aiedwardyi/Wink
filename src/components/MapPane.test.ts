@@ -150,6 +150,15 @@ it("draws the repo as a tree in place of the squares and the changed-files list,
   expect([...host.querySelectorAll("button.map-tree-file")].map(row => row.getAttribute("data-map-file"))).toEqual(["src/a.ts", "src/manual.ts"]);
 });
 
+it.each([[true, 44], [false, 17]])("gives each file row a finger's height on a phone and keeps the desktop pitch: phone %s", async (phone, height) => {
+  vi.spyOn(window, "matchMedia").mockImplementation(query => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  const rows = ["src/a.ts", "src/manual.ts"].map(path => host.querySelector<HTMLElement>(`button.map-tree-file[data-map-file="${path}"]`)!);
+  expect(rows.map(row => parseFloat(row.style.height) || 17)).toEqual([height, height]);
+  expect(parseFloat(rows[1].style.top) - parseFloat(rows[0].style.top)).toBe(height);
+});
+
 it("opens a changed file box in the viewer below", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);

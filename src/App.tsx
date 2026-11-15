@@ -49,6 +49,7 @@ import { useWebTerminalBridge } from "@/lib/web-terminal-bridge";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { webPushSupported, webPushTarget } from "@/lib/web-push";
 import { closeReadAlerts, joinedReadState } from "@/lib/read-alerts";
+import { isPhone } from "@/lib/phone-swipe";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
@@ -544,7 +545,15 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   // asked for, and leaving the list up would hide it.
   useEffect(() => {
     setDrawerOpen(false);
-  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
+  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen, state.revealed]);
+
+  // On a phone the pane and Bot Details are sheets over the chat a tapped notification asks for.
+  useEffect(() => {
+    if (!state.revealed || !isPhone()) return;
+    closePane();
+    dispatch({ type: "toggleSettings", open: false });
+    dispatch({ type: "toggleInspector", open: false });
+  }, [state.revealed, dispatch]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
@@ -656,6 +665,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
     add(state.settingsOpen, "settings", () => dispatch({ type: "toggleSettings", open: false }));
+    add(slotPanels.includes("show"), "pane", closePane);
     add(state.inspectorOpen, "inspector", () => dispatch({ type: "toggleInspector", open: false }));
     add(state.appSettingsOpen, "app-settings", () => dispatch({ type: "toggleAppSettings", open: false }));
     add(state.pluginsOpen, "plugins", () => dispatch({ type: "togglePlugins", open: false }));

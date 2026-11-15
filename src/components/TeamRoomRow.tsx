@@ -244,6 +244,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   const previousTop = useRef(0);
   const previousSize = useRef({ height: 0, viewport: 0 });
   const touchY = useRef(0);
+  // A finger, wheel or key asking for older lines. It breaks follow only through a scroll that leaves the end.
+  const reaching = useRef(false);
   const beforePage = useRef<TranscriptScroll | null>(null);
   const loadPage = useCallback(() => loadOlder?.(() => { beforePage.current = captureTranscriptScroll(scrollRef.current); }), [loadOlder]);
   const fill = useCallback(() => {
@@ -317,15 +319,17 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         data-team-room-transcript
         data-orbit-transcript
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
-        onWheel={(event) => { if (event.deltaY < 0) atEnd.current = false; }}
-        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; }}
+        onWheel={(event) => { if (event.deltaY < 0) reaching.current = true; }}
+        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; reaching.current = false; }}
         onTouchMove={(event) => {
           const y = event.touches[0]?.clientY ?? touchY.current;
-          if (y > touchY.current) atEnd.current = false;
+          if (y > touchY.current) reaching.current = true;
           touchY.current = y;
         }}
+        onTouchEnd={() => { reaching.current = false; }}
+        onTouchCancel={() => { reaching.current = false; }}
         onKeyDown={(event) => {
-          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) atEnd.current = false;
+          if (event.target === event.currentTarget && ["ArrowUp", "PageUp", "Home"].includes(event.key)) reaching.current = true;
         }}
         tabIndex={0}
         onClick={(e) => {
@@ -335,7 +339,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
         onScroll={(e) => {
           const el = e.currentTarget;
           const size = { height: el.scrollHeight, viewport: el.clientHeight };
-          if (el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
+          if (reaching.current ? el.scrollHeight - el.scrollTop - el.clientHeight > 0 : el.scrollTop < previousTop.current && size.height === previousSize.current.height && size.viewport === previousSize.current.viewport) atEnd.current = false;
+          reaching.current = false;
           if (shouldResumeBottomFollow({ following: atEnd.current, previousScrollTop: previousTop.current, scrollTop: el.scrollTop, distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight })) atEnd.current = true;
           previousTop.current = el.scrollTop;
           previousSize.current = size;

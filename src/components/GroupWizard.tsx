@@ -156,7 +156,11 @@ export function GroupWizard({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") createGroup();
+              // An IME confirm-Enter is not a submit, and a phone's Go before any pick moves on to the bots.
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              if (picked.size) return createGroup();
+              const fields = [...e.currentTarget.parentElement!.querySelectorAll<HTMLElement>("input, button")];
+              fields[fields.indexOf(e.currentTarget) + 1]?.focus();
             }}
             placeholder={t("groupWizard.nameTitle")}
             aria-label={t("groupWizard.nameTitle")}

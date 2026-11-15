@@ -38,8 +38,40 @@ async function mount() {
     clientHeight: { get: () => viewport }, scrollHeight: { get: () => height },
     scrollTop: { get: () => top, set: (value: number) => { top = Math.min(height - viewport, value); } },
   });
-  return { pane, grow: () => { height += 220; }, expand: () => { viewport += 100; top = Math.min(height - viewport, top); } };
+  return { pane, grow: () => { height += 220; }, expand: () => { viewport += 100; top = Math.min(height - viewport, top); }, shorten: () => { height = 300; top = 0; } };
 }
+
+function drag(pane: HTMLElement, from: number, to: number) {
+  for (const [type, y] of [["touchstart", from], ["touchmove", to]] as const) {
+    const event = new Event(type, { bubbles: true });
+    Object.defineProperty(event, "touches", { value: [{ clientX: 100, clientY: y }] });
+    pane.dispatchEvent(event);
+  }
+}
+
+it.each(["a room too short to scroll", "a sideways swipe that drifts down"])("keeps following after a finger moves down without scrolling: %s", async (kind) => {
+  const { pane, grow, shorten } = await mount();
+  if (kind.includes("short")) shorten();
+  await act(async () => resize());
+  await act(async () => drag(pane, 100, 140));
+  grow();
+  grow();
+  await act(async () => resize());
+  expect(pane.scrollHeight - pane.scrollTop - pane.clientHeight).toBe(0);
+  expect(document.querySelector("[data-jump-latest]")).toBeNull();
+});
+
+it("a finger that scrolls up while a picture grows stops following and shows Jump", async () => {
+  const { pane, grow } = await mount();
+  await act(async () => resize());
+  await act(async () => drag(pane, 100, 300));
+  grow();
+  pane.scrollTop = 300;
+  await act(async () => pane.dispatchEvent(new Event("scroll", { bubbles: true })));
+  await act(async () => resize());
+  expect(pane.scrollTop).toBe(300);
+  expect(document.querySelector("[data-jump-latest]")).toBeTruthy();
+});
 
 it("stays at the exact bottom when picture growth sends a scroll before the resize callback", async () => {
   const { pane, grow } = await mount();

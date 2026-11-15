@@ -139,9 +139,9 @@ export function openNotificationTarget(
   state: NotificationRoutingState & Pick<AppState, "hydrated">,
   freshState = false,
 ) {
-  if (joinedRoomIdOf(target.threadId)) return dispatch({ type: "select", id: target.threadId });
+  if (joinedRoomIdOf(target.threadId)) return dispatch({ type: "select", id: target.threadId, reveal: true });
   const owner = notificationOwner(state, target);
-  if (owner) dispatch({ type: "select", id: owner.id });
+  if (owner) dispatch({ type: "select", id: owner.id, reveal: true });
   if (!state.hydrated) dispatch({ type: "notificationSwitchPending", target });
   else if (owner) switchToNotificationThread(dispatch, target, state, freshState);
 }
@@ -302,6 +302,7 @@ export function reducer(state: AppState, action: Action): AppState {
         config: action.config,
       };
     case "select": {
+      if (action.reveal) state = { ...state, ...appSettingsNavigation(state, { open: false }), pluginsOpen: false, createBotOpen: false, revealed: state.revealed + 1 };
       // the slot's panels belong to the chat being left
       if (action.id !== state.selectedId) state = reducer(reducer(state, { type: "toggleSettings", open: false }), { type: "toggleInspector", open: false });
       // reselecting the conversation a workspace covers does not reveal it
@@ -1005,6 +1006,7 @@ export const initialState: AppState = {
   settingsKeepGoingRequest: 0,
   settingsMemoryTarget: null,
   settingsMemoryNonce: 0,
+  revealed: 0,
   pluginsOpen: false,
   inspectorOpen: false,
   appSettingsOpen: false,
