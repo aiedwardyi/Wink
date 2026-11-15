@@ -60,7 +60,7 @@ describe("call token", () => {
     const setup = h.sent().bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Alnilam");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
-    expect(setup.systemInstruction.parts[0].text).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(setup.systemInstruction.parts[0].text).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
     expect(setup.systemInstruction.parts[0].text).not.toContain("Switch only when");
     expect(setup.systemInstruction.parts[0].text).toContain('Open: "응, 나야." No name or intro.');
   });
@@ -71,7 +71,7 @@ describe("call token", () => {
     const setup = h.sent().bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Aoede");
     const brief = setup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("Any other language, Japanese too, gets Korean, never a third language.");
+    expect(brief).toContain("Speak only Korean, whatever language they use, never one word of another; match their politeness.");
     expect(brief).not.toContain("Switch only when");
   });
 
@@ -232,12 +232,13 @@ describe("call token", () => {
     expect(setup.tools[0].functionDeclarations[0].description).toContain("full access to the user's PC");
   });
 
-  it("brief answers English or Korean in kind, any other language in the app language", async () => {
+  it("brief speaks only the app language, and any other language is a mis-hear", async () => {
     const h = harness();
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
-    expect(brief).toContain("When they speak English or Korean, answer in that language");
-    expect(brief).toContain("Any other language, Japanese too, gets English, never a third language.");
+    expect(brief).toContain("Speak only English, whatever language they use, never one word of another.");
+    expect(brief).toContain("Any language but English or Korean, or garbled speech, is a mis-hear: ask them in English to say it again.");
+    expect(brief).not.toContain("answer in that language");
     expect(brief).not.toContain("Switch only when the person clearly asks");
   });
 

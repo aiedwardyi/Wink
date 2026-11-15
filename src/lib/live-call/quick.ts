@@ -8,10 +8,17 @@ const EARLY_MAX_BYTES = 15 * 16_000 * 2;
 export class EarlyMic {
   readonly frames: ArrayBuffer[] = [];
   spoke = false;
+  private loudFrames = 0;
   private bytes = 0;
+
+  /** Words, not a click: one loud 40 ms frame is a tap on the glass. */
+  get talked() {
+    return this.loudFrames > 1;
+  }
 
   add(pcm: ArrayBuffer, loud: boolean) {
     this.spoke ||= loud;
+    if (loud) this.loudFrames += 1;
     this.frames.push(pcm);
     this.bytes += pcm.byteLength;
     while (this.bytes > EARLY_MAX_BYTES) this.bytes -= this.frames.shift()!.byteLength;

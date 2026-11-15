@@ -128,7 +128,7 @@ export async function buildBrief(bot: BotRecord, messages: Message[], userName: 
   const prepared = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", userName }).catch(() => null);
   const tail = prepared?.status === "ready" ? chatTail(prepared.transcript, userName) : "";
   const speak = locale === "ko" ? "Korean" : "English";
-  const tongue = `Speak ${speak} by default. When they speak English or Korean, answer in that language; in Korean match their politeness. Any other language, Japanese too, gets ${speak}, never a third language. Speech that sounds garbled: ask again in ${speak}.`;
+  const tongue = `Speak only ${speak}, whatever language they use, never one word of another${speak === "Korean" ? "; match their politeness" : ""}. Any language but English or Korean, or garbled speech, is a mis-hear: ask them in ${speak} to say it again.`;
   const shown = bot.pendingModelSelection ?? bot.modelSelection;
   // the chip's label: catalogModelLabel in src/lib/model-chip.ts
   const model = catalog?.(shown.instanceId)?.models.options.find((option) => option.id === shown.model)?.label ?? shown.model;
