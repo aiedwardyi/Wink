@@ -4784,6 +4784,8 @@ const groupTaskResumes = new Map<string, {
   prompt: string;
   ready: boolean;
   release: () => void;
+  /** the line a restart cut off: its other responders answer once this resume ends */
+  owedLine?: string;
 }>();
 const taskResumes = new TaskResumeScheduler({
   busy: ({ botId, threadId }) => botHasActiveTurn(botId, threadId) || groupTaskResumes.get(`${botId}\0${threadId}`)?.ready === false,
@@ -4800,7 +4802,10 @@ const taskResumes = new TaskResumeScheduler({
       resumePaneWakes(botId);
       let failure: string | undefined;
       return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled, undefined, undefined, rootForStart(threadId, { kind: "automatic" }))
-        .then(() => { if (failure) throw new Error(failure); });
+        .then(() => {
+          if (failure) throw new Error(failure);
+          if (room.owedLine && !room.operation.cancelled) queueOwedRoomTurns(group.id, threadId, botId, room.owedLine);
+        });
     }
     if (bot.threadId !== threadId) {
       throw Object.assign(new Error("switch to this task before continuing it"), { status: 409 });
@@ -7000,13 +7005,13 @@ async function runClaimedGroupMemberTurn(
   }
 }
 
-function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string) {
+function startGroupCardContinuation(groupId: string, threadId: string, botId: string, prompt: string, owedLine?: string) {
   const key = `${botId}\0${threadId}`;
-  if (groupTaskResumes.has(key)) return false;
+  if (groupTaskResumes.has(key)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
-  const entry = { groupId, operation, prompt, ready: false, release };
+  const entry = { groupId, operation, prompt, ready: false, release, owedLine };
   groupTaskResumes.set(key, entry);
   const previous = groupQueues.get(groupId) ?? Promise.resolve();
   const next = previous.then(async () => {
@@ -7016,18 +7021,19 @@ function startGroupCardContinuation(groupId: string, threadId: string, botId: st
   });
   const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
   groupQueues.set(groupId, tracked.catch(() => {}));
-  return true;
 }
 
-/** Continue resumes one member; the others a restart cut off answer after it. */
-function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string) {
+/** Runs once the resumed member's turn ends, so a member it brought in itself is not asked twice. */
+function queueOwedRoomTurns(groupId: string, threadId: string, resumedId: string, instructionId: string) {
   const group = store.group(groupId);
-  const packet = taskPacketForWrite(threadId);
-  // a Stop ended the whole line on purpose
-  if (!group || !packet?.instructionId || packet.flushReason === "stop") return;
+  if (!group) return;
   const members = group.memberIds.map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot));
-  const owed = owedRoomResponders(store.messagesFor(threadId), packet.instructionId, (text) => roomResponders(text, members, group.defaultResponder), resumedId);
-  for (const bot of owed) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId: packet.instructionId });
+  const respondersFor = (line: Message) => {
+    const asker = members.find((member) => !member.hidden && member.id === line.askedBy);
+    return roomResponders(line.text ?? "", members, asker ? { kind: "member", botId: asker.id } : group.defaultResponder);
+  };
+  const owed = owedRoomResponders(store.messagesFor(threadId), instructionId, respondersFor, resumedId);
+  for (const bot of owed) queueRoomParticipation(bot.id, threadId, { groupId, hop: 0, instructionId });
 }
 
 function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId?: string, askerId?: string) {
@@ -7048,6 +7054,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     text,
     replyToId: replyTo?.id,
     sendId,
+    ...(askerId ? { askedBy: askerId } : {}),
   });
   const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
@@ -7683,7 +7690,6 @@ const botChatRoutes = createBotChatRoutes({
   resolveAndSendRoutine,
   approvalBus,
   startGroupCardContinuation,
-  queueOwedRoomTurns,
   resolveReplyTarget,
   connectorMessage,
   maybeResumeConnectors,

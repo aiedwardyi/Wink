@@ -85,6 +85,12 @@ describe("room answers owed after a restart", () => {
     expect(owedRoomResponders([...rows, text("c1", "c")], "line", all, "b")).toEqual([]);
   });
 
+  it("counts a question card as an answer, but not a tool row", () => {
+    const row = (id: string, kind: string, botId: string) => ({ id, role: "bot", kind, from: { botId } });
+    const rows = [text("line"), row("a-card", "options", "a"), text("b-half", "b"), row("c-tool", "activity", "c")];
+    expect(owedRoomResponders(rows, "line", all, "b")).toEqual([{ id: "c" }]);
+  });
+
   it("owes nobody when the line is gone or was not routed by the room rule", () => {
     const rows = [text("line"), text("b-half", "b")];
     expect(owedRoomResponders(rows, "missing", all, "b")).toEqual([]);

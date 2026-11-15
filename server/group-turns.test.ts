@@ -8,17 +8,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGroupRoutes } from "./group-routes.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { mentionedBots, roomResponders, Store, type BotRecord, type GroupRecord } from "./store.ts";
-import { owedRoomResponders, packetAfterInterruption } from "./task-recovery-flush.ts";
+import { owedRoomResponders, packetAfterInterruption, TaskResumeScheduler } from "./task-recovery-flush.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 
-/** A top-level function or class of index.ts, built against `deps`. */
+/** A top-level function, class or const of index.ts, built against `deps`. */
 function load(name: string, deps: Record<string, unknown>) {
-  const node = index.statements.find((statement) => (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name);
+  const node = index.statements.find((statement) =>
+    ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name)
+    || (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((item) => item.name.getText(index) === name)));
   const code = ts.transpileModule(node!.getText(index), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
   return new Function(...Object.keys(deps), `${code}\nreturn ${name};`)(...Object.values(deps));
 }
+
+const botChat = ts.createSourceFile("bot-chat-routes.ts", readFileSync(join(import.meta.dirname, "bot-chat-routes.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
+const findResumeTask = (node: ts.Node): ts.ArrowFunction | undefined =>
+  ts.isPropertyAssignment(node) && node.name.getText(botChat) === "resumeTask" && ts.isArrowFunction(node.initializer) ? node.initializer : ts.forEachChild(node, findResumeTask);
+const resumeTaskCode = ts.transpileModule(`async function resumeTask(res, m) ${findResumeTask(botChat)!.body.getText(botChat)}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
 
 let store: Store;
 let kai: BotRecord;
@@ -90,6 +97,7 @@ describe("a tapped question card in a group", () => {
     start(group.id, "Yes", undefined, undefined, ray.id);
     await groupQueues.get(group.id);
     expect(runGroupMemberTurn.mock.calls.map((call) => call[2])).toEqual([ray.id]);
+    expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ role: "user", askedBy: ray.id });
   });
 });
 
@@ -140,19 +148,71 @@ describe("a room turn cut off mid-line", () => {
     expect(flush(kai.threadId, ray.id, "stop")).toMatchObject({ botId: kai.id });
   });
 
-  it("queues the members a restart left owing an answer behind the resumed one", () => {
+  const owed = (askedBy?: string) => {
     store.patchGroup(group.id, { defaultResponder: { kind: "everyone" } });
-    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "plan this" });
+    const line = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "plan this", ...(askedBy ? { askedBy } : {}) });
+    const queueRoomParticipation = vi.fn();
+    const queue = load("queueOwedRoomTurns", { store, owedRoomResponders, roomResponders, queueRoomParticipation });
+    return { line, queueRoomParticipation, run: () => queue(group.id, group.threadId, ray.id, line.id) };
+  };
+
+  it("queues the members a restart left owing an answer", () => {
+    const { line, queueRoomParticipation, run } = owed();
     reply(kai, "Kai's plan");
     reply(ray, "Ray's half");
-    const queueRoomParticipation = vi.fn();
-    const record = { ...packet(kai.id, line.id), flushReason: "crash" };
-    const queue = load("queueOwedRoomTurns", { store, taskPacketForWrite: () => record, owedRoomResponders, roomResponders, queueRoomParticipation });
-    queue(group.id, group.threadId, ray.id);
+    run();
     expect(queueRoomParticipation.mock.calls).toEqual([[zed.id, group.threadId, { groupId: group.id, hop: 0, instructionId: line.id }]]);
+  });
 
+  it("skips a member the resumed one brought in itself", () => {
+    const { queueRoomParticipation, run } = owed();
+    reply(kai, "Kai's plan");
+    reply(ray, "Ray's plan, over to Zed");
+    reply(zed, "Zed's plan");
+    run();
+    expect(queueRoomParticipation).not.toHaveBeenCalled();
+  });
+
+  it("owes nobody else a card answer, even in an everyone room", () => {
+    const { queueRoomParticipation, run } = owed(ray.id);
+    reply(ray, "Ray's half");
+    run();
+    expect(queueRoomParticipation).not.toHaveBeenCalled();
+  });
+
+  it("queues them once the resumed turn ends, and not after a Stop", async () => {
+    const queueOwedRoomTurns = vi.fn();
+    const groupTaskResumes = new Map();
+    const operation = { cancelled: false };
+    const taskResumes = load("taskResumes", {
+      TaskResumeScheduler, groupTaskResumes, store, queueOwedRoomTurns,
+      botHasActiveTurn: () => false, hasQueuedSendBefore: () => false, resumePaneWakes: () => {}, rootForStart: () => null,
+      runGroupMemberTurn: async () => true, isBusyRejection: () => false, broadcast: () => {}, drainQueuedSends: () => {},
+    });
+    const resume = async () => {
+      groupTaskResumes.set(`${ray.id}\0${group.threadId}`, { groupId: group.id, operation, prompt: "resume", ready: true, release: () => {}, owedLine: "line-1" });
+      await taskResumes.request(ray.id, group.threadId, 0);
+    };
+    await resume();
+    expect(queueOwedRoomTurns.mock.calls).toEqual([[group.id, group.threadId, ray.id, "line-1"]]);
+    operation.cancelled = true;
+    await resume();
+    expect(queueOwedRoomTurns).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the rest alone when Continue follows a Stop", async () => {
+    const startGroupCardContinuation = vi.fn();
+    const record = { flushReason: "crash", instructionId: "line-1" };
+    const deps = {
+      store: { bot: () => ({ id: ray.id }), conversationForBot: () => ({ group }) },
+      json: (_res: unknown, status: number) => status, cancelUsageWait: () => {}, taskPacketForWrite: () => record, isRecoveryFlushReason: () => true,
+      isCompletedTaskRecord: () => false, startGroupCardContinuation, TASK_RESUME_PROMPT: "resume",
+      taskResumes: { request: async () => ({ pending: true }) }, queueMark: () => 0, drainQueuedSends: () => {},
+    };
+    const resumeTask = new Function(...Object.keys(deps), `${resumeTaskCode}\nreturn resumeTask;`)(...Object.values(deps));
+    expect(await resumeTask({}, ["", ray.id, group.threadId])).toBe(202);
     record.flushReason = "stop";
-    queue(group.id, group.threadId, ray.id);
-    expect(queueRoomParticipation).toHaveBeenCalledTimes(1);
+    await resumeTask({}, ["", ray.id, group.threadId]);
+    expect(startGroupCardContinuation.mock.calls.map((call) => call[4])).toEqual(["line-1", undefined]);
   });
 });

@@ -213,7 +213,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     runGroupMemberTurn: () => startTurn(bot.id, "resume"),
   });
   const resumeDeps = {
-    store, startTurn, taskResumes, queueMark, drainQueuedSends, startGroupCardContinuation, queueOwedRoomTurns: noop,
+    store, startTurn, taskResumes, queueMark, drainQueuedSends, startGroupCardContinuation,
     groupIsWorking: () => claims.size > 0 || groupTaskResumes.size > 0,
     json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     taskPacketForWrite: () => ({ flushReason: "stop" }),
