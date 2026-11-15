@@ -5,7 +5,7 @@ import { Languages, MessageSquareReply } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { captureTranscriptScroll, restoreTranscriptScroll, shouldResumeBottomFollow, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
-import { CHAT_PEEK_WINDOW_SIZE, useChatPreview } from "@/lib/chat-preview";
+import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
@@ -234,6 +234,8 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   onReact?: (message: Message, emoji: string) => void; reactionNames?: ReadonlyMap<string, string>; notice?: RoomNoticeControl; empty?: RoomEmpty; presence?: ReactNode;
 }) {
   const preview = useChatPreview();
+  const shownRows = useChatPeekRows();
+  const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
   const { t } = useI18n();
   const [menu, setMenu] = useState<MessageMenuRequest | null>(null);
@@ -261,7 +263,7 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
     setWindowHead(undefined);
   }, [preview, phone, compactWindow]);
   const startIndex = Math.max(0, locatedHead);
-  const shownLines = lines.slice(startIndex);
+  const shownLines = peekRows(lines.slice(startIndex), shownRows);
   const earlierLines = startIndex > 0 ? lines : null;
   const loadPage = useCallback(() => {
     if (earlierLines) {
@@ -273,13 +275,14 @@ export function TeamRoomTranscript({ lines, mine, base, label, hasMore = false, 
   }, [loadOlder, preview, startIndex, earlierLines]);
   const fill = useCallback(() => {
     const el = scrollRef.current;
+    if (!peekSettled) return;
     if (startIndex > 0 && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) {
       beforePage.current = captureTranscriptScroll(el);
       setWindowHead(lines[Math.max(0, startIndex - (lines.length - startIndex))].id);
       return;
     }
     if ((startIndex > 0 || !preview && hasMore) && el && el.clientHeight > 0 && el.scrollHeight - el.clientHeight < 48) loadPage();
-  }, [hasMore, loadPage, preview, startIndex, lines]);
+  }, [hasMore, loadPage, peekSettled, preview, startIndex, lines]);
   useLayoutEffect(() => {
     if (beforePage.current && scrollRef.current) restoreTranscriptScroll(scrollRef.current, beforePage.current);
     beforePage.current = null;

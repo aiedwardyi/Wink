@@ -410,7 +410,7 @@ describe("usePhoneSwipe", () => {
     expect(stage.style.transform).toBe("");
     expect(menu.style.transform).toBe("");
     const app = readFileSync(join(here, "../App.tsx"), "utf8");
-    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, showPeek, peekReady);");
+    expect(app).toContain("usePhoneSwipe(id, enabled, select, rider, showPeek);");
     expect(app).toContain("rider={menuButtonRef} onSelect={selectSwipe}");
   });
 

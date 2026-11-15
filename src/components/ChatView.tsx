@@ -98,7 +98,7 @@ import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
-import { CHAT_PEEK_WINDOW_SIZE, useChatPreview } from "@/lib/chat-preview";
+import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
@@ -588,12 +588,12 @@ export function stampedReplyComm(message: Message): Message["comm"] {
 
 const MessagesList = memo(function MessagesList({
   bot,
-  messages,
+  messages: listed,
   transcript,
   editingId,
   lastBotTextId,
   canonicalLastMessageId,
-  streamingMessage,
+  streamingMessage: streamingRow,
   dock,
   canRetryLast,
   engine,
@@ -639,6 +639,9 @@ const MessagesList = memo(function MessagesList({
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
+  const shownRows = useChatPeekRows();
+  const messages = useMemo(() => peekRows(listed, shownRows), [listed, shownRows]);
+  const streamingMessage = shownRows ? streamingRow : null;
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
   // Fold finished tool chips into runs, so a stretch of them cannot bury
   // what the bot actually said. Hidden unless Settings → Tool calls is on.
@@ -942,6 +945,7 @@ export function PinnedBanner({
 
 export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const preview = useChatPreview();
+  const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
   const compactWindow = preview || phone;
   const { t } = useI18n();
@@ -1414,10 +1418,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   // Keep the small window on promotion; grow cached rows only when they cannot fill the viewport.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
+    if (!peekSettled || windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
     const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
     setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(messages.length, size, renders) }));
-  }, [windowSize, startIndex, messages.length, renders, jump.messages, transcriptWindow, underfilled]);
+  }, [peekSettled, windowSize, startIndex, messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
     Boolean(bot.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
@@ -1587,6 +1591,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           )}
         </div>
         <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-md:min-w-0 max-md:shrink max-md:flex-nowrap">
+          <ChatPeekPart part="controls">
           {keepGoing && (
             <button
               type="button"
@@ -1618,6 +1623,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           <ShowPaneButton threadId={bot.threadId} />
 
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
+          </ChatPeekPart>
         </div>
       </div>
 
@@ -1903,6 +1909,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           selected one. ArrowUp-to-edit stays gated on busy because editing
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+        <ChatPeekPart part="composer">
         {onLiveCall
           ? <Suspense fallback={null}><LiveCallBar bot={bot} /></Suspense>
           : callNote?.botId === bot.id && <p role="alert" className="px-6 pb-2 text-xs text-ink-secondary max-md:px-4">{callNote.text}</p>}
@@ -1947,6 +1954,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           callButton={!onLiveCall && callAvailable && !state.config?.gemini?.configured ? <CallButton bot={bot} helpAbove /> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden || preview} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        </ChatPeekPart>
       </div>
       </div>
 

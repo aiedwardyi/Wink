@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
-import { ChatPreviewContext } from "@/lib/chat-preview";
+import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
 import { PHONE_QUERY, swipeBlocked } from "@/lib/phone-swipe";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
@@ -261,6 +261,72 @@ describe("cached chat preview", () => {
     expect(host.querySelector("[data-orbit-transcript]")).toBe(transcript);
     expect(host.querySelector('[data-mid="cached-last"]')).toBe(row);
     expect(transcript.scrollTop).toBe(1000);
+  });
+});
+
+describe("staged chat peek", () => {
+  let frames: Map<number, FrameRequestCallback>;
+  beforeEach(() => {
+    frames = new Map();
+    let next = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++next, callback); return next; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+  });
+  const frame = () => act(async () => {
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const callback of pending) callback(0);
+  });
+  const mids = () => [...host.querySelectorAll("[data-mid]")].map((node) => node.getAttribute("data-mid"));
+  const stage = (kind: "bot" | "room" | "people", preview: boolean) => act(async () => root.render(createElement(StoreProvider, null,
+    createElement(ChatPeekParts, { id: kind, preview }, createElement(ChatPreviewContext.Provider, { value: preview },
+      kind === "bot" ? createElement(ChatView, { bot: heavyBot, focusComposerBlocked: preview })
+        : kind === "room" ? createElement(GroupView, { group: heavyRoom })
+        : createElement(TeamRoomTranscript, { lines: heavyLines, mine: () => false, base: "/api/rooms/peek-lines", label: "People", onReply: () => {} }))),
+  )));
+
+  it.each(["bot", "room", "people"] as const)("mounts a peeked %s newest row first and keeps it through promotion", async (kind) => {
+    await stage(kind, true);
+    expect(host.querySelector("[data-orbit-transcript]")).not.toBeNull();
+    expect(mids()).toEqual([]);
+    expect(host.querySelector("[data-orbit-composer]")).toBeNull();
+    await frame();
+    await frame();
+    expect(host.querySelector("[data-orbit-composer]") === null).toBe(kind === "people");
+    expect(mids()).toEqual([]);
+    await frame();
+    expect(mids()).toEqual(["heavy-199"]);
+    const tail = host.querySelector('[data-mid="heavy-199"]');
+    await frame();
+    expect(mids()).toEqual(["heavy-198", "heavy-199"]);
+    await stage(kind, false);
+    expect(mids()).toEqual(["heavy-196", "heavy-197", "heavy-198", "heavy-199"]);
+    expect(host.querySelector('[data-mid="heavy-199"]')).toBe(tail);
+  });
+
+  it("mounts the bot header before its controls", async () => {
+    await stage("bot", true);
+    expect(host.querySelector('[aria-label="Open Neighbor\'s profile"]')).not.toBeNull();
+    expect(host.querySelector('[aria-haspopup="dialog"]')).toBeNull();
+    await frame();
+    expect(host.querySelector('[aria-haspopup="dialog"]')).not.toBeNull();
+  });
+
+  it.each(["bot", "room"] as const)("grows an underfilled peeked %s only after its rows mount", async (kind) => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? this.querySelectorAll("[data-mid]").length * 20 : 0;
+    });
+    await stage(kind, true);
+    for (let part = 1; part <= 6; part++) {
+      await frame();
+      expect(mids().length).toBe(Math.max(0, part - 2));
+    }
+    await frame();
+    expect(mids()).toHaveLength(32);
+    expect(requests.some((url) => url.includes("/api/threads/"))).toBe(false);
   });
 });
 

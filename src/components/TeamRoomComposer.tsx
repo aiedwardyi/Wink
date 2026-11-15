@@ -1,6 +1,6 @@
 import { useReplyDraft } from "@/lib/drafts";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useChatPreview } from "@/lib/chat-preview";
+import { ChatPeekPart, useChatPreview } from "@/lib/chat-preview";
 import type { Message } from "@/state/store-types";
 
 import { CallWidgetSlot } from "./CallSlots";
@@ -20,10 +20,10 @@ export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, o
 }) {
   const preview = useChatPreview();
   return (
-    <>
+    <ChatPeekPart part="composer">
       {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
       <Composer room={{ name, base, draftId, people, bots, offline, status, onStop, chain }} focusBlocked={preview} replyTo={replyTo} onClearReply={onClearReply} onConsumeReply={onConsumeReply} onRestoreReply={onRestoreReply} />
-    </>
+    </ChatPeekPart>
   );
 }
 

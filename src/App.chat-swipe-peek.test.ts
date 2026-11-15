@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Group } from "@/state/store";
+import { ChatPeekPart } from "@/lib/chat-preview";
 import { SWIPE_MOTION_MS, sidebarChatIds } from "@/lib/phone-swipe";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
 import { UNASSIGNED_SECTION_ID, sidebarItemKey } from "@/lib/sidebar-order";
@@ -14,6 +15,7 @@ vi.mock("@/components/ChatView", () => ({
   ChatView: ({ bot }: { bot: Bot }) => createElement("main", { "data-test-chat": bot.id },
     createElement("h1", null, bot.name),
     ...bot.messages.map((message) => createElement("p", { key: message.id }, message.text)),
+    createElement(ChatPeekPart, { part: "composer" }, createElement("footer")),
   ),
 }));
 vi.mock("@/components/GroupView", () => ({
@@ -25,6 +27,7 @@ vi.mock("@/components/GroupView", () => ({
 
 let host: HTMLDivElement;
 let root: Root;
+let frames: Map<number, FrameRequestCallback>;
 
 const chat = (id: string) => host.querySelector<HTMLElement>(`[data-test-chat="${id}"]`);
 const mountedChats = () => [...host.querySelectorAll<HTMLElement>("[data-test-chat]")].map((node) => node.dataset.testChat);
@@ -58,11 +61,17 @@ async function touch(type: string, x: number, y: number, timeStamp: number, targ
   await act(async () => { target.dispatchEvent(event); });
 }
 
+const frame = () => act(async () => {
+  const pending = [...frames.values()];
+  frames.clear();
+  for (const callback of pending) callback(0);
+});
+
 async function drag(id: string, from: number, to: number) {
   const target = chat(id)!;
   await touch("touchstart", from, 300, 0, target);
   await touch("touchmove", to, 300, 1000, target);
-  await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+  await frame();
   return target;
 }
 
@@ -73,6 +82,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
   vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  frames = new Map();
+  let nextFrame = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
 });
@@ -104,6 +117,45 @@ describe("phone chat peek", () => {
     await mount(id);
     await drag(id, from, to);
     expect(mountedChats()).toEqual([id]);
+  });
+
+  it("mounts the neighbor a part per frame and the rest on landing", async () => {
+    await mount("b");
+    const target = chat("b")!;
+    expect(target.querySelector("footer")).not.toBeNull();
+    await touch("touchstart", 300, 300, 0, target);
+    await touch("touchmove", 140, 300, 1000, target);
+    const incoming = chat("c");
+    expect(incoming?.querySelector("h1")?.textContent).toBe("C");
+    expect(incoming?.querySelector("footer")).toBeNull();
+    await frame();
+    expect(incoming?.querySelector("footer")).toBeNull();
+    await frame();
+    expect(incoming?.querySelector("footer")).not.toBeNull();
+  });
+
+  it("completes a neighbor that lands before its parts mount", async () => {
+    await mount("b");
+    const target = chat("b")!;
+    await touch("touchstart", 300, 300, 0, target);
+    await touch("touchmove", 140, 300, 1000, target);
+    const incoming = chat("c");
+    expect(incoming?.querySelector("footer")).toBeNull();
+    await touch("touchend", 140, 300, 2000, target);
+    await wait(SWIPE_MOTION_MS + 80);
+    expect(chat("c")).toBe(incoming);
+    expect(mountedChats()).toEqual(["c"]);
+    expect(incoming?.querySelector("footer")).not.toBeNull();
+  });
+
+  it("restages the neighbor when the drag reverses", async () => {
+    await mount("b");
+    const target = await drag("b", 200, 100);
+    await frame();
+    expect(chat("c")?.querySelector("footer")).not.toBeNull();
+    await touch("touchmove", 300, 300, 2000, target);
+    expect(chat("a")).not.toBeNull();
+    expect(chat("a")?.querySelector("footer")).toBeNull();
   });
 
   it("replaces the peek when the drag reverses across its origin", async () => {

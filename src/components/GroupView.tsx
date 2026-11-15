@@ -88,7 +88,7 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
-import { CHAT_PEEK_WINDOW_SIZE, useChatPreview } from "@/lib/chat-preview";
+import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import { turnPresenceWaiting } from "@/lib/send-accept";
@@ -221,9 +221,9 @@ const NO_JOINS: RoomJoin[] = [];
 export const Transcript = memo(function Transcript({
   group,
   members,
-  messages,
+  messages: listed,
   transcript,
-  streamingMessage,
+  streamingMessage: streamingRow,
   dock,
   onReply,
   onMessageMenu,
@@ -254,6 +254,9 @@ export const Transcript = memo(function Transcript({
   const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
+  const shownRows = useChatPeekRows();
+  const messages = useMemo(() => peekRows(listed, shownRows), [listed, shownRows]);
+  const streamingMessage = shownRows ? streamingRow : null;
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const people = useMemo(() => {
     if (!group.hosted) return undefined;
@@ -964,6 +967,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
 }
 export const GroupView = memo(function GroupView({ group: live }: { group: Group }) {
   const preview = useChatPreview();
+  const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
   const compactWindow = preview || phone;
   const heldArchive = useGroupArchive(live.id);
@@ -1268,10 +1272,10 @@ export const GroupView = memo(function GroupView({ group: live }: { group: Group
   // A widening window still to commit is not short of rows.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
+    if (!peekSettled || windowSize >= TRANSCRIPT_WINDOW_SIZE || !el?.clientHeight || !startIndex || !transcriptUnderfilled(el) || jump.messages || transcriptWindow.expanded || transcriptWindow.end !== null) return;
     const size = Math.min(TRANSCRIPT_WINDOW_SIZE, windowSize * 2);
     setTranscriptWindow((w) => ({ ...w, size, start: tailWindowStart(group.messages.length, size, renders) }));
-  }, [windowSize, startIndex, group.messages.length, renders, jump.messages, transcriptWindow, underfilled]);
+  }, [peekSettled, windowSize, startIndex, group.messages.length, renders, jump.messages, transcriptWindow, underfilled]);
   const fillPaging =
     Boolean(group.hasMore) && !jump.messages && !jump.pending && transcriptWindow.end === null && !transcriptWindow.expanded && transcriptWindow.start <= tailStart && (windowSize >= TRANSCRIPT_WINDOW_SIZE || startIndex === 0);
   useEffect(() => {
@@ -1567,6 +1571,7 @@ export const GroupView = memo(function GroupView({ group: live }: { group: Group
       )}
 
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+      <ChatPeekPart part="composer">
       {archive ? (
         <GroupArchiveBar />
       ) : (
@@ -1596,6 +1601,7 @@ export const GroupView = memo(function GroupView({ group: live }: { group: Group
           />
         </>
       )}
+      </ChatPeekPart>
       </div>
       </div>
     </main>

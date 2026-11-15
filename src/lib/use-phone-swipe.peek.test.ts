@@ -16,10 +16,10 @@ let animateDescriptor: PropertyDescriptor | undefined;
 let reply: ReturnType<typeof vi.fn<() => void>>;
 let translate: ReturnType<typeof vi.fn<() => void>>;
 
-function Harness({ initial = "b", enabled = true, ready }: { initial?: string; enabled?: boolean; ready?: (id: string) => boolean }) {
+function Harness({ initial = "b", enabled = true, mounts = true }: { initial?: string; enabled?: boolean; mounts?: boolean }) {
   const [id, setId] = useState(initial);
   const [peek, setPeek] = useState<PhoneSwipePeek | null>(null);
-  const stage = usePhoneSwipe(id, enabled, (next) => { selected(next); setId(next); }, undefined, (next) => { peeks(next); setPeek(next); }, ready);
+  const stage = usePhoneSwipe(id, enabled, (next) => { selected(next); setId(next); }, undefined, (next) => { peeks(next); if (mounts) setPeek(next); });
   return createElement("div", { ref: stage, id: "stage" },
     createElement("p", { id: "message" }, id),
     peek && createElement("div", { "data-peek": peek.id }),
@@ -48,7 +48,7 @@ function RoomHarness() {
 
 const stage = () => host.querySelector<HTMLElement>("#stage")!;
 const peek = () => host.querySelector<HTMLElement>("[data-peek]")?.dataset.peek ?? null;
-const mount = (initial = "b", enabled = true, ready?: (id: string) => boolean) => act(() => root.render(createElement(Harness, { initial, enabled, ready })));
+const mount = (initial = "b", enabled = true, mounts = true) => act(() => root.render(createElement(Harness, { initial, enabled, mounts })));
 
 function touch(type: string, x: number, y: number, timeStamp: number, target = host.querySelector("#message")!) {
   const event = new Event(type, { bubbles: true, cancelable: true });
@@ -104,124 +104,81 @@ afterEach(() => {
 });
 
 describe("phone swipe pager", () => {
-  it("prepares the indicated neighbor inside touch slop without moving the page", () => {
+  it("leaves the neighbor unmounted inside touch slop", () => {
     mount();
     touch("touchstart", 300, 300, 0);
     touch("touchmove", 292, 301, 20);
     paint();
-    expect(peek()).toBe("c");
+    expect(peeks).not.toHaveBeenCalled();
     expect(stage().style.transform).toBe("");
     expect(motions).toHaveLength(0);
   });
 
-  it("releases a slop preview when the gesture resolves to vertical scroll", () => {
+  it("starts no neighbor work when the gesture resolves to vertical scroll", () => {
     mount();
     touch("touchstart", 300, 300, 0);
     touch("touchmove", 292, 301, 20);
-    expect(peek()).toBe("c");
     touch("touchmove", 292, 340, 40);
     paint();
-    expect(peek()).toBeNull();
+    expect(peeks).not.toHaveBeenCalled();
     expect(stage().style.transform).toBe("");
     expect(selected).not.toHaveBeenCalled();
   });
 
-  it.each(["touchend", "touchcancel"])("releases slop preparation on %s without starting a spring", (end) => {
+  it.each(["touchend", "touchcancel"])("ends a touch inside slop on %s without a peek or spring", (end) => {
     mount();
     touch("touchstart", 300, 300, 0);
     touch("touchmove", 292, 301, 20);
-    expect(peek()).toBe("c");
     touch(end, 292, 301, 40);
     paint();
-    expect(peek()).toBeNull();
+    expect(peeks).not.toHaveBeenCalled();
     expect(frames.size).toBe(0);
     expect(motions).toHaveLength(0);
     expect(selected).not.toHaveBeenCalled();
   });
 
-  it("waits for the cached page before exposing its side", () => {
-    let ready = false;
-    mount("b", true, () => ready);
+  it("moves at the axis lock without waiting for a frame or the neighbor", () => {
+    mount("b", true, false);
     touch("touchstart", 300, 300, 0);
     touch("touchmove", 140, 300, 1000);
-    paint();
-    expect(stage().style.transform).toBe("");
-    expect(peek()).toBe("c");
-    ready = true;
-    paint();
     expect(stage().style.transform).toBe("translateX(-160px)");
-  });
-
-  it("waits out preparation on an early flick and springs from the displayed position", async () => {
-    let ready = false;
-    mount("b", true, () => ready);
-    touch("touchstart", 300, 300, 0);
-    touch("touchmove", 140, 300, 1000);
-    touch("touchend", 140, 300, 2000);
-    paint();
-    expect(motions).toHaveLength(0);
-    expect(selected).not.toHaveBeenCalled();
-    ready = true;
-    paint();
-    expect(motions[0].frames.map((frame) => frame.transform)).toEqual(["translateX(0px)", "translateX(-400px)"]);
-    await finishMotion();
-    expect(selected).toHaveBeenCalledExactlyOnceWith("c");
+    expect(frames.size).toBe(0);
+    expect(peeks).toHaveBeenLastCalledWith({ from: "b", id: "c", step: 1 });
     expect(peek()).toBeNull();
   });
 
-  it("releases a cancelled preview before preparation finishes", () => {
-    mount("b", true, () => false);
+  it("lands a flick before the neighbor mounts", async () => {
+    mount("b", true, false);
+    touch("touchstart", 300, 300, 0);
+    touch("touchmove", 248, 300, 30);
+    touch("touchend", 248, 300, 40);
+    expect(motions[0].frames.map((frame) => frame.transform)).toEqual(["translateX(-52px)", "translateX(-400px)"]);
+    await finishMotion();
+    expect(selected).toHaveBeenCalledExactlyOnceWith("c");
+    expect(peeks).toHaveBeenLastCalledWith(null);
+    expect(stage().style.transform).toBe("");
+  });
+
+  it("springs a cancelled drag back before the neighbor mounts", async () => {
+    mount("b", true, false);
     touch("touchstart", 300, 300, 0);
     touch("touchmove", 140, 300, 1000);
     touch("touchcancel", 140, 300, 2000);
-    paint();
-    expect(motions).toHaveLength(0);
+    expect(motions[0].frames.map((frame) => frame.transform)).toEqual(["translateX(-160px)", "translateX(0px)"]);
+    await finishMotion();
     expect(frames.size).toBe(0);
-    expect(peek()).toBeNull();
+    expect(peeks).toHaveBeenLastCalledWith(null);
+    expect(selected).not.toHaveBeenCalled();
     expect(stage().style.transform).toBe("");
   });
 
-  it("drops a queued landing when disabled during preparation", () => {
-    let ready = false;
-    mount("b", true, () => ready);
-    touch("touchstart", 300, 300, 0);
-    touch("touchmove", 140, 300, 1000);
-    touch("touchend", 140, 300, 2000);
-    mount("b", false, () => ready);
-    ready = true;
-    paint();
-    expect(motions).toHaveLength(0);
-    expect(selected).not.toHaveBeenCalled();
-    expect(peek()).toBeNull();
-  });
-
-  it("drops a queued landing when the phone width changes during preparation", () => {
-    let ready = false;
-    mount("b", true, () => ready);
-    touch("touchstart", 300, 300, 0);
-    touch("touchmove", 140, 300, 1000);
-    touch("touchend", 140, 300, 2000);
-    act(() => (window as unknown as { happyDOM: { setViewport(value: { width: number; height: number }): void } }).happyDOM.setViewport({ width: 360, height: 844 }));
-    ready = true;
-    paint();
-    expect(motions).toHaveLength(0);
-    expect(selected).not.toHaveBeenCalled();
-    expect(peek()).toBeNull();
-  });
-
-  it("requires the new neighbor's readiness after reversing", () => {
-    const ready = new Set<string>();
-    mount("b", true, (id) => ready.has(id));
+  it("follows the finger through a reversal before either neighbor mounts", () => {
+    mount("b", true, false);
     touch("touchstart", 200, 300, 0);
     touch("touchmove", 100, 300, 1000);
-    paint();
     touch("touchmove", 300, 300, 2000);
-    ready.add("c");
     paint();
-    expect(peek()).toBe("a");
-    expect(stage().style.transform).toBe("");
-    ready.add("a");
-    paint();
+    expect(peeks).toHaveBeenLastCalledWith({ from: "b", id: "a", step: -1 });
     expect(stage().style.transform).toBe("translateX(100px)");
   });
 

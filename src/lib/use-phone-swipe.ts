@@ -57,7 +57,6 @@ export function usePhoneSwipe(
   select: (id: string) => void,
   rider?: RefObject<HTMLElement | null>,
   onPeek?: (peek: PhoneSwipePeek | null) => void,
-  peekReady?: (id: string) => boolean,
 ): (node: HTMLElement | null) => void {
   const [el, setEl] = useState<HTMLElement | null>(null);
   const stage = useCallback((node: HTMLElement | null) => setEl(node), []);
@@ -65,10 +64,10 @@ export function usePhoneSwipe(
   const enterFrom = useRef<number | null>(null);
   const landed = useRef<string | null>(null);
   const shownBot = useRef(botId);
-  const latest = useRef({ botId, select, onPeek, peekReady });
+  const latest = useRef({ botId, select, onPeek });
   const resetMotion = useRef(() => {});
   useLayoutEffect(() => {
-    latest.current = { botId, select, onPeek, peekReady };
+    latest.current = { botId, select, onPeek };
   });
 
   useLayoutEffect(() => {
@@ -101,8 +100,6 @@ export function usePhoneSwipe(
     let peek: PhoneSwipePeek | null = null;
     let frame = 0;
     let offset = 0;
-    let painted = 0;
-    let prepared = false;
     let animations: Animation[] = [];
     let motion = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -110,25 +107,14 @@ export function usePhoneSwipe(
     const move = (transform: string) => {
       for (const stage of stages()) if (stage) stage.style.transform = transform;
     };
-    const ready = () => prepared || !peek || !latest.current.peekReady || (prepared = latest.current.peekReady(peek.id));
     const paint = () => {
       frame = 0;
-      if (!ready()) {
-        frame = requestAnimationFrame(paint);
-        return;
-      }
-      painted = offset;
       move(offset ? `translateX(${offset}px)` : "");
     };
     const showPeek = (id: string | null, step: SwipeStep) => {
       const from = latest.current.botId;
       if ((peek?.id ?? null) === id && (!id || peek?.from === from)) return;
-      if (id && peek && latest.current.peekReady && painted) {
-        painted = 0;
-        move("");
-      }
       peek = id && from ? { from, id, step } : null;
-      prepared = !peek || !latest.current.peekReady;
       latest.current.onPeek?.(peek);
     };
     const stopMotion = () => {
@@ -143,7 +129,6 @@ export function usePhoneSwipe(
       stopMotion();
       drag = null;
       offset = 0;
-      painted = 0;
       move("");
       for (const stage of stages()) stage?.style.removeProperty("will-change");
       showPeek(null, 0);
@@ -158,26 +143,16 @@ export function usePhoneSwipe(
         animations = [];
         done();
       };
-      const run = () => {
-        frame = 0;
-        if (version !== motion) return;
-        if (!ready()) {
-          if (from === 0 && to === 0) finish();
-          else frame = requestAnimationFrame(run);
-          return;
-        }
-        offset = to;
-        animations = settle(stages(), from, to);
-        // Some animate implementations lack the finished promise and need the timer fallback.
-        if (animations.length && animations.every((animation) => animation.finished)) {
-          void Promise.all(animations.map((animation) => animation.finished)).then(finish, () => {});
-        } else if (animations.length) {
-          timer = setTimeout(finish, SWIPE_MOTION_MS);
-        } else {
-          finish();
-        }
-      };
-      run();
+      offset = to;
+      animations = settle(stages(), from, to);
+      // Some animate implementations lack the finished promise and need the timer fallback.
+      if (animations.length && animations.every((animation) => animation.finished)) {
+        void Promise.all(animations.map((animation) => animation.finished)).then(finish, () => {});
+      } else if (animations.length) {
+        timer = setTimeout(finish, SWIPE_MOTION_MS);
+      } else {
+        finish();
+      }
     };
     const preview = (dx: number) => {
       const step = dx === 0 ? 0 : dx < 0 ? 1 : -1;
@@ -199,7 +174,6 @@ export function usePhoneSwipe(
       const caught = matrix ? Number(matrix[2].split(",")[matrix[1] ? 12 : 4]) || 0 : 0;
       stopMotion();
       offset = caught;
-      painted = caught;
       move(caught ? `translateX(${caught}px)` : "");
       width = el.clientWidth || window.innerWidth;
       stages().forEach((stage) => stage?.getAnimations?.().forEach((animation) => animation.cancel()));
@@ -223,10 +197,6 @@ export function usePhoneSwipe(
           drag = null;
           if (offset) spring(offset, 0, clear);
           else clear();
-        } else if (latest.current.onPeek && lockAxis((touch.clientX - startX) * 2, (touch.clientY - drag.y) * 2) === "x") {
-          // Prepare within slop, but only move after the real axis lock.
-          const step = dx < 0 ? 1 : -1;
-          showPeek(neighborId(drag.ids, latest.current.botId ?? "", step), step);
         }
         return;
       }
@@ -235,8 +205,12 @@ export function usePhoneSwipe(
       if (dt > 0) drag.velocity = (touch.clientX - drag.lastX) / dt;
       drag.lastX = touch.clientX;
       drag.lastT = e.timeStamp;
-      if (!horizontal) for (const stage of stages()) if (stage) stage.style.willChange = "transform";
       preview(dx);
+      if (horizontal) return;
+      for (const stage of stages()) if (stage) stage.style.willChange = "transform";
+      // The lock frame moves in the handler and never waits for the neighbor to mount.
+      cancelAnimationFrame(frame);
+      paint();
     };
     const finish = (commit: boolean) => {
       if (!drag) return;
@@ -251,7 +225,7 @@ export function usePhoneSwipe(
       const step = commit ? swipeStep(dx, drag.velocity, width) : 0;
       const target = neighborId(drag.ids, current, step);
       const canMove = neighborId(drag.ids, current, dx < 0 ? 1 : -1) !== null;
-      const from = ready() ? dragOffset(dx, canMove) : painted;
+      const from = dragOffset(dx, canMove);
       drag = null;
       if (!target) {
         spring(from, 0, clear);

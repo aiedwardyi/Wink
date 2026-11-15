@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
@@ -41,7 +41,7 @@ import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem 
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
-import { ChatPreviewContext } from "@/lib/chat-preview";
+import { ChatPeekParts, ChatPreviewContext } from "@/lib/chat-preview";
 import { altDigitSelectsPane, backquoteTogglesTerminal, workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { workerRuns } from "@/lib/worker-runs";
 import { useTerminalPanes } from "@/lib/terminal-panes";
@@ -108,30 +108,23 @@ function PhoneChatPages({ id, enabled, menuVisible, hidden, rider, onSelect, chi
 }) {
   const [peek, setPeek] = useState<PhoneSwipePeek | null>(null);
   const [slot, setSlot] = useState(0);
-  const carrier = useRef<HTMLDivElement | null>(null);
-  const peekReady = useCallback((target: string) => {
-    const page = [...(carrier.current?.children ?? [])].find((node) => node.getAttribute("data-phone-chat-page") === target);
-    return Boolean(page);
-  }, []);
   const showPeek = useCallback((next: PhoneSwipePeek | null) => {
-    setPeek(next);
+    // The neighbor mounts off the drag's frames; its release stays inside the landing flush.
+    if (next) startTransition(() => setPeek(next));
+    else setPeek(null);
   }, []);
   const select = useCallback((target: string) => {
     setSlot((current) => 1 - current);
     onSelect(target);
   }, [onSelect]);
-  const stage = usePhoneSwipe(id, enabled, select, rider, showPeek, peekReady);
-  const bindStage = useCallback((node: HTMLDivElement | null) => {
-    carrier.current = node;
-    stage(node);
-  }, [stage]);
+  const stage = usePhoneSwipe(id, enabled, select, rider, showPeek);
   const neighbor = menuVisible && peek?.from === id ? peek : null;
-  return <div ref={bindStage} className="relative flex min-h-0 min-w-0 flex-1" inert={hidden} aria-hidden={hidden}>
+  return <div ref={stage} className="relative flex min-h-0 min-w-0 flex-1" inert={hidden} aria-hidden={hidden}>
     {[{ key: slot, id, preview: false }, ...(neighbor ? [{ key: 1 - slot, id: neighbor.id, preview: true }] : [])].map((page) =>
       <div key={page.key} data-phone-chat-page={page.id} className="flex min-h-0 min-w-0 flex-1"
         style={page.preview ? { position: "absolute", top: 0, bottom: 0, left: `${(neighbor?.step ?? 0) * 100}%`, width: "100%" } : undefined}
         inert={page.preview} aria-hidden={page.preview || undefined}>
-        {children(page.id, page.preview)}
+        <ChatPeekParts id={page.id} preview={page.preview}>{children(page.id, page.preview)}</ChatPeekParts>
       </div>,
     )}
   </div>;
