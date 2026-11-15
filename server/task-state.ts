@@ -324,9 +324,17 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const plan = z.array(z.object({
     step: z.string().trim().min(1),
     status: z.enum(["pending", "active", "done", "skipped"]),
-  }).strict()).transform((items) =>
-    keep("plan", items, LIMITS.plan, "first").map((item, index) => ({ ...item, step: clip(`plan.${index}.step`, item.step, LIMITS.step) })),
-  );
+  }).strict()).transform((items) => {
+    const kept = keep("plan", items, LIMITS.plan, "first");
+    const active = kept.filter((item) => item.status === "active").length;
+    if (active > 1) clipped.push(`plan (${active} active > 1, later ones set to pending)`);
+    let seen = false;
+    return kept.map((item, index) => {
+      const demote = item.status === "active" && seen;
+      if (item.status === "active") seen = true;
+      return { ...item, status: demote ? "pending" as const : item.status, step: clip(`plan.${index}.step`, item.step, LIMITS.step) };
+    });
+  });
   // Empty string clears. Whitespace-only is rejected before trim.
   const nextAction = z.string().refine(
     (value) => value === "" || /\S/.test(value),

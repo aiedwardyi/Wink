@@ -634,10 +634,24 @@ describe("task state clipping", () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
-    expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(2);
+    expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(1);
     expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
     expect(parsed.data.artifacts).toHaveLength(20);
     expect(parsed.data.asks).toHaveLength(30);
-    expect(clipped).toEqual(["plan (25 > 20)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
+    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
+  });
+
+  it("keeps every plan step and leaves only the first active one active", () => {
+    const clipped: string[] = [];
+    const parsed = taskStateUpdateSchema(clipped).safeParse({
+      fromBotId: "bot-1",
+      fromThreadId: "thread-1",
+      plan: [{ step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "active" }, { step: "d", status: "active" }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.plan).toEqual([
+      { step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "pending" }, { step: "d", status: "pending" },
+    ]);
+    expect(clipped).toEqual(["plan (3 active > 1, later ones set to pending)"]);
   });
 });
