@@ -75,7 +75,7 @@ it.each([
     expect(response.data.steered).toBe(true);
     expect(h.steer).toHaveBeenCalledTimes(1);
   }
-  h.waits.failed(h.bot.threadId, "turn-1", h.now + 3_600_000, "limit-message", ["five_hour", "seven_day"]);
+  h.waits.failed(h.bot.threadId, "turn-1", { resetsAt: h.now + 3_600_000 }, "limit-message", ["five_hour", "seven_day"]);
   h.store.setActivity(h.bot.id, "idle");
   h.waits.settled(h.bot.threadId, "turn-1", false);
   expect(h.waits.store.all()).toHaveLength(1);

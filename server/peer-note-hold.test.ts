@@ -94,7 +94,6 @@ describe("worker notes while a bot answers a bot", () => {
         woken.push({ threadId, notes });
         store.markPaneNotesDelivered(botId, threadId, newestId);
       },
-      warn: () => {},
     });
     // an engine that reports the read at its next model request (Claude)
     const adapter = {

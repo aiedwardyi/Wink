@@ -4089,7 +4089,7 @@ bus.subscribe((event: RuntimeEvent) => {
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
       if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId).catch(() => console.error("Signed-out account could not be saved"));
-      if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit.resetsAt, row.id,
+      if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit, row.id,
         [...new Set(["five_hour", "seven_day", ...(rateLimitsByInstance.get(event.providerInstanceId ?? "")?.windows.map((window) => window.id) ?? [])])]);
       // a setup error means the engine could not even start: the bot is
       // dead until something changes, not merely idle. The next successful
@@ -4496,7 +4496,6 @@ const paneWake = new PaneWakeScheduler({
     });
   },
   admit: (botId, threadId) => admitPaneWake(store, botId, threadId, commsBus.replyUnwoken),
-  warn: (line) => console.warn(line),
 });
 
 /** The user wrote to this bot: lift a Stop pause and wake for notes held under it. */

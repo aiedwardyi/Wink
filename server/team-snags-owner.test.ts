@@ -272,7 +272,7 @@ describe("team snag owner", () => {
       const wake = vi.fn();
       const scheduler = new PaneWakeScheduler({
         enabled: (bot, thread) => paneWakeEnabled(store, bot, thread), busy: () => false,
-        hasNotes: () => true, wake, warn: () => {},
+        hasNotes: () => true, wake,
       });
       scheduler.noteArrived(chief.id, chief.threadId);
       postChiefNote(store, "this-pc", "Team snags (1)");
