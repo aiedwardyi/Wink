@@ -20,6 +20,7 @@ import { createPeopleOnlyRoom, peopleOnlyRoster, setPeopleOnly } from "./rooms/p
 import { stopBotChain } from "./rooms/send.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
+import { scanQuestion } from "../shared/open-question.ts";
 import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
@@ -455,7 +456,8 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
           const steered = askerId && askerId !== current.busyBotId ? null : await steerRoomSend({ store, instanceForBot: deps.instanceForBot, userName: deps.userName }, current, text, replyTo, sendId, answersCard);
           // a Stop during the steer await hands the line back, as a 1:1 Send now
           if (!steered && roomStops.get(current.id) !== stops) return { ok: true as const, cancelled: true as const, threadId };
-          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId, answersCard);
+          // a typed line answers the open question, so its asker takes it; a mention still wins
+          const message = steered ?? startGroupTurn(current.id, text, replyTo, sendId, askerId ?? scanQuestion(store.messagesFor(threadId))?.from?.botId, answersCard);
           return { ok: true as const, threadId, message, idle: idle() };
         },
       );

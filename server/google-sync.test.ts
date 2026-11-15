@@ -411,6 +411,21 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(laptop.sync.status().state).toBe("up-to-date");
   });
 
+  it("says which picture a pass just downloaded", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    const laptop = makePC("laptop");
+    await startOn(home);
+    await startOn(laptop);
+    laptop.sync.stop();
+    write(home.folder!, "pictures/late.png", "late bytes");
+    await settle(home);
+    const landed: string[] = [];
+    laptop.sync = boot(laptop, { picture: (name) => void landed.push(name) });
+    laptop.sync.resume();
+    await settle(laptop);
+    expect(landed).toEqual(["late.png"]);
+  });
+
   it("keeps initial join chat priority through activation until the ready pass finishes", async () => {
     const home = makePC("home", { bots: [bot("Counsel")] });
     await startOn(home);

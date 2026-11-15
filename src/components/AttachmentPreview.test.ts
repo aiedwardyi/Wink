@@ -96,6 +96,28 @@ describe("ShownImage", () => {
     }
   });
 
+  it("loads a picture the moment its file lands, after the timed retries gave up", async () => {
+    vi.useFakeTimers();
+    const { host, root } = await renderShownImage("/a/b/abc-123.png");
+    try {
+      for (const wait of [5_000, 15_000, 45_000]) {
+        await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+        await act(async () => { await vi.advanceTimersByTimeAsync(wait); });
+      }
+      await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "other.png" })));
+      expect(host.querySelector("img")).toBeNull();
+      await act(async () => window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: "abc-123.png" })));
+      expect(host.querySelector("img")?.getAttribute("src")).toBe("/api/attachments/abc-123.png?retry=4");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("caps the picture like a markdown image without stretching it", async () => {
     const { host, root } = await renderShownImage("/a/b/cap.png");
     try {

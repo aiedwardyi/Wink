@@ -1,5 +1,5 @@
 // Saved paths resolve through the attachment route before loading.
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ImageOff, Maximize2 } from "lucide-react";
 import { CHAT_IMAGE, chatImageBox, rememberChatImage } from "@/lib/chat-image";
 import { cn } from "@/lib/cn";
@@ -44,6 +44,15 @@ function usePictureRetry(src: string) {
     setWaiting(false);
     setAttempt((current) => current + 1);
   };
+  // The other PC's picture can land long after its message: the server says when the file is here.
+  useEffect(() => {
+    if (!waiting) return;
+    const landed = (event: Event) => {
+      if (event instanceof CustomEvent && src.split("?")[0]!.endsWith(`/${event.detail}`)) retryNow();
+    };
+    window.addEventListener("orbit:picture-landed", landed);
+    return () => window.removeEventListener("orbit:picture-landed", landed);
+  }, [src, waiting]);
   return { src: pictureSrc(src, attempt), failed: waiting, onError, retryNow };
 }
 

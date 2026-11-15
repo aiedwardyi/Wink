@@ -299,6 +299,20 @@ describe("terminal send relay", () => {
     });
   });
 
+  it("writes a line and its Enter as two bridge writes, and stops at a failed one", async () => {
+    const bodies: unknown[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ screenText: `$ ${bodies.length}` });
+    }) as typeof fetch;
+    await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, text: "yes\n" }, fetchImpl)).resolves.toEqual({ status: 200, body: { screenText: "$ 2" } });
+    expect(bodies).toEqual([{ sessionId: "s1", generation: 2, text: "yes" }, { sessionId: "s1", generation: 2, text: "\n" }]);
+    let calls = 0;
+    const stale = (async () => { calls += 1; return Response.json({ error: "Terminal session is stale" }, { status: 409 }); }) as typeof fetch;
+    await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, text: "yes\n" }, stale)).resolves.toMatchObject({ status: 409 });
+    expect(calls).toBe(1);
+  });
+
   it("frames a validated multi-line paste and still refuses a raw ESC in it", async () => {
     const bodies: unknown[] = [];
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -306,7 +320,7 @@ describe("terminal send relay", () => {
       return Response.json({ screenText: "$" });
     }) as typeof fetch;
     await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, text: "first\nsecond", paste: true }, fetchImpl)).resolves.toMatchObject({ status: 200 });
-    expect(bodies).toEqual([{ sessionId: "s1", generation: 2, text: "\x1b[200~first\nsecond\x1b[201~\n" }]);
+    expect(bodies).toEqual([{ sessionId: "s1", generation: 2, text: "\x1b[200~first\nsecond\x1b[201~" }, { sessionId: "s1", generation: 2, text: "\n" }]);
     await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, text: "first\x1b[201~\nsecond", paste: true }, mustNotFetch)).resolves.toEqual({
       status: 400,
       body: { error: "control characters are not allowed" },
@@ -339,7 +353,7 @@ describe("terminal send relay", () => {
       calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), method: init?.method, body: JSON.parse(String(init?.body)) });
       return new Response(JSON.stringify({ botId: "bot-1", sessionId: "s1", generation: 2, screenText: "$ ls", screenRuns: [[{ t: "$ ls" }]], seq: 9, modes: [1], panes: [] }));
     }) as typeof fetch;
-    await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, extra: true }, fetchImpl)).resolves.toEqual({
+    await expect(terminalSendResponse(ACCESS, "bot-1", { ...input, text: "ls", extra: true }, fetchImpl)).resolves.toEqual({
       status: 200,
       body: { sessionId: "s1", generation: 2, screenText: "$ ls", screenRuns: [[{ t: "$ ls" }]], panes: [] },
     });
@@ -347,7 +361,7 @@ describe("terminal send relay", () => {
       url: "http://127.0.0.1:52150/v1/bots/bot-1/terminal/send",
       auth: `Bearer ${terminalSendGrant(ACCESS.token, "bot-1")}`,
       method: "POST",
-      body: input,
+      body: { ...input, text: "ls" },
     }]);
     expect(terminalSendGrant(ACCESS.token, "bot-1")).not.toBe(terminalReadGrant(ACCESS.token, "bot-1"));
   });
@@ -381,23 +395,24 @@ describe("pane attention relay", () => {
       calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body)) });
       return new Response("{}");
     }) as typeof fetch;
-    await raisePaneAttention(null, "bot-1", "pane-1", undefined, fetchImpl);
-    await raisePaneAttention(ACCESS, "bot-1", "pane-1", undefined, fetchImpl);
-    await raisePaneAttention(ACCESS, "bot-1", "pane-1", "report", fetchImpl);
-    await raisePaneAttention(ACCESS, "bot-1", "pane-1", "stall", fetchImpl);
+    await raisePaneAttention(null, "bot-1", "pane-1", undefined, undefined, fetchImpl);
+    await raisePaneAttention(ACCESS, "bot-1", "pane-1", undefined, undefined, fetchImpl);
+    await raisePaneAttention(ACCESS, "bot-1", "pane-1", "report", "BLOCKED FIX-B which key?", fetchImpl);
+    await raisePaneAttention(ACCESS, "bot-1", "pane-1", "stall", undefined, fetchImpl);
     const auth = `Bearer ${terminalReadGrant(ACCESS.token, "bot-1")}`;
     expect(calls).toEqual([
       { url: "http://127.0.0.1:52150/v1/bots/bot-1/terminal/attention", auth, body: { sessionId: "pane-1" } },
-      { url: "http://127.0.0.1:52150/v1/bots/bot-1/terminal/attention", auth, body: { sessionId: "pane-1", kind: "report" } },
+      { url: "http://127.0.0.1:52150/v1/bots/bot-1/terminal/attention", auth, body: { sessionId: "pane-1", kind: "report", text: "BLOCKED FIX-B which key?" } },
       { url: "http://127.0.0.1:52150/v1/bots/bot-1/terminal/attention", auth, body: { sessionId: "pane-1", kind: "stall" } },
     ]);
     const down = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
-    await expect(raisePaneAttention(ACCESS, "bot-1", "pane-1", undefined, down)).resolves.toBeUndefined();
+    await expect(raisePaneAttention(ACCESS, "bot-1", "pane-1", undefined, undefined, down)).resolves.toBeUndefined();
   });
 
   it("raises attention with the note kind after the mailbox stores a pane note", () => {
     const route = server.slice(server.indexOf('path === "/api/mailbox"'), server.indexOf('path.startsWith("/api/")', server.indexOf('path === "/api/mailbox"')));
     expect(route).toContain("raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind)");
+    expect(route).toContain("raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind, parsed.data.text)");
   });
 });
 

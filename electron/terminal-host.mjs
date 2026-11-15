@@ -1734,7 +1734,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.reportLost = null;
         if (session.reportSignal) { try { fs.unlinkSync(session.reportSignal); } catch {} }
         if (session.runningCommand) session.runningCommand.reported = true;
-        paneRuns?.reported(session.id);
+        // BLOCKED waits on the teacher, so the run is still live for a restart to bring back.
+        if (!/^\s*BLOCKED\b/.test(text ?? "")) paneRuns?.reported(session.id);
         session.finished = [];
         session.autoNote = null;
         session.autoReported = true;

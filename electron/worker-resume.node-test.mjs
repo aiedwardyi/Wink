@@ -226,6 +226,15 @@ for (const status of ["pending", "resume failed", "unexpected menu"]) {
   });
 }
 
+test("old chat that reads like a menu does not close a worker the start hook then confirms", async (t) => {
+  const f = fixture(t);
+  const seen = ["unexpected menu", "resumed"];
+  f.host.workerResumeStatus = () => seen.shift() ?? "resumed";
+  await recovery.recoverWorkers(f.options);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.notes[0].text, /^RESUMED: codex/);
+});
+
 test("a failed replacement close never sends FRESH guidance", async (t) => {
   const f = fixture(t);
   f.host.workerResumeStatus = () => "pending";

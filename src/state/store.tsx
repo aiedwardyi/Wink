@@ -2258,6 +2258,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bumpPeripheralVersion("routines");
       }
       switch (frame.kind) {
+        case "picture":
+          window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: frame.name }));
+          break;
         case "turn.dispatch":
           if (frame.threadId) {
             liveTurns.current = liveTurnIdAfterDispatch(liveTurns.current, frame.threadId, frame.createdAt);

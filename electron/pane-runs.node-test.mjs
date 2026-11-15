@@ -63,6 +63,20 @@ test("a restart sends one note naming only the panes left mid-run", async (t) =>
   assert.equal(lines.length, 4);
 });
 
+test("a worker waiting on BLOCKED is still named after a restart", async (t) => {
+  const file = runFile(t);
+  const app = launch(file);
+  const done = await app.host.openForBot("bot-1", { label: "FIX-A", command: "claude" });
+  const blocked = await app.host.openForBot("bot-1", { label: "FIX-B", command: "claude" });
+  app.host.attendBot("bot-1", done.sessionId, "report", "DONE FIX-A PR 1");
+  app.host.attendBot("bot-1", blocked.sessionId, "report", "BLOCKED FIX-B which key?");
+  app.host.dispose();
+  const notes = await restart(file);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0].text, /FIX-B/);
+  assert.doesNotMatch(notes[0].text, /FIX-A/);
+});
+
 test("a crash with no clean quit still leaves the record", async (t) => {
   const file = runFile(t);
   const app = launch(file);

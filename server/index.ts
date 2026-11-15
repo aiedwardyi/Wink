@@ -2424,6 +2424,7 @@ const googleSync = createGoogleSync({
   republishing: () => threadSyncV2?.republishing() ?? false,
   kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
+  picture: (name) => broadcast({ kind: "picture", name }),
   openThread: () => threadRoutes.openThread(),
 });
 const uploadCloudRoots = cloudSyncRoots();
@@ -7825,7 +7826,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const label = await paneLabel(terminalBridgeAccess, scope.bot, scope.pane);
       const note = mailboxNoteText(scope.pane, source.name || source.id, source.id, parsed.data.text, label);
       if (!note) return json(res, 400, { error: "empty message" });
-      if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind);
+      if (kind === "report") await raisePaneAttention(terminalBridgeAccess, scope.bot, scope.pane, kind, parsed.data.text);
       if (kind === "report") usageStats.workerReported(scope.pane, parsed.data.text);
       const message = store.appendMessage(source.threadId, { role: "bot", kind: "note", text: note, origin: profileSyncSettings.deviceId });
       if (kind === "report") void unlandedWork.refresh(source.id, source.threadId);
