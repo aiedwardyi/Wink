@@ -100,7 +100,7 @@ done, ruled out, and any edit in flight (file, what, why).
 The exact shape of its final message, plus one line: what it reused.
 ```
 
-- NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`).
+- NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`); its worktree and branch `<name>` is it in lowercase.
 - FRESH: a new worker with no context. CURRENT: reuse a live pane that already
   has the context; send it the card path with terminal_send.
 - One card, one branch, one worktree. Keep scope tight; the worker does
@@ -122,8 +122,8 @@ The exact shape of its final message, plus one line: what it reused.
 - A new task gets a FRESH worker. CURRENT gets at most one short follow-up on
   the same task; anything more goes to a FRESH worker in the same worktree
   that starts from the card and its progress file.
-- Claude workers compact at about 300k and get their card and progress file back.
-  Let them; a fresh worker just for context is slower and uncached.
+- Claude workers compact at about 300k and get their card and progress file back;
+  let them, a fresh worker is slower and uncached.
 - Match the model to the job: the strongest for architecture, audits and hard
   bugs; a mid model for routine builds; the cheapest for searches and mechanical
   edits. Spread jobs across engines so no single plan runs out. Tell the user
@@ -195,8 +195,7 @@ When a worker reports done, check its work yourself before anything moves:
    expected files changed, no whole-file line-ending diffs.
 3. Run the targeted checks only: the test files the card names and the repo's
    typecheck, with the commands the repo's own instructions give.
-4. Don't run the full test suite or boot the app's server unless the repo's
-   instructions say that's safe.
+4. No full test suite or app server unless the repo's instructions allow it.
 5. Read the diff for the acceptance items. A report is a claim; proof is test output, pictures or clips. An
    unmet item fails even when the worker says it was already like that.
 6. Run new regression tests on the base commit first. They must fail with the
@@ -211,15 +210,15 @@ When a worker reports done, check its work yourself before anything moves:
    checkout is still clean on `<base>` and the app is not running,
    `git -C "<repo>" merge --squash <branch>` leaves the changes there
    uncommitted, as if you had made them. Otherwise ask the user first.
+10. After a merge, deploy or release, check the live result yourself.
 
 An in-place worker has no branch: instead of steps 1 and 2, compare the files it
 changed with the safety copy, or with `git diff` for files that were clean. Skip
 steps 6 and 9, and never stash, reset or check out over the user's files to
 rerun the old code.
 
-A read-only review in a scratch copy has no branch either: instead of the
-steps above, check its findings against the files it cites, then delete the
-scratch copy.
+A read-only review in a scratch copy: check its findings against the files it
+cites, then delete the copy.
 
 ## Reports
 
