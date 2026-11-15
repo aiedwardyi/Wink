@@ -55,7 +55,7 @@ import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
-import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
+import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
@@ -3858,11 +3858,16 @@ bus.subscribe((event: RuntimeEvent) => {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
           : asker && botAccounts.instance(asker, event.threadId);
-        if (instance && event.requestId) {
-          void instance.adapter
-            .respondToRequest(event.threadId, event.requestId, { behavior: "deny", message: event.background ? BACKGROUND_DENY_NOTE : ASK_DENY_NOTE })
-            .catch(() => {});
-        }
+        const requestId = event.requestId;
+        const deny = async () => {
+          if (!instance || !requestId) throw new Error("provider unavailable");
+          const outcome = await instance.adapter.respondToRequest(event.threadId, requestId, { behavior: "deny", message: event.background ? BACKGROUND_DENY_NOTE : ASK_DENY_NOTE });
+          if (outcome === "unavailable") throw new Error("the ask is no longer open");
+        };
+        // retried once, then a teammate's request ends: with no card, an undelivered deny would hold the room
+        void deny().catch(deny).catch(() => {
+          if (!event.background && group?.hosted && asker) failTeammateAskTurn(group.hosted.roomId, event.threadId, asker.id);
+        });
         break;
       }
       const message = pushMessage({

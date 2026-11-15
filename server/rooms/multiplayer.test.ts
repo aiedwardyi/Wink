@@ -11,7 +11,7 @@ import { autoVerdict } from "../auto-approve.ts";
 import { DATA_DIR } from "../config.ts";
 import { _resetSteerQueue, drainSteeredMessages, queuedRoomBotIds, queueRoomParticipation, type RoomDrain } from "../steer-queue.ts";
 import { Store } from "../store.ts";
-import { ASK_DENY_NOTE, askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, hostedTurnRefused, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
+import { ASK_DENY_NOTE, askById, askRiders, closeAsksDb, configureRoomAsks, endAsk, failTeammateAskTurn, hostedTurnRefused, roomAsks, settleAsk, startAsk, teammateAskTurn, type HostedGroup, type RoomAsk, type RoomAskDeps } from "./asks.ts";
 import { addPerson, closeRoomsDb, createRoom, recentRoomEntries, type RoomPerson } from "./db.ts";
 import { goLive, openDoorStream } from "./door-streams.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./multiplayer.ts";
@@ -258,7 +258,7 @@ describe("a teammate's request under the host's setting for the bot", () => {
   }
 
   /** The request.opened fold of index.ts for a request on the room's thread, up to its first break. */
-  function openRequest(event: Record<string, unknown> = {}) {
+  function openRequest(event: Record<string, unknown> = {}, respond: () => Promise<string> = async () => "delivered") {
     let fold = undefined as ts.CaseClause | undefined;
     const walk = (node: ts.Node) => {
       if (ts.isCaseClause(node) && node.expression.getText(index) === '"request.opened"') fold = node;
@@ -266,11 +266,11 @@ describe("a teammate's request under the host's setting for the bot", () => {
     };
     walk(index);
     expect(fold).toBeDefined();
-    const respondToRequest = vi.fn(async () => "delivered");
+    const respondToRequest = vi.fn(respond);
     const pushMessage = vi.fn();
     const scope = {
       event: { type: "request.opened", requestType: "permission", requestId: "r1", threadId: group.threadId, tool: "Bash", summary: "npm run build", ...event },
-      bot: undefined, group: store.group(group.id), speaker: { botId: wink }, store, teammateAskTurn, autoVerdict, ASK_DENY_NOTE, pushMessage,
+      bot: undefined, group: store.group(group.id), speaker: { botId: wink }, store, teammateAskTurn, failTeammateAskTurn, autoVerdict, ASK_DENY_NOTE, pushMessage,
       isUnattended: () => false, botAccounts: { instance: () => ({ adapter: { respondToRequest } }) }, appendDecision: vi.fn(), DATA_DIR,
     };
     new Function(...Object.keys(scope), js(`switch (event.type) { ${fold!.getText(index)} }`))(...Object.values(scope));
@@ -300,6 +300,19 @@ describe("a teammate's request under the host's setting for the bot", () => {
       expect(respondToRequest.mock.calls).toEqual([[group.threadId, "r1", { behavior: "deny", message: ASK_DENY_NOTE }]]);
       expect(pushMessage).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    ["fails", async () => { throw new Error("broker gone"); }],
+    ["reaches nobody", async () => "unavailable"],
+  ])("ends the request when the deny %s twice, so no open step holds the room", async (_how, respond) => {
+    store.patchBot(wink, { autoApprove: false });
+    const ask = running();
+    const { respondToRequest, pushMessage } = openRequest({}, respond);
+    await vi.waitFor(() => expect(askById(ask.id)?.state).toBe("failed"));
+    expect(respondToRequest).toHaveBeenCalledTimes(2);
+    expect(deps.stopTurn).toHaveBeenCalledWith(expect.objectContaining({ id: ask.id }), expect.any(Function));
+    expect(pushMessage).not.toHaveBeenCalled();
   });
 
   it("lets an Auto bot answer a teammate's step as it does the host's", async () => {

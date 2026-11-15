@@ -291,11 +291,19 @@ export function askAllowsRequest(id: string): boolean {
 
 /** The deny for a card on a teammate's request: only the host could answer it. */
 export const ASK_DENY_NOTE =
-  "Wink: this step needs the host's approval, and a teammate's request can't wait for it. Skip it and say so in your reply.";
+  "Wink: only the host could answer this step, and a teammate's request can't wait for them. Skip it and say so in your reply.";
+
+const teammateAsks = (roomId: string, threadId: string, botId: string) =>
+  roomAsks(roomId, ["running", "stopping"]).filter((ask) => ask.asker.kind === "person" && ask.threadId === threadId && ask.botId === botId);
 
 /** A teammate's request is this bot's live turn on the thread. */
 export function teammateAskTurn(roomId: string, threadId: string, botId: string): boolean {
-  return roomAsks(roomId, ["running", "stopping"]).some((ask) => ask.asker.kind === "person" && ask.threadId === threadId && ask.botId === botId);
+  return teammateAsks(roomId, threadId, botId).length > 0;
+}
+
+/** A deny that never reached the engine leaves a step open with no card; the request ends so the room moves on. */
+export function failTeammateAskTurn(roomId: string, threadId: string, botId: string): void {
+  for (const ask of teammateAsks(roomId, threadId, botId)) void endAsk(ask.id, "failed");
 }
 
 function writeEnd(ask: RoomAsk, text: string): void {
