@@ -5,7 +5,7 @@ import test from "node:test";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import os from "node:os";
 import { createTerminalBridge, paneCountBody, terminalPaneCountsGrant, terminalReadGrant, terminalSendGrant, updateGrant } from "./terminal-bridge.mjs";
-import { BOT_PANE_TOTAL, createTerminalHost } from "./terminal-host.mjs";
+import { createTerminalHost } from "./terminal-host.mjs";
 import { closeBotPanes } from "../server/terminal-cleanup.ts";
 import { createWorkerLaunch } from "../server/worker-launch.ts";
 import { terminalPaneCountsGrant as serverTerminalPaneCountsGrant, terminalSendGrant as serverTerminalSendGrant, updateGrant as serverUpdateGrant } from "../server/terminal-grant.ts";
@@ -482,12 +482,10 @@ test("GET /v1/terminal/pane-counts returns worker counts for that grant only", a
   await bridge.close();
 });
 
-test("pane counts keep a bot with more than 8 workers, up to its home and remote total", () => {
+test("pane counts keep a bot with more than 8 workers, and past 192", () => {
   const labels = (n) => Array.from({ length: n }, (_, i) => `w${i}`);
   assert.equal(paneCountBody({ "bot-1": labels(9) }).counts["bot-1"], 9);
-  assert.equal(paneCountBody({ "bot-1": labels(192) }).counts["bot-1"], 192);
-  assert.deepEqual(paneCountBody({ "bot-1": labels(193) }), { counts: {}, panes: {} });
-  assert.equal(BOT_PANE_TOTAL, 192);
+  assert.equal(paneCountBody({ "bot-1": labels(193) }).counts["bot-1"], 193);
 });
 
 test("opens a pane only for the grant's own bot", async () => {
@@ -499,7 +497,7 @@ test("opens a pane only for the grant's own bot", async () => {
       sendBot: () => ({}),
       async openForBot(botId, input) {
         calls.push([botId, input]);
-        if (input.label === "full") throw new Error("Too many bot terminals (limit 128)");
+        if (input.label === "full") throw new Error("Not enough free memory for another terminal (0.1 GB free, 0.6 GB needed).");
         return { sessionId: "p1", generation: 1 };
       },
     },
@@ -514,7 +512,7 @@ test("opens a pane only for the grant's own bot", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { sessionId: "p1", generation: 1 });
   assert.equal((await open("bot-2", { label: "worker" })).status, 401);
-  assert.equal((await open("bot-1", { label: "full" })).status, 429);
+  assert.equal((await open("bot-1", { label: "full" })).status, 500);
   assert.deepEqual(calls.map(([botId, input]) => [botId, input.label]), [["bot-1", "worker"], ["bot-1", "full"]]);
   await bridge.close();
 });

@@ -3,7 +3,6 @@ import { createHash, randomInt } from "node:crypto";
 import { orbitBinFiles } from "./terminal-mailbox.mjs";
 import { quoteWindows } from "./terminal-worker.mjs";
 
-export const REMOTE_PANE_CEILING = 64;
 const GB = 1024 ** 3;
 const RESERVE = 1.5 * GB;
 const PANE_MEMORY = 0.6 * GB;
@@ -52,7 +51,6 @@ export function remoteArgs(command) {
 /** Picks a free tunnel port on the host and counts its panes still starting; `panes` are its live and opening ones. */
 export function remoteSlot(host, panes, at, random = randomInt) {
   const there = panes.filter((pane) => pane.host === host);
-  if (there.length >= REMOTE_PANE_CEILING) throw new Error(`Too many terminals on ${host} (limit ${REMOTE_PANE_CEILING}).`);
   const used = new Set(there.map((pane) => pane.port));
   const free = Array.from({ length: PORT_COUNT }, (_, index) => FIRST_PORT + index).filter((port) => !used.has(port));
   return { host, port: free[random(free.length)], at, starting: startingPanes(there, at).length };

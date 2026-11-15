@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 
-import { createRemoteHosts, REMOTE_PANE_CEILING, remoteArgs, remoteHost, remoteLaunchLine, remoteSlot, remoteSshArgs, sshFailure } from "./terminal-remote.mjs";
+import { createRemoteHosts, remoteArgs, remoteHost, remoteLaunchLine, remoteSlot, remoteSshArgs, sshFailure } from "./terminal-remote.mjs";
 
 const GB = 1024 ** 3;
 const HOSTS = {
@@ -50,10 +50,8 @@ test("picks a free tunnel port per host and counts the panes still starting ther
   assert.deepEqual(remoteSlot("work", panes, at, () => 0), { host: "work", port: 40002, at, starting: 1 });
   assert.deepEqual(remoteSlot("dad", panes, at, () => 0), { host: "dad", port: 40000, at, starting: 1 });
   assert.equal(remoteSlot("work", [], at, (count) => count - 1).port, 48999);
-  assert.equal(REMOTE_PANE_CEILING, 64);
-  const full = Array.from({ length: REMOTE_PANE_CEILING }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
-  assert.throws(() => remoteSlot("work", full, at), /Too many terminals on work \(limit 64\)/);
-  assert.equal(remoteSlot("work", full.slice(1), at, () => 0).port, 40000);
+  const busy = Array.from({ length: 65 }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
+  assert.equal(remoteSlot("work", busy, at, () => 0).port, 40065);
 });
 
 test("the launch line splices the pane's env at run time and never types a grant", () => {
