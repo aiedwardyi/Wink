@@ -3,8 +3,6 @@ import type { Message, Store } from "./store.ts";
 
 export const PANE_WAKE_PROMPT = "A pane note arrived. Act on it.";
 export const PANE_WAKE_DEBOUNCE_MS = 3_000;
-export const PANE_WAKE_HOURLY_CAP = 20;
-const HOUR_MS = 60 * 60 * 1000;
 
 export interface WakeAdmission { rootId: string | null; reservation: Reservation | null }
 
@@ -21,8 +19,6 @@ export interface PaneWakeDeps {
   /** Starts with the admission's own root and reservation, never a re-read. */
   wake(botId: string, threadId: string, admission: WakeAdmission): void;
   admit?(botId: string, threadId: string): WakeAdmission | null;
-  warn(line: string): void;
-  now?(): number;
 }
 
 const isReportNote = (message: Message) => message.kind === "note" && Boolean(message.reportIds?.length);
@@ -101,7 +97,6 @@ interface Pending {
 /** One teacher turn per burst of pane notes, only once the bot is idle. */
 export class PaneWakeScheduler {
   private readonly pending = new Map<string, Pending>();
-  private readonly wakes = new Map<string, number[]>();
   private readonly deps: PaneWakeDeps;
 
   constructor(deps: PaneWakeDeps) {
@@ -130,7 +125,6 @@ export class PaneWakeScheduler {
       if (entry.timer) clearTimeout(entry.timer);
       this.pending.delete(key);
     }
-    this.wakes.delete(botId);
   }
 
   private arm(key: string, entry: Pending): void {
@@ -154,7 +148,7 @@ export class PaneWakeScheduler {
       return;
     }
     this.pending.delete(key);
-    this.wake(key, entry);
+    this.wake(entry);
   }
 
   /** Drops a burst whose panes the bot closed itself; any doubt wakes. */
@@ -175,26 +169,12 @@ export class PaneWakeScheduler {
     this.pending.delete(key);
     if (!this.deps.enabled(botId, threadId) || this.deps.paused?.(botId) || !this.deps.hasNotes(threadId)) return;
     if (closed) return this.deps.skipped?.(botId, threadId);
-    this.wake(key, entry);
+    this.wake(entry);
   }
 
-  private wake(key: string, entry: Pending): void {
+  private wake(entry: Pending): void {
     const { botId, threadId } = entry;
-    const now = this.deps.now?.() ?? Date.now();
-    const recent = (this.wakes.get(botId) ?? []).filter((at) => now - at < HOUR_MS);
-    if (recent.length >= PANE_WAKE_HOURLY_CAP) {
-      this.wakes.set(botId, recent);
-      // a dropped wake strands the note until the user writes; retry once the oldest wake ages out
-      const retryMs = recent[0]! + HOUR_MS - now + PANE_WAKE_DEBOUNCE_MS;
-      this.deps.warn(`pane wake: ${botId} hit ${PANE_WAKE_HOURLY_CAP} wakes this hour; retrying in ${Math.ceil(retryMs / 60_000)} min`);
-      this.pending.set(key, entry);
-      entry.timer = setTimeout(() => this.fire(key, entry), retryMs);
-      entry.timer.unref?.();
-      return;
-    }
     const admission = this.deps.admit ? this.deps.admit(botId, threadId) : { rootId: null, reservation: null };
-    if (!admission) return;
-    this.wakes.set(botId, [...recent, now]);
-    this.deps.wake(botId, threadId, admission);
+    if (admission) this.deps.wake(botId, threadId, admission);
   }
 }
