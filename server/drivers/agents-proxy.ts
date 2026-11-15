@@ -209,7 +209,8 @@ const ROUTINE_FIELDS_SCHEMA = {
   },
   duration_minutes: {
     type: "integer",
-    minimum: 1,
+    minimum: 15,
+    maximum: 240,
     description: "Maximum run duration in minutes. Defaults to 30.",
   },
 } as const;
@@ -556,7 +557,7 @@ const TOOLS = [
   {
     name: "propose_routine_action",
     description:
-      "Prepare a user-requested change to an existing routine. This only creates a durable confirmation card; it does NOT apply the change. Use list_routines first to get the routine id. After calling it, end the turn and do not claim the action completed until the user confirms the card.",
+      "Prepare a user-requested change to one of this bot's existing routines. This only creates a durable confirmation card; it does NOT apply the change. Use list_routines first to get the routine id. After calling it, end the turn and do not claim the action completed until the user confirms the card.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
