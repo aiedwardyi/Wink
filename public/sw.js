@@ -90,6 +90,7 @@ self.addEventListener("fetch", (event) => {
 
 const CALL_CACHE = "wink-calls-v1";
 const CALL_VIBRATE = [1000, 500, 1000, 500, 1000, 500, 1000];
+const CALL_KEEP_MS = 10 * 60_000;
 const callKey = (id) => `/call/${encodeURIComponent(id)}`;
 
 // The worker sleeps between rings, so a call already picked up or put off is kept in a cache.
@@ -98,7 +99,14 @@ async function callHandled(id) {
 }
 
 async function handleCall(id) {
-  if (id) await (await caches.open(CALL_CACHE)).put(callKey(id), new Response(""));
+  if (!id) return;
+  const cache = await caches.open(CALL_CACHE);
+  const now = Date.now();
+  for (const key of await cache.keys()) {
+    const at = Number((await cache.match(key))?.headers.get("x-handled-at"));
+    if (!(now - at < CALL_KEEP_MS)) await cache.delete(key);
+  }
+  await cache.put(callKey(id), new Response("", { headers: { "x-handled-at": String(now) } }));
 }
 
 async function alertOptions(data) {
@@ -112,7 +120,11 @@ async function alertOptions(data) {
     data: { url: data.url || "/", chat: data.chat, at: data.at },
   };
   if (!data.call) return options;
-  if (await callHandled(data.call)) return { ...options, renotify: false, silent: true };
+  if (await callHandled(data.call)) {
+    // showNotification throws on a silent alert that vibrates.
+    delete options.vibrate;
+    return { ...options, renotify: false, silent: true };
+  }
   return {
     ...options,
     requireInteraction: true,

@@ -107,8 +107,8 @@ const GREETING = { en: "[Wink] The call just started. Say only \"Hey.\" or \"Hey
 const TONGUE = { en: "English", ko: "Korean" };
 // After the yes and the voice's reply, this much quiet ends a call the bot rang for.
 const CLOSE_MS = 2_000;
-// Long enough for the reply to start; a voice that says nothing still hangs up.
-const CLOSE_WAIT_MS = 6_000;
+// Long enough for a slow reply to start, or a stray sound to come back as words; silence after either still hangs up.
+const CLOSE_WAIT_MS = 10_000;
 // The voice is the bot calling, so it asks for itself: "I need you to...", never its own name.
 const openerLine = (note: string, app: "en" | "ko") =>
   `[Wink] You are the caller: you rang them because you are stuck until they act: "${note}". In ${TONGUE[app]}, in first person, say what you need them to do in one or two short, plain sentences, like "I need you to sign in on Home so tonight's run can go." Then wait for their answer. Nothing else.`;
@@ -386,7 +386,7 @@ export class LiveCall {
     if ((!this.connected && !this.early) || this.snapshot.muted) return;
     const speech = loud(pcm);
     if (speech) {
-      clearTimeout(this.closeTimer);
+      if (this.closing && !this.deps.audio.playing) this.closeIn(CLOSE_WAIT_MS);
       this.spokeAt = this.voiceAt = this.now();
       this.loudAt ||= this.spokeAt;
     }

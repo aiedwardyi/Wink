@@ -13,7 +13,9 @@ type Ringing = { id: string; botId: string; timer?: ReturnType<typeof setTimeout
 
 export type BotCallDeps = {
   send: (payload: PushPayload) => void;
-  /** The room a thread belongs to, so a device that muted it stays quiet. */
+  /** The thread's stored blockers: other writes (a turn completing) clear them too, so each re-ring checks. */
+  current: (threadId: string) => readonly Blocker[];
+  /** A call is the bot's own voice on its own thread, so a room's blocker keeps its normal alert. */
   chat: (threadId: string) => string | undefined;
   skip: (threadId: string) => boolean;
 };
@@ -22,10 +24,10 @@ const calls = (blocker: Blocker) => blocker.kind === "login" || blocker.kind ===
 const keyOf = (blocker: Blocker) => `${blocker.kind}\n${blocker.note}`;
 
 /** `ring` 1..CALL_RINGS is the call; past that it is the plain alert left behind on the same tag. */
-export function botCallPayload(bot: NotifyBot, threadId: string, note: string, call: { id: string; ring: number; chat?: string }, at = Date.now()): PushPayload | null {
+export function botCallPayload(bot: NotifyBot, threadId: string, note: string, call: { id: string; ring: number }, at = Date.now()): PushPayload | null {
   const alert = buildNotification("question", bot, threadId, note);
   if (!alert) return null;
-  const base = pushPayload({ title: alert.title, message: alert.body, icon: alert.icon }, { botId: bot.id, threadId }, call.chat, at);
+  const base = pushPayload({ title: alert.title, message: alert.body, icon: alert.icon }, { botId: bot.id, threadId }, undefined, at);
   const tag = `wink-call:${bot.id}`;
   if (call.ring > CALL_RINGS) return { ...base, title: `${bot.name} needs you`, tag };
   const url = new URL(base.url, "http://wink");
@@ -36,11 +38,21 @@ export function botCallPayload(bot: NotifyBot, threadId: string, note: string, c
 export function createBotCalls(deps: BotCallDeps) {
   const threads = new Map<string, Map<string, Ringing>>();
 
-  const ring = (ringing: Ringing, bot: NotifyBot, threadId: string, note: string, n: number) => {
-    const payload = botCallPayload(bot, threadId, note, { id: ringing.id, ring: n, chat: deps.chat(threadId) });
+  const ring = (ringing: Ringing, bot: NotifyBot, threadId: string, blocker: Blocker, n: number) => {
+    const key = keyOf(blocker);
+    if (n > 1 && !deps.current(threadId).some((held) => keyOf(held) === key)) return forget(threadId, key);
+    const payload = botCallPayload(bot, threadId, blocker.note, { id: ringing.id, ring: n });
     if (!payload) return;
     deps.send(payload);
-    ringing.timer = n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, note, n + 1), CALL_RING_GAP_MS) : undefined;
+    ringing.timer = n <= CALL_RINGS ? setTimeout(() => ring(ringing, bot, threadId, blocker, n + 1), CALL_RING_GAP_MS) : undefined;
+  };
+
+  const forget = (threadId: string, key: string) => {
+    const thread = threads.get(threadId);
+    if (!thread) return;
+    clearTimeout(thread.get(key)?.timer);
+    thread.delete(key);
+    if (!thread.size) threads.delete(threadId);
   };
 
   return {
@@ -56,10 +68,10 @@ export function createBotCalls(deps: BotCallDeps) {
       const had = new Set(before.map(keyOf));
       for (const blocker of after.filter(calls)) {
         const key = keyOf(blocker);
-        if (had.has(key) || thread.has(key) || deps.skip(threadId)) continue;
+        if (had.has(key) || thread.has(key) || deps.skip(threadId) || deps.chat(threadId)) continue;
         const ringing: Ringing = { id: randomUUID(), botId: bot.id };
         thread.set(key, ringing);
-        ring(ringing, bot, threadId, blocker.note, 1);
+        ring(ringing, bot, threadId, blocker, 1);
       }
       if (thread.size) threads.set(threadId, thread);
       else threads.delete(threadId);

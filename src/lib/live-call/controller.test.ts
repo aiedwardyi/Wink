@@ -190,11 +190,12 @@ describe("LiveCall a bot rang for", () => {
 
   async function rang(opener: string | null = NOTE) {
     vi.useFakeTimers();
-    const audio = fakeAudio();
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(fn: (pcm: ArrayBuffer) => void) { frame = fn; } };
     const s = setup({}, audio, () => 1_000, opener ?? undefined);
     await s.call.start();
     s.engine().events.ready();
-    return { ...s, audio };
+    return { ...s, audio, frame: (pcm: ArrayBuffer) => frame(pcm) };
   }
 
   async function exchange(s: Awaited<ReturnType<typeof rang>>, heard: string, said: string) {
@@ -230,6 +231,33 @@ describe("LiveCall a bot rang for", () => {
     await vi.advanceTimersByTimeAsync(1_900);
     expect(s.call.state().status).not.toBe("ended");
     await vi.advanceTimersByTimeAsync(100);
+    expect(s.call.state().status).toBe("ended");
+  });
+
+  it("still hangs up when a stray sound after the yes brings no words", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    await exchange(s, "Okay.", "Thanks, see you there.");
+    s.frame(new Int16Array(640).fill(1_200).buffer);
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(s.call.state().status).not.toBe("ended");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(s.call.state().status).toBe("ended");
+  });
+
+  it("gives a slow voice ten seconds to start its reply after the yes", async () => {
+    const s = await rang();
+    s.engine().events.turnDone();
+    s.engine().events.heard("Okay.");
+    s.engine().events.turnDone();
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(s.call.state().status).not.toBe("ended");
+    s.engine().events.answering();
+    s.engine().events.said("Thanks.");
+    s.audio.onStart();
+    s.engine().events.turnDone();
+    s.audio.onIdle();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(s.call.state().status).toBe("ended");
   });
 

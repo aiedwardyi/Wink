@@ -13,6 +13,7 @@ let bot: BotRecord;
 let packet: TaskResumePacket;
 let sent: PushPayload[];
 let hosted: boolean;
+let room: string | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -20,12 +21,13 @@ beforeEach(() => {
   packet = seedTaskResumePacket({ threadId: "t1", botId: "scout", text: "Run the eval tonight", messageId: "m1", now: 1, turnsAtWrite: 0 });
   sent = [];
   hosted = false;
+  room = undefined;
 });
 
 afterEach(() => vi.useRealTimers());
 
 function routes() {
-  const botCalls = createBotCalls({ send: (payload) => sent.push(payload), chat: () => undefined, skip: () => hosted });
+  const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => packet.blockers, chat: () => room, skip: () => hosted });
   const store = {
     bot: (id: string) => (id === bot.id ? bot : undefined),
     conversationForBot: () => ({}),
@@ -92,8 +94,15 @@ describe("bot calls", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("stops ringing when another write clears the blocker, like a turn completing", async () => {
+    await write(routes(), [{ kind: "engine", note: "Codex is out of credit." }]);
+    packet.blockers = [];
+    await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
+    expect(sent).toHaveLength(1);
+  });
+
   it("stops ringing once the call is picked up", async () => {
-    const botCalls = createBotCalls({ send: (payload) => sent.push(payload), chat: () => undefined, skip: () => false });
+    const botCalls = createBotCalls({ send: (payload) => sent.push(payload), current: () => [{ kind: "login", note: "Sign in" }], chat: () => undefined, skip: () => false });
     botCalls.blockers(bot, "t1", [], [{ kind: "login", note: "Sign in" }]);
     botCalls.answered("scout");
     await vi.advanceTimersByTimeAsync(CALL_RING_GAP_MS * 5);
@@ -101,7 +110,7 @@ describe("bot calls", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("stays quiet for input blockers, plain updates, hosted threads and muted bots", async () => {
+  it("stays quiet for input blockers, hosted threads, muted bots and rooms", async () => {
     const route = routes();
     await write(route, [{ kind: "input", note: "Which branch?" }]);
     hosted = true;
@@ -109,6 +118,9 @@ describe("bot calls", () => {
     hosted = false;
     bot.notifications = false;
     await write(route, [{ kind: "engine", note: "Out of credit." }]);
+    bot.notifications = true;
+    room = "g1";
+    await write(route, [{ kind: "engine", note: "Codex is out of credit." }]);
     expect(sent).toEqual([]);
   });
 

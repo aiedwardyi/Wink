@@ -12,6 +12,7 @@ const RELAY = "abcdefghijklmnop.wink.test";
 function worker(hostname, network = () => Promise.reject(new TypeError("Failed to fetch")), windows = []) {
   const listeners = {};
   const cache = new Map();
+  const calls = new Map();
   const shown = [];
   const opened = [];
   const self = {
@@ -20,15 +21,26 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     addEventListener: (type, listener) => {
       listeners[type] = listener;
     },
-    registration: { showNotification: async (title, options) => shown.push({ title, options }) },
+    registration: {
+      showNotification: async (title, options) => {
+        // As browsers do: a silent alert may not vibrate.
+        if (options.silent && options.vibrate) throw new TypeError("silent notifications cannot vibrate");
+        shown.push({ title, options });
+      },
+    },
     clients: { matchAll: async () => windows, openWindow: async (url) => opened.push(url) },
   };
   const caches = {
-    open: async () => ({
-      add: async (request) => cache.set(request.url, `cached ${request.url}`),
-      match: async (url) => cache.get(url),
-      put: async (url, response) => void cache.set(url, response),
-    }),
+    open: async (name) => {
+      const store = name === "wink-calls-v1" ? calls : cache;
+      return {
+        add: async (request) => store.set(request.url, `cached ${request.url}`),
+        match: async (url) => store.get(url),
+        put: async (url, response) => void store.set(url, response),
+        keys: async () => [...store.keys()],
+        delete: async (url) => store.delete(url),
+      };
+    },
     match: async (url) => cache.get(url),
   };
   class Request {
@@ -36,9 +48,9 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
       this.url = url;
     }
   }
-  const now = 1_800_000_000_000;
-  runInNewContext(SOURCE, { self, caches, fetch: network, Request, Response, URL, setTimeout, Date: { now: () => now } });
-  return { listeners, cache, shown, opened, now };
+  const clock = { now: 1_800_000_000_000 };
+  runInNewContext(SOURCE, { self, caches, fetch: network, Request, Response, URL, setTimeout, Date: { now: () => clock.now } });
+  return { listeners, cache, calls, shown, opened, now: clock.now, clock };
 }
 
 async function push(listeners, data) {
@@ -155,8 +167,17 @@ describe("service worker", () => {
     expect(opened).toEqual([]);
     await push(listeners, { title: "📞 Scout is calling", body: "Sign in", tag: "wink-call:b1", url: "/?bot=b1&thread=t1&call=Sign+in", call: "c1" });
     expect(shown[0].options).toMatchObject({ silent: true, renotify: false });
+    expect(shown[0].options.vibrate).toBeUndefined();
     expect(shown[0].options.requireInteraction).toBeUndefined();
     expect(shown[0].options.actions).toBeUndefined();
+  });
+
+  it("forgets handled calls once their rings are long over", async () => {
+    const { listeners, calls, clock } = worker("home.tail1234.ts.net");
+    await click(listeners, "/?bot=b1&thread=t1&call=Sign+in", { action: "later", data: { call: "c1" } });
+    clock.now += 11 * 60_000;
+    await click(listeners, "/?bot=b1&thread=t1&call=Sign+in", { action: "later", data: { call: "c2" } });
+    expect([...calls.keys()]).toEqual(["/call/c2"]);
   });
 
   it("adds the tap time to the url when it opens a window", async () => {

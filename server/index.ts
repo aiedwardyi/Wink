@@ -3018,6 +3018,7 @@ const webPushSubject = () => (REMOTE_HOST ? `https://${REMOTE_HOST}` : "mailto:o
 
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject()).catch((cause) => console.warn(`web-push: ${cause}`)),
+  current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
 });
