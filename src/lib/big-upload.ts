@@ -3,7 +3,6 @@
 // after any error the client asks for it and carries on from there.
 import { z } from "zod";
 
-import { UPLOAD_MAX_BYTES } from "./composer-attachments.js";
 import { holdReload } from "./reload-hold.js";
 import { shrunkPicture } from "./shrink-image.js";
 
@@ -14,7 +13,6 @@ const MAX_FAILURES = 10;
 export type UploadPhase = "uploading" | "resuming";
 export type UploadDone = { path: string; name: string; size: number; type: string; preview?: string };
 export type UploadErrorKey =
-  | "composer.uploadTooBig"
   | "composer.uploadDiskFull"
   | "composer.uploadBusy"
   | "composer.uploadFailed";
@@ -30,7 +28,6 @@ export class UploadError extends Error {
 }
 
 export function uploadErrorKey(code: string | undefined): UploadErrorKey {
-  if (code === "too_big") return "composer.uploadTooBig";
   if (code === "disk_full") return "composer.uploadDiskFull";
   if (code === "busy") return "composer.uploadBusy";
   return "composer.uploadFailed";
@@ -118,7 +115,6 @@ export async function cancelUpload(id: string): Promise<void> {
 
 async function run(file: UploadFile, options: UploadOptions): Promise<UploadDone> {
   const { onProgress, onPhase, onId, signal } = options;
-  if (file.size > UPLOAD_MAX_BYTES) throw new UploadError("composer.uploadTooBig");
   let id = options.uploadId ?? "";
   let offset = 0;
   let chunkBytes = UPLOAD_CHUNK_BYTES;
