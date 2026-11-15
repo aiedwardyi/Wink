@@ -1147,7 +1147,7 @@ test("closing a bot pane stops only processes it started", async (t) => {
   assert.deepEqual(stopped, [9003]);
 });
 
-test("closing a bot pane on Windows stops what its CLI started, though the kill takes the CLI first", async (t) => {
+test("closing a bot pane on Windows stops what its CLI started, though the kill takes the CLI first", { skip: process.platform !== "win32" }, async (t) => {
   const stopped = [];
   const server = { pid: 9002, ppid: 9001, created: 1_000_600 };
   let owner;
@@ -3886,6 +3886,24 @@ test("a Claude model cap posts LIMIT, not STALLED, and its run reads limit", asy
   assert.match(f.notes[0].text, /^LIMIT: Claude hit its Fable limit\. Its work so far stays in .+\. Switch it to another model, or move the job to another engine\.$/);
   await f.advance(30 * 60_000);
   assert.equal(f.notes.length, 1);
+});
+
+test("a Claude model cap met again on the next task posts LIMIT again", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  f.children[0].data(CLAUDE_MODEL_LIMIT);
+  await f.settle();
+  await f.advance(120_000);
+  assert.equal(f.notes.length, 1);
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "next task\r" });
+  f.children[0].data(`● On it.\r\n${CLAUDE_MODEL_LIMIT}`);
+  await f.settle();
+  await f.advance(120_000);
+  assert.equal(f.notes.length, 2);
+  assert.match(f.notes[1].text, /^LIMIT: Claude hit its Fable limit\./);
+  await f.advance(30 * 60_000);
+  assert.equal(f.notes.length, 2);
 });
 
 test("output below an old Claude model cap is not a limit", async (t) => {

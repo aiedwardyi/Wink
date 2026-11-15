@@ -802,7 +802,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
       }
       const limit = usageLimit(text, session.engine, session.cols);
-      const limitKey = limit ? JSON.stringify([session.engine, (limit.reset ?? limit.model).replace(/\s+/g, "")]) : null;
+      // A model cap names no reset, so it is told once per task, not once per pane.
+      const limitKey = limit ? JSON.stringify([session.engine, limit.reset?.replace(/\s+/g, "") ?? [limit.model, session.stallArmedAt]]) : null;
       if (session.stallDirty) {
         session.stallDirty = false;
         const signature = limitKey ?? stallSignature(text);
