@@ -38,7 +38,7 @@ async function app(req: IncomingMessage, res: ServerResponse) {
   if (isRelayRequest(req) && (await access.gate(req, res)).handled) return;
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
   reached.push(path);
-  const deps = { store, relayHost: () => relayHost, botCaller: req.headers.authorization === BOT };
+  const deps = { store, relayHost: () => relayHost };
   if (await peopleRoute(req, res, req.method ?? "GET", path, deps)) return;
   res.writeHead(404, { "content-type": "application/json" });
   res.end(JSON.stringify({ error: "not found" }));
@@ -391,8 +391,7 @@ describe("remove", () => {
     expect(emitted).toHaveBeenLastCalledWith({ type: "group", groupId: group.id });
     expect(hostedRoomView(group.hosted)).toMatchObject({ people: [], removed: [{ id: mina.body.person.id, name: "Mina" }] });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toEqual({ status: 403, body: { error: "removed" } });
-    expect(await letBack(id, mina.body.person.id, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect(await letBack(id, mina.body.person.id)).toEqual({ status: 200, body: { ok: true } });
+    expect(await letBack(id, mina.body.person.id, BOT)).toEqual({ status: 200, body: { ok: true } });
     expect(hostedRoomView(group.hosted)).not.toHaveProperty("removed");
     expect(await letBack(id, mina.body.person.id)).toEqual({ status: 404, body: { error: "not found" } });
     expect(await joinAs(body.code, "Mina", pcOf("Mina"))).toMatchObject({ status: 200, body: { person: { name: "Mina" } } });
@@ -437,13 +436,12 @@ describe("who reaches them", () => {
     expect((await call(`/api/rooms/${botRoom.hosted.roomId}/invites`, { method: "POST" })).body.code).toMatch(CODE);
   });
 
-  it("refuses a bot's comms token", async () => {
+  it("lets the user's own bot invite and remove like the host", async () => {
     const group = peopleRoom();
     const mina = await joined(group, "Mina");
-    expect(await invite(group.hosted.roomId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect(await remove(group.hosted.roomId, mina.personId, BOT)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect(roomInvites(group.hosted.roomId)).toEqual([]);
-    expect(roomPeople(group.hosted.roomId).map((person) => person.name)).toEqual(["Mina"]);
+    expect(await invite(group.hosted.roomId, BOT)).toMatchObject({ status: 200, body: { code: expect.stringMatching(CODE) } });
+    expect(await remove(group.hosted.roomId, mina.personId, BOT)).toMatchObject({ status: 200, body: { ok: true } });
+    expect(roomPeople(group.hosted.roomId)).toEqual([]);
   });
 
   it("refuses guest keys without a phone session through the relay", async () => {
@@ -464,12 +462,12 @@ describe("who reaches them", () => {
 describe("wiring", () => {
   const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n");
 
-  it("index.ts mounts the people routes before the room file routes, owner only", () => {
+  it("index.ts mounts the people routes before the room file routes, bots included", () => {
     const people = index.indexOf("await peopleRoute(req, res, method, path, {");
     expect(people).toBeGreaterThan(0);
     expect(people).toBeLessThan(index.indexOf("await hostFileRoute("));
     const line = index.slice(people, index.indexOf("\n", people));
-    expect(line).toContain("botCaller: Boolean(commsCallers.resolve(req.headers.authorization))");
+    expect(line).not.toContain("botCaller");
     expect(line).toContain("relayHost: () => phoneAccess.presenceHost()");
   });
 });

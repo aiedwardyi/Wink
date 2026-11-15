@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -202,21 +202,27 @@ describe("sharing a bot group", () => {
 });
 
 describe("the share route", () => {
-  async function post(path: string, botCaller = false, method = "POST") {
+  async function post(path: string, method = "POST") {
     const res = { writeHead: vi.fn(), end: vi.fn() };
-    const handled = await shareRoute({} as IncomingMessage, res as unknown as ServerResponse, method, path, { ...deps(), botCaller, publicGroupState: (group) => ({ id: group.id, hosted: group.hosted }) });
+    const handled = await shareRoute({} as IncomingMessage, res as unknown as ServerResponse, method, path, { ...deps(), publicGroupState: (group) => ({ id: group.id, hosted: group.hosted }) });
     return handled ? { status: res.writeHead.mock.calls[0]![0] as number, body: JSON.parse(res.end.mock.calls[0]![0]) } : null;
   }
 
-  it("shares for the owner only, and leaves other paths alone", async () => {
+  it("shares, and leaves other paths alone", async () => {
     const group = crew();
     say(group, "hello");
-    expect(await post(`/api/groups/${group.id}/share`, true)).toEqual({ status: 403, body: { error: "forbidden" } });
-    expect((await post(`/api/groups/${group.id}/share`, false, "GET"))?.status).toBe(404);
+    expect((await post(`/api/groups/${group.id}/share`, "GET"))?.status).toBe(404);
     expect(await post(`/api/groups/${group.id}/sharex`)).toBeNull();
     const shared = await post(`/api/groups/${group.id}/share`);
     expect(shared).toEqual({ status: 200, body: { roomId: expect.any(String), code: expect.any(String), carried: 1, group: { id: group.id, hosted: { roomId: shared!.body.roomId } } } });
     relay = null;
     expect(await post(`/api/groups/${group.id}/share`)).toEqual({ status: 409, body: { error: "phone access is off" } });
+  });
+
+  it("is mounted for the user's own bots too", () => {
+    const index = readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8");
+    const start = index.indexOf("await shareRoute(");
+    expect(start).toBeGreaterThan(0);
+    expect(index.slice(start, index.indexOf("\n", start))).not.toContain("botCaller");
   });
 });
