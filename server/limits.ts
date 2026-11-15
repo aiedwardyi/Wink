@@ -168,7 +168,7 @@ export const PENDING_LIMITS: Limits = {
     MAX_VIEW_ENTRIES: "ROOM-COLLAB-OPEN is editing rooms/; untrusted host input size (likely keep).",
   },
   "server/rooms/invites.ts": {
-    MAX_PEOPLE: "Owned by ROOM-COLLAB-OPEN (room size).",
+    MAX_PEOPLE: "Raised 20 -> 100, the most people every joiner's room state parses; a 101st left joiners unable to load (measured). Not yet registered.",
     MAX_CREDENTIAL_LENGTH: "ROOM-COLLAB-OPEN is editing rooms/; outsider credential size (likely keep).",
   },
   "server/rooms/upload-timeouts.ts": { MAX_UPLOAD_BYTES: "Follow-up after ROOM-COLLAB-OPEN: mirrors the 1 GB room file cap." },
