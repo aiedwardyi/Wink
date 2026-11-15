@@ -218,3 +218,43 @@ describe("room echo", () => {
     expect(JSON.stringify(prepared)).not.toContain("waitlist");
   });
 });
+
+describe("room echo engine provenance", () => {
+  it.each([
+    ["claude-fable-5", "claudeAgent", "codex", "Codex"],
+    ["gpt-5.4", "codex", "claudeAgent", "Claude"],
+  ])("compares cloud echoes with the engine behind %s", (model, engine, otherEngine, otherName) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "boxAgent", model)).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+    expect(roomEchoesSinceLastUserTurn([{ ...row, engine: otherEngine }], new Set(), "Edward", undefined, "boxAgent", model).join("\n")).toContain(`You (on ${otherName}) answered:`);
+  });
+
+  it.each(["geminiAgent", "boxAgent", "localModel"])("leaves %s echoes untagged", (engine) => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Earlier reply"', engine, roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+  });
+
+  it("stores the replying engine and names it after a switch", () => {
+    const { store, rando, say } = world();
+    const room = store.createGroup("New group", [rando.id]);
+    say(room.threadId, "user", "Make a dog image");
+    const since = store.messagesFor(room.threadId).length;
+    say(room.threadId, "bot", "Generated a dog image", { engine: "antigravityAgent" });
+    const row = writeRoomEcho(store, rando, room, room.threadId, since, "Edward")!;
+    expect(row.engine).toBe("antigravityAgent");
+    const messages = store.activePath(rando.threadId);
+    const plain = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "antigravityAgent");
+    expect(plain).toEqual(roomEchoesSinceLastUserTurn(messages, new Set(), "Edward"));
+    const switched = roomEchoesSinceLastUserTurn(messages, new Set(), "Edward", undefined, "museAgent").join("\n");
+    expect(switched).toContain('You (on Gemini) answered: "Generated a dog image"');
+    expect(row.text).toContain('You answered: "Generated a dog image"');
+  });
+
+  it("leaves legacy echoes untagged", () => {
+    const { store, rando } = world();
+    const row = store.appendMessage(rando.threadId, { role: "bot", kind: "note", quiet: true, text: 'In "New group"\nYou answered: "Legacy reply"', roomEcho: { groupId: "room" } });
+    expect(roomEchoesSinceLastUserTurn([row], new Set(), "Edward", undefined, "museAgent")).toEqual(roomEchoesSinceLastUserTurn([row], new Set(), "Edward"));
+  });
+});

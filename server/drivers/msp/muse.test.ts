@@ -23,20 +23,25 @@ describe("classifyMuseError MSP turn errors", () => {
 });
 
 describe("museServeArgs", () => {
+  const trust = ["--trust-workspace"];
   const off = ["-c", "run.reminder_roster.agents=[]"];
 
-  it("turns the reminder agents off from 1.4.15 on a native CLI", () => {
-    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", false)).toEqual(off);
-    expect(museServeArgs("Muse Code 1.5.0 (1.5.0-R1.1)", false)).toEqual(off);
-    expect(museServeArgs("Muse Code 2.0.1", false)).toEqual(off);
+  it("trusts the workspace and turns the reminder agents off from 1.4.15 on a native CLI", () => {
+    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", false)).toEqual([...trust, ...off]);
+    expect(museServeArgs("Muse Code 1.5.0 (1.5.0-R1.1)", false)).toEqual([...trust, ...off]);
+    expect(museServeArgs("Muse Code 2.0.1", false)).toEqual([...trust, ...off]);
   });
 
-  it("leaves older, unknown and WSL CLIs on a plain serve", () => {
+  it("still trusts the workspace behind WSL, where only the -c switch is unsafe", () => {
+    expect(museServeArgs("Muse Code 1.4.20 (1.4.20-R8619.1)", true)).toEqual(trust);
+  });
+
+  it("leaves older and unknown CLIs on a plain serve", () => {
     expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", false)).toEqual([]);
     expect(museServeArgs("Muse Code 1.3.20", false)).toEqual([]);
     expect(museServeArgs("", false)).toEqual([]);
     expect(museServeArgs(null, false)).toEqual([]);
-    expect(museServeArgs("Muse Code 1.4.15 (1.4.15-R8339.1)", true)).toEqual([]);
+    expect(museServeArgs("Muse Code 1.4.14 (1.4.14-R7309.1)", true)).toEqual([]);
   });
 });
 
@@ -129,15 +134,22 @@ describe("MSP Muse driver", () => {
     }
   });
 
-  it("ships the four live model/list models with the 1.3 default", () => {
+  it("includes Ember in the catalog with the 1.3 default", () => {
     expect(MSP_MUSE_MODELS.default).toBe("muse-spark-1.3");
     expect(MSP_MUSE_MODELS.options.map((o) => o.id)).toEqual([
       "muse-spark-1.3",
       "muse-spark-1.3-contributor",
+      "muse-ember-1.0",
       "muse-spark-1.2",
       "muse-spark-1.2-contributor",
     ]);
     expect(MspMuseAgentDriver.models).toEqual(MSP_MUSE_MODELS);
+  });
+
+  it("offers Ember's recorded CLI effort variants", () => {
+    const { reply } = JSON.parse(readFileSync(new URL("../../../test/fixtures/recorded/muse/model-list.json", import.meta.url), "utf8"));
+    const ember = reply.models.find((model: { modelId: string }) => model.modelId === "muse-ember-1.0");
+    expect(ember.variants).toEqual([...MSP_MUSE_EFFORT_LEVELS]);
   });
 
   it("registers behind the same museAgent kind the fleet keys on", () => {

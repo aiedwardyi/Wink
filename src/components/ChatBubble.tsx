@@ -265,6 +265,7 @@ const Bubble = memo(function Bubble({
   editing,
   isLastBotText,
   streaming = false,
+  pictured = false,
   dock,
   sendsNext = false,
   sendsAfterSync = false,
@@ -284,6 +285,7 @@ const Bubble = memo(function Bubble({
   editing: boolean;
   isLastBotText: boolean;
   streaming?: boolean;
+  pictured?: boolean;
   dock?: ReplyDock;
   sendsNext?: boolean;
   sendsAfterSync?: boolean;
@@ -316,6 +318,10 @@ const Bubble = memo(function Bubble({
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
   const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
+  // floated beside markdown: shorter than a line, so only the first line makes room
+  const callMark = message.call && (
+    <Phone size={12} className={cn("mr-1.5 text-ink-secondary/70", user ? "inline align-[-1px]" : "float-left mt-[calc((1lh-12px)/2)]")} />
+  );
 
   if (user && editing && !webhookView) {
     return (
@@ -480,6 +486,7 @@ const Bubble = memo(function Bubble({
                 <AttachedImageGallery paths={attachedImages.images} />
               )}
               <div className={cn(collapsible && USER_FOLD_CLASS)}>
+                {callMark}
                 <LinkedText text={visibleText} />
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
@@ -492,7 +499,8 @@ const Bubble = memo(function Bubble({
             </>
           ) : markdownText.trim() ? (
             <MessageBoundary fallbackText={markdownText}>
-              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
+              {callMark}
+              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} pictured={pictured} />
             </MessageBoundary>
           ) : null}
         </div>
@@ -549,14 +557,7 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      {message.call ? (
-        <div className="flex items-center gap-1">
-          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
-          <TimestampLabel at={message.at} hidden={streaming} />
-        </div>
-      ) : (
-        <TimestampLabel at={message.at} hidden={streaming} />
-      )}
+      <TimestampLabel at={message.at} hidden={streaming} />
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

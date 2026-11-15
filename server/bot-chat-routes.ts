@@ -72,7 +72,7 @@ type BotChatRouteDeps = {
   startTurn: (botId: string, text: string, opts?: { threadId?: string; userMessage?: Message; replyTo?: Message; sendId?: string; call?: CallTag }) => Promise<StartedTurn>;
   resolveAndSendRoutine: (res: ServerResponse, args: { botId: string; botName?: string; threadId: string; requestId: string; behavior: string }) => boolean;
   approvalBus: ApprovalBus;
-  startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string) => void;
+  startGroupCardContinuation: (groupId: string, threadId: string, botId: string, prompt: string, owedLine?: string) => void;
   resolveReplyTarget: (threadId: string, value: unknown) => Message | undefined;
   connectorMessage: (botId: string, threadId: string, messageId: string) => Message | null;
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
@@ -601,7 +601,9 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         return json(res, 409, { error: "this task has no interrupted work to continue" });
       }
       if (conversation.group) {
-        startGroupCardContinuation(conversation.group.id, m[2], bot.id, TASK_RESUME_PROMPT);
+        // a Stop ended the whole line on purpose; a restart also cut off its other responders
+        const owedLine = packet.flushReason === "stop" ? undefined : packet.instructionId;
+        startGroupCardContinuation(conversation.group.id, m[2], bot.id, TASK_RESUME_PROMPT, owedLine);
       }
       const result = await taskResumes.request(bot.id, m[2], queueMark());
       drainQueuedSends();

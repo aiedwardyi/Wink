@@ -23,8 +23,8 @@ function snapshotBody(snapshot: Record<string, unknown>): Record<string, unknown
 }
 
 const BOT_ID = /^[\w-]{1,128}$/;
-// electron BOT_PANE_TOTAL: 16 home panes plus 64 on other PCs.
-const BOT_PANES = 80;
+// electron BOT_PANE_TOTAL: 128 home panes plus 64 on other PCs.
+const BOT_PANES = 192;
 const bridgeErrorSchema = z.object({ error: z.string().optional() }).catch({});
 const bridgeSnapshotSchema = z.record(z.string(), z.unknown()).catch({});
 const paneCountsSchema = z.object({

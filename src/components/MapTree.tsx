@@ -4,7 +4,7 @@ import { fmt, TREE, treeAlong, treeClimb, treeEdges, treeLayout, treeOrder, tree
 import { mapWorkerColor } from "@/lib/map-worker-colors";
 import "./MapTree.css";
 
-interface Labels { folders(n: number): string; files(n: number): string; more(n: number): string; same: string; different: string }
+interface Labels { folders(n: number): string; files(n: number): string; count(n: number, shown: string): string; more(n: number): string; same: string; different: string }
 
 interface MapTreeProps {
   index: TreeIndex;
@@ -28,6 +28,7 @@ const corner = (row: Point) => ({ x: row.x + 8, y: row.y + 4.5 });
 const CLASHES = 4;
 export const widths = new Map<string, number>();
 let canvas: CanvasRenderingContext2D | null | undefined;
+let probe: HTMLElement | undefined;
 const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const ease = (k: number) => k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
 const half = (n: number) => Math.round(n) + 0.5;
@@ -66,14 +67,27 @@ export function measurer(element: HTMLElement, phone: boolean) {
   const sans = style.getPropertyValue("--font-sans").trim() || "sans-serif";
   const mono = style.getPropertyValue("--font-mono").trim() || "monospace";
   const fonts: Record<TreeFont, string> = phone
-    ? { root: `600 12px ${sans}`, dir: `500 11px ${sans}`, count: `400 10px ${sans}`, file: `400 10.5px ${mono}` }
-    : { root: `600 12.5px ${sans}`, dir: `500 11.5px ${sans}`, count: `400 10px ${sans}`, file: `400 11px ${mono}` };
+    ? { root: `600 12px ${sans}`, dir: `500 11px ${sans}`, count: `400 10px ${sans}`, hidden: `400 10px ${sans}`, file: `400 10.5px ${mono}` }
+    : { root: `600 12.5px ${sans}`, dir: `500 11.5px ${sans}`, count: `400 10px ${sans}`, hidden: `400 10px ${sans}`, file: `400 11px ${mono}` };
   if (canvas === undefined) canvas = document.createElement("canvas").getContext?.("2d") ?? null;
+  // A canvas cannot draw tabular digits, so a box count is measured in the page, styled like the count itself.
+  const drawn = (text: string) => {
+    probe ??= Object.assign(document.createElement("span"), { className: "map-tree-probe" });
+    if (probe.parentNode !== element) element.append(probe);
+    probe.textContent = text;
+    return parseFloat(getComputedStyle(probe).width);
+  };
   return (text: string, font: TreeFont) => {
-    const key = `${fonts[font]}\0${text}`;
+    const key = `${font}\0${fonts[font]}\0${text}`;
     let width = widths.get(key);
     if (width === undefined) {
       if (canvas) { canvas.font = fonts[font]; width = canvas.measureText(text).width; } else width = text.length * parseFloat(fonts[font].split(" ")[1]) * 0.62;
+      if (canvas && font === "count") {
+        const shown = drawn(text);
+        // A hidden pane has no layout to read: use the canvas width for now and ask again next time.
+        if (!(shown > 0)) return width;
+        width = shown;
+      }
       if (widths.size >= 4096) widths.delete(widths.keys().next().value!);
       widths.set(key, width);
     }
@@ -238,8 +252,10 @@ export const MapTree = memo(function MapTree({ index, workers, team, slots, clas
     const ids = team ? under(dir.path) : [];
     const target = it.kind === "box" ? folded(it) : undefined;
     const Box = target ? "button" : "div";
+    const count = fmt(dir.total);
+    const countLabel = labels.count(dir.total, count);
     return <Box type={target ? "button" : undefined} className="map-tree-box" data-changed={(it.kind === "root" ? layout.changed.size > 0 : layout.lit.has(dir.path)) || undefined} style={{ width: it.bw }} onClick={target ? () => onOpen(target) : undefined}>
-      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span>{fmt(dir.total)}</span>
+      <b>{it.kind === "root" ? dir.name : <>{dir.name}<i>/</i></>}</b><span title={countLabel}><span aria-hidden="true">{count}</span><span className="sr-only">{countLabel}</span></span>
       {ids.length > 0 && <s className="map-tree-ticks" style={{ background: `linear-gradient(90deg, ${ids.map((id, i) => `${color(id)} ${(i * 100 / ids.length).toFixed(2)}% ${((i + 1) * 100 / ids.length).toFixed(2)}%`).join(", ")})` }} />}
     </Box>;
   };

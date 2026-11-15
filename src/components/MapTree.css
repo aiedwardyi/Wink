@@ -7,7 +7,8 @@
 .map-tree-box { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 26px; padding: 0 9px; border: 1px solid var(--color-hairline); background: var(--color-panel); white-space: nowrap; }
 .map-tree-box b { font: 500 11.5px/1 var(--font-sans, sans-serif); color: var(--color-ink); }
 .map-tree-box b i { font-style: normal; color: var(--color-ink-secondary); }
-.map-tree-box span { font: 10px/1 var(--font-sans, sans-serif); color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; }
+.map-tree-box span, .map-tree-probe { font: 10px/1 var(--font-sans, sans-serif); color: var(--color-ink-secondary); font-variant-numeric: tabular-nums; }
+.map-tree-probe { position: absolute; visibility: hidden; white-space: nowrap; }
 .map-tree-n[data-kind="root"] .map-tree-box { background: var(--color-raised); }
 .map-tree-n[data-kind="root"] .map-tree-box b { font-weight: 600; font-size: 12.5px; }
 .map-tree-n[data-kind="box"] .map-tree-box { background: transparent; }

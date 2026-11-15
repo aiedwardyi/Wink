@@ -105,6 +105,20 @@ describe("phone Settings navigation", () => {
     expect(pane.textContent).not.toContain("Sync");
   });
 
+  it.each(["en", "ko"])("fits phone Account to its content while keeping taller content scrollable in %s", async (locale) => {
+    await open(locale);
+    await tap(locale === "ko" ? "계정" : "Account");
+    expect(dialog()!.classList.contains("h-auto")).toBe(true);
+    expect(dialog()!.classList.contains("max-h-full")).toBe(true);
+    expect(dialog()!.querySelector("[data-settings-page] .overflow-y-auto")).not.toBeNull();
+  });
+
+  it("keeps the other phone Settings pages at their fixed height", async () => {
+    await open();
+    await tap("General");
+    expect(dialog()!.classList.contains("h-[560px]")).toBe(true);
+  });
+
   it("keeps Vibration in one row without its help text", async () => {
     Object.defineProperty(navigator, "vibrate", { value: vi.fn(), configurable: true });
     await open();

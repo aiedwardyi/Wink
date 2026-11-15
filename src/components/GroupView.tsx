@@ -90,6 +90,7 @@ import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, rest
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import { turnPresenceWaiting } from "@/lib/send-accept";
+import { picturedReplies } from "@/lib/show-pane";
 import { useI18n } from "@/lib/i18n";
 import { useRoomTurnStage } from "@/lib/room-turn";
 import { buffersForTurn } from "@/lib/turn-stage";
@@ -273,6 +274,7 @@ export const Transcript = memo(function Transcript({
     () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
     [items, showToolCalls, showActivities, workerAt],
   );
+  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
   const toggleFold = (id: string) => setUnfolded((current) => {
     const next = new Set(current);
@@ -540,7 +542,7 @@ export const Transcript = memo(function Transcript({
                     </>
                   ) : markdownText.trim() ? (
                     <MessageBoundary fallbackText={markdownText}>
-                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} />
+                      <ChatMarkdown text={markdownText} streaming={streaming} whole={m.streamWhole} baseDir={botFolder} threadId={group.threadId} pictured={pictured.has(m.id)} />
                       {translation && <RoomTranslationText translation={translation} />}
                     </MessageBoundary>
                   ) : null}

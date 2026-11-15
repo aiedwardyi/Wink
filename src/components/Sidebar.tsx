@@ -102,6 +102,7 @@ import {
   type SidebarOrder,
 } from "@/lib/sidebar-order";
 import { useTouchDrag, type TouchDropMark } from "@/lib/use-touch-drag";
+import { useListMenuDismiss } from "@/lib/use-hold-menu";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
@@ -218,21 +219,7 @@ function RoomContextMenu({
     if (!closing) renameRef.current?.focus();
   }, [closing]);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-room-menu]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-room-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!group) return null;
   const saveRename = () => {
@@ -371,21 +358,7 @@ function SectionPicker({
     if (!closing) nameRef.current?.focus();
   }, [closing]);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-section-picker]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-section-picker]", "[data-sidebar-list]", closing, onClose);
 
   // Hidden bots can carry a stale assignment; don't offer it as a context.
   // Channels and bots share one namespace, so Work or Personal can hold both.
@@ -495,21 +468,7 @@ function BotContextMenu({
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
-  useEffect(() => {
-    if (closing) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest("[data-bot-menu]")) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [closing, onClose]);
+  useListMenuDismiss("[data-bot-menu]", "[data-sidebar-list]", closing, onClose);
 
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
@@ -1486,6 +1445,19 @@ export function Sidebar({
   // over() runs every frame; the order is fixed until drop, so recompute only on a new row
   const touchEdgeRef = useRef<{ key: string; edge: TouchDropMark | undefined } | null>(null);
   const touchListRef = useTouchDrag("[data-sidebar-row], [data-sidebar-section-handle]", "[data-sidebar-row], [data-sidebar-item-drop-zone]", {
+    holdMenu: {
+      open: (pressed, x, y) => {
+        const item = touchRowItem(pressed);
+        if (!item) return false;
+        if (item.kind === "bot") setMenu({ botId: item.id, x, y });
+        else setRoomMenu({ groupId: item.id, x, y });
+        return true;
+      },
+      close: () => {
+        setMenu(null);
+        setRoomMenu(null);
+      },
+    },
     lift: (pressed) => {
       touchEdgeRef.current = null;
       const item = touchRowItem(pressed);
@@ -1786,7 +1758,7 @@ export function Sidebar({
       )}
 
       {/* Bot list */}
-      <div ref={touchListRef} className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
+      <div ref={touchListRef} data-sidebar-list className={cn("min-w-0 flex-1 overflow-x-hidden overflow-y-auto", density === "icons" ? "px-0" : "px-2")}>
         <div className="flex flex-col gap-0.5">
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("palette.noMatch", { query })}</div>

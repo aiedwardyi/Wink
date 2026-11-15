@@ -23,8 +23,8 @@
 .verify-doc-group + .verify-doc-findings { margin-top: 4px; }
 .verify-doc-findings[data-fixed] .verify-doc-text q { text-decoration: line-through var(--color-ink-secondary); }
 
-.verify-doc-stage { position: relative; flex: 1 1 auto; min-height: 220px; max-height: 62vh; overflow: auto; overscroll-behavior: contain; padding: 12px; background: var(--color-inset); }
-.verify-watch-frame[data-maximized] .verify-doc-stage { max-height: none; }
+.verify-doc-stage { position: relative; flex: 1 1 auto; min-height: 220px; max-height: 62vh; overflow: auto; overscroll-behavior: auto; padding: 12px; background: var(--color-inset); }
+.verify-watch-frame[data-maximized] .verify-doc-stage { max-height: none; overscroll-behavior: contain; }
 .verify-watch-frame[data-inline] .verify-doc-stage { max-height: min(56vh, 460px); }
 .verify-doc-sheet { position: relative; margin: 0 auto 12px; max-width: 720px; padding: 18px 0 14px; border: 1px solid var(--color-hairline); border-radius: 6px; background: var(--color-card); color: var(--color-ink); font-size: 12.5px; line-height: 1.6; content-visibility: auto; contain-intrinsic-size: auto 720px; }
 .verify-doc-page { position: absolute; top: 4px; right: 10px; color: var(--color-ink-secondary); font-size: 10.5px; line-height: 14px; font-variant-numeric: tabular-nums; }

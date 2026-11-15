@@ -241,6 +241,7 @@ export interface AcpSupport {
   resolveTurnModel?(
     model: string | undefined,
     env: Record<string, string | undefined>,
+    config: AcpConfig,
   ): string | undefined;
   /** Apply per-session settings between session/new (or session/load) and the
    * first session/prompt. Some CLIs ignore argv and take the model/mode over
@@ -572,7 +573,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const context = (turn: SendTurnInput, captured: Captured) => {
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv(LOCAL_HOST_KEY_ENVS);
-        const resolvedModel = support.resolveTurnModel?.(turn.model, env);
+        const resolvedModel = support.resolveTurnModel?.(turn.model, env, config);
         const allowed = new Set(support.credentialEnv ?? []);
         for (const key of LOCAL_HOST_KEY_ENVS) if (!allowed.has(key)) delete env[key];
         const cliTurn = resolvedModel !== undefined && resolvedModel !== turn.model ? { ...turn, model: resolvedModel } : turn;

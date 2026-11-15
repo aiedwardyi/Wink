@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
-import { mapFileDiff, mapFiles, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
+import { mapFileDiff, mapFiles as mapChanges, mapFork, mapHead, mapDiffLines, mapRepoFiles, mapWalkFiles, MAP_LINE_LIMIT } from "./map-git.ts";
 import { createMapPane, type MapPaneRecord } from "./map-pane.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { watchMapPanes } from "./map-events.ts";
@@ -15,6 +15,7 @@ import { terminalReadGrant } from "./terminal-grant.ts";
 const roots: string[] = [];
 const servers: Server[] = [];
 const streams: ServerResponse[] = [];
+const mapFiles = async (...args: Parameters<typeof mapChanges>) => (await mapChanges(...args)).files;
 afterEach(async () => {
   for (const stream of streams.splice(0)) stream.end();
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
@@ -283,6 +284,139 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   const first = new TextDecoder().decode((await again.body!.getReader().read()).value);
   expect(JSON.parse(first.split("\n\n")[0].slice(6)).workers[0].files).toEqual([{ path: "file.ts", added: 1, removed: 1, ranges: [[1, 1]] }]);
   againAbort.abort();
+});
+
+it("opens with every live worker in its first snapshot instead of adding them one by one", async () => {
+  const workers = ["pane-a", "pane-b", "pane-c"].map(sessionId => {
+    const { root } = repo();
+    writeFileSync(join(root, "file.ts"), `const ${sessionId.slice(-1)} = 2;\n`);
+    return { sessionId, cwd: root, label: sessionId.toUpperCase() };
+  });
+  const feature = createMapPane({ panes: async () => workers, subscribe: () => () => {} });
+  const server = createServer((req, res) => {
+    streams.push(res);
+    void feature.handle(req, res, "bot", "live", new URL(req.url!, "http://localhost"));
+  });
+  servers.push(server);
+  const abort = new AbortController();
+  const reader = (await fetch(`http://127.0.0.1:${await listenLocal(server)}/live`, { signal: abort.signal })).body!.getReader();
+  let text = "";
+  while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+  abort.abort();
+  const first: MapSnapshot = JSON.parse(text.slice(6, text.indexOf("\n\n")));
+  expect(first.workers.map(worker => [worker.nick, worker.files.length])).toEqual([["PANE-A", 1], ["PANE-B", 1], ["PANE-C", 1]]);
+});
+
+async function open(workers: MapPaneRecord[]) {
+  let listener = () => {};
+  const feature = createMapPane({ panes: async () => workers, subscribe: (_bot, next) => { listener = next; return () => {}; } });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    if (url.pathname === "/live") streams.push(res);
+    void feature.handle(req, res, "bot", url.pathname.slice(1), url);
+  });
+  servers.push(server);
+  const url = `http://127.0.0.1:${await listenLocal(server)}`;
+  const abort = new AbortController();
+  const reader = (await fetch(`${url}/live`, { signal: abort.signal })).body!.getReader();
+  const seen: MapSnapshot[] = [];
+  let buffered = "";
+  async function until(check: (data: MapSnapshot) => boolean): Promise<MapSnapshot> {
+    for (;;) {
+      const end = buffered.indexOf("\n\n");
+      if (end >= 0) {
+        const data: MapSnapshot = JSON.parse(buffered.slice(6, end));
+        buffered = buffered.slice(end + 2);
+        seen.push(data);
+        if (check(data)) return data;
+      } else {
+        const { value, done } = await reader.read();
+        // A closed stream reads as done forever: without this a failed wait spins.
+        if (done) throw new Error("Map stream ended");
+        buffered += new TextDecoder().decode(value);
+      }
+    }
+  }
+  return { url, seen, until, chat: () => listener(), close: () => abort.abort() };
+}
+
+it("marks only the worker whose folder is gone and still opens the others", async () => {
+  const { root, base } = repo();
+  writeFileSync(join(root, "file.ts"), "const kept = 2;\n");
+  const map = await open([{ sessionId: "pane-gone", cwd: join(root, "missing"), label: "GONE", baseHead: base }, { sessionId: "pane-ok", cwd: root, label: "OK" }]);
+  const first = await map.until(() => true);
+  map.close();
+  expect(first.error).toBeUndefined();
+  expect(first.workers.map(worker => [worker.nick, worker.files.length, worker.error])).toEqual([["GONE", 0, true], ["OK", 1, undefined]]);
+});
+
+it("keeps a healthy worker's changes clear of another worker's failed read, with no blink on later events", async () => {
+  const broken = repo();
+  const healthy = repo();
+  const map = await open([{ sessionId: "pane-a", cwd: broken.root, label: "BROKEN", baseHead: broken.base }, { sessionId: "pane-b", cwd: healthy.root, label: "HEALTHY", baseHead: healthy.base }]);
+  await map.until(data => data.workers.length === 2);
+  rmSync(join(broken.root, ".git"), { recursive: true, force: true });
+  writeFileSync(join(broken.root, "file.ts"), "const lost = 2;\n");
+  await map.until(data => data.workers[0].error === true);
+  writeFileSync(join(healthy.root, "file.ts"), "const kept = 2;\n");
+  const after = await map.until(data => data.workers[1].files.length === 1);
+  for (let event = 0; event < 3; event++) map.chat();
+  writeFileSync(join(healthy.root, "file.ts"), "const kept = 3;\n");
+  await map.until(data => data.workers[1].editedAt > after.workers[1].editedAt);
+  expect((await fetch(`${map.url}/file?worker=pane-b&path=file.ts`)).status).toBe(200);
+  map.close();
+  const broke = map.seen.findIndex(data => data.workers[0]?.error);
+  expect(map.seen.slice(broke).every(data => data.workers[0].error === true)).toBe(true);
+  expect(map.seen.some(data => data.error || data.workers[1]?.error)).toBe(false);
+});
+
+it("lists only the worker's own files and commits after it merges the trunk", async () => {
+  const { root, git, base } = repo();
+  const commit = (path: string, subject: string) => { writeFileSync(join(root, path), `${subject}\n`); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", subject); };
+  git("branch", "-M", "main");
+  git("checkout", "-qb", "work");
+  commit("own.ts", "own work");
+  const before = await open([{ sessionId: "pane-a", cwd: root, label: "WORK", baseHead: base }]);
+  expect((await before.until(() => true)).workers[0].files.map(file => file.path)).toEqual(["own.ts"]);
+  before.close();
+  git("checkout", "-q", "main");
+  for (const name of ["one", "two", "three"]) commit(`theirs-${name}.ts`, `theirs ${name}`);
+  git("checkout", "-q", "work");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "--no-edit", "main");
+  const map = await open([{ sessionId: "pane-a", cwd: root, label: "WORK", baseHead: base }]);
+  expect((await map.until(() => true)).workers[0].files.map(file => file.path)).toEqual(["own.ts"]);
+  const flow = await fetch(`${map.url}/flow?worker=pane-a`).then(res => res.json());
+  map.close();
+  expect(flow).toMatchObject({ total: 2, commits: [{ subject: "Merge branch 'main' into work" }, { subject: "own work" }] });
+});
+
+it("keeps the launch commit for a worker on the trunk and for a branch that has not merged it", async () => {
+  const { root, git } = repo();
+  const commit = (path: string, subject: string) => { writeFileSync(join(root, path), `${subject}\n`); git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", subject); return git("rev-parse", "HEAD"); };
+  git("branch", "-M", "main");
+  const fork = git("rev-parse", "HEAD");
+  git("checkout", "-qb", "work");
+  const launch = commit("before.ts", "before the worker");
+  commit("own.ts", "own work");
+  expect(await mapFork(root, launch)).toBe(launch);
+  git("checkout", "-q", "main");
+  const trunk = commit("theirs.ts", "theirs");
+  expect(await mapFork(root, fork)).toBe(fork);
+  git("checkout", "-q", "work");
+  expect(await mapFork(root, launch)).toBe(launch);
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "rebase", "-q", "main");
+  expect(await mapFork(root, launch)).toBe(trunk);
+});
+
+it("never walks a remote pane's local folder", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "wink-map-plain-"));
+  roots.push(folder);
+  writeFileSync(join(folder, "Desktop.txt"), "home\n");
+  const map = await open([{ sessionId: "pane-r", cwd: folder, label: "REMOTE", host: "laptop" }]);
+  expect((await map.until(() => true)).workers).toEqual([{ id: "pane-r", nick: "REMOTE", git: false, files: [], editedAt: 0 }]);
+  const listed = await fetch(`${map.url}/repo?worker=pane-r`).then(res => res.json());
+  map.close();
+  expect(listed).toEqual({ name: "", paths: [] });
 });
 
 it("recognizes non-git folders", async () => {

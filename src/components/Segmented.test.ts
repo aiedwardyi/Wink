@@ -97,4 +97,17 @@ describe("selected ring", () => {
     expect(thumb().className).toContain("ring-1");
     expect(thumb().className).toContain("inset-y-[3px]");
   });
+
+  it("spans the picked option plus the bar padding on both sides only with a ring", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.tagName === "BUTTON" ? new window.DOMRect(3.25 + options.findIndex((option) => option.label === this.textContent) * 66.5, 0, 64.5, 28) : new window.DOMRect(0, 0, 468, 34);
+    });
+    act(() => root.render(createElement(Segmented, { label: "Chat Box", value: "6", options, onChange: () => undefined, ring: createElement("i", { "data-ring": "" }) })));
+    const thumb = () => group().querySelector<HTMLElement>("[data-segmented-thumb]")!;
+    expect(thumb().style.width).toBe("70.5px");
+    expect(thumb().style.transform).toBe("translateX(399.25px)");
+    render("6", false);
+    expect(thumb().style.width).toBe("64px");
+    expect(thumb().style.transform).toBe("translateX(399px)");
+  });
 });
