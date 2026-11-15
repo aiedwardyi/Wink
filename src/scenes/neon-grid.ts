@@ -21,7 +21,7 @@ uniform float uOff, uLaneX, uLaneW;
 uniform vec3 uSky, uHaze, uPink, uCyan, uSunTop, uSunLow;
 float h1(vec2 p) { return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
 float tri(float x) { return abs(fract(x) - 0.5) * 2.0; }
-float line(float d) { return smoothstep(1.3, 0.3, d) + 0.22 * exp(-d / 2.5); }
+float line(float d) { return 1.0 - smoothstep(0.3, 1.3, d) + 0.22 * exp(-d / 2.5); }
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uBuf.y - gl_FragCoord.y) * (uSize / uBuf);
   float hy = floor(uSize.y * 0.62);
@@ -40,7 +40,7 @@ void main() {
     vec2 c = vec2(cx, hy - r * 0.62);
     float d = length(px - c);
     col += uSunLow * exp(-max(d - r, 0.0) / (r * 0.55)) * 0.32;
-    float sun = smoothstep(r + 0.8, r - 0.8, d);
+    float sun = 1.0 - smoothstep(r - 0.8, r + 0.8, d);
     if (sun > 0.0) {
       float top = c.y - r * 0.05;
       float v = clamp((px.y - top) / (hy - top), 0.0, 1.0);
@@ -67,7 +67,7 @@ void main() {
     float dv = abs(fract(slope / ${CELL} + 0.5) - 0.5) * across;
     float fadeH = smoothstep(2.0, 8.0, ${CELL} * ppz);
     float fadeV = smoothstep(4.0, 14.0, across);
-    float lane = smoothstep(uLaneW, uLaneW * 0.6, abs(px.x - uLaneX));
+    float lane = 1.0 - smoothstep(uLaneW * 0.6, uLaneW, abs(px.x - uLaneX));
     float fog = mix(0.3, 1.0, smoothstep(0.0, 160.0, dy)) * mix(1.0, 0.45, lane);
     vec3 lc = mix(uPink, uCyan, smoothstep(0.2, 1.0, abs(px.x - cx) / cx));
     col = mix(uHaze * 0.7, uSky * 0.75, smoothstep(0.0, 70.0, dy));
