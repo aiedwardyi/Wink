@@ -2,6 +2,30 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.270] - 2026-11-15
+
+### Added
+- In a team room, any member can ask a teammate's bot for help, and every member's message counts like the host's.
+
+### Changed
+- Wink sends fewer prompt tokens with each message, on every engine.
+- Long chats summarize far less often, so replies start sooner and use fewer tokens.
+- Caps on you and your bots are gone: bot instructions save past 4,000 characters, a message takes more than 5 files, and bots can ask more questions and pass work along longer in rooms.
+- A bot created from chat can be given its model and effort, and copies the Chief's approval and tool settings.
+- Voice goes quiet whenever you ask it to, ignores side talk and stops the moment you talk over it.
+- The pinned question looks the same folded and open, and its buttons are easier to tap.
+- Every burst of worker reports reaches the Chief, and cleanup only rechecks folders that changed.
+
+### Fixed
+- On an Android call, the volume keys change the voice's volume.
+- Opening another PC's window asks for Google once, on the designed sign-in page.
+- On first run, a new bot starts on an engine you are signed in to, and Install never stays locked after you close its window.
+- If Wink's server stops after launch, the app restarts it and says so, and Google sign-in errors read in plain words.
+- An old Claude chat whose session is gone starts fresh with its context instead of failing, and a picture still uploading holds Send.
+- Animated themes move in group and team rooms too.
+- On a phone, Back closes the full-screen pane instead of jumping to another chat, and a tapped notification shows its chat.
+- On a phone, the status bar follows the theme, and Map rows and bar controls are easier to tap.
+
 ## [1.0.269] - 2026-11-15
 
 ### Added
