@@ -807,6 +807,7 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
   driverKind: entry.driverKind,
   defaultModel: entry.models.default,
   available: entry.snapshot.state === "available",
+  authenticated: entry.snapshot.authenticated,
   capabilities: entry.capabilities,
   effortLevels: entry.capabilities.effortLevels,
   rateLimits: rateLimitsByInstance.get(entry.instanceId)?.windows,
@@ -842,6 +843,7 @@ function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate 
     driverKind: instance.driverKind,
     defaultModel: instance.models.default,
     available: automaticAvailability.get(instance.instanceId) !== false,
+    authenticated: providerSnapshots.get(instance.instanceId)?.authenticated,
     capabilities: {
       agentsMcp: instance.adapter.capabilities.agentsMcp === true,
       approvalReview: instance.reviewPermission !== undefined,
