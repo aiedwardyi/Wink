@@ -58,27 +58,31 @@ export function answerText(messages: readonly Row[], card: Row, answer: string):
 const sameAsker = (left: Row, right: Row) => left.from?.botId === right.from?.botId;
 
 /** Every ask_user card's state. A staysOpen card waits until answered, dismissed or asked again word for word;
- * an older card closes as the person types past it or a newer card arrives. */
+ * an older card closes as the person types past it or a newer card arrives. An answered card takes the person's
+ * next line, the one that settled it, so it never answers an older card too. */
 export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskState> {
   const states = new Map<T, AskState>();
   const asked: T[] = [];
   let open: T[] = [];
   const answer = (card: T, text: string, by: T) => {
-    states.set(card, { state: "answered", reply: firstLine(text), by });
+    if (states.get(card)?.state === "waiting") states.set(card, { state: "answered", reply: firstLine(text), by });
     open = open.filter((entry) => entry !== card);
   };
   for (const message of messages) {
     if (isAskUserCard(message)) {
       const subtitle = message.card!.subtitle?.trim();
       for (const older of open) {
+        if (states.get(older)?.state !== "waiting") continue;
         if (!older.card!.staysOpen) states.set(older, { state: "superseded" });
         else if (older.card!.subtitle?.trim() === subtitle && sameAsker(older, message)) states.set(older, { state: "askedAgain" });
       }
       open = open.filter((older) => states.get(older)?.state === "waiting");
       asked.push(message);
       const card = message.card!;
-      if (card.answered) states.set(message, { state: "answered", reply: firstLine(card.answered) });
-      else if (card.dismissed) states.set(message, { state: "dismissed" });
+      if (card.answered) {
+        states.set(message, { state: "answered", reply: firstLine(card.answered) });
+        open.push(message);
+      } else if (card.dismissed) states.set(message, { state: "dismissed" });
       else {
         states.set(message, { state: "waiting" });
         open.push(message);
@@ -99,7 +103,7 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
       continue;
     }
     const top = open.at(-1);
-    if (top && (!top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
+    if (top && (states.get(top)?.state !== "waiting" || !top.card!.staysOpen || !top.card!.options?.length)) answer(top, text, message);
   }
   return states;
 }

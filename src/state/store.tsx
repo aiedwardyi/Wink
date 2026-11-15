@@ -1443,7 +1443,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
-          if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
           if (sendStartsTurnOn) clearStream(sendStartsTurnOn, "sent");
           const threadId =
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
@@ -1519,6 +1518,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (typeof settledThread === "string") {
               rawDispatch({ type: "sendSettled", threadId: settledThread, sendId, queued: body?.queued === true });
             }
+            // after the server routed the send, so it saw the question still open
+            if (typedBeforeSend) persistCard(action.botId, typedBeforeSend.question.id, { answered: typedBeforeSend.answered });
           };
           const sending = post()
             .then(settle)

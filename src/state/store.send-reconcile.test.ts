@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { openQuestion } from "@/lib/open-question";
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
 import { ConnectionError } from "@/lib/error-text";
@@ -681,10 +682,35 @@ describe("typing while a question is open", () => {
     { name: "without choices", options: [], answered: "maybe at 8" },
   ])("folds a 1:1 question $name at once, before any bot turn", async ({ options, answered }) => {
     const idle = { ...bot, busy: false, activity: "idle", messages: [ask(options)] } as Bot;
-    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>(() => {}), [idle]);
+    let accept!: (response: Response) => void;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), () => new Promise<Response>((resolve) => { accept = resolve; }), [idle]);
     await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "maybe at 8", threadId: idle.threadId }));
     expect(store.state.bots[0]?.messages[0]?.card?.answered).toBe(answered);
+    await act(async () => accept(Response.json({ ok: true, threadId: idle.threadId })));
     expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered }]]);
+  });
+
+  it("a busy bot's server routes the typed reply while its question is still open", async () => {
+    const busy = { ...bot, busy: true, activity: "working", messages: [ask([])] } as Bot;
+    let patchedBeforePost: unknown[] | undefined;
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => {
+      patchedBeforePost = patches(fetch);
+      return Response.json({ ok: true, steered: true, threadId: busy.threadId });
+    }, [busy]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "What happens to the existing data?", threadId: busy.threadId }));
+    expect(patchedBeforePost).toEqual([]);
+    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-card", { answered: "What happens to the existing data?" }]]);
+  });
+
+  it("answers only the newest open question", async () => {
+    const folder = { ...ask([]), id: "m-folder", card: { ...card([]), subtitle: "Which folder?" } };
+    const branch = { ...ask([]), id: "m-branch", at: 2, card: { ...card([]), subtitle: "Which branch?" } };
+    const idle = { ...bot, busy: false, activity: "idle", messages: [folder, branch] } as Bot;
+    const line: Message = { id: "u-main", at: 3, role: "user", kind: "text", text: "main" };
+    const fetch = await mount(() => Response.json({ messages: [], hasMore: false }), async () => Response.json({ ok: true, threadId: idle.threadId, message: line }), [idle]);
+    await act(async () => store.dispatch({ type: "send", botId: bot.id, text: "main", threadId: idle.threadId }));
+    expect(openQuestion(store.state.bots[0]!.messages)?.id).toBe("m-folder");
+    expect(patches(fetch)).toEqual([["/api/bots/b1/cards/m-branch", { answered: "main" }]]);
   });
 
   it("folds a room question at once", async () => {

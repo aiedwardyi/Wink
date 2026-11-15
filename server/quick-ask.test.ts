@@ -599,9 +599,9 @@ describe("Gate 0", () => {
     });
   });
 
-  it("passes past a live card with choices, but not a tap on one of them", () => {
+  it("skips the helper while a card with choices is open: typing answers it", () => {
     const choices = closed({ staysOpen: true, options: ["Ship today", "Hold for QA"] });
-    expect(routesQuick({ ...base, messages: [choices] })).toBe(true);
+    expect(routesQuick({ ...base, messages: [choices] })).toBe(false);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true, options: [QUESTION, "Hold for QA"] })] })).toBe(false);
     expect(routesQuick({ ...base, messages: [closed({ staysOpen: true })] })).toBe(false);
   });
