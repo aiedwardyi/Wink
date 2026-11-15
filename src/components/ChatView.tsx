@@ -1818,6 +1818,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             visible={waiting && !jump.messages && !dockLive}
             docked={dockLive}
             label={activityLabel}
+            instant={phase === "responding"}
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
