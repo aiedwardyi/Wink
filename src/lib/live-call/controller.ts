@@ -256,6 +256,8 @@ export class LiveCall {
   private landing = new Map<string, () => void>();
   // Queued sends have no row until they run; a cancel is their only end.
   private queuedSends = new Map<string, string>();
+  // Told as never started, so the bot going idle does not tell it again.
+  private unrun = new Set<string>();
   private busy = false;
   private reported = new Set<string>();
   private settled = new Set<string>();
@@ -839,7 +841,7 @@ export class LiveCall {
         if (sent === "landed") {
           void posting.then((late) => {
             const failed = failure(late);
-            if (failed) this.unstarted(text, failed);
+            if (failed) this.unstarted(sendId, text, failed);
           }, () => {});
           return this.accepted(sendId, text, false);
         }
@@ -868,8 +870,9 @@ export class LiveCall {
   }
 
   /** A send the bot took but never ran: its turn failed to start, or it was cancelled from the queue. */
-  private unstarted(text: string, result: string) {
+  private unstarted(sendId: string, text: string, result: string) {
     if (this.ended) return;
+    this.unrun.add(sendId);
     this.awaiting = Math.max(0, this.awaiting - 1);
     this.sent.delete(orderKey(text));
     this.notSent(text, reasonOf(result));
@@ -884,7 +887,7 @@ export class LiveCall {
       const text = this.queuedSends.get(sendId);
       if (text === undefined) continue;
       this.queuedSends.delete(sendId);
-      this.unstarted(text, "not sent: cancelled");
+      this.unstarted(sendId, text, "not sent: cancelled");
     }
   }
 
@@ -1145,7 +1148,7 @@ export class LiveCall {
     this.ran = false;
     const lost: string[] = [];
     for (const row of messages) {
-      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || row.queued || this.settled.has(row.id) || !row.text?.trim()) continue;
+      if (row.role !== "user" || row.call?.id !== this.callId || !(row.call?.order || row.call?.ask) || row.quick?.state === "asked" || row.queued || this.settled.has(row.id) || (row.sendId && this.unrun.has(row.sendId)) || !row.text?.trim()) continue;
       this.settled.add(row.id);
       this.awaiting = Math.max(0, this.awaiting - 1);
       if (newNeed || (askedAt !== undefined && askedAt >= row.at)) continue;

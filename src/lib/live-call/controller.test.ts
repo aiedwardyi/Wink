@@ -2514,6 +2514,25 @@ describe("VOICE-FIX-5: receipts that wait on the bot", () => {
     expect(engine().texts.filter((t) => t.startsWith("[Wink] Not run"))).toEqual(['[Wink] Not run: "Fix the login bug." never started (context preparation failed). Tell them plainly; they can ask again.']);
   });
 
+  it("H1 a send that never started is not told again when the bot goes idle", async () => {
+    vi.useFakeTimers();
+    const receipt = slow();
+    const { call, engine } = await started({ "/messages": receipt.post });
+    engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);
+    const answered = call.answer(true);
+    await flush();
+    const rows = [{ ...orderRow("o1", "Fix the login bug."), sendId: "send-1" }];
+    call.observe({ busy: false, messages: rows });
+    await answered;
+    call.observe({ busy: true, messages: rows });
+    receipt.reply({ status: 202, data: { ok: true, dispatchFailed: true, error: "context preparation failed" } });
+    await flush();
+    call.observe({ busy: false, messages: rows });
+    await gap();
+    expect(engine().texts.filter((t) => t.includes("stopped with no reply"))).toEqual([]);
+    expect(call.state().notice).toEqual({ kind: "notSent", text: "Fix the login bug.", why: "context preparation failed" });
+  });
+
   it("H2 a queued order cancelled before it runs settles Working and is told", async () => {
     vi.useFakeTimers();
     const { call, engine } = await started({ "/messages": { status: 202, data: { ok: true, queued: true, queueId: "q1" } } });
