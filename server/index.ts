@@ -1015,17 +1015,19 @@ function checkedGroupResponder(value: unknown, memberIds: string[]): GroupDefaul
   return null;
 }
 
-function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | { ok: false; error: string } {
+function checkedMemberIds(value: unknown, roster: readonly string[] = []): { ok: true; memberIds: string[] } | { ok: false; error: string } {
   if (!Array.isArray(value)) return { ok: false, error: "memberIds must be a list of bot IDs" };
-  // a room keeps the id of a deleted sole member; an edit that names a live bot lets it go
-  const live = value.filter((id) => typeof id === "string" && store.bot(id));
-  const invalidIndex = live.length ? -1 : value.findIndex(
+  // a room keeps the id of a deleted sole member; an edit that names a live bot lets that one id go
+  const named = value.some((id) => typeof id === "string" && store.bot(id))
+    ? value.filter((id) => !(roster.includes(id) && !store.bot(id)))
+    : value;
+  const invalidIndex = named.findIndex(
     (id) => typeof id !== "string" || !id.trim() || !store.bot(id),
   );
   if (invalidIndex !== -1) {
-    return { ok: false, error: `unknown channel member: ${String(value[invalidIndex])}` };
+    return { ok: false, error: `unknown channel member: ${String(named[invalidIndex])}` };
   }
-  const memberIds = [...new Set(live as string[])];
+  const memberIds = [...new Set(named as string[])];
   if (!memberIds.length) return { ok: false, error: "a channel needs at least one bot" };
   return { ok: true, memberIds };
 }

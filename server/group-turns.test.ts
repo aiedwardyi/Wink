@@ -127,8 +127,10 @@ describe("a room whose only bot was deleted", () => {
     store.deleteBot(kai.id);
     const checked = load("checkedMemberIds", { store });
     expect(store.group(solo.id)?.memberIds).toEqual([kai.id]);
-    expect(checked([kai.id, ray.id])).toEqual({ ok: true, memberIds: [ray.id] });
-    expect(checked([kai.id])).toEqual({ ok: false, error: `unknown channel member: ${kai.id}` });
+    expect(checked([kai.id, ray.id], [kai.id])).toEqual({ ok: true, memberIds: [ray.id] });
+    expect(checked([kai.id], [kai.id])).toEqual({ ok: false, error: `unknown channel member: ${kai.id}` });
+    expect(checked([ray.id, "missing-bot"], [kai.id])).toEqual({ ok: false, error: "unknown channel member: missing-bot" });
+    expect(checked([kai.id, ray.id])).toEqual({ ok: false, error: `unknown channel member: ${kai.id}` });
   });
 });
 
