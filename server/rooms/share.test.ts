@@ -156,7 +156,7 @@ describe("sharing a bot group", () => {
     expect(shared.carried).toBe(200);
     expect(entries).toHaveLength(200);
     expect(entries[0]!.text).toBe("line 5");
-    expect(entries.find((entry) => entry.text.startsWith("h"))!.text).toHaveLength(4_000);
+    expect(entries.find((entry) => entry.text.startsWith("h"))!.text).toHaveLength(5_000);
     expect(entries.find((entry) => entry.text.startsWith("b"))!.text).toHaveLength(20_000);
     expect(entries.some((entry) => entry.text === "the other task")).toBe(false);
   });
