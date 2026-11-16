@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { z } from "zod";
 import type { Message } from "@/state/store";
-import { localLinks, showKind, type ShowKind } from "./chat-media";
+import { linkedFileSrc, localLinks, showKind, type ShowKind } from "./chat-media";
 
 export { linkedFileSrc, localLinks, showKind, showName, type ShowKind } from "./chat-media";
 
@@ -216,6 +216,11 @@ export function useAutoShow(threadId: string | undefined, messages: readonly Mes
     if (!threadId) return;
     const step = autoShowStep(state.current, threadId, messages, closed);
     state.current = step.state;
-    if (step.item && free && !onMedia && !onMap) openItem(step.item);
+    const item = step.item;
+    // A file this PC can't serve would open a dead pane; its link still opens it in the browser.
+    if (item && free && !onMedia && !onMap) {
+      fetch(linkedFileSrc(item.threadId, item.path), { headers: { Range: "bytes=0-0" } })
+        .then((res) => { if (res.ok || res.status === 416) openItem(item); }, () => {});
+    }
   }, [threadId, messages, shown, free, onMedia, onMap]);
 }

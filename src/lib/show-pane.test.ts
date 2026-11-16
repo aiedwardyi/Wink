@@ -100,14 +100,18 @@ function Probe({ thread, messages, free }: { thread: string; messages: Message[]
 
 const render = (thread: string, messages: Message[], free = true) => act(async () => root.render(createElement(Probe, { thread, messages, free })));
 
+let served = 206;
+
 beforeEach(() => {
+  served = 206;
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: served })));
   host = document.createElement("div");
   root = createRoot(host);
   shown = null;
   media = null;
   map = null;
 });
-afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); });
+afterEach(() => { act(() => root.unmount()); act(() => closeShow()); localStorage.clear(); vi.unstubAllGlobals(); });
 
 it("opens a new file in the open chat, and stays shut after the user closes it this turn", async () => {
   const turn = [user("u1")];
@@ -116,6 +120,13 @@ it("opens a new file in the open chat, and stays shut after the user closes it t
   expect(shown).toEqual({ threadId: "t1", path: "C:\\work\\launch-deck.pdf", kind: "pdf" });
   await act(async () => closeShow());
   await render("t1", [...turn, deck, page]);
+  expect(shown).toBeNull();
+});
+
+it("stays shut for a new page this PC cannot serve", async () => {
+  served = 404;
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
   expect(shown).toBeNull();
 });
 

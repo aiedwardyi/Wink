@@ -1,4 +1,4 @@
-// Linked media may leave the bot's output roots, excluding private and system folders.
+// Linked media and pages may leave the bot's output roots, excluding private and system folders.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
@@ -227,7 +227,7 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
 }
 
 function outsideMedia(real: string): boolean {
-  if (!(mediaType(real) || cardFile(real)) || /^[\\/]{2}/.test(real)) return false;
+  if (!(mediaType(real) || cardFile(real) || /\.html?$/i.test(real)) || /^[\\/]{2}/.test(real)) return false;
   const normalized = real.replaceAll("\\", "/").toLowerCase();
   if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
   return !systemFolder(real);
@@ -449,8 +449,8 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
         sendJson(res, 404, { error: "not found" });
         return;
       }
-      if (!insideRoot(real, [folder]) || !insideRoot(real, roots) ||
-          relative(folder, real).split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".pnpm")) {
+      if (!insideRoot(real, [folder]) || (inRoot && !insideRoot(real, roots)) ||
+          relative(folder, real).split(/[\\/]/).some((part) => (part.startsWith(".") && part !== ".pnpm") || (!inRoot && part.toLowerCase() === "appdata"))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
