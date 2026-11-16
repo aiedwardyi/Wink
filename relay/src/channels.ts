@@ -198,7 +198,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       const ready: ReadyMessage = { type: "ready", session: session.id, poolToken: session.poolToken, pool: { ...POOL } };
       if (result.ticket) ready.ticket = result.ticket;
       if (result.account?.refreshed) ready.account = result.account.refreshed;
-      if (ctx.snags) ready.snags = true;
+      if (ctx.snags && hub.recordsTeam(result.label)) ready.snags = true;
       if (hub.recordsTeam(result.label)) ready.active = true;
       if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
       if (ctx.roomCodes) ready.roomCodes = true;
@@ -230,7 +230,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
   const onSnag = (label: string, msg: SnagMessage) => {
     const parsed = teamSnagSchema.safeParse(msg.data);
     let reason: string;
-    if (!ctx.snags) reason = "snags-off";
+    if (!ctx.snags || !hub.recordsTeam(label)) reason = "snags-off";
     else if (Buffer.byteLength(JSON.stringify(msg), "utf8") > SNAG_MAX_BYTES) reason = "too-large";
     else if (!parsed.success) reason = "bad-snag";
     else {

@@ -87,9 +87,13 @@ export class Hub {
     return this.byLabel.size;
   }
 
-  /** Only the owner's own PCs, the ones joined with a setup code, report their person's active times. */
+  /** Only the owner's own PCs, the ones joined with a setup code, are on the team log or send snags. */
   recordsTeam(label: string): boolean {
     return this.opts.team !== undefined && !this.opts.joinedWithGoogle?.(label);
+  }
+
+  private teamFor(label: string) {
+    return this.recordsTeam(label) ? this.opts.team : undefined;
   }
 
   get splicedCount(): number {
@@ -126,7 +130,7 @@ export class Hub {
     if (old) this.end(old, "superseded");
     else {
       this.markChanged(label);
-      this.opts.team?.pcUp(label);
+      this.teamFor(label)?.pcUp(label);
     }
     this.opts.log.log("session-up", { label, reason: old ? "superseded-old" : "new" });
     return session;
@@ -145,7 +149,7 @@ export class Hub {
     if (this.byLabel.get(session.label) === session) {
       this.byLabel.delete(session.label);
       this.markChanged(session.label);
-      this.opts.team?.pcDown(session.label);
+      this.teamFor(session.label)?.pcDown(session.label);
       this.failWaiting(session.label);
     }
     this.unindex(session);
@@ -175,7 +179,7 @@ export class Hub {
 
   /** A control frame arrived on the label's current session. */
   seen(session: Session): void {
-    if (this.byLabel.get(session.label) === session) this.opts.team?.pcSeen(session.label);
+    if (this.byLabel.get(session.label) === session) this.teamFor(session.label)?.pcSeen(session.label);
   }
 
   active(session: Session): void {
@@ -324,7 +328,7 @@ export class Hub {
     this.parked.get(data)?.();
     this.parked.delete(data);
     this.splicedPerLabel.set(label, (this.splicedPerLabel.get(label) ?? 0) + 1);
-    const phoneId = this.opts.team?.phoneStart(label);
+    const phoneId = this.teamFor(label)?.phoneStart(label);
     const pair: LabeledPair = Object.assign(splice({
       phone,
       data,

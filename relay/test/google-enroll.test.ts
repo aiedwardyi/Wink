@@ -125,7 +125,7 @@ describe("POST /v1/enroll/google", () => {
     ctl.socket.destroy();
   });
 
-  it("keeps a Google-joined pc's names and active times off the team log", async () => {
+  it("keeps a Google-joined pc off the team log and takes no snags from it", async () => {
     const s = setup();
     const h = await startRelay({
       google: { desktopClientId: DESKTOP, webClientId: WEB, signinOrigin: ORIGIN, keys: s.issuer },
@@ -142,15 +142,16 @@ describe("POST /v1/enroll/google", () => {
     const account = signAccountTicket({ label: mate.label, subHash: googleSubHash("mate-sub"), iat, exp: iat + 3600 }, h.operator);
     const home = await openControl(h, mate, { account, name: "Mate PC", person: "Mate" });
     expect([away.ready.active, home.ready.active]).toEqual([undefined, true]);
+    expect([away.ready.snags, home.ready.snags]).toEqual([undefined, true]);
     away.socket.write(encodeFrame({ type: "active" }));
     home.socket.write(encodeFrame({ type: "active" }));
     const journal = () => readFile(join(h.dataDir, "team-sessions"), "utf8").catch(() => "");
     await vi.waitFor(async () => expect(await journal()).toMatch(new RegExp(`^act ${mate.label} `, "m")));
-    // Label-only `pc` connection spans stay: they carry no name or use time.
-    expect((await journal()).split("\n").filter((line) => line.includes(stranger.label) && !line.startsWith("pc "))).toEqual([]);
     expect(h.relay.hub.pcsFor(googleSubHash("stranger-sub"))).toEqual([{ label: stranger.label, name: "Stranger PC" }]);
     away.socket.destroy();
     home.socket.destroy();
+    await vi.waitFor(async () => expect(await journal()).toMatch(new RegExp(`^pc ${mate.label} `, "m")));
+    expect(await journal()).not.toContain(stranger.label);
   });
 
   it("refuses a stale token", async () => {
