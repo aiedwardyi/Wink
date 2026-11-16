@@ -16,6 +16,8 @@ import {
   loadOrCreateVapidKeys,
   loadPushSubscriptions,
   pushPayload,
+  pushServiceEndpoint,
+  removePhonePushSubscriptions,
   removePushSubscription,
   sendWebPushToDevices,
   vapidAuthorization,
@@ -137,6 +139,22 @@ describe("subscription store", () => {
     ]);
     removePushSubscription(dir, "https://push.example/b");
     expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/a"]);
+  });
+
+  it("accepts only browsers' push services as endpoints", () => {
+    const ok = ["https://fcm.googleapis.com/fcm/send/a", "https://web.push.apple.com/Q", "https://updates.push.services.mozilla.com/wpush/v2/a", "https://wns2-par02p.notify.windows.com/w/?token=a"];
+    const bad = ["https://attacker.example/x", "https://192.168.1.1/x", "http://fcm.googleapis.com/a", "https://fcm.googleapis.com:8443/a", "https://push.apple.com.attacker.example/a", "https://evilpush.apple.com.x/a", "not a url"];
+    expect(ok.filter(pushServiceEndpoint)).toEqual(ok);
+    expect(bad.filter(pushServiceEndpoint)).toEqual([]);
+  });
+
+  it("keeps the subscribing phone and drops only its entries", () => {
+    addPushSubscription(dir, { ...sub("a"), phone: "forged" }, "phone-1");
+    addPushSubscription(dir, sub("b"), "phone-2");
+    addPushSubscription(dir, { ...sub("c"), phone: "phone-1" });
+    expect(loadPushSubscriptions(dir).map((s) => [s.endpoint, s.phone])).toEqual([["https://push.example/a", "phone-1"], ["https://push.example/b", "phone-2"], ["https://push.example/c", undefined]]);
+    removePhonePushSubscriptions(dir, "phone-1");
+    expect(loadPushSubscriptions(dir).map((s) => s.endpoint)).toEqual(["https://push.example/b", "https://push.example/c"]);
   });
 
   it("ignores corrupt files and invalid entries", () => {

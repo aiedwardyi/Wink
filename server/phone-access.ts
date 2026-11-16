@@ -32,6 +32,7 @@ import type { PhoneRelay, PhoneRelayConfig, PhoneRelayEnrollOptions, PhoneRelayO
 import { relayMode } from "./phone-relay/mode.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import { parseJson } from "./schema.ts";
+import { removePhonePushSubscriptions } from "./web-push.ts";
 
 const MINUTE_MS = 60_000;
 const MAX_BODY_BYTES = 4096;
@@ -601,6 +602,7 @@ export class PhoneAccess {
         this.google?.dropPhone(id);
         for (const socket of this.sockets.get(id) ?? []) socket.destroy();
         this.sockets.delete(id);
+        removePhonePushSubscriptions(this.options.dataDir, id);
       }
       return reply(200, { ok: true });
     }

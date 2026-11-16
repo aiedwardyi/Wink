@@ -32,6 +32,7 @@ import { isRelayRequest, markRelaySocket } from "./phone-relay/via.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
+import { addPushSubscription, loadPushSubscriptions } from "./web-push.ts";
 
 const COMMS = "c".repeat(48);
 const BOT_BEARER = "Bearer bot-caller";
@@ -822,6 +823,17 @@ describe("relay request gate", () => {
     expect((await viaRelay(w.r, `${forged}body.woff2`)).status).toBe(401);
     expect((await viaRelay(w.r, `${forged}body.woff2`, { headers: { origin: "null" } })).status).toBe(403);
     expect((await viaRelay(w.r, "/api/bots", { headers: { origin: "null", cookie: session } })).status).toBe(403);
+  });
+
+  it("drops a phone's push subscription when it is signed out", async () => {
+    const w = await world();
+    await pairPhone(w);
+    const { phones } = phonesSchema.parse(JSON.parse((await w.local("/api/phone/devices")).body));
+    const keys = { p256dh: "BA", auth: "AA" };
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/phone", keys }, phones[0]!.id);
+    addPushSubscription(w.r.dataDir, { endpoint: "https://fcm.googleapis.com/fcm/send/pc", keys });
+    expect((await w.local(`/api/phone/devices/${phones[0]!.id}`, { method: "DELETE" })).status).toBe(200);
+    expect(loadPushSubscriptions(w.r.dataDir).map((sub) => sub.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/pc"]);
   });
 
   it("ends a linked page's grant when its phone is signed out", async () => {

@@ -165,6 +165,7 @@ import {
   addPushSubscription,
   loadOrCreateVapidKeys,
   loadPushSubscriptions,
+  pushServiceEndpoint,
   pushEndpointSchema,
   pushPayload,
   pushSubscriptionSchema,
@@ -8345,8 +8346,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "POST" && path === "/api/web-push/subscribe") {
       const body = pushSubscriptionSchema.safeParse(await readBody(req));
-      if (!body.success) return json(res, 400, { error: "invalid push subscription" });
-      addPushSubscription(DATA_DIR, body.data);
+      if (!body.success || !pushServiceEndpoint(body.data.endpoint)) return json(res, 400, { error: "invalid push subscription" });
+      addPushSubscription(DATA_DIR, body.data, phone?.id);
       return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/web-push/unsubscribe") {

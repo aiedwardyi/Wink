@@ -22,6 +22,8 @@ export const pushSubscriptionSchema = z.object({
   endpoint: z.string().url().startsWith("https://"),
   keys: z.object({ p256dh: b64url, auth: b64url }),
   off: z.array(z.string().max(100)).max(500).optional(),
+  /** The phone that subscribed; signing it out drops the subscription. */
+  phone: z.string().max(100).optional(),
 });
 const subscriptionsFileSchema = z.object({ subscriptions: z.array(z.unknown()) });
 export const pushEndpointSchema = z.object({ endpoint: z.string() });
@@ -35,6 +37,18 @@ export type PushTarget = { botId: string; threadId: string };
 export type WebPushResult = { ok: true } | { ok: false; gone: boolean; error: string };
 
 const fromB64url = (value: string) => Buffer.from(value, "base64url");
+
+const PUSH_HOSTS = /^(?:fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|[\w-]+(?:\.[\w-]+)*\.push\.apple\.com|[\w-]+(?:\.[\w-]+)*\.notify\.windows\.com)$/;
+
+/** Browsers' own push services only, so a subscription can't aim the PC at another host. */
+export function pushServiceEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" && !url.port && PUSH_HOSTS.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 export function loadOrCreateVapidKeys(dataDir: string): VapidKeys {
   const path = join(dataDir, WEB_PUSH_KEYS_FILE);
@@ -164,10 +178,18 @@ function savePushSubscriptions(dataDir: string, subscriptions: PushSubscriptionR
 }
 
 /** One entry per device; re-enabling the same browser replaces its entry. `off` lists the rooms this device muted. */
-export function addPushSubscription(dataDir: string, subscription: PushSubscriptionRecord): void {
+export function addPushSubscription(dataDir: string, subscription: PushSubscriptionRecord, phone?: string): void {
   const rest = loadPushSubscriptions(dataDir).filter((sub) => sub.endpoint !== subscription.endpoint);
   const off = subscription.off?.length ? { off: subscription.off } : {};
-  savePushSubscriptions(dataDir, [...rest, { endpoint: subscription.endpoint, keys: subscription.keys, ...off }]);
+  const entry: PushSubscriptionRecord = { endpoint: subscription.endpoint, keys: subscription.keys, ...off };
+  if (phone) entry.phone = phone;
+  savePushSubscriptions(dataDir, [...rest, entry]);
+}
+
+export function removePhonePushSubscriptions(dataDir: string, phone: string): void {
+  const all = loadPushSubscriptions(dataDir);
+  const rest = all.filter((sub) => sub.phone !== phone);
+  if (rest.length !== all.length) savePushSubscriptions(dataDir, rest);
 }
 
 export function removePushSubscription(dataDir: string, endpoint: string): void {
