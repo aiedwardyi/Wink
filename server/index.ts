@@ -2155,6 +2155,11 @@ function scheduleThreadUpload(threadId: string): void {
   threadSyncTimers.set(threadId, timer);
 }
 
+/** One Drive pass carries a settled reply and the memory its settle just wrote. */
+function publishSettledTurn(threadId: string): void {
+  void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(threadId) : undefined).then(() => googleSync.kick());
+}
+
 /** Runs before a route answers, so the user never types on a stale copy. */
 function pullSyncedThread(threadId: string): void | Promise<void> {
   if (threadSyncGate.enabled) return threadSyncV2?.pull(threadId).catch((error) => console.warn("chat sync v2: pull failed", error));
@@ -4494,8 +4499,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const settledBot = store.botByThread(event.threadId);
   if (!settledBot) return;
   syncMemory(settledBot.id);
-  // One Drive pass carries the reply and the memory it just wrote.
-  void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(event.threadId) : undefined).then(() => googleSync.kick());
+  publishSettledTurn(event.threadId);
 });
 
 function paneNotesPending(threadId: string): boolean {
