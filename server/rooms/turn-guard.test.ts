@@ -171,7 +171,7 @@ describe("every room runner caller on a hosted thread", () => {
     expect(() => { sent = start(group.id, "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"); }).not.toThrow();
     expect(sent).toEqual({ id: "m1" });
     expect(hostSend.mock.calls[0]).toEqual([expect.objectContaining({ id: group.id }), "@Wink hi", { id: "x", roomEntryId: "e1" }, "send-0000000001"]);
-    expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder);
+    expect(roomResponders).toHaveBeenCalledWith("@Wink hi", expect.anything(), group.defaultResponder, { id: "x", roomEntryId: "e1" });
     expect(appendMessage).not.toHaveBeenCalled();
   });
 });
