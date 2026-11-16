@@ -275,11 +275,18 @@ const ASK_SETTINGS = JSON.stringify({
   permissions: { ask: WRITE_TOOLS },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
-// Auto sends commands to the broker for approval; edits run under acceptEdits.
-const AUTO_SETTINGS = JSON.stringify({
-  permissions: { ask: ["Bash", "PowerShell"] },
-  sandbox: { autoAllowBashIfSandboxed: false },
-});
+
+const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
+
+function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
+  return [join(configDir, "settings.json"), join(cwd, ".claude", "settings.json"), join(cwd, ".claude", "settings.local.json")].some((file) => {
+    try {
+      return ownDefaultModeSchema.safeParse(JSON.parse(readFileSync(file, "utf8"))).success;
+    } catch {
+      return false;
+    }
+  });
+}
 
 const DENY_TIMEOUT_NOTE =
   "Wink: nobody answered this permission request in time. Skip this action and finish what you can without it.";
@@ -1029,6 +1036,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const asks = turn.approval === "ask" && config.permissionMode !== "bypassPermissions";
       const auto = turn.approval === "auto";
       const autoAttended = auto && turn.attended === true;
+      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
+      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
+      // Wink's acceptEdits default yields to a defaultMode the user set in their own settings.
+      const ownMode =
+        !asks && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+        hasOwnDefaultMode(input.account?.home ?? claudeConfigDir(turnEnvironment), turn.cwd ?? homedir());
+      const permissionMode = asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode;
 
       const args = [
         "-p",
@@ -1038,19 +1052,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // token-level streaming: content_block_delta events between the
         // whole-message frames, so the bubble grows as the model writes
         "--include-partial-messages",
-        "--permission-mode", asks ? "default" : config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
+        ...(ownMode ? [] : ["--permission-mode", permissionMode]),
       ];
       if (asks) args.push("--settings", ASK_SETTINGS);
-      else if (turn.approval === "auto" && config.permissionMode !== "bypassPermissions") {
-        args.push("--settings", AUTO_SETTINGS);
-      }
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
       const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
-      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
-      turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
       if (restart?.turn.settled) return { turnId };

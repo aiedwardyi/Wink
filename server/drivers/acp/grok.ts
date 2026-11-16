@@ -605,8 +605,8 @@ export const grokSupport: AcpSupport = {
   // accepted as a TUI option and then ignored, so ACP session/new keeps
   // [models].default (grok-4.6) and oMLX never sees a request.
   spawnArgs: (config, turn) => [
-    "--permission-mode",
-    config.fullAuto ? "bypassPermissions" : "default",
+    // Only a Wink setting overrides; otherwise the user's own grok config decides.
+    ...(config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
     "agent",
     ...(turn.model ? ["-m", turn.model] : []),
     // long form on purpose: `--effort` is documented as an alias, and an

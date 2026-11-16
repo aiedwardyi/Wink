@@ -7,7 +7,7 @@
 // cannot exec, and the broker is a unix socket. Both now go through
 // resolveCliSpawn / permissionSocketPath, so they run everywhere.
 import { spawn as spawnChild } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -3404,26 +3404,39 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     });
   });
 
-  it("keeps Auto mode on acceptEdits: edits run unasked, commands reach the broker over the user's allow list", async () => {
+  it("lets the user's own allow list run commands unasked in Auto mode", async () => {
     process.env.FAKE_CLAUDE_USER_ALLOW = "Write,Edit,Bash";
     await create("edit");
     const dump = join(scratch, "auto-dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-auto-edits", text: "go", cwd: scratch, approval: "auto" });
 
-    const bash = await recorder.until((e) => e.type === "request.opened" && e.tool === "Bash");
+    const first = await recorder.until((e) => e.type === "turn.completed" || e.type === "request.opened");
+    expect(first.type).toBe("turn.completed");
     expect(existsSync(join(scratch, "made.txt"))).toBe(true);
-    await instance.adapter.respondToRequest("t-auto-edits", bash.requestId!, { behavior: "allow" });
-    await recorder.until((e) => e.type === "turn.completed");
     expect(existsSync(join(scratch, "ran.txt"))).toBe(true);
-    expect(recorder.events.some((e) => e.type === "request.opened" && e.tool === "Write")).toBe(false);
 
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
     expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
-    expect(JSON.parse(argv[argv.indexOf("--settings") + 1])).toEqual({
-      permissions: { ask: ["Bash", "PowerShell"] },
-      sandbox: { autoAllowBashIfSandboxed: false },
-    });
+    expect(argv).not.toContain("--settings");
+  });
+
+  it("leaves the permission mode to a defaultMode in the user's own settings", async () => {
+    const configDir = join(scratch, "own-claude-config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }));
+    await create(undefined, { CLAUDE_CONFIG_DIR: configDir });
+    const dump = join(scratch, "own-mode-dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-own-mode", text: "go", cwd: scratch, approval: "auto" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).argv).not.toContain("--permission-mode");
+
+    rmSync(dump);
+    const ask = await instance.adapter.sendTurn({ threadId: "t-own-mode-ask", text: "go", cwd: scratch, approval: "ask" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === ask.turnId);
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("default");
   });
 
   it("respawns a warm session under the new mode when the chip flips", async () => {

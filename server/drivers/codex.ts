@@ -958,9 +958,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         let codexThreadId: string | null = warm ? cursor : null;
         let startedModel: string | null = null;
         let resumeFailed = false;
-        // a user-level approvals_reviewer = "auto_review" would otherwise answer
-        // escalations with a reviewer model, never reaching the chip or Auto mode
-        const approvalsReviewer = "user";
+        // Ask must reach the person; otherwise the user's own approvals_reviewer decides.
+        const approvalsReviewer = approvalPolicy === "untrusted" ? "user" : undefined;
         if (cursor && !warm) {
           try {
             const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox });
