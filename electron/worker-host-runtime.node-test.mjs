@@ -68,6 +68,22 @@ test("the runtime is copied once, and a script change restages only the script l
   assert.deepEqual(layers(root), [path.basename(changed.bin), path.basename(changed.js), "notes.txt", "staging-fresh"].sort());
 });
 
+test("a node-pty file that changes at the same size restages the native layer", windows, async (t) => {
+  const root = scratch(t);
+  const pty = path.join(root, "node-pty");
+  fs.cpSync(path.dirname(path.dirname(require.resolve("node-pty"))), pty, { recursive: true, dereference: true });
+  const input = { root: path.join(root, "runtime"), executable: process.execPath, ptyModule: path.join(pty, "lib", "index.js"), sources: [] };
+  const first = await stageWorkerHostRuntime(input);
+  const file = path.join(pty, "package.json");
+  const text = fs.readFileSync(file, "utf8");
+  fs.writeFileSync(file, text.replace(/"version": "(\d)/, (_match, digit) => `"version": "${(Number(digit) + 1) % 10}`));
+  assert.equal(fs.statSync(file).size, Buffer.byteLength(text));
+  const changed = await stageWorkerHostRuntime(input);
+  assert.deepEqual([first.staged.bin, changed.staged.bin], [true, true]);
+  assert.notEqual(changed.bin, first.bin);
+  assert.equal(fs.readFileSync(path.join(changed.bin, "node-pty", "package.json"), "utf8"), fs.readFileSync(file, "utf8"));
+});
+
 test("a host started from the copied runtime runs a pane and keeps its layers", { ...windows, timeout: 120_000 }, async (t) => {
   const root = scratch(t);
   const runtimeRoot = path.join(root, "runtime");

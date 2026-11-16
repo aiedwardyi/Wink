@@ -20,6 +20,17 @@ export function sameProof(actual, expected) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+/** Adds one output chunk to a pane's ring, dropping the oldest chunks past `limit` bytes but always keeping the newest. */
+export function keepRing(pane, bytes, limit) {
+  pane.ring.push({ seq: ++pane.seq, bytes });
+  pane.bytes += bytes.length;
+  while (pane.bytes > limit && pane.ring.length - pane.head > 1) pane.bytes -= pane.ring[pane.head++].bytes.length;
+  if (pane.head > 1024) {
+    pane.ring.splice(0, pane.head);
+    pane.head = 0;
+  }
+}
+
 export function textChunks(text) {
   if (text.length <= MAX_CHUNK) return [text];
   const chunks = [];
