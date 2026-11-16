@@ -24,9 +24,11 @@ import { loadSidebarOrder, useSidebarSide } from "@/lib/sidebar-preferences";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView, warmCallViews } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { BoardView } from "@/components/BoardView";
 import { JoinedRoomView } from "@/components/JoinedRoomView";
 import { TeamRoomView } from "@/components/TeamRoomView";
 import { isTeamRoom, joinedRoomIdOf } from "@/lib/team-rooms";
+import { isForumSelection } from "@/lib/board";
 import { useJoinedRooms } from "@/lib/joined-rooms";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { GlobalTooltip } from "@/components/GlobalTooltip";
@@ -157,7 +159,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const joinedId = joinedRoomIdOf(state.selectedId);
-  const bot = group || joinedId ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
+  const forum = isForumSelection(state.selectedId);
+  const bot = group || joinedId || forum ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id]);
   const webTerminal = useWebTerminalBridge(bot?.id, state.config?.features?.terminalLive === true, terminalOpen);
@@ -780,6 +783,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
           <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
         </main>
+      ) : forum ? (
+        <BoardView hidden={nativeViewOverlayOpen} />
       ) : joinedId ? (
         <JoinedRoomView key={joinedId} roomId={joinedId} hidden={nativeViewOverlayOpen} />
       ) : group && isTeamRoom(group) ? (

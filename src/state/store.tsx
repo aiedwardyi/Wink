@@ -39,6 +39,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
+import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
@@ -206,7 +207,7 @@ export function useMascotMotionExpiry(nonce: number | undefined, dispatch: (acti
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null;
+      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id) || joinedRoomIdOf(id) !== null || isForumSelection(id);
       const selectedId =
         state.selectedId && known(state.selectedId)
           ? state.selectedId
@@ -2263,6 +2264,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       switch (frame.kind) {
         case "picture":
           window.dispatchEvent(new CustomEvent("orbit:picture-landed", { detail: frame.name }));
+          break;
+        case "board":
+          window.dispatchEvent(new Event(BOARD_CHANGED_EVENT));
           break;
         case "turn.dispatch":
           if (frame.threadId) {
