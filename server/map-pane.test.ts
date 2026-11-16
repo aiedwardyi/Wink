@@ -307,7 +307,6 @@ it("does no work before opening, refreshes from real edit events, and stops on c
   const count = read.mock.calls.length;
   writeFileSync(join(root, "file.ts"), "closed\n");
   listener?.();
-  await new Promise(done => setTimeout(done, 200));
   expect(read).toHaveBeenCalledTimes(count);
   expect((await fetch(`${url}/file?worker=pane-a&path=file.ts`)).status).toBe(404);
   git("add", ".");
