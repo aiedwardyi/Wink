@@ -46,6 +46,9 @@ export interface MapPaneDeps {
 export function createMapPane(deps: MapPaneDeps) {
   const fallback = new Map<string, string | null>();
   const readers = new Map<string, Set<Map<string, WatchedPane>>>();
+  // The workers each bot's Map last saw, so a reopen paints before git has read them again.
+  const known = new Map<string, Map<string, WatchedPane>>();
+  const lists = new Map<string, string[]>();
   const flows = createMapFlow(deps.gh);
 
   function live(res: ServerResponse, botId: string) {
@@ -64,6 +67,14 @@ export function createMapPane(deps: MapPaneDeps) {
       resend = error;
       const snapshot: MapSnapshot = { workers: [...panes.values()].map(value => value.worker) };
       if (error) snapshot.error = true;
+      else {
+        known.set(botId, panes);
+        const roots = new Set([...known.values()].flatMap(seen => [...seen.values()].map(record => record.root)));
+        for (const root of lists.keys()) if (!roots.has(root)) lists.delete(root);
+      }
+      write(snapshot);
+    };
+    const write = (snapshot: MapSnapshot) => {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
       if (res.writableLength > 1024 * 1024) res.destroy();
     };
@@ -120,6 +131,8 @@ export function createMapPane(deps: MapPaneDeps) {
           const reason = deps.reason?.(botId, existing.pane, existing.worker.editedAt);
           if (reason !== existing.worker.reason) { existing.worker = { ...existing.worker, reason }; changed = true; }
         }
+        const last = known.get(botId);
+        if (!panes.size && fresh.length && last && fresh.every(pane => last.has(pane.sessionId))) write({ workers: fresh.map(pane => last.get(pane.sessionId)!.worker) });
         // New workers are read together and sent once: sent one by one, Map rebuilt its tree per worker as it opened.
         const records = await Promise.all(fresh.map(async (pane): Promise<WatchedPane> => {
           const key = `${botId}:${pane.sessionId}`;
@@ -173,10 +186,17 @@ export function createMapPane(deps: MapPaneDeps) {
     if (route === "live") return live(res, botId);
     const sessionId = url.searchParams.get("worker") ?? "";
     const path = url.searchParams.get("path") ?? "";
-    const record = [...(readers.get(botId) ?? [])].map(panes => panes.get(sessionId)).find(Boolean);
+    const open = readers.get(botId);
+    // What Map was last sent, not a worker still in its first read: a reopen shows the last snapshot until its own read is done.
+    const record = open && (known.get(botId)?.get(sessionId) ?? [...open].map(panes => panes.get(sessionId)).find(Boolean));
     if (route === "repo") {
       if (!record) return json(res, 404, { error: "No such worker" });
-      try { return json(res, 200, { name: basename(record.root), paths: record.base ? await mapRepoFiles(record.root) : record.root ? await mapWalkFiles(record.root) : [] }); }
+      const { root } = record;
+      const read = (record.base ? mapRepoFiles(root) : root ? mapWalkFiles(root) : Promise.resolve([])).then(paths => { if (record.base) lists.set(root, paths); return paths; });
+      // A Git list drifts mostly by the worker's own edits, which Map adds from the snapshot: the last list paints at once, this read serves the next open.
+      const last = lists.get(root);
+      if (last) { read.catch(() => lists.delete(root)); return json(res, 200, { name: basename(root), paths: last }); }
+      try { return json(res, 200, { name: basename(root), paths: await read }); }
       catch { return json(res, 503, { error: "Could not list the files" }); }
     }
     if (route === "flow") {

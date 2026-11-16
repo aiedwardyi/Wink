@@ -200,6 +200,9 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
     slid.current = repo?.held || held ? to : null;
     if (from !== to) for (let part: Element | null = barRef.current; part; part = part.nextElementSibling) ease(part, [{ transform: `translateY(${from - to}px)` }, { transform: "none" }]);
   });
+  // Git rows ask after the tree and the code: each row runs git and gh, and asked together they held both back by seconds.
+  const [rows, setRows] = useState(false);
+  if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
     if (!base || !loaded || held) return;
@@ -258,7 +261,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId?: s
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapSplit target={topRef} rows />
-      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active} />
+      <MapGitFlow base={base || undefined} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} active={active && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">
