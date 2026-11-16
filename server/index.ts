@@ -6926,11 +6926,13 @@ async function runClaimedGroupMemberTurn(
   // processes, interleaved token spend, and an interrupt that only ever
   // reached one of them.
   const riders = authority ? askRiders(authority) : [];
-  const lead = authority ? askById(authority) : null;
+  // the ask behind this turn: its own, or the one that started the chain it hops on
+  const asked = authority ?? chainAsk;
+  const lead = asked ? askById(asked) : null;
   // keyed on who asked: one teammate without "Can make bots work" makes the whole turn read-only
-  const works = !authority || Boolean(lead && asksWork([lead, ...riders]));
+  const works = !asked || Boolean(lead && asksWork([lead, ...riders]));
   if (!works && instance.adapter.capabilities.readOnlyTurns !== true) {
-    void endAsk(authority!, "failed", `${bot.name} can't take requests from you yet. ${userName} has to turn on "Can make bots work" for you.`);
+    if (authority) void endAsk(authority, "failed", `${bot.name} can't take requests from you yet. ${userName} has to turn on "Can make bots work" for you.`);
     return true;
   }
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
@@ -6938,7 +6940,7 @@ async function runClaimedGroupMemberTurn(
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
-  const owned = group.dm || authority ? [] : ownerChats(bot, notOwnerChats());
+  const owned = group.dm || asked ? [] : ownerChats(bot, notOwnerChats());
   const searchable = instance.adapter.capabilities.agentsMcp === true && hasOwnerChat(store, owned);
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop, searchable, !works);
@@ -7059,14 +7061,14 @@ async function runClaimedGroupMemberTurn(
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
   // A teammate who may make bots work runs under the host's setting for this bot: Auto as set, else read-only.
-  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (authority && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
+  const access: AccessTurn = { approval: bot.autoApprove && works ? "auto" : "ask", ...(lane || (asked && (!bot.autoApprove || !works)) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
     // a teammate's ask, or a chain one started, answers the whole room: the owner's private facts stay out
-    (authority || chainAsk ? "" : aboutYouPrompt()) +
+    (asked ? "" : aboutYouPrompt()) +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7211,7 +7213,7 @@ async function runClaimedGroupMemberTurn(
       if (isCancelled?.()) return false;
       if (spoken.has(chainEdge(bot.id, next.id))) continue;
       spoken.add(chainEdge(bot.id, next.id));
-      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId, undefined, authority ?? chainAsk))) {
+      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId, undefined, asked))) {
         return false;
       }
     }

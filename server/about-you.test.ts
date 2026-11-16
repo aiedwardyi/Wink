@@ -127,17 +127,17 @@ describe("every bot reads About You", () => {
   // a name the scope lacks reads as undefined, so a turn's other parameters need no stubs
   const evaluate = (code: string, scope: Record<string, unknown>): unknown =>
     new Function("scope", `with (scope) { ${code} }`)(new Proxy(scope, { has: () => true, get: (target, key) => (key in target ? target[key as string] : Reflect.get(globalThis, key)) }));
-  const roomSystem = (turn: Record<string, unknown>) => {
-    const statement = inside(fn("runClaimedGroupMemberTurn"), (node): node is ts.VariableStatement => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === "roomSystem"))!;
-    return evaluate(`${js(statement.getText(index))}
-return roomSystem;`, {
+  const declared = (name: string) => inside(fn("runClaimedGroupMemberTurn"), (node): node is ts.VariableStatement => ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) => declaration.name.getText(index) === name));
+  // the ask behind a room turn, where index.ts names one
+  const asked = () => js(declared("asked")?.getText(index) ?? "");
+  const roomSystem = (turn: Record<string, unknown>) =>
+    evaluate(`${asked()}\n${js(declared("roomSystem")!.getText(index))}\nreturn roomSystem;`, {
       system: "", projectFolderPrompt: () => "", cwd: ".", detailedRepliesEnabled: () => false, cfg: {},
       DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", aboutYouPrompt, memorySystemPrompt: () => "",
       memoryNotesEnabled: () => false, bot: { id: "bot", playbooks: [] }, lane: false, renderSkillInstructions: () => "", selectedSkills: [],
       installedPlaybookInstructions: () => "", text: "", harnessPlaybookPrompt: () => "", integrations: {}, accessRules: () => "",
       instance: { adapter: {} }, access: {}, memberTurnSelection: () => ({}), selection: {}, ...turn,
     }) as string;
-  };
 
   it("goes into 1:1 sessions, never a joined room's session, whoever asked there", () => {
     const block = inside(fn("startClaimedTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "tracePart" && node.arguments[1]?.getText(index).includes("aboutYouPrompt") === true)!;
@@ -159,7 +159,7 @@ return roomSystem;`, {
     const hop = inside(fn("runClaimedGroupMemberTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "runGroupMemberTurn" && node.arguments[2]?.getText(index) === "next.id")!;
     const handoff = inside(fn("runGroupMemberTurn"), (node): node is ts.CallExpression => ts.isCallExpression(node) && node.expression.getText(index) === "runClaimedGroupMemberTurn")!;
     // the chain's call, then runGroupMemberTurn's hand-off, name for name
-    const args = evaluate(`return [${hop.arguments.map((arg) => arg.getText(index)).join(", ")}];`, { authority: "ask-from-sora", next: { id: "pixel" }, hop: 0 }) as unknown[];
+    const args = evaluate(`${asked()}\nreturn [${hop.arguments.map((arg) => arg.getText(index)).join(", ")}];`, { authority: "ask-from-sora", next: { id: "pixel" }, hop: 0 }) as unknown[];
     const outer = Object.fromEntries(names(fn("runGroupMemberTurn")).map((name, i) => [name, args[i]]));
     const turn = Object.fromEntries(names(fn("runClaimedGroupMemberTurn")).map((name, i) => [name, outer[handoff.arguments[i]?.getText(index) ?? ""]]));
     addToAboutYou(paste, "2026-11-16");

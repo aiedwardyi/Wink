@@ -89,7 +89,7 @@ it("lists every runGroupMemberTurn caller with its RootStart kind", () => {
     { call: "group.id, threadId, botId", kind: "automatic", root: 'rootForStart(threadId, { kind: "automatic" })' },
     { call: "source.group.id, source.threadId, source.bot.id", kind: "automatic", root: 'rootForStart(source.threadId, { kind: "automatic" })' },
     { call: "room.groupId, threadId, botId", kind: "inherit", root: "room.rootId ?? null", tail: ["room.askId", "room.chainAsk"] },
-    { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "authority ?? chainAsk"] },
+    { call: "groupId, threadId, next.id", kind: "inherit", root: "rootId", tail: ["undefined", "asked"] },
     { call: "groupId, threadId, responder.id", kind: "human", root: "rootId" },
     { call: "current.group.id, entry.threadId, entry.botId", kind: "automatic", root: 'rootForStart(entry.threadId, { kind: "automatic" })' },
     { call: "current.group.id, entry.threadId, entry.botId", kind: "automatic", root: 'rootForStart(entry.threadId, { kind: "automatic" })' },
