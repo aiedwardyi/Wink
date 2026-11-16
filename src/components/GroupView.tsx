@@ -45,6 +45,7 @@ import { detectChatOptions, laterUserAnswer } from "@/lib/chat-options";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { Composer } from "./Composer";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
+import { WakeChips } from "./WakeChips";
 import { roomRecoveryBusy, roomRecoveryPacket } from "@/lib/task-recovery";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReconnectingCue } from "./ReconnectingCue";
@@ -1560,6 +1561,7 @@ export function GroupView({ group: live, hidden = false }: { group: Group; hidde
             />
           )}
           <CallWidgetSlot className="px-3 pb-2 md:hidden" />
+          <WakeChips botIds={group.memberIds} threadId={group.threadId} />
           <Composer
             key={group.threadId}
             group={group}
