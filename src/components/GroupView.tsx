@@ -964,7 +964,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const archive = preview ? null : heldArchive;
   const group = useMemo(() => (archive ? { ...live, threadId: archive.threadId, messages: archive.messages, hasMore: false } : live), [archive, live]);
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, turnOrigin } = useStore();
   const sidebarOnRight = useSidebarSide() === "right";
   const stream = useStreaming();
   const streaming = stream.streaming[group.threadId];
@@ -1157,12 +1157,12 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
   const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
-  const lastUserAt = group.messages.findLast((m) => m.role === "user")?.at;
+  const since = turnOrigin(group.threadId);
   const dock = useMemo<ReplyDock | null>(() => dockSlot ? {
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: noReply ? undefined : lastUserAt,
+    since: noReply ? undefined : since,
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     avatar: (
@@ -1175,7 +1175,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserAt, noReply, presenceSpeaker, group.name, toolInFlight]);
+  } : null, [dockSlot, dockLive, activityLabel, since, noReply, presenceSpeaker, group.name, toolInFlight]);
 
   // the window holding a focus target commits before useFocusMessage scrolls
   const appliedFocus = useRef<number | null>(null);
@@ -1560,7 +1560,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
               instant={responding}
               quiet={noReply?.quiet}
               wrap={Boolean(noReply)}
-              since={noReply ? undefined : lastUserAt}
+              since={noReply ? undefined : since}
             />
           )}
           <div ref={setHeldSlot} className="contents" />
