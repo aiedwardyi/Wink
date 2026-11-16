@@ -40,7 +40,8 @@
 @keyframes map-rise { from { opacity: 0; transform: translateY(5px); } }
 .map-code { min-height: 0; flex: 1; overflow: auto; padding: 10px 0 24px; background: var(--code-bg, var(--color-inset)); font: 12px/1.65 var(--font-mono, monospace); scrollbar-width: thin; transition: opacity var(--motion-moderate) var(--ease-standard); }
 .map-code[aria-busy="true"]:not(:has(> .map-empty)) { opacity: .5; }
-.map-code-row { display: grid; grid-template-columns: 38px 18px minmax(0, 1fr); padding-right: 14px; }
+/* a 5,000-line file re-lays out only the rows in view as its colors land */
+.map-code-row { display: grid; grid-template-columns: 38px 18px minmax(0, 1fr); padding-right: 14px; content-visibility: auto; contain-intrinsic-size: auto 1.65em; }
 .map-code-row u { text-align: right; text-decoration: none; color: var(--color-ink-secondary); opacity: .6; user-select: none; font-variant-numeric: tabular-nums; }
 .map-code-row b { text-align: center; font-weight: 500; user-select: none; }
 .map-code-row code { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-syntax-fg, var(--color-ink)); }
