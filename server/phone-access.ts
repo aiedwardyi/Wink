@@ -516,10 +516,13 @@ export class PhoneAccess {
   }
 
   /** Trades `invite` for a ticket. The failure reason, or null once enrolled. */
-  private async enroll(invite: string): Promise<EnrollError | null> {
+  /** `base` enrolls at a relay other than the saved one, before anything is saved. */
+  private async enroll(invite: string, base?: string): Promise<EnrollError | null> {
     try {
       this.client ??= await (this.options.loadClient ?? loadRelayClient)();
-      await (this.options.enroll ?? this.client.enroll)({ dataDir: this.options.dataDir, config: this.options.config() ?? {}, invite });
+      const saved = this.options.config() ?? {};
+      const config = base ? { ...saved, base, enabled: true } : saved;
+      await (this.options.enroll ?? this.client.enroll)({ dataDir: this.options.dataDir, config, invite });
       return null;
     } catch (cause) {
       const reason = safeRelayError(cause instanceof Error ? cause.message : String(cause)) ?? "enrollment failed";
@@ -589,7 +592,12 @@ export class PhoneAccess {
       if (!code.ok) return reply(400, { error: SETUP_ERROR[code.reason] });
       const current = this.describe().base;
       if (current && current !== code.value.base && (await this.holdsTicket())) {
-        return reply(409, { error: `this PC already uses the relay at ${current}` });
+        // A move: the new relay takes this PC first, so a refused code leaves the working setup alone.
+        const refused = await this.enroll(code.value.invite, code.value.base);
+        if (refused) return reply(400, { error: refused });
+        this.options.saveSetup(code.value.base);
+        await this.restart();
+        return reply(200, this.describe());
       }
       this.options.saveSetup(code.value.base);
       // A failed enroll keeps the saved base, so Settings asks for a new code.
