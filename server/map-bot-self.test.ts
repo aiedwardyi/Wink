@@ -40,11 +40,12 @@ const edited = (writes: string[], ok = true): Message => ({
   tool: completedTool({ name: "Edit" }, { eventId: `e${id}`, provider: "claude", threadId: "thread", createdAt: new Date().toISOString(), type: "item.completed", itemType: "tool", ok, writes }),
 });
 
-async function open(messages: Message[], cwd?: string) {
+async function open(messages: Message[], cwd?: string, task?: { cwd?: string | null }) {
   const listeners: ((change: StoreChange) => void)[] = [];
-  // SAFETY: the worker map reads only these three store members.
+  // SAFETY: the worker map reads only these four store members.
   const store = {
     bot: () => ({ id: "bot", name: "Teacher", threadId: "thread", cwd }),
+    taskByThread: () => task,
     messagesFor: () => messages,
     onChange: (listener: (change: StoreChange) => void) => { listeners.push(listener); return () => {}; },
   } as unknown as Store;
@@ -149,6 +150,32 @@ it("keeps an unpushed commit on the trunk and drops the row when the push lands,
   const committed = await map.until(() => true);
   expect(committed.workers.map(worker => worker.files.map(file => file.path))).toEqual([["file.ts"]]);
   git("update-ref", "refs/remotes/origin/main", "HEAD");
+  await map.until(data => data.workers.length === 0);
+  map.close();
+});
+
+it("reads relative writes in the task's pinned folder, not a bot folder set since", async () => {
+  const { root } = repo();
+  const moved = mkdtempSync(join(tmpdir(), "wink-map-moved-"));
+  roots.push(moved);
+  writeFileSync(join(root, "file.ts"), "const pinned = 2;\n");
+  const map = await open([edited(["file.ts"])], moved, { cwd: root });
+  const shown = await map.until(data => data.workers.length > 0);
+  map.close();
+  expect(shown.workers[0].files.map(file => file.path)).toEqual(["file.ts"]);
+});
+
+it("drops a linked worktree's row when its branch is merged from the main checkout", async () => {
+  const { git } = repo();
+  const tree = join(mkdtempSync(join(tmpdir(), "wink-map-tree-")), "work");
+  roots.push(join(tree, ".."));
+  git("worktree", "add", "-q", "-b", "work", tree);
+  writeFileSync(join(tree, "file.ts"), "const branch = 2;\n");
+  const map = await open([edited([join(tree, "file.ts")])]);
+  await map.until(data => data.workers[0]?.files.length === 1);
+  execFileSync("git", ["-C", tree, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "branch work"], { windowsHide: true });
+  await map.until(data => data.workers.length === 1);
+  git("merge", "-q", "--ff-only", "work");
   await map.until(data => data.workers.length === 0);
   map.close();
 });

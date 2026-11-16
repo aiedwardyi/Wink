@@ -13,7 +13,6 @@ export function completedTool(
     ...(summary ? { summary } : {}),
     ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
     ...(event.detail ? { detail: event.detail } : {}),
-    // Map reads the bot's own edits from here: its row is the folders these files sit in.
     ...(event.ok && event.writes?.length ? { writes: event.writes } : {}),
   };
   if (existing?.verb) tool.verb = existing.verb;

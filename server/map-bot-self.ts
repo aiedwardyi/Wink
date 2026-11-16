@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isNetworkPath } from "./bot-cwd.ts";
 import type { MapPaneRecord } from "./map-pane.ts";
-import type { BotRecord, Message } from "./store.ts";
+import type { Message } from "./store.ts";
 
 const ROWS = 4;
 
 /** The git folders the bot's own turns wrote files in, newest first, as Map rows labeled with the bot's name. */
-export function mapBotSelf(messages: readonly Message[], bot: Pick<BotRecord, "name" | "cwd" | "lastProjectCwd">): MapPaneRecord[] {
+export function mapBotSelf(messages: readonly Message[], name: string, home: string | null | undefined): MapPaneRecord[] {
   const folders = new Map<string, Set<string>>();
   const seen = new Map<string, string | null>();
   const rootOf = (start: string) => {
@@ -25,7 +25,6 @@ export function mapBotSelf(messages: readonly Message[], bot: Pick<BotRecord, "n
     for (const dir of walked) seen.set(dir, root);
     return root;
   };
-  const home = bot.cwd ?? bot.lastProjectCwd;
   for (let i = messages.length - 1; i >= 0; i--) {
     const writes = messages[i].kind === "activity" ? messages[i].tool?.writes : undefined;
     for (const path of writes ?? []) {
@@ -38,6 +37,18 @@ export function mapBotSelf(messages: readonly Message[], bot: Pick<BotRecord, "n
     }
   }
   return [...folders].map(([root, files]) => ({
-    sessionId: `self-${createHash("sha256").update(root).digest("hex").slice(0, 12)}`, cwd: root, label: bot.name, self: [...files],
+    sessionId: `self-${createHash("sha256").update(root).digest("hex").slice(0, 12)}`, cwd: root, label: name, self: [...files],
   }));
+}
+
+/** A linked worktree keeps its refs in the main repo's .git, outside its folder. */
+export function mapGitRefs(root: string): { dir: string; match: (path: string) => boolean } | null {
+  try {
+    const link = /^gitdir:\s*(.+)$/m.exec(readFileSync(join(root, ".git"), "utf8"))?.[1].trim();
+    if (!link) return null;
+    const own = resolve(root, link);
+    const common = resolve(own, readFileSync(join(own, "commondir"), "utf8").trim());
+    const head = relative(common, join(own, "HEAD")).replaceAll("\\", "/");
+    return { dir: common, match: path => path === head || /^(packed-refs|refs\/)/.test(path) };
+  } catch { return null; }
 }

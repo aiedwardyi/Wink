@@ -10,7 +10,7 @@ import { parsePaneNote } from "../shared/pane-note.ts";
 import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
-import { mapBotSelf } from "./map-bot-self.ts";
+import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -33,6 +33,7 @@ interface WatchedPane {
   fork?: string;
   worker: MapWorker;
   watcher?: FSWatcher;
+  refs?: FSWatcher;
   timer?: NodeJS.Timeout;
   running: boolean;
   dirty: boolean;
@@ -127,7 +128,7 @@ export function createMapPane(deps: MapPaneDeps) {
       clearTimeout(record.timer);
       record.timer = setTimeout(() => { record.timer = undefined; void refresh(record); }, 65);
     };
-    const remove = (record: WatchedPane) => { record.watcher?.close(); clearTimeout(record.timer); };
+    const remove = (record: WatchedPane) => { record.watcher?.close(); record.refs?.close(); clearTimeout(record.timer); };
     const fail = (record: WatchedPane) => {
       remove(record);
       record.watcher = undefined;
@@ -184,6 +185,11 @@ export function createMapPane(deps: MapPaneDeps) {
               schedule(record, path);
             });
             record.watcher.on("error", () => { fail(record); send(); });
+            const refs = record.pane.self ? mapGitRefs(record.root) : null;
+            if (refs) {
+              record.refs = watch(refs.dir, { recursive: true }, (_event, name) => { if (name && refs.match(name.toString().replaceAll("\\", "/"))) schedule(record); });
+              record.refs.on("error", () => { fail(record); send(); });
+            }
           } catch { fail(record); }
         }
         await Promise.all(records.filter(record => record.base).map(record => refresh(record, true)));
@@ -243,7 +249,9 @@ export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess
   return createMapPane({
     panes: async botId => {
       const bot = store.bot(botId);
-      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot) : [];
+      const task = bot && store.taskByThread(bot.id, bot.threadId);
+      // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
+      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
       const bridge = access();
       if (!bridge) return self;
       const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
