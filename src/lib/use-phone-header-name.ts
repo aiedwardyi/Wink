@@ -59,13 +59,14 @@ export function usePhoneHeaderNameFloor(
   nameRef: { current: HTMLButtonElement | null },
   name: string,
   menuOnRight: boolean,
+  enabled = true,
 ) {
   const skin = useSkin();
   useLayoutEffect(() => {
     const cluster = clusterRef.current;
     const button = nameRef.current;
     const header = cluster?.parentElement;
-    if (!cluster || !button || !header) return;
+    if (!enabled || !cluster || !button || !header) return;
     let alive = true;
     let text = 0;
     let rem = 16;
@@ -294,5 +295,5 @@ export function usePhoneHeaderNameFloor(
       header.style.paddingRight = "";
       clearChip();
     };
-  }, [clusterRef, nameRef, name, skin, menuOnRight]);
+  }, [clusterRef, nameRef, name, skin, menuOnRight, enabled]);
 }

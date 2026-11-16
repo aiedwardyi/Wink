@@ -975,7 +975,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const phoneClusterRef = useRef<HTMLDivElement>(null);
   const phoneNameRef = useRef<HTMLButtonElement>(null);
-  usePhoneHeaderNameFloor(phoneClusterRef, phoneNameRef, bot.name, sidebarOnRight);
+  usePhoneHeaderNameFloor(phoneClusterRef, phoneNameRef, bot.name, sidebarOnRight, !preview);
   const composerDock = useComposerDockPad(composerDockRef);
   const focusComposer = useCallback(() => {
     focusComposerOnActivation({ composer: composerInputRef.current });

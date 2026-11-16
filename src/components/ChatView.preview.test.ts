@@ -82,7 +82,7 @@ afterEach(async () => {
 });
 
 describe("cached chat preview", () => {
-  it.each(["loaded", "loading"] as const)("measures the header once with %s fonts and repeats only for a pending font load", async (status) => {
+  it.each(["loaded", "loading"] as const)("measures the header once on promotion with %s fonts and repeats only for a pending font load", async (status) => {
     const descriptor = Object.getOwnPropertyDescriptor(document, "fonts");
     const loaded = new Set<() => void>();
     const fonts = {
@@ -96,7 +96,11 @@ describe("cached chat preview", () => {
     const appended = vi.spyOn(document.body, "appendChild");
     const copies = () => appended.mock.calls.filter(([node]) => node instanceof HTMLElement && node.style.left === "-9999px").length;
     try {
-      await render(true);
+      const bot = { ...neighbor, id: "header", threadId: "thread-header", messages: [], hasMore: false, pinnedMessageId: undefined };
+      await render(true, bot);
+      await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+      expect(measure).not.toHaveBeenCalled();
+      await render(false, bot);
       await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
       expect(measure).toHaveBeenCalledTimes(1);
       expect(copies()).toBe(0);
