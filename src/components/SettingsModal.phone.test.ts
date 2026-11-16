@@ -101,7 +101,7 @@ describe("phone Settings navigation", () => {
     expect(pane.querySelector("#settings-profile-name")).not.toBeNull();
     expect(pane.querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     // the Activity card holds its place while its numbers load
-    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, true]);
+    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, false, true]);
     expect(pane.textContent).not.toContain("Sync");
   });
 

@@ -321,6 +321,7 @@ import {
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
+import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -5921,6 +5922,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           DEFAULT_RULES +
           accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
+          tracePart("memory", aboutYouPrompt()) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
           tracePart("playbook", packagePlaybooks) +
@@ -6984,6 +6986,7 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     DEFAULT_RULES +
+    aboutYouPrompt().trimEnd() +
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -8702,6 +8705,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
+    if (path === "/api/about-you" && method === "GET") return aboutYouRoutes.get(res);
+    if (path === "/api/about-you" && method === "POST") return await aboutYouRoutes.add(req, res);
+    m = path.match(/^\/api\/about-you\/sources\/([^/]+)$/);
+    if (m && method === "DELETE") return aboutYouRoutes.remove(res, decodeURIComponent(m[1]));
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
     // workspace); these routes only make them visible without a trip to

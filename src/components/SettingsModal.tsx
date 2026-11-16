@@ -45,6 +45,7 @@ import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
 import { ActivityCard } from "./ActivityCard";
+import { AboutYouCard } from "./AboutYouCard";
 import { RoomFilesFolderRow } from "./RoomFilesFolderRow";
 import { trackSetting } from "@/lib/usage-stats";
 
@@ -628,6 +629,7 @@ export function SettingsModal({
                     )}
                   </div>
                 </Card>
+                <AboutYouCard />
                 <ActivityCard waved={activityWaved} />
               </>
             )}
