@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { encodeFrame, signAccountTicket, verifyAccountTicket, verifyTicket } from "../../shared/relay-protocol.ts";
+import { parseOptions } from "../deploy/cli.ts";
+import { realLocal } from "../deploy/exec.ts";
 import { loadConfig } from "../src/config.ts";
 import type { RelayLimits } from "../src/limits.ts";
 import { makePc, openControl, startRelay, type Harness, type Pc } from "./fixtures.ts";
@@ -256,6 +258,39 @@ describe("POST /v1/enroll/google", () => {
     expect(await enroll(second, makePc(), token(s, "restart-third"))).toMatchObject({ status: 503, body: { error: "full" } });
     expect(await enroll(second, makePc(), token(s, "restart-sub"))).toMatchObject({ status: 503, body: { error: "full" } });
     expect((await enroll(second, pc, token(s, "restart-sub"))).status).toBe(200);
+  });
+
+  it("admits a launch week of new pcs on the config a default deploy writes, abuse caps kept", async () => {
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
+    const argv = ["provision", "--project", "wink-new-proj", "--base", "wink.example.com", "--dns-zone", "example.com"];
+    const google = ["--google-desktop-client-id", DESKTOP, "--google-web-client-id", WEB, "--google-signin-origin", ORIGIN];
+    await realLocal("/r", dir).writeConfig(parseOptions([...argv, ...google]).opts);
+    const config = await loadConfig(join(dir, "wink-relay.config.json"));
+    const s = setup();
+    const h = await startRelay({ google: { ...config.google!, keys: s.issuer }, now: s.clock.now, limits: config.limits });
+    harnesses.push(h);
+    for (let i = 0; i < 120; i++) {
+      // Every request here comes from one address, so its cap of 5 an hour paces the loop.
+      if (i > 0 && i % 5 === 0) s.clock.advance(3_600_000);
+      expect((await enroll(h, makePc(), token(s, `launch-sub-${i}`))).status).toBe(200);
+    }
+    expect(await enroll(h, makePc(), token(s, "launch-sub-late"))).toMatchObject({ status: 429, body: { error: "rate-limited" } });
+    s.clock.advance(3_600_000);
+    expect((await enroll(h, makePc(), token(s, "launch-sub-119"))).status).toBe(200);
+    expect(await enroll(h, makePc(), token(s, "launch-sub-119"))).toMatchObject({ status: 403, body: { error: "account-full" } });
+  });
+
+  it("holds a request for a spot about to free, one at a time, and not past the wait", async () => {
+    const s = setup({ googleEnrollPerWeek: 1, googleEnrollWaitMs: 2_000, googleEnrollMaxWaiting: 1 });
+    const h = await relay(s);
+    expect((await enroll(h, makePc(), token(s, "hold-sub-0"))).status).toBe(200);
+    s.clock.advance(7 * DAY - 300);
+    const pair = [enroll(h, makePc(), token(s, "hold-sub-1")), enroll(h, makePc(), token(s, "hold-sub-2"))];
+    expect(await Promise.race(pair)).toMatchObject({ status: 503, body: { error: "full", retryAfter: 1 } });
+    s.clock.advance(300);
+    expect((await Promise.all(pair)).map((r) => r.status).sort()).toEqual([200, 503]);
+    s.clock.advance(7 * DAY - 300);
+    expect(await enroll(h, makePc(), token(s, "hold-sub-3"))).toMatchObject({ status: 503, body: { error: "full", retryAfter: 1 } });
   });
 
   it("never logs the sub, the email or the token", async () => {

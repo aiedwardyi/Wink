@@ -6,6 +6,7 @@
 import { sign, verify, type KeyObject } from "node:crypto";
 import { mkdir, open, rename } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import {
@@ -43,7 +44,8 @@ export const googleEnrollRequestSchema = z.strictObject({
 
 export type GoogleEnrollRequest = z.infer<typeof googleEnrollRequestSchema>;
 
-type Denied = { ok: false; status: number; error: string; retryAfter?: number };
+/** `waitMs` is set when the relay-wide week is full: the exact time until a spot frees. */
+type Denied = { ok: false; status: number; error: string; retryAfter?: number; waitMs?: number };
 
 export type GoogleEnrollResult = { ok: true; label: string; fresh: boolean; ticket: string; account: string } | Denied;
 
@@ -112,10 +114,11 @@ export class GoogleEnrollJournal {
     if (mine.length >= limits.googleEnrollPerAccount) return { ok: false, status: 403, error: "account-full" };
     const today = mine.filter((at) => at > now - DAY_MS);
     if (today.length >= limits.googleEnrollPerAccountPerDay) {
-      return { ok: false, status: 403, error: "account-full", retryAfter: retryAfter(today, limits.googleEnrollPerAccountPerDay, DAY_MS, now) };
+      return { ok: false, status: 403, error: "account-full", retryAfter: seconds(freesIn(today, limits.googleEnrollPerAccountPerDay, DAY_MS, now)) };
     }
     if (week.length >= limits.googleEnrollPerWeek) {
-      return { ok: false, status: 503, error: "full", retryAfter: retryAfter(week, limits.googleEnrollPerWeek, WEEK_MS, now) };
+      const waitMs = freesIn(week, limits.googleEnrollPerWeek, WEEK_MS, now);
+      return { ok: false, status: 503, error: "full", retryAfter: seconds(waitMs), waitMs };
     }
     this.byLabel.set(label, { subHash, at: now });
     const durable = this.append(`${label} ${subHash} ${now}\n`);
@@ -156,10 +159,14 @@ export class GoogleEnrollJournal {
   }
 }
 
-/** Seconds until enough entries leave the window to free one spot under `cap`. */
-function retryAfter(ats: number[], cap: number, windowMs: number, now: number): number {
+/** Ms until enough entries leave the window to free one spot under `cap`. */
+function freesIn(ats: number[], cap: number, windowMs: number, now: number): number {
   ats.sort((a, b) => a - b);
-  return Math.max(1, Math.ceil((ats[Math.max(0, ats.length - cap)] + windowMs - now) / 1000));
+  return ats[Math.max(0, ats.length - cap)] + windowMs - now;
+}
+
+function seconds(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1000));
 }
 
 export interface GoogleEnrollerOptions {
@@ -174,14 +181,36 @@ export interface GoogleEnrollerOptions {
 
 export class GoogleEnroller {
   private readonly opts: GoogleEnrollerOptions;
+  private waiting = 0;
 
   constructor(opts: GoogleEnrollerOptions) {
     this.opts = opts;
   }
 
+  /** Claims a spot, holding the request while the week is full and a spot frees within googleEnrollWaitMs. */
+  private async claim(label: string, subHash: string): Promise<Claim> {
+    const { journal, limits } = this.opts;
+    const now = this.opts.now ?? Date.now;
+    // The hold sleeps on real timers, so real time bounds it whatever clock `now` is.
+    const giveUp = Date.now() + limits.googleEnrollWaitMs;
+    for (;;) {
+      const claim = journal.claim(label, subHash, now(), limits);
+      if (claim.ok || claim.waitMs === undefined) return claim;
+      // Negated so a NaN wait (a cap of 0) is refused too.
+      if (!(Date.now() + claim.waitMs <= giveUp) || this.waiting >= limits.googleEnrollMaxWaiting) return claim;
+      this.waiting++;
+      try {
+        await sleep(claim.waitMs);
+      } finally {
+        this.waiting--;
+      }
+    }
+  }
+
   /** Callers parse the body with googleEnrollRequestSchema first (BAD_GOOGLE_ENROLL when it fails). */
   async enroll(req: GoogleEnrollRequest): Promise<GoogleEnrollResult> {
-    const now = (this.opts.now ?? Date.now)();
+    const clock = this.opts.now ?? Date.now;
+    let now = clock();
     const publicKey = publicKeyFromRaw(req.pk);
     if (!publicKey) return fail(400, "bad-key");
     const sigBytes = Buffer.from(req.sig, "base64url");
@@ -197,9 +226,10 @@ export class GoogleEnroller {
     if (!claims.token.emailVerified) return fail(403, "bad-token");
     const subHash = googleSubHash(claims.token.sub);
 
-    const claim = this.opts.journal.claim(label, subHash, now, this.opts.limits);
-    if (!claim.ok) return claim;
+    const claim = await this.claim(label, subHash);
+    if (!claim.ok) return { ok: false, status: claim.status, error: claim.error, retryAfter: claim.retryAfter };
 
+    now = clock();
     const iat = Math.floor(now / 1000);
     const exp = iat + (this.opts.ticketTtlSec ?? TICKET_TTL_SEC);
     const ticket = signTicket({ label, pk: raw.toString("base64url"), iat, exp }, this.opts.operatorPrivateKey);

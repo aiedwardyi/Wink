@@ -15,8 +15,11 @@ export interface RelayLimits {
   /** Control channel auth attempts per source IP. */
   controlAuthPerIpPerMin: number;
   enrollPerIpPerHour: number;
-  /** POST /v1/enroll/google: new labels per rolling 7 days, relay-wide. Each one costs a certificate. */
+  /** POST /v1/enroll/google: new labels per rolling 7 days, relay-wide. Each one costs a certificate, so a deploy sizes it to its CAs. */
   googleEnrollPerWeek: number;
+  /** A full week holds a request this long for a spot about to free, this many requests at once. Keep it under the API's 5 s idle timeout. */
+  googleEnrollWaitMs: number;
+  googleEnrollMaxWaiting: number;
   /** New labels per Google account, ever and per rolling day. */
   googleEnrollPerAccount: number;
   googleEnrollPerAccountPerDay: number;
@@ -70,7 +73,10 @@ export const DEFAULT_LIMITS: Readonly<RelayLimits> = Object.freeze({
   connPerIpBurst: 60,
   controlAuthPerIpPerMin: 6,
   enrollPerIpPerHour: 5,
+  // Let's Encrypt alone: 50 certificates a week per registered domain, renewals included.
   googleEnrollPerWeek: 35,
+  googleEnrollWaitMs: 3_000,
+  googleEnrollMaxWaiting: 64,
   googleEnrollPerAccount: 5,
   googleEnrollPerAccountPerDay: 2,
   accountPerIpPerHour: 30,
