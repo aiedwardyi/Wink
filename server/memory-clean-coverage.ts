@@ -37,7 +37,9 @@ export async function organizeCandidate(input: {
       return { file: packet.file, lines: packet.ids.map((id) => ({ id, text: lines[id - 1] })) };
     }))}`,
     `Current: ${JSON.stringify(input.sources.map((source) => {
-      const changed = new Set(input.entries.filter((entry) => entry.header.file === source.file).flatMap((entry) => [...entry.lines, ...entry.header.wrote]));
+      // a replace's newer line stays; left out, the judge reads the current value as deleted
+      const changed = new Set([...input.entries.filter((entry) => entry.header.file === source.file).flatMap((entry) => [...entry.lines, ...entry.header.wrote]),
+        ...checks.flatMap((check) => check.file === source.file && check.newer !== undefined ? [check.newer] : [])]);
       const text = input.after.get(source.file)!;
       return { file: source.file, retained: [...new Set(text.split("\n").filter((line) => changed.has(line)))], sourceHash: hashText(source.text), candidateHash: hashText(text) };
     }))}`,

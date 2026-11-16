@@ -81,6 +81,20 @@ describe("memory cleanup latent walls", () => {
     expect(quiz).not.toContain(pair[0]);
   });
 
+  it("shows the judge the line a replace keeps as retained, grill light n1", async () => {
+    const pair = ["- Studio at Guri: entry number 1014 (noted 2026-11-05)", "- Studio at Guri: entry number 6825 (noted 2026-11-07)"];
+    const engines = sleepEngines((prompt) => prompt.includes(`151| ${pair[0]}`) ? [{ op: "replace", id: 151, newer: 152, reason: "Entry number changed" }] : []);
+    let judged = "";
+    const recall = async (prompt: string) => {
+      if (prompt.startsWith("[memory-clean:organize]")) judged = prompt;
+      return engines.recall(prompt);
+    };
+    const result = await night(`${clauses(150)}${pair.join("\n")}\n`, { ...engines, recall });
+    expect(result).toMatchObject({ ok: true });
+    const current = JSON.parse(/^Current: (.*)$/m.exec(judged)![1]!) as Array<{ file: string; retained: string[] }>;
+    expect(current.find((item) => item.file === "MEMORY.md")!.retained).toContain(pair[1]);
+  });
+
   it("writes a remember over 300 bytes as bullets of at most 300 bytes", async () => {
     const long = remember(1, ` Then ${word(7)} sails at dawn to the ${word(8)} reef for ${word(9)} nets.`.repeat(4));
     expect(Buffer.byteLength(long.text)).toBeGreaterThan(300);
