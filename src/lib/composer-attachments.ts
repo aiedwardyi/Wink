@@ -82,7 +82,8 @@ export function imageSupportForTargets(
   instances: readonly { instanceId: string; capabilities?: { images?: boolean } }[],
   targets: readonly { modelSelection: { instanceId: string } }[],
 ): ImageSupport {
-  if (!targets.length) return "unsupported";
+  // no bot answers, so no engine reads the picture
+  if (!targets.length) return "supported";
   let unknown = false;
   for (const target of targets) {
     const instance = instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId);
