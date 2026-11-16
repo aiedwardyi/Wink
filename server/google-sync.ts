@@ -164,8 +164,9 @@ export function createGoogleSync(options: Options) {
   let fullStrikes = 0;
   let uploadAt = 0;
   let running: Promise<void> | null = null;
-  // A kick that lands mid-pass may have written after that pass looked, so one more pass follows it.
+  // A kick that lands mid-pass may have written after that pass looked, so one more pass follows it, after any rate-limit wait.
   let again = false;
+  let rateLimited = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let soon = false;
   let stopped = false;
@@ -439,6 +440,7 @@ export function createGoogleSync(options: Options) {
     const maintenance = summary.kindRescan && summary.failed.length === 0 && !retry.success;
     catching = (!maintenance && moved > 0) || summary.failed.length > 0 || retry.success || republishing;
     if (!catching) total = 0;
+    rateLimited = retry.success;
     if (retry.success) return retry.data.retryAfterMs;
     return !maintenance && moved > 0 ? 0 : republishing ? REPUBLISH_MS : passMs;
   }
@@ -461,6 +463,7 @@ export function createGoogleSync(options: Options) {
     soon = false;
     running = (async () => {
       let delay = passMs;
+      rateLimited = false;
       try {
         delay = await pass(bound, quiet);
       } catch (error) {
@@ -468,7 +471,7 @@ export function createGoogleSync(options: Options) {
         log(`[google-sync] pass failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       running = null;
-      schedule(again ? 0 : delay);
+      schedule(again && !rateLimited ? 0 : delay);
       again = false;
     })();
     return running;

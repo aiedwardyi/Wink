@@ -189,6 +189,27 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
       schedule.mockRestore();
     }
   });
+  it("keeps a rate-limit wait when a kick lands mid-pass", async () => {
+    const home = makePC("home");
+    await startOn(home);
+    await settle(home);
+    const drive = driveA();
+    const fetch = drive.fetch;
+    const requests = vi.spyOn(drive, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return url.pathname === `/drive/v3/files/${drive.root().id}` ? Promise.resolve(new Response(null, { status: 429 })) : fetch(input, init);
+    });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const pass = home.sync.kick();
+      void home.sync.kick();
+      await pass;
+      expect(schedule.mock.calls.at(-1)?.[1]).toBe(1_000);
+    } finally {
+      requests.mockRestore();
+      schedule.mockRestore();
+    }
+  });
   it.each([{ ext: "notes", changes: { memoryNotes: false } }, { ext: "style", changes: { mascotStyle: "icon-36" } }])("counts a PC whose only published change is $ext", async ({ ext, changes }) => {
     const home = makePC("home", { bots: [bot("Counsel")] });
     await startOn(home);
@@ -446,7 +467,7 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
       await pass;
       await home.sync.idle();
       expect(driveFiles(driveA()).find((file) => file.path === head)?.bytes).toBe(reply);
-      // The held pass, one queued pass for all ten kicks, and the follow-up any uploading pass already runs.
+      // Pass 1 is the held one, pass 2 runs once for all ten kicks and uploads the reply, pass 3 follows any pass that moved files.
       expect(passes).toBe(3);
       expect(timers.mock.calls.at(-1)?.[1]).toBe(30_000);
     } finally {

@@ -2155,7 +2155,7 @@ function scheduleThreadUpload(threadId: string): void {
   threadSyncTimers.set(threadId, timer);
 }
 
-/** One Drive pass carries a settled reply and the memory its settle just wrote. */
+/** Kicks a Drive pass now for a settled reply and the memory its settle just wrote. */
 function publishSettledTurn(threadId: string): void {
   void Promise.resolve(threadSyncGate.enabled ? threadSyncV2?.settle(threadId) : undefined).then(() => googleSync.kick());
 }
