@@ -68,7 +68,7 @@ export function createReplayPacer({ sliceMs = SLICE_MS, clock = () => performanc
 export function keptNoteText({ running = [], finished = [], unreachable = [] }) {
   const lines = [];
   if (running.length) lines.push(`KEPT RUNNING: ${running.map((run) => `${paneName(run)} (${run.engine ?? "script"}) still ${run.engine ? "working" : "running"}`).join("; ")}.`);
-  if (finished.length) lines.push(`FINISHED WHILE WINK WAS DOWN: ${finished.map(({ run, reported, exitCode }) => `${paneName(run)} ${reported ? "reported (report above)" : `${exitCode === null ? "command ended" : `exit ${exitCode}`}, no report: read it, then close it`}`).join("; ")}.`);
+  if (finished.length) lines.push(`FINISHED WHILE WINK WAS DOWN: ${finished.map(({ run, reported, exitCode, gone }) => `${paneName(run)} ${reported ? "reported (report above)" : `${exitCode === null ? "command ended" : `exit ${exitCode}`}, no report: ${gone ? "its pane closed with the worker host" : "read it, then close it"}`}`).join("; ")}.`);
   if (unreachable.length) lines.push(`WORKERS UNAVAILABLE: Wink cannot reach its background worker host, so it cannot tell whether these panes still run: ${unreachable.map(paneName).join("; ")}. It does not restart them, and checks again every ${RETRY_MS / 1000} s.`);
   return lines.join("\n");
 }
@@ -154,10 +154,17 @@ export async function adoptWorkers({ client, runs, host, mailbox = async () => n
       continue;
     }
     if (!panes) return report();
+    // A host that went after its last pane ended saved each exit; read before a new host takes the slot.
+    const ended = left === "none" ? client.ended() : new Map();
     if (left === "none") void client.prewarm();
     await adopt(panes);
     // What no host holds any more takes the restart path, or is over if its run had ended.
     for (const run of records.values()) {
+      if (ended.has(run.id)) {
+        group(run).finished.push({ run, reported: run.state === "reported", exitCode: ended.get(run.id), gone: true });
+        runs.closed(run.id);
+        continue;
+      }
       runs.released(run.id);
       if (run.state !== "running") runs.closed(run.id);
     }

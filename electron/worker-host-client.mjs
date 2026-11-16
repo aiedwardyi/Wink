@@ -3,7 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { terminalEnvironment } from "./terminal-host.mjs";
-import { holdWorkerHostLock, workerHostLock } from "./worker-host-identity.mjs";
+import { holdWorkerHostLock, workerHostLock, workerHostRecord } from "./worker-host-identity.mjs";
 import { WORKER_HOST_PROTOCOL, sameProof, textChunks, workerHostPeer, workerHostProof } from "./worker-host-protocol.mjs";
 import { launchWorkerHost } from "./worker-host-runtime.mjs";
 
@@ -315,6 +315,11 @@ export function createWorkerHostClient({ root, runtimeRoot = path.join(root, "ru
       // Only a missing folder means nothing was left; one that cannot be listed may still hold a live host.
       try { names = fs.readdirSync(root); } catch (error) { return error.code === "ENOENT" ? "none" : "unknown"; }
       return names.some((name) => /^v\d+$/.test(name) && name !== path.basename(slot) && alive(name) === "alive") ? "unknown" : "none";
+    },
+    /** Exit codes the last host of this slot saved for panes that ended before it went; read it while `left()` says "none". */
+    ended() {
+      const saved = workerHostRecord(path.join(slot, "panes.json"));
+      return new Map((Array.isArray(saved?.panes) ? saved.panes : []).filter((pane) => Number.isInteger(pane?.exit)).map((pane) => [pane.id, pane.exit]));
     },
     panes: () => peer ? peer.request("list") : Promise.resolve([]),
     /** Ends a kept pane nobody will take back: stops it if it still runs, then has the host forget it. */
