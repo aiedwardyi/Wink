@@ -794,12 +794,13 @@ it("says how many new files a capped worker left out", async () => {
 });
 
 const posts: string[][] = [];
+let dropDone = false;
 class Tokenizer {
   onmessage?: (event: { data: object }) => void;
   postMessage(data: { id: number; stop?: boolean; path: string; theme: string; code: string[]; removed: boolean[] }) {
     if (data.stop) return;
     posts.push(data.code);
-    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => this.onmessage?.({ data: { id: data.id, done } }));
+    void tokenize(data.path, data.theme, data.code, data.removed, (from, tokens) => this.onmessage?.({ data: { id: data.id, from, tokens } })).then(done => dropDone || this.onmessage?.({ data: { id: data.id, done } }));
   }
   terminate() {}
 }
@@ -857,6 +858,20 @@ it("draws an already colored file at once from the cache without tokenizing it a
   await openSource("src/again.ts");
   expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
   expect(posts.length).toBe(sent);
+});
+
+it("keeps a file colored by its last slice even when it closes before the worker says done", async () => {
+  dropDone = true;
+  try {
+    await openSource("src/closed.ts");
+    await until(() => colors()["const"] !== undefined);
+    const sent = posts.length;
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await openSource("src/closed.ts");
+    expect(colors()).toMatchObject({ const: "#569CD6", '"two"': "#CE9178" });
+    expect(posts.length).toBe(sent);
+  } finally { dropDone = false; }
 });
 
 it("colors a removed line inside an unchanged comment as a comment", async () => {

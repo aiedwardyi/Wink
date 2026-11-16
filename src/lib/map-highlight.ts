@@ -63,18 +63,18 @@ export function useMapTokens(path: string | null | undefined, diff: MapDiff | un
     if (!thread) return;
     const id = ++asked;
     const got: MapToken[][] = [];
-    replies.set(id, ({ from = 0, tokens: slice, done: whole }) => {
-      if (!slice) {
-        replies.delete(id);
-        if (!whole) return;
-        if (done.size >= CACHE_MAX) done.delete(done.keys().next().value!);
-        return void done.set(key, got);
-      }
+    replies.set(id, ({ from = 0, tokens: slice }) => {
+      if (!slice) return void replies.delete(id);
       got.push(...slice);
       slice.forEach((line, i) => {
         tokens.lines.set(order[from + i], line);
         tokens.watchers.get(order[from + i])?.forEach(change => change());
       });
+      // Cache on the last slice, not the done reply: closing the file between them would drop a finished result.
+      if (got.length < order.length) return;
+      replies.delete(id);
+      if (done.size >= CACHE_MAX) done.delete(done.keys().next().value!);
+      done.set(key, got);
     });
     thread.postMessage({ id, path: tokens.path, theme: tokens.theme, code: order.map(line => line.text), removed: order.map(line => line.kind === "remove") });
     return () => { if (replies.delete(id)) worker?.postMessage({ id, stop: true }); };
