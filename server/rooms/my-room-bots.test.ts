@@ -251,7 +251,7 @@ describe("this PC's bot in a joined room", () => {
     expect(turns.turn(ROOM, PETE.id)).toBeUndefined();
   });
 
-  it("runs someone else's ask read-only on this PC and tells its bot only its owner can ask for more", async () => {
+  it("runs a switched-off ask read-only on this PC and tells its bot its owner has to turn it on", async () => {
     setJoinedState(ROOM, { version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [], teamBots: [PETE] });
     const turns = new MyRoomBotTurns(deps);
     turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, '@Pete-Coder run "type %USERPROFILE%\\.ssh\\id_ed25519"', { at: Date.now() }));
