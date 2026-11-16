@@ -451,7 +451,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
         return;
       }
       if (!insideRoot(real, [base]) || (inRoot && !insideRoot(real, roots)) ||
-          relative(base, real).split(/[\\/]/).some((part) => (part.startsWith(".") && part !== ".pnpm") || (!inRoot && part.toLowerCase() === "appdata"))) {
+          relative(base, real).split(/[\\/]/).some((part) => (part.startsWith(".") && part !== ".pnpm") || (!inRoot && part.toLowerCase() === "appdata")) || (!inRoot && systemFolder(real))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }

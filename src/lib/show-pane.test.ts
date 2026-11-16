@@ -130,6 +130,31 @@ it("stays shut for a new page this PC cannot serve", async () => {
   expect(shown).toBeNull();
 });
 
+function heldProbes() {
+  const replies: Array<() => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => replies.push(() => done(new Response(null, { status: 206 }))))));
+  return replies;
+}
+
+it("drops a pending probe once the user opens another tab", async () => {
+  const replies = heldProbes();
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
+  await act(async () => showMedia("t1"));
+  await act(async () => { for (const reply of replies) reply(); });
+  expect([shown, media]).toEqual([null, "t1"]);
+});
+
+it("never lets an older probe replace a newer file", async () => {
+  const replies = heldProbes();
+  await render("t1", [user("u1")]);
+  await render("t1", [user("u1"), page]);
+  await render("t1", [user("u1"), page, deck]);
+  await act(async () => { replies[1]!(); });
+  await act(async () => { replies[0]!(); });
+  expect(shown?.path).toBe("C:\\work\\launch-deck.pdf");
+});
+
 it("leaves the slot alone while something else holds it", async () => {
   await render("t1", [user("u1")], false);
   await render("t1", [user("u1"), deck], false);

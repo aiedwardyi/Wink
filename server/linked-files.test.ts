@@ -445,6 +445,7 @@ describe("linked files", () => {
       "public/img/theme.webp": "webp-bytes",
       "public/redo/long/.private/keys.json": "secret",
       "public/redo/long/AppData/Local/token.json": "secret",
+      "public/redo/long/ProgramData/secret.json": "secret",
       "../secret.css": "secret",
     };
     mkdirSync(folder, { recursive: true });
@@ -456,6 +457,7 @@ describe("linked files", () => {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, "<p>private</p>");
     }
+    vi.stubEnv("ProgramData", join(site, "ProgramData"));
     const page = join(site, "index.html");
     const server = await listen((req, res) => serveLinkedFile(req, res, {
       bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
@@ -473,7 +475,7 @@ describe("linked files", () => {
         expect(res.headers.get("content-type"), asset).toContain(type);
         expect(await res.text(), asset).toContain(body);
       }
-      for (const asset of [".private/keys.json", "AppData/Local/token.json", "../../../.git/config", "../../../../secret.css", "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fsecret.css"]) {
+      for (const asset of [".private/keys.json", "AppData/Local/token.json", "ProgramData/secret.json", "../../../.git/config", "../../../../secret.css", "%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fsecret.css"]) {
         const res = await fetch(asset.startsWith("%") ? `${shown.url}${asset}` : new URL(asset, shown.url));
         expect(res.status, asset).toBe(404);
         expect(await res.text(), asset).not.toContain("secret");
@@ -484,6 +486,7 @@ describe("linked files", () => {
       }
     } finally {
       await server.close();
+      vi.unstubAllEnvs();
     }
   });
 
