@@ -57,6 +57,7 @@ import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createRoomLanes, laneKey } from "./room-lane.ts";
+import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askRiders, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, hostedTurnRefused, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -5844,6 +5845,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const unlandedNotice = turnStartedByUser(opts) ? unlandedWork.take(threadId) : "";
         const withLate = (base: string) =>
           [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\n\n");
+        const approval = bot.autoApprove ? "auto" : "ask";
         const system =
           persona +
           // The folder is already this turn's cwd, but nothing told the model
@@ -5882,6 +5884,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           DEFAULT_RULES +
+          accessRules(live.adapter.access?.({ approval, cwd, leanStartup, integrations }), integrations) +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
           tracePart("memory", privateWorkspace ? memorySystemPrompt(bot.id, false, memoryNotesEnabled(cfg, bot)) : "") +
           skillInstructions +
@@ -5988,7 +5991,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
-        approval: bot.autoApprove ? "auto" : "ask",
+        approval,
         attended: !isUnattended(bot.id),
         integrations,
         cwd,
@@ -6939,6 +6942,8 @@ async function runClaimedGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(group.id, threadId), bot.cwd);
+  // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
+  const access: AccessTurn = { approval: bot.autoApprove ? "auto" : "ask", ...(lane || (authority && !bot.autoApprove) ? { readOnly: true } : {}) };
   const roomSystem =
     system +
     projectFolderPrompt(cwd, workspace) +
@@ -6947,7 +6952,9 @@ async function runClaimedGroupMemberTurn(
     (workspace ? `\n${memorySystemPrompt(bot.id, lane, memoryNotesEnabled(cfg, bot)).trim()}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
-    harnessPlaybookPrompt(Boolean(integrations.terminal));
+    harnessPlaybookPrompt(Boolean(integrations.terminal)) +
+    // last, so a read-only side lane shares the idle room's cached prefix
+    accessRules(instance.adapter.access?.({ ...access, cwd, integrations, leanStartup: memberTurnSelection(selection, bot.leanStartup).leanStartup }), integrations);
 
   // run the turn and wait for it to settle, folding the reply text so a
   // chained @mention can be routed afterwards
@@ -7011,9 +7018,7 @@ async function runClaimedGroupMemberTurn(
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
-        // A teammate's request runs under the host's setting for this bot: Auto as set, else read-only.
-        approval: bot.autoApprove ? "auto" : "ask",
-        ...(lane || (authority && !bot.autoApprove) ? { readOnly: true as const } : {}),
+        ...access,
         attended: !isUnattended(bot.id),
         cwd,
         integrations,

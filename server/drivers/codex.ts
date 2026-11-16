@@ -57,6 +57,7 @@ import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount }
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 import { CODEX_PROMO_MESSAGE, isCodexPromo, markCodexPromo, requireCodexPromoAccount } from "../../electron/codex-promo.mjs";
 import { warmPool, type Lease } from "./warm-pool.ts";
+import { FREE_ACCESS, routedAccess, type AccessTurn } from "./turn-access.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -213,6 +214,15 @@ type AppServer = {
 
 const appServerAlive = (server: AppServer) =>
   server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
+
+// Only a Wink setting overrides; otherwise the user's own codex config decides.
+// untrusted asks before any edit or command that is not read-only.
+function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
+  return {
+    approvalPolicy: fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : undefined,
+    sandbox: fullAuto ? "danger-full-access" : undefined,
+  } as const;
+}
 
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
@@ -412,10 +422,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
 
         const cwd = turn.cwd ?? homedir();
-        // Only a Wink setting overrides; otherwise the user's own codex config decides.
-        // untrusted asks before any edit or command that is not read-only.
-        const approvalPolicy = config.fullAuto ? "never" : turn.approval === "ask" ? "untrusted" : undefined;
-        const sandbox = config.fullAuto ? "danger-full-access" : undefined;
+        const { approvalPolicy, sandbox } = codexPolicy(config.fullAuto, turn);
         // Everything fixed at spawn or thread/resume; the mounts' tokens live per boot, bot and thread.
         const fingerprint = createHash("sha256")
           .update(JSON.stringify([config.cli, appServerArgs, cwd, Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)), approvalPolicy, sandbox, turn.model ?? "", turn.effort ?? ""]))
@@ -1150,6 +1157,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         pinnedSystem: true,
       },
       sendTurn,
+      access: (turn) => {
+        const { approvalPolicy } = codexPolicy(config.fullAuto, turn);
+        if (approvalPolicy === "never") return FREE_ACCESS;
+        return approvalPolicy || turn.readOnly ? routedAccess(turn) : { edits: "own", commands: "own" };
+      },
       steer: async (threadId, text) => active.get(threadId)?.steer(text) ?? false,
       interruptTurn: async (threadId) => active.get(threadId)?.stop(),
       endTurn: async (threadId, turnId) => {

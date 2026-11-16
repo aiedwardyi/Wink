@@ -72,6 +72,7 @@ import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
+import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
@@ -298,6 +299,20 @@ function hasOwnDefaultMode(configDir: string, cwd: string): boolean {
       return false;
     }
   });
+}
+
+/** The grants of the launch flags in sendTurn; server/turn-access.test.ts checks them against the real argv. */
+export function claudeAccess(config: Pick<ClaudeConfig, "permissionMode" | "tools" | "disallowedTools">, turn: AccessTurn, ownMode = false): TurnAccess {
+  if (turn.readOnly) return { edits: "off", commands: "off" };
+  const has = (names: string[]) => names.some((name) => (config.tools?.includes(name) ?? true) && !config.disallowedTools?.includes(name));
+  const grants: TurnAccess = ownMode ? { edits: "own", commands: "own" }
+    : config.permissionMode === "bypassPermissions" ? FREE_ACCESS
+    : turn.approval === "ask" ? { edits: "ask", commands: "ask" }
+    : { edits: "free", commands: turn.approval === "auto" ? "auto" : "ask" };
+  return {
+    edits: has(["Edit", "Write", "MultiEdit", "NotebookEdit"]) ? grants.edits : "off",
+    commands: has(["Bash", "PowerShell"]) ? grants.commands : "off",
+  };
 }
 
 const DENY_TIMEOUT_NOTE =
@@ -2283,6 +2298,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           rateLimits: true,
         },
         sendTurn,
+        // same test as sendTurn's ownMode: the user's own defaultMode replaces Wink's acceptEdits
+        access: (turn) => claudeAccess(config, turn,
+          turn.approval !== "ask" && turn.integrations?.localComputer?.scope !== "local-computer" && config.permissionMode === "acceptEdits" && turn.leanStartup !== true &&
+          hasOwnDefaultMode(input.account?.home ?? claudeConfigDir({ ...process.env, ...input.environment }), turn.cwd ?? homedir())),
         steer,
         applyEffort: async (threadId, effort) => {
           const s = sessions.get(threadId);
