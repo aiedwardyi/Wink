@@ -657,7 +657,8 @@ googleAccount.onIdToken(googlePhotoChanged);
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
-  if (commsCallers.resolve(header)) return botRoute(path);
+  const caller = commsCallers.resolve(header);
+  if (caller) return botRoute(path, caller.botId);
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
