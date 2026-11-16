@@ -371,6 +371,41 @@ describe("a teammate's request under the host's setting for the bot", () => {
     await vi.waitFor(() => expect(runs.respondToRequest).toHaveBeenCalledWith(group.threadId, "r1", { behavior: "allow" }));
   });
 
+  it("lets a read-only turn @ no other bot, since the next one would run without the asker's limits", () => {
+    const runner = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "runClaimedGroupMemberTurn")!;
+    const chains: ts.IfStatement[] = [];
+    const walk = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.thenStatement.getText(index).includes("roomResponders(replyText")) chains.push(node);
+      ts.forEachChild(node, walk);
+    };
+    walk(runner);
+    expect(chains).toHaveLength(1);
+    const chains_ = (works: boolean) => new Function("works", "isCancelled", "replyText", `return Boolean(${chains[0]!.expression.getText(index)});`)(works, undefined, "@Sora-Code take this");
+    expect(chains_(true)).toBe(true);
+    expect(chains_(false)).toBe(false);
+  });
+
+  it("marks Board posts from a joined room's task as room posts, and clears no read-only mark it never set", () => {
+    let roomTurn = "";
+    let wiring = "";
+    const walk = (node: ts.Node) => {
+      if (ts.isPropertyAssignment(node) && node.name.getText(index) === "roomTurn") roomTurn = node.initializer.getText(index);
+      if (ts.isPropertyAssignment(node) && node.name.getText(index) === "startTurn" && node.initializer.getText(index).includes("transcriptText: typed")) wiring = node.initializer.getText(index);
+      ts.forEachChild(node, walk);
+    };
+    walk(index);
+    expect(wiring).toContain("joinedRoomThreads.add(threadId)");
+    const joinedRoomThreads = new Set(["joined-task"]);
+    const turn = new Function("store", "readOnlyTurnThreads", "readOnlyAskTurn", "joinedRoomThreads", `return ${js(roomTurn)};`)(
+      { groupByThread: () => undefined }, new Set(["read-only-task"]), () => false, joinedRoomThreads,
+    );
+    expect(turn({ botId: "b", threadId: "joined-task" })).toBe("room");
+    expect(turn({ botId: "b", threadId: "read-only-task" })).toBe("read-only");
+    expect(turn({ botId: "b", threadId: "one-on-one" })).toBeNull();
+    const start = index.text.indexOf("const readOnly = opts?.readOnly === true;");
+    expect(index.text.indexOf("readOnlyTurns !== true) throw", start)).toBeLessThan(index.text.indexOf("readOnlyTurnThreads.add(threadId)", start));
+  });
+
   it("never approves a step on a read-only turn, in a room or a joined room's task", async () => {
     store.patchBot(wink, { autoApprove: true });
     running();

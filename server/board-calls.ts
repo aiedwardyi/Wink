@@ -1,6 +1,6 @@
 // Bot calls feed the Board: a call leaves a stuck post, the user's answer becomes its fix,
 // and a later bot with the same blocker gets that fix instead of calling. No model calls.
-import { BOARD_USER, boardLine, boardPostId, errorSig, fromRoom, type Board, type BoardPost } from "./board.ts";
+import { BOARD_USER, boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
 type Blocker = TaskResumePacket["blockers"][number];
@@ -37,7 +37,8 @@ export function createBoardCalls(deps: BoardCallDeps) {
     solvedOnly: true,
     minShare: MIN_SHARE,
     limit: BOARD_HITS,
-  }).filter((post) => !fromRoom(post));
+    withoutRoom: true,
+  });
 
   return {
     /**

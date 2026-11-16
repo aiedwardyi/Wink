@@ -2689,6 +2689,8 @@ const toolMessageByItem = new Map<string, { messageId: string; turnId?: string }
 const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> messageId
 /** Threads whose current turn someone else asked for in a room this PC joined. */
 const readOnlyTurnThreads = new Set<string>();
+/** Task threads that answer a room this PC joined: their Board posts are room posts. */
+const joinedRoomThreads = new Set<string>();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -5562,9 +5564,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
       const readOnly = opts?.readOnly === true;
+      if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
       if (readOnly) readOnlyTurnThreads.add(threadId);
       else readOnlyTurnThreads.delete(threadId);
-      if (readOnly && instance.adapter.capabilities.readOnlyTurns !== true) throw new Error(`${bot.name} can't answer other people here: its engine can't work read-only`);
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (!readOnly && bot.shareTerminalWithChat !== false) {
         const terminal = terminalIntegration(bot.id);
@@ -6613,7 +6615,10 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) }),
+  startTurn: (botId, threadId, prompt, typed, failed, readOnly) => {
+    joinedRoomThreads.add(threadId);
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+  },
   messagesFor: (threadId) => store.messagesFor(threadId),
   changed: (roomId) => broadcast({ kind: "joined", hosted: true, roomId }),
   interrupt: async (botId, threadId) => {
@@ -7137,8 +7142,9 @@ async function runClaimedGroupMemberTurn(
     drainSecretResumes();
   }
 
-  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain
-  if (!isCancelled?.() && replyText.trim()) {
+  // chained mentions: a repeat pair is two bots tagging back and forth, so it ends the chain.
+  // A read-only turn hands work to no bot: the next one would run without the asker's limits.
+  if (works && !isCancelled?.() && replyText.trim()) {
     const members = group.memberIds
       .map((id) => store.bot(id))
       .filter((b): b is NonNullable<typeof b> => Boolean(b) && b!.id !== bot.id);
@@ -7705,7 +7711,7 @@ const boardRoutes = createBoardRoutes({
   roomTurn: ({ botId, threadId }) => {
     const hosted = store.groupByThread(threadId)?.hosted;
     if (readOnlyTurnThreads.has(threadId) || (hosted && readOnlyAskTurn(hosted.roomId, threadId, botId))) return "read-only";
-    return hosted ? "room" : null;
+    return hosted || joinedRoomThreads.has(threadId) ? "room" : null;
   },
 });
 const internalRoutes = createInternalRoutes({

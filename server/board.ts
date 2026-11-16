@@ -114,6 +114,7 @@ export interface BoardSearch {
   /** Share of the query's words a post must hold; a matching error_sig always passes. */
   minShare?: number;
   limit?: number;
+  withoutRoom?: boolean;
 }
 
 export interface BoardOptions {
@@ -210,7 +211,7 @@ export function createBoard(options: BoardOptions) {
       const words = boardWords(input.query);
       const minShare = input.minShare ?? 0;
       const scored = board.list().flatMap((post) => {
-        if (input.solvedOnly && (post.status !== "solved" || !post.fix)) return [];
+        if ((input.solvedOnly && (post.status !== "solved" || !post.fix)) || (input.withoutRoom && fromRoom(post))) return [];
         const sig = Boolean(input.errorSig && post.error_sig === input.errorSig);
         const held = new Set(boardWords(`${post.title} ${post.body} ${post.fix}`));
         const hits = words.filter((word) => held.has(word)).length;
