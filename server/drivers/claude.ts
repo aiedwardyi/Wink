@@ -99,7 +99,7 @@ export function claudeAuthStatus(
     authChecks.set(key, check);
     void check.finally(() => authChecks.delete(key)).catch(() => {});
   }
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const deadline = setTimeout(() => resolve({}), deadlineMs);
     check.finally(() => clearTimeout(deadline)).then((stdout) => {
       try {
@@ -113,7 +113,7 @@ export function claudeAuthStatus(
       } catch {
         resolve({});
       }
-    }, reject);
+    });
   });
 }
 
