@@ -13,7 +13,7 @@ const memory = (count: number) => `${Array.from({ length: count }, (_, i) => fac
 const clauses = (count: number) => `${Array.from({ length: count }, (_, i) => `- ${word(i)} stores the ${word(i + 300)} ledger; ${word(i + 600)} keeps the ${word(i + 900)} lantern (noted 2026-09-01)`).join("\n")}\n`;
 const remember = (n: number, extra = "") => ({ text: `Remember that ${word(n)} lives beside the ${word(n + 1)} pier with ${word(n + 2)} boats.${extra}`, at: now - 3_600_000 + n, kind: "remember" as const });
 const filed = (header: { counts?: { filed: number } } | object) => "counts" in header ? header.counts!.filed : 0;
-const night = (text: string, input: Partial<CleanInput> = {}, changes?: () => unknown[]) => cleanFiles({ memory: text, history: null, typed: new Set(), now, ...sleepEngines(changes), ...input });
+const night = (text: string, input: Partial<CleanInput> = {}, changes?: (prompt: string) => unknown[]) => cleanFiles({ memory: text, history: null, typed: new Set(), now, ...sleepEngines(changes), ...input });
 
 describe("memory cleanup latent walls", () => {
   it("reads remember requests from the whole week past the input cap", () => {
@@ -54,6 +54,17 @@ describe("memory cleanup latent walls", () => {
     const long = remember(0, ` Then ${word(7)} sails at dawn to the ${word(8)} reef for ${word(9)} nets.`.repeat(6));
     const result = await night(clauses(280), { user: [long] });
     expect(result).toMatchObject({ ok: false, stage: "validate", detail: expect.stringContaining("infeasible-remembers:") });
+  });
+
+  it("shows a heavy file's stale pair to the proposer and swaps it, grill-g heavy n1", async () => {
+    const pair = ["- Phone plan: 95400 won a month (noted 2026-11-05)", "- Phone plan: 99100 won a month (noted 2026-11-07)"];
+    const text = `${clauses(150)}${pair.join("\n")}\n`;
+    const result = await night(text, {}, (prompt) => prompt.includes(`151| ${pair[0]}`) && prompt.includes(`152| ${pair[1]}`) ? [{ op: "replace", id: 151, newer: 152, reason: "Plan changed" }] : []);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.memory).not.toContain(pair[0]);
+    expect(result.memory).toContain(pair[1]);
+    expect(result.block).toContain(pair[0]);
   });
 
   it("writes a remember over 300 bytes as bullets of at most 300 bytes", async () => {

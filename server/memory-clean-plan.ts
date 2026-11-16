@@ -1,7 +1,7 @@
 import { parseReply } from "./memory-clean-call.ts";
 import { archiveBlock, appendBlock, hashText, historyPointer, HISTORY_FILE, loadedPrefix } from "./memory-clean-format.ts";
 import type { ArchiveEntry, Change, ChangeList, CleanFile, CleanInput, RejectReason, RunHeader, SleepLine, ValidateInput } from "./memory-clean-types.ts";
-import { contentWords, GROWTH_MAX, measureChanges, prepareChangeList, protectedLines, rememberCovered } from "./memory-clean-validate.ts";
+import { contentWords, GROWTH_MAX, measureChanges, prepareChangeList, protectedLines, rememberCovered, stalePair } from "./memory-clean-validate.ts";
 
 export type CleanSource = { file: CleanFile; text: string };
 export type WorkPacket = { file: CleanFile; ids: number[] };
@@ -31,8 +31,17 @@ export function workPackets(sources: CleanSource[], typed: ReadonlySet<string>, 
       group.push(id);
       groups.set(key, group);
     }
+    // a stale pair is offered alone, without the rest of its word group
+    for (const [key, group] of [...groups]) {
+      const dated = key === "duplicate" ? [] : group.filter((id) => /\(noted \d{4}-\d{2}-\d{2}\)/i.test(lines[id - 1]!));
+      const pair = dated.filter((id) => dated.some((other) => id !== other && (stalePair(lines[id - 1]!, lines[other - 1]!, source.text) || stalePair(lines[other - 1]!, lines[id - 1]!, source.text))));
+      if (!pair.length) continue;
+      groups.set(`stale ${key}`, pair);
+      if (pair.length === group.length) groups.delete(key);
+      else groups.set(key, group.filter((id) => !pair.includes(id)));
+    }
     const light = Buffer.byteLength(source.text) <= 16000 && lines.length <= 140;
-    const priority = (key: string, ids: number[]) => key === "duplicate" ? 3 : light && ids.some((id) => /\b(?:done|completed|ended)\b/.test(lines[id - 1]!)) ? 1 :
+    const priority = (key: string, ids: number[]) => key === "duplicate" ? 3 : key.startsWith("stale ") ? 2 : light && ids.some((id) => /\b(?:done|completed|ended)\b/.test(lines[id - 1]!)) ? 1 :
       light && ids.some((id) => ids.some((other) => id !== other && lines[other - 1]!.startsWith(lines[id - 1]!.trimEnd() + " "))) ? 2 : 0;
     const ranked = [...groups].sort(([a, x], [b, y]) => priority(b, y) - priority(a, x) ||
       Math.max(...y.map((id) => Buffer.byteLength(lines[id - 1]!))) - Math.max(...x.map((id) => Buffer.byteLength(lines[id - 1]!))) || x[0]! - y[0]!);

@@ -245,6 +245,12 @@ function newer(a: string, b: string, olderId: number, newerId: number): boolean 
   return oldDate !== null && newDate !== null ? newDate > oldDate : newerId > olderId;
 }
 
+// two noted states of one subject: what a replace swaps
+export function stalePair(older: string, current: string, base: string): boolean {
+  const noted = (line: string) => /\(noted (\d{4}-\d{2}-\d{2})\)/i.exec(line)?.[1];
+  return !!noted(older) && !!noted(current) && newer(older, current, 0, 1) && sameSubject(older, current, base);
+}
+
 // the words before a clause's value: "Birthday is November 16" -> "Birthday"
 const subjectPart = (part: string, base: string) => {
   const text = part.replace(/^\s*[-*]\s+/, "").trim();
