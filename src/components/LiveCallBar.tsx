@@ -5,7 +5,7 @@ import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { dropCall, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
+import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
@@ -239,6 +239,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     call.observe({ busy: Boolean(bot.busy), messages, threadId: bot.threadId, needs: firstNeed(messages) });
   }, [bot.busy, bot.threadId, call, messages]);
+
+  useEffect(() => onQueueCancelled((sendIds) => call.dequeued(sendIds)), [call]);
 
   return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
 }

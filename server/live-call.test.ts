@@ -444,6 +444,20 @@ describe("call lines and end", () => {
     ]);
   });
 
+  it("K1 an app notice keeps the voice's look but never reaches the bot or the next brief", async () => {
+    const h = harness();
+    const callId = "c-0123456789ab";
+    await h.post("lines", { callId, lines: [{ who: "user", text: "Deploy it." }, { who: "voice", text: "Okay, want me to deploy?" }, { who: "notice", text: "보내지 않음: 배포해 줘 (시간 초과)" }] });
+    const rows = h.store.activePath(h.bot.threadId);
+    expect(rows.at(-1)).toMatchObject({ role: "bot", kind: "text", engine: "geminiAgent", call: { id: callId, voice: true, notice: true } });
+    const [block] = callLinesSinceLastUserTurn(rows, new Set());
+    expect(block).toContain("Voice: Okay, want me to deploy?");
+    expect(block).not.toContain("배포해 줘");
+    const brief = await buildBrief(h.bot, rows, "Ed", 0);
+    expect(brief).toContain("Okay, want me to deploy?");
+    expect(brief).not.toContain("배포해 줘");
+  });
+
   it("400s a bad call id", async () => {
     expect((await harness().post("lines", { callId: "nope", lines: [{ who: "user", text: "hi" }] })).status).toBe(400);
   });

@@ -23,6 +23,7 @@ import { canAnswerCard, typedAnswer } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
+import { queueCancelled } from "@/lib/live-call/active";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { preferredStartupSelectionId } from "@/lib/sidebar-order";
@@ -2462,6 +2463,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           for (const send of frame.sends ?? []) {
             rawDispatch({ type: "cancelQueued", botId: frame.botId, threadId: send.threadId, queueId: send.queueId });
           }
+          queueCancelled((frame.sends ?? []).flatMap((send: { sendId?: string }) => send.sendId ? [send.sendId] : []));
           break;
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);
