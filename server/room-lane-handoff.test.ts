@@ -67,7 +67,7 @@ describe("lane hand-off", () => {
 
   it("queues a teammate's hand-off with its ask, rechecked right before the turn runs", () => {
     const settle = section('  if (outcome === "settled" && handedOff && !isCancelled?.())', "  // turn.completed normally performs this cleanup.");
-    expect(settle).toContain("rootId, undefined, authority ?? true);");
+    expect(settle).toContain("rootId, undefined, authority ?? true, asked);");
     const drained = section("function enqueueDrainedRoomTurn(", "  const tracked = next.finally(");
     const check = drained.indexOf('if (typeof room.hands === "string" && handOffRefused(room.hands)) return;');
     expect(check).toBeGreaterThan(drained.indexOf("if (operation.cancelled)"));
@@ -84,7 +84,7 @@ describe("lane hand-off", () => {
     const expression = section("  const roomSystem =", ";\n");
     const prompt = (handoff: object | null) => runInNewContext(`${expression}; roomSystem`, {
       handoff, LANE_HANDOFF_LINE, system: "SYS", cwd: "", workspace: undefined, cfg: {}, bot: { id: "pip" }, lane: Boolean(handoff), text: "", integrations: {}, selectedSkills: [],
-      projectFolderPrompt: () => "", detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "",
+      projectFolderPrompt: () => "", detailedRepliesEnabled: () => false, DETAILED_REPLY_INSTRUCTIONS: "", ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", asked: undefined, aboutYouPrompt: () => "",
       memorySystemPrompt: () => "", memoryNotesEnabled: () => true, renderSkillInstructions: () => "", installedPlaybookInstructions: () => "", harnessPlaybookPrompt: () => "",
       accessRules: () => " ACCESS", instance: { adapter: {} }, access: {}, selection: {}, memberTurnSelection: () => ({}),
     }) as string;

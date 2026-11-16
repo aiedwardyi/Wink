@@ -49,6 +49,7 @@ interface RoomItem {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
   hands?: Hands;
@@ -202,6 +203,7 @@ export interface RoomDrain {
   onDispatchError?: (message: string) => void;
   instructionId?: string;
   askId?: string;
+  chainAsk?: string;
   ready?: () => Promise<boolean>;
   spoken?: Set<string>;
   hands?: Hands;
@@ -281,13 +283,15 @@ export function queueRoomParticipation(
     onDispatchError?: (message: string) => void;
     instructionId?: string;
     askId?: string;
+    chainAsk?: string;
     ready?: () => Promise<boolean>;
     spoken?: Set<string>;
     hands?: Hands | false;
   },
 ): QueuedSteer {
   const entry = entryFor(botId, threadId);
-  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined));
+  // a chain hop folds only into its own ask's chain: a teammate's limits never ride on another's
+  const existing = options.askId ? undefined : entry.items.find((item): item is RoomItem => item.kind === "room" && !item.askId && item.hands === (options.hands || undefined) && item.chainAsk === options.chainAsk);
   if (existing) {
     // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
@@ -319,6 +323,7 @@ export function queueRoomParticipation(
     spoken: options.spoken,
     ...(options.askId ? { askId: options.askId } : {}),
     ...(options.hands ? { hands: options.hands } : {}),
+    ...(options.chainAsk ? { chainAsk: options.chainAsk } : {}),
   });
   queues.set(entryKey(botId, threadId), entry);
   return { id };
@@ -429,6 +434,7 @@ export function drainSteeredMessages(
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;
     if (room.askId) roomDrain.askId = room.askId;
+    if (room.chainAsk) roomDrain.chainAsk = room.chainAsk;
     if (room.ready) roomDrain.ready = room.ready;
     if (room.spoken) roomDrain.spoken = room.spoken;
     if (room.hands) roomDrain.hands = room.hands;

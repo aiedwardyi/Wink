@@ -90,7 +90,8 @@ describe("Account settings", () => {
   it("keeps Profile and Sync in one band without phone sections or their requests", async () => {
     const pane = await render();
     const cards = [...pane.children];
-    expect(cards).toHaveLength(1);
+    expect(cards).toHaveLength(2);
+    expect(cards[1].textContent).toContain("About You");
     expect(cards[0].querySelector("#settings-profile-name")).not.toBeNull();
     expect(cards[0].querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     expect(cards[0].textContent).not.toContain("Profile");
