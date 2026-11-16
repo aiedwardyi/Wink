@@ -23,7 +23,7 @@ import {
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
 } from "./container-computer.ts";
-import { isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
+import { isValidSshAlias, scrubbedEnv, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
@@ -220,7 +220,7 @@ export function defaultRunner(args: string[], options: VpsCommandOptions = {}): 
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
       shell: false,
-      env: { ...process.env, PATH: augmentedPath() },
+      env: scrubbedEnv({ ...process.env, PATH: augmentedPath() }),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -879,7 +879,7 @@ export async function vpsComputerJoin(
   const localPort = await unusedLoopbackPort();
   const child = spawn("ssh", vpsSshTunnelArgs(alias, localPort, connection.privateIp), {
     shell: false,
-    env: { ...process.env, PATH: augmentedPath() },
+    env: scrubbedEnv({ ...process.env, PATH: augmentedPath() }),
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });

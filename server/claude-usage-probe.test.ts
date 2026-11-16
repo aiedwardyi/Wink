@@ -3,7 +3,7 @@ import { PassThrough, Writable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { createClaudeUsageProbe, readClaudeUsage } from "./claude-usage-probe.ts";
-import { createUsageRefresh } from "./usage-refresh.ts";
+import { createUsageRefresh, readUsageRpc } from "./usage-refresh.ts";
 import { DATA_DIR } from "./config.ts";
 import { join } from "node:path";
 import * as procs from "./procs.ts";
@@ -74,6 +74,18 @@ it.each(["old CLI", "bad id", "invalid JSON", "exit", "spawn error", "EPIPE", "p
   await expect(f.pending).rejects.toThrow("unavailable");
   expect(f.frames).toHaveLength(1);
   expect(procs.killCliTree).toHaveBeenCalledOnce();
+});
+
+it("starts the Claude and Codex usage CLIs without saved keys or Wink's token", async () => {
+  void childFixture(false).pending.catch(() => undefined);
+  vi.mocked(procs.spawnCli).mockClear();
+  const env = { PATH: "fixture", GEMINI_API_KEY: "saved", OMB_COMMS_TOKEN: "boot", OPENAI_API_KEY: "saved" };
+  const claude = readClaudeUsage("fixture-cli", env, account).catch(() => undefined);
+  const codex = readUsageRpc("fixture-cli", env).catch(() => undefined);
+  for (const [, , options] of vi.mocked(procs.spawnCli).mock.calls) expect(options?.env).toEqual({ PATH: "fixture" });
+  expect(procs.spawnCli).toHaveBeenCalledTimes(2);
+  vi.mocked(procs.spawnCli).mock.results.forEach(({ value }) => value.emit("exit"));
+  await Promise.all([claude, codex]);
 });
 
 it("kills the child when initialize or get_usage times out", async () => {

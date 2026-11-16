@@ -39,6 +39,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           },
         ],
         bots: [],
+        routines: [],
         config: mockConfig.current,
         mascotMotion: null,
         settingsKeepGoingRequest: keepGoing.request,
