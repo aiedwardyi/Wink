@@ -64,7 +64,17 @@ describe("account names", () => {
     expect(restored.get(second.id)).toEqual(f.names.get(second.id));
     expect(f.names.get("missing")).toBeNull();
     expect(f.names.nameOf("missing", "claude")).toBe("Claude (removed)");
-    for (const engine of ["Grok", "Gemini", "Muse"]) expect(f.names.nameOf("missing", engine)).toBe(engine);
+    for (const engine of ["Gemini", "Muse"]) expect(f.names.nameOf("missing", engine)).toBe(engine);
+  });
+
+  it("numbers Grok sign-ins like Codex and resolves them by number", async () => {
+    const f = fixture();
+    f.bases.grok = { driver: "grokAgent" };
+    const grok = await f.accounts.add("grok");
+    f.sync();
+    expect(f.names.get("grok")).toMatchObject({ engine: "grok", number: 1, name: "Grok 1" });
+    expect(f.names.nameOf(grok.id, "grokAgent")).toBe("Grok 2");
+    expect(f.names.resolve("grokAgent", "Grok 2")).toEqual({ kind: "account", id: grok.id });
   });
 
   it("gives an added account the lowest free number from 2", async () => {

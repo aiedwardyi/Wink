@@ -8,6 +8,7 @@
 // two would deadlock over the speaker otherwise.
 import { useSyncExternalStore } from "react";
 
+import { holdReloadOpen } from "./reload-hold";
 import { speaker } from "./tts";
 import { trackFeature, trackScreen } from "./usage-stats";
 
@@ -24,6 +25,7 @@ export function currentCall(): string | null {
 }
 
 let startedAt = 0;
+let releaseReload: (() => void) | null = null;
 
 export function startCall(targetId: string) {
   if (current === targetId) return;
@@ -32,6 +34,7 @@ export function startCall(targetId: string) {
   speaker.stop();
   void window.ogb?.speechStop();
   current = targetId;
+  releaseReload ??= holdReloadOpen();
   startedAt = performance.now();
   trackScreen("call");
   trackFeature("call.start");
@@ -44,6 +47,8 @@ export function endCall(targetId?: string): boolean {
   if (targetId && current !== targetId) return false;
   if (current === null) return false;
   current = null;
+  releaseReload?.();
+  releaseReload = null;
   trackFeature("call.end", { ms: performance.now() - startedAt });
   speaker.stop();
   void window.ogb?.speechStop();

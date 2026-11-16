@@ -31,9 +31,13 @@ it("eases to a stop without pushing the names cursor out the top", () => {
   expect(cam.v).toBeLessThan(1);
 });
 
-it("goes back up with a reader that points above the view", () => {
-  const cam = cameraStep({ x: 4_000, v: 900, speed: 900, to: 4_400 }, { lead: { y: 3_000, to: 110 } }, 460, 100_000, 16);
-  expect(cam.x).toBeLessThanOrEqual(3_000);
+it("does not reverse when a finding points back above the view", () => {
+  let cam: DocCamera = { x: 4_000, v: 900, speed: 900, to: 4_400 };
+  for (const y of [3_900, 3_400, 3_000, 3_100, 4_500]) {
+    const next = cameraStep(cam, { lead: { y, to: y }, stop: 110 }, 460, 100_000, 16);
+    expect(next.x).toBeGreaterThanOrEqual(cam.x);
+    cam = next;
+  }
 });
 
 it("keeps following when a resize clamps the view", () => {

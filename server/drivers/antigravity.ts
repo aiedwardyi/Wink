@@ -14,7 +14,7 @@
 // auto-denies shell (`run_command` comes back as a tool ERROR); the default
 // `request-review` auto-denies; `--dangerously-skip-permissions` (fullAuto)
 // approves everything. Real per-action approval cards are a future path via
-// native ACP (agy issue #31), which would reuse acp/core.ts like grok/gemini.
+// native ACP, which would reuse acp/core.ts like grok/gemini.
 //
 // MCP: agy has no per-turn MCP flag, so Wink's servers (agents, terminal, and
 // the bot's computer: cloud box / Local VM / VPS) are mounted into the global
@@ -49,6 +49,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
 import { antigravitySignIn } from "./antigravity-auth.ts";
+import { unrestated } from "../turn-reply.ts";
 
 const DRIVER_KIND = "antigravityAgent";
 const AGY_STOPPED_NOTE = "The bot stopped before finishing.";
@@ -70,6 +71,19 @@ export function isAgyAccountError(text: string): boolean {
 
 function stripAntigravitySystemNotices(text: string): string {
   return text.replace(AGY_SYSTEM_NOTICE, "");
+}
+
+const AGY_NOTICE_HEADS = ["the following is a <system_message>", "<system_message>"];
+
+/** Where a notice that has not fully streamed in yet begins (text.length if none). */
+function unfinishedNoticeStart(text: string): number {
+  const open = text.search(/(?:The following is a )?<SYSTEM_MESSAGE>/i);
+  if (open !== -1) return open;
+  const lower = text.toLowerCase();
+  for (let i = Math.max(0, lower.length - AGY_NOTICE_HEADS[0].length); i < lower.length; i++) {
+    if (AGY_NOTICE_HEADS.some((head) => head.startsWith(lower.slice(i)))) return i;
+  }
+  return text.length;
 }
 
 function isCancelledTool(payload: { state?: string; tool_info?: { output?: string } | string }): boolean {
@@ -104,7 +118,7 @@ export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
     { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)", contextWindow: 1_048_576 },
     { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)", contextWindow: 1_048_576 },
     // claude-sonnet-4-6, claude-opus-4-6-thinking, and gpt-oss-120b-medium
-    // below predate the ground-truth rule (driver PR #30) and do not appear
+    // below predate the ground-truth rule and do not appear
     // in a current `agy models` run — see MODEL-AG-STALE. Left in place
     // pending a follow-up to confirm or remove them; see
     // ANTIGRAVITY_UNVERIFIED_LEGACY_IDS in antigravity.test.ts.
@@ -529,7 +543,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; interrupt: () => void; turnId: string }>();
     let disposed = false;
-    const systemHeld = systemLedger();
+    const systemHeld = systemLedger(true, instanceId);
     // every live agy child, tracked independently of `active`: a child can
     // hang AFTER emitting `result` (so it's already removed from `active`), and
     // dispose()/stopAll() must still be able to reap it. Removed on process exit.
@@ -590,9 +604,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // transport and is what blew Windows CreateProcess (~32k) with long
       // pastes / injected continuity. Continuity stays in system/text.
       const resumeCursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-      // A resumed conversation that holds this exact system text gets only the turn text.
-      const system = turn.system && (!resumeCursor || !systemHeld.holds(resumeCursor, turn.system)) ? turn.system : undefined;
+      const system = systemHeld.prompt(resumeCursor, turn.system);
       if (system && resumeCursor) systemHeld.forget(resumeCursor);
+      else if (resumeCursor) systemHeld.begin(resumeCursor);
       const prompt = composeAntigravityPrompt(system, turn.text);
 
       let settled = false;
@@ -616,7 +630,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         settled = true;
         const conversation = conversationId ?? resumeCursor;
         if (conversation && checkpointed) systemHeld.forget(conversation);
-        else if (conversation && system && promptAccepted) systemHeld.record(conversation, system);
+        else if (conversation && system && promptAccepted) systemHeld.record(conversation, turn.system!);
+        else if (conversation) systemHeld.keep(conversation);
         clearTimeout(watchdog);
         armPostSettleCleanup();
         return true;
@@ -836,6 +851,21 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       let cancelledTool = false;
       let lastStepType: string | undefined;
       let lastStepState: string | undefined;
+      // every text_delta so far, and the shown text already streamed from it
+      let deltaText = "";
+      let streamed = "";
+      const steps = new Map<number, string>();
+      const streamDelta = (delta: string) => {
+        deltaText += delta;
+        if (cancelledTool) return;
+        const shown = stripAntigravitySystemNotices(deltaText);
+        const ready = shown.slice(0, unfinishedNoticeStart(shown));
+        if (ready.length <= streamed.length || !ready.trim() || !ready.startsWith(streamed)) return;
+        // a busy resume repeating text already shown holds until it differs
+        if ([...shownResponses].some((text) => text.startsWith(ready))) return;
+        emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: ready.slice(streamed.length) });
+        streamed = ready;
+      };
 
       // A busy resume is the same logical turn, so its usage carries forward.
       const withPriorUsage = (usage: { input_tokens?: number; cache_read_tokens?: number; output_tokens?: number }): TurnUsage => ({
@@ -907,15 +937,21 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               } else if (payload.state === "ERROR") {
                 emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId, ok: false });
               }
-            } else if (payload.step_type === "agent_response" && payload.usage) {
-              emit({ ...base(threadId, turnId), type: "thread.token-usage.updated", ...withPriorUsage(payload.usage) });
+            } else if (payload.step_type === "agent_response") {
+              if (typeof payload.text_delta === "string") {
+                steps.set(payload.step_index, (steps.get(payload.step_index) ?? "") + payload.text_delta);
+                streamDelta(payload.text_delta);
+              }
+              if (payload.usage) emit({ ...base(threadId, turnId), type: "thread.token-usage.updated", ...withPriorUsage(payload.usage) });
             }
             break;
           }
           case "result": {
             promptAccepted = true;
-            // agy delivers the assistant text in result.response (not streamed)
-            const response = stripAntigravitySystemNotices(typeof payload.response === "string" ? payload.response : "");
+            // result.response is every text_delta joined; a later step restating an earlier one drops it
+            const joined = typeof payload.response === "string" ? payload.response : "";
+            const parts = [...steps.values()];
+            const response = stripAntigravitySystemNotices(parts.join("") === joined ? unrestated(parts).join("") : joined);
             const realResponse = Boolean(response.trim()) && !cancelledTool;
             const parsedError = z.string().safeParse(payload.error);
             const agyError = parsedError.success ? parsedError.data : "";
@@ -928,7 +964,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               && (busyReason !== null || AGY_NOT_ACCOUNT_ERROR.test(agyError) || (AGY_TIMEOUT_ERROR.test(agyError) && !AGY_ACCOUNT_ERROR.test(agyError)));
             if (realResponse && !shownResponses.has(response)) {
               shownResponses.add(response);
-              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: response });
+              // item.completed carries the reply; a result that disagrees with the stream adds no delta
+              const rest = response.startsWith(streamed) ? response.slice(streamed.length) : "";
+              if (rest) emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: rest });
               emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: response });
             }
             const conversation = conversationId ?? resumeCursor;
@@ -1111,7 +1149,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           // so a non-fullAuto mount could never fire. localComputerMcp stays
           // unset on purpose — the host desktop requires per-action human
           // approval (see contracts.ts), which print mode cannot deliver in
-          // any mode; that returns with the native ACP path (agy issue #31).
+          // any mode; that returns with the native ACP path.
           computerMcp: config.fullAuto,
           // The static agents entry above; each turn's identity rides on its
           // own agy child's env.

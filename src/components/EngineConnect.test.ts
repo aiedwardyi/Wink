@@ -183,7 +183,7 @@ describe("first engine connection", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await click("Install Claude");
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
-    expect(host.textContent).toContain("Installing Claude…");
+    expect(host.textContent).toContain("Open Again");
     expect(host.textContent).toContain("Finish in the window that opened.");
     await advance(4999);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -191,7 +191,7 @@ describe("first engine connection", () => {
     await advance(1);
     expect(fetchMock).toHaveBeenLastCalledWith("/api/instances?refresh=1");
     expect(host.textContent).toContain("Sign in to Claude");
-    expect(host.textContent).not.toContain("Installing Claude…");
+    expect(host.textContent).not.toContain("Open Again");
     const count = fetchMock.mock.calls.length;
     await advance(15000);
     expect(fetchMock).toHaveBeenCalledTimes(count);
@@ -204,11 +204,24 @@ describe("first engine connection", () => {
     expect(host.querySelector("code")).toBeNull();
   });
 
+  it.each(["running", "opened"] as const)("leaves the button free to open the window again after a %s launch", async (result) => {
+    Object.assign(window.ogb!, { openEngineInstall: vi.fn(async () => result) });
+    await connect();
+    await click("Install Claude");
+    const button = () => host.querySelector<HTMLButtonElement>('[data-engine-connect="claude"] button')!;
+    expect(button().textContent).toBe("Open Again");
+    expect(button().disabled).toBe(false);
+    expect(host.textContent).not.toContain("Installing Claude…");
+    await click("Open Again");
+    expect(window.ogb!.openEngineInstall).toHaveBeenCalledTimes(2);
+    expect(button().disabled).toBe(false);
+  });
+
   it("times out at ten minutes, retries with a fresh deadline and still checks on focus", async () => {
     await connect();
     await click("Install Claude");
     await advance(599999);
-    expect(host.textContent).toContain("Installing Claude…");
+    expect(host.textContent).toContain("Finish in the window that opened.");
     await advance(1);
     expect(host.textContent).toContain("Didn't finish?");
     const count = fetchMock.mock.calls.length;
@@ -220,7 +233,7 @@ describe("first engine connection", () => {
     expect(window.ogb!.openEngineInstall).toHaveBeenCalledTimes(2);
     await advance(5000);
     expect(fetchMock).toHaveBeenCalledTimes(count + 2);
-    expect(host.textContent).toContain("Installing Claude…");
+    expect(host.textContent).toContain("Finish in the window that opened.");
   });
 
   it("keeps polling after a failed recheck, without losing the commands escape", async () => {
@@ -228,7 +241,7 @@ describe("first engine connection", () => {
     await click("Install Claude");
     fetchMock.mockRejectedValueOnce(new Error("offline"));
     await advance(5000);
-    expect(host.textContent).toContain("Installing Claude…");
+    expect(host.textContent).toContain("Finish in the window that opened.");
     await advance(5000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     await click("Show Commands");
@@ -255,7 +268,7 @@ describe("first engine connection", () => {
     instances = instances.map((row) => row.instanceId === "claude" ? { ...row, snapshot: { state: "available", authenticated: true } } : row);
     await advance(5000);
     expect(host.textContent).toContain("Claude is ready");
-    expect(host.textContent).toContain("Installing Codex…");
+    expect(host.querySelector('[data-engine-connect="codex"]')!.textContent).toContain("Finish in the window that opened.");
     instances = instances.map((row) => ({ ...row, snapshot: { state: "available", authenticated: true } }));
     await advance(5000);
     const count = fetchMock.mock.calls.length;
@@ -378,8 +391,7 @@ describe("first engine connection", () => {
     await click("Install Claude");
     const row = host.querySelector('[data-engine-connect="claude"]')!;
     expect(row.textContent).toContain("Paste the command in Terminal and press Enter.");
-    expect(row.textContent).toContain("Terminal opened");
-    expect(row.textContent).not.toContain("Installing Claude…");
+    expect(row.textContent).toContain("Open Again");
     expect(row.textContent).not.toContain("Finish in the window that opened.");
     expect(host.querySelector("[data-engine-connect-commands] code")?.textContent).toBe("install-claude");
     await advance(595000);

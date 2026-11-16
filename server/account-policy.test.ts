@@ -58,6 +58,14 @@ describe("account launch boundary", () => {
     expect(result.args.join(" ")).toContain("sqlite_home=");
   });
 
+  it("pins a Grok account to its own GROK_HOME and drops inherited auth overrides", () => {
+    const result = policy!.accountLaunch({ ...account, of: "grok" }, "grokAgent", ["agent", "stdio"], {
+      grok_home: "wrong", GROK_AUTH_PATH: "wrong", GROK_AUTH: "token", XAI_API_KEY: "fake", PATH: "keep",
+    });
+    expect(result.args).toEqual(["agent", "stdio"]);
+    expect(result.env).toEqual({ PATH: "keep", GROK_HOME: account.home });
+  });
+
   it.each(["--profile", "--with-api-key", "--oss", "-p"])("rejects a conflicting Codex selector %s", (flag) => {
     expect(policy, "account policy exists").not.toBeNull();
     expect(() => policy!.accountLaunch(account, "codex", ["app-server", flag, "conflict"], {})).toThrow("Conflicting");

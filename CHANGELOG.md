@@ -2,6 +2,226 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.273] - 2026-11-16
+
+### Added
+- Four animated dark themes: Samurai Ink, Night Rain, Warp and Circuit. They move while your bot works and hold still when it is done.
+- Bots can read your live account usage and reset times, so answers about limits come from the Usage page, not memory.
+- The Map's file viewer colors code like VS Code.
+- The Map has a second drag line between the file tree and the Git rows.
+- When a bot starts a fix from a room report, the room gets a "Fix started" line, then "Fixed in" with the version once the fix ships.
+
+### Changed
+- Settings > Themes tiles play for 3 seconds when opened; hovering or pressing a tile replays it.
+- The side pane button reopens the tab you last picked in that chat, or the Map while a worker runs.
+- The Map reopens on its last view at once, and the Git rows load after the tree and code.
+- Git rows show passed checks in emerald green and running checks in blue.
+- The empty Map's sample wears a Demo chip so it never looks like a live worker.
+- A room bot looks the same everywhere, with the look its owner picked.
+- The call voice plays at a calmer level, closer to other apps.
+- Claude bots load rarely used Wink tools only when needed, so each message uses fewer tokens.
+- Usage rows show the normal arrow; the hand appears only while you drag.
+
+### Fixed
+- In a call, a "yes" or a new request no longer waits on the previous send, and a send that never starts says so.
+- In a call, a "yes" gets one acknowledgement, a quiet request in any words hushes the bot, and an offer still waiting is not asked again.
+- Stop stays visible during a call.
+- "Not sent" and "Queued" call notices show in your app language and stay out of the call and the bot's transcript.
+- An ended call's card sits after the call and shows its end time.
+- Answering a bot's call without a voice key opens its chat instead of failing, and the follow-up rings still come.
+- A folded question with one extra choice reads "1 more choice".
+- Sign-in pages no longer log an error on every load.
+- In a group, a typed answer to an open question goes to the bot that asked it.
+- A bot working in a room takes every 1:1 line still waiting in its next turn, and Send shows only when there is a turn to join.
+- Replying to a bot's message in a room wakes that bot.
+- A room translation keeps its original's lists, bold and line breaks.
+- The host's pictures and files reach teammates as room files, not "[image]" placeholders.
+- Add bot scrolls the bot picker into view.
+- Hidden bots no longer block a Main switch or removing an account.
+- The terminal slides in and out again on Ctrl+`.
+- Send in a phone terminal types the text, then presses Enter, every time.
+- Workers resumed after a restart, including ones waiting on a question, come back instead of closing.
+- On a phone, Send waits until an attached document has uploaded.
+- Devices no longer asks for a Google sign-in on a PC with no relay and points you to Tailscale instead.
+- A picture synced from another device shows once it lands instead of staying broken.
+- On touch, tapping a Git row's clash or stop mark shows its details.
+- On phones, Copy sits right by your selection, and messages between bots open the message menu.
+- A press outside the @mention picker closes it, and "@" followed by a space sends as plain text.
+
+## [1.0.272] - 2026-11-16
+
+### Added
+- A bot stuck on a sign-in or engine problem calls your phone: Answer starts a voice call where it tells you what it needs, Not now leaves a plain alert.
+- Every bot follows short code-fix rules by default: fix the root cause, add a check, prove it by running the code. Your own instructions win.
+- Claude bots in terminal panes start with Code Mode on.
+
+### Changed
+- Most leftover limits on terminals, sign-ins, phones, uploads, routines and rooms are gone, and a team room holds up to 100 people.
+- Gemini, Grok and Muse bots no longer resend their full setup after Wink restarts, so the next message uses fewer tokens.
+
+### Fixed
+- When a bot's final answer repeats what it already wrote in the same turn, you see it once.
+- A folded question shows the choices that fit plus a "+N" pill for the rest; tapping it opens the card.
+- Typing an answer to a question no longer hits a "question already settled" error.
+- In a call, a "yes" followed by a new request no longer confirms the old one, and "wait" or "bye" no longer answers an open question.
+- In a call, asking what the bot said reads its newest chat message out in full.
+- Browser sign-in titles the PC list "Choose a PC" and drops the "Choose another PC" link that went nowhere.
+- Lagoon and Lagoon Night keep rippling while a bot works and settle when it finishes.
+- Worker rows in chat hover with a rounded, padded fill, and nothing shifts.
+
+## [1.0.271] - 2026-11-16
+
+### Changed
+- Tapping a question's choice adds no bubble from you; the greyed card shows "Answered:" with your choice, and the bot still gets it.
+- Typing a reply while a question is open folds that question the moment your message sends, in chats and rooms.
+
+### Fixed
+- On a phone, swiping goes through every bot chat in sidebar order, also with a section folded or a search typed, and the chat keeps following after a small sideways swipe.
+- On a phone, turning the screen keeps the open chat, and the side menu no longer gets stuck.
+- An app update no longer reloads Wink in the middle of a call; it waits until the call ends.
+- Tapping a notification while Wink is offline opens its chat, and closes any open menu or picker.
+- An open picture stays open when the room's files update, and on a phone Settings' close button is easier to tap.
+
+## [1.0.270] - 2026-11-15
+
+### Added
+- In a team room, any member can ask a teammate's bot for help, and every member's message counts like the host's.
+
+### Changed
+- Wink sends fewer prompt tokens with each message, on every engine.
+- Long chats summarize far less often, so replies start sooner and use fewer tokens.
+- Caps on you and your bots are gone: bot instructions save past 4,000 characters, a message takes more than 5 files, and bots can ask more questions and pass work along longer in rooms.
+- A bot created from chat can be given its model and effort, and copies the Chief's approval and tool settings.
+- Voice goes quiet whenever you ask it to, ignores side talk and stops the moment you talk over it.
+- The pinned question looks the same folded and open, and its buttons are easier to tap.
+- Every burst of worker reports reaches the Chief, and cleanup only rechecks folders that changed.
+
+### Fixed
+- On an Android call, the volume keys change the voice's volume.
+- Opening another PC's window asks for Google once, on the designed sign-in page.
+- On first run, a new bot starts on an engine you are signed in to, and Install never stays locked after you close its window.
+- If Wink's server stops after launch, the app restarts it and says so, and Google sign-in errors read in plain words.
+- An old Claude chat whose session is gone starts fresh with its context instead of failing, and a picture still uploading holds Send.
+- Animated themes move in group and team rooms too.
+- On a phone, Back closes the full-screen pane instead of jumping to another chat, and a tapped notification shows its chat.
+- On a phone, the status bar follows the theme, and Map rows and bar controls are easier to tap.
+
+## [1.0.269] - 2026-11-15
+
+### Added
+- Neon Grid, an animated chat theme: a sunset grid floor that rolls while the bot works and rests when it is idle.
+- Muse Ember in the model picker.
+
+### Changed
+- Voice keeps to the app language, asks a question only once, opens with one calm "Hey." and stops when you talk over it.
+- Voice no longer says the same line twice in a row.
+- Hanging up a call sends only words meant for the bot, and a call back reads out the reply to your last order.
+- A call passes along new replies and status as they happen, and a dropped call shows the words it never sent.
+- The Map reads git only when a worker's files change, and one broken worker no longer breaks the others.
+- In the Map, Review, PR and Checks open their own page, a drag line gives the code view more room, worker switches fade instead of snapping, and passed checks use one green on every theme.
+- Live Typing types out a reply that arrives all at once instead of showing it as a block.
+- The turn status line holds each label for a second, so a fast run of tools no longer flickers.
+- A bot answering in a group, room or routine says where it is working in its list row.
+- Lagoon and Snow move in their Themes tiles, play once when picked and say once that they move while the bot works.
+- Room engine, model and voice pickers use Wink's own menus.
+- Bots know which of their pull requests are not in your installed Wink yet, so they check before saying something is fixed.
+- On a phone, list menus open on a hold before you let go.
+
+### Fixed
+- Group turns no longer get stuck: Thinking and Stop clear, a question card is answered by the bot that asked, and Continue after a restart picks up the bots that still owe an answer.
+- A teammate's request runs under the host's Ask or Auto setting for that bot.
+- Group details hides the Folder row when no shared folder is set.
+- Call rows show the phone icon before the first word instead of under the bubble.
+- Sidebar and field menus stay open while a chat streams.
+- A document viewer passes the scroll on to the chat at its top and bottom edges.
+- On a phone, the memory page has no see-through strip or gap under its sticky headers.
+- On a phone, account activity fits, with the calendar above its numbers.
+- On a phone, the room bell responds to every tap.
+- On a phone, the chat header keeps the full model name when it fits.
+
+## [1.0.268] - 2026-11-15
+
+### Changed
+- Wink with lots of chat history opens to typing about twice as fast by reading only each chat's newest messages at launch.
+
+### Fixed
+- After a restart, workers resuming together wait for memory instead of some giving up.
+- The chat box ring in Settings > Themes reaches the bar's right edge.
+
+## [1.0.267] - 2026-11-15
+
+### Changed
+- Muse bots answer sooner on a busy PC by keeping their engine ready between messages.
+- Muse turns report their token counts.
+
+### Fixed
+- Live Verify document replays glide down without jumping back up.
+- On a phone, a long question keeps three lines above its choices when there is room.
+- A worker with no pull request keeps its Git row summary in the Map.
+- A bot that never switched models no longer gets model tags in voice and cloud context.
+- Checking the Muse version no longer flashes a terminal window.
+
+## [1.0.266] - 2026-11-15
+
+### Changed
+- A file named mid-sentence is a plain underlined link, and a picture it links to appears under the reply. Click either to open it on the right.
+- New pictures open the side pane only when clicked. Pages and PDFs still open it automatically.
+- Gemini replies appear as they are written.
+- Codex bots stay warm between turns so their first words arrive sooner.
+- Grok bots run Wink's own tools without a permission wait, and a rule you remove from your Grok config stays removed.
+- The Model Index includes Gemini 4 Hydrogen and Carbon.
+
+### Fixed
+- Long questions keep their answer choices in sight.
+- The Map's Git row no longer overlaps the PR summary.
+- Hovering a Map folder's number explains how many files it counts.
+- What's New appears below messages synced from another PC.
+- The other-PC window explains connection failures instead of going black.
+- After a model switch, a bot credits earlier work to the model that wrote it.
+- A picture the bot already showed is not drawn a second time.
+- A bot's 1:1 chat stays quiet while it works in a group.
+
+## [1.0.265] - 2026-11-14
+
+### Added
+- The model picker's Chart style has one finished look: lab colors on black, in dark and light, on desktop and phone. Every key and click works as before.
+
+### Changed
+- How many worker tabs a bot can open now depends on free memory, not a fixed 16. A bot on a PC with room to spare can open its 17th tab and well past it.
+- Up/Down and clicks glide the Map arrow to the file you picked instead of drawing a box around it. Follow hands the arrow back to the workers.
+
+### Fixed
+- Muse bots have Wink's tools again, in 1:1s and groups, so they can make and show pictures, react, ask and use panes.
+- Typing while Codex is replying keeps the text it already showed instead of wiping it and starting over.
+- In a group set to answer only when @mentioned, a line that mentions no one no longer holds the message box, and you can add or remove bots while the group is working.
+- The Map opens with all workers at once instead of rebuilding as each one loads.
+- Map folder boxes leave the same gap on both sides of their name and count.
+
+## [1.0.264] - 2026-11-14
+
+### Added
+- Lagoon and Snow chat themes, each with Day and Night. The backdrop moves when you send and when a reply comes in, then rests.
+- The Map file viewer has an expand button that folds the tree away so the file fills the pane. Tap it again to get the tree back where you left it.
+- The Map's Git row reads as one straight line of named stops: Coding, Commit, Push, PR, Checks, Review and Merged.
+- Say it and hang up: tap Call and talk right away, and anything the call didn't answer goes to the bot as your message when you hang up.
+- Replies type live by default. A device where you picked Paragraphs keeps it.
+- A pinned question arrives as the full card, then shrinks to one row over the message box once the chat moves on. The row keeps the answer buttons.
+
+### Changed
+- Wink says "group" instead of "room" everywhere you see it, in English and Korean.
+- With two or more accounts on an engine, the status line names the account in use. Alt+T opens the Look strip from every picker.
+- Settings and phone setup buttons hover and move like the rest of the app.
+- Dragging a usage row no longer pushes the card into a scrollbar, and it slows into the ends instead of stopping dead.
+
+### Fixed
+- Codex bots keep write access when a chat continues, instead of asking for approval on every write.
+- Switching the model while a bot is replying sends your next message to the new model.
+- Voice calls read out only what you asked for, wait their turn, and ask a question once.
+- The Your PCs and Signed in here lists in Settings > Devices paint at once from the last answer.
+- The "Bots are working it out" strip hides when no bot is working.
+- Picking a style or look in the model picker closes the strip.
+- The Map tree fits small projects on a phone without overlapping boxes, and the clash list shows one row per file.
+
 ## [1.0.263] - 2026-11-14
 
 ### Added

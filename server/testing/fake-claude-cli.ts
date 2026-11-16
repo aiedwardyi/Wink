@@ -5,7 +5,7 @@
 // the real thing misbehaves:
 //
 //   FAKE_CLAUDE_MODE   happy (default) | exit-early | resume-fails | resume-fails-multiline
-//                      | resume-fails-unknown | hang | malformed
+//                      | resume-fails-unknown | resume-fails-real | hang | malformed
 //                      | stream (partial-message text deltas before the
 //                        whole-message frame, plus subagent noise to drop)
 //                      | edit (a Write then a Bash, gated like the real CLI)
@@ -720,6 +720,16 @@ const playTurn = (prompt: JsonValue, held = false) => {
     process.stderr.write(resumeDiagnostic, () => process.exit(4));
     return;
   }
+  // the installed CLI's own shape: stderr line, then an error result frame, then exit 1
+  if (mode === "resume-fails-real" && argv.includes("--resume")) {
+    const missing = `No conversation found with session ID: ${sessionId}`;
+    process.stderr.write(`${missing}
+`, () => {
+      out({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: sessionId, total_cost_usd: 0, errors: [missing] });
+      setTimeout(() => process.exit(1), 50);
+    });
+    return;
+  }
   // transient-failure script for retry tests. FAKE_CLAUDE_TRANSIENTS is how
   // many launches fail transiently (503-shaped stderr, exit 5); the count of
   // launches so far lives in a state FILE because child processes cannot
@@ -766,6 +776,12 @@ const playTurn = (prompt: JsonValue, held = false) => {
     if (mode === "background-hang") {
       out({ type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tu-task", description: "fake task", is_backgrounded: true, task_type: "local_agent", session_id: sessionId });
     }
+    setInterval(() => {}, 1_000);
+    return;
+  }
+
+  if (mode === "tool-hang") {
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu-hang", name: "Bash", input: { command: "sleep forever" } }] } });
     setInterval(() => {}, 1_000);
     return;
   }

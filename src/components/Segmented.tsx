@@ -24,6 +24,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
   const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
   const [mask, setMask] = useState<string | undefined>();
   const [peekWidth, setPeekWidth] = useState<number>();
+  const wide = Boolean(ring);
   useLayoutEffect(() => {
     const group = ref.current;
     if (!group) return;
@@ -49,7 +50,13 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
         const right = on.offsetLeft + on.offsetWidth + 3 - (width ?? group.clientWidth);
         group.scrollLeft = Math.max(0, Math.min(on.offsetLeft - 3, Math.max(group.scrollLeft, right)));
       }
-      setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
+      if (on && wide) {
+        // Whole-px offsets leave a strip of bar beside the ring; rects carry the modal's pop-in scale.
+        const box = group.getBoundingClientRect();
+        const pick = on.getBoundingClientRect();
+        const scale = box.width / Number.parseFloat(getComputedStyle(group).width) || 1;
+        setThumb({ x: (pick.left - box.left) / scale + group.scrollLeft - 3, w: pick.width / scale + 6 });
+      } else setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
       setMask(edgeFade(group));
     };
     place();
@@ -59,7 +66,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
     if (peek && group.parentElement) observer.observe(group.parentElement);
     for (const button of group.querySelectorAll("button")) observer.observe(button);
     return () => observer.disconnect();
-  }, [value, options.length, peek]);
+  }, [value, options.length, peek, wide]);
   return (
     <div
       ref={ref}

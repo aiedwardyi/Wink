@@ -61,6 +61,29 @@ it("fits an image in the pane", async () => {
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("signups.png");
 });
 
+it("shows a text file as text", async () => {
+  vi.mocked(fetch).mockResolvedValue(new Response("test4\n<b>line two</b>", { status: 200 }));
+  await render({ item: item("C:\\w\\test.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector(".show-stage[data-ready] pre")));
+  const pre = host.querySelector(".show-stage[data-ready] pre")!;
+  expect(pre.textContent).toBe("test4\n<b>line two</b>");
+  expect(pre.children).toHaveLength(0);
+  expect(fetch).toHaveBeenCalledWith(src("C:\\w\\test.txt"));
+  expect(host.querySelector(".show-frame")!.getAttribute("data-kind")).toBe("text");
+  expect(host.querySelector(".show-frame-name")?.textContent).toBe("test.txt");
+});
+
+it.each([
+  ["an announced size", () => new Response("x", { status: 200, headers: { "content-length": "1000001" } })],
+  ["no announced size", () => new Response("x".repeat(1_000_001), { status: 200 })],
+])("offers Open for a text file too big for the pane, with %s", async (_, reply) => {
+  vi.mocked(fetch).mockResolvedValue(reply());
+  await render({ item: item("C:\\w\\huge.txt", "text"), hidden: false });
+  await until(() => Boolean(host.querySelector("[data-show-fallback]")));
+  expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
+  expect(host.querySelector("pre")).toBeNull();
+});
+
 it("pages a PDF one page at a time", async () => {
   await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("1 / 8"));

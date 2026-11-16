@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useStore } from "@/state/store";
 
@@ -17,19 +17,20 @@ export function translateLine(base: string, entryId: string, lang: LocaleId): Pr
 
 export function useTranslationAvailable(base: string): boolean {
   const { state } = useStore();
-  const [available, setAvailable] = useState(false);
+  // A usage report lands on every bot turn and cannot change whether an engine translates.
+  const engines = useMemo(() => JSON.stringify([state.config?.gemini?.configured, state.instances.map(({ rateLimits: _rateLimits, ...instance }) => instance)]), [state.instances, state.config?.gemini?.configured]);
+  const [answer, setAnswer] = useState({ base, available: false });
   useEffect(() => {
-    let current = true;
-    setAvailable(false);
     if (!base) return;
+    let current = true;
     const check = () => {
-      void request(`${base}/translate`).then((body) => { if (current) setAvailable(body.available === true); }, () => { if (current) setAvailable(false); });
+      void request(`${base}/translate`).then((body) => { if (current) setAnswer({ base, available: body.available === true }); }, () => { if (current) setAnswer({ base, available: false }); });
     };
     check();
     window.addEventListener("focus", check);
     return () => { current = false; window.removeEventListener("focus", check); };
-  }, [base, state.instances, state.config]);
-  return available;
+  }, [base, engines]);
+  return answer.base === base && answer.available;
 }
 
 type Translation = { key: string; visible: boolean; pending: boolean; failed: boolean; text?: string };

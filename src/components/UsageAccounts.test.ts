@@ -177,3 +177,45 @@ it("names the trigger for screen readers in Korean", async () => {
   expect(picker().getAttribute("aria-label")).toContain("Claude 1");
   expect(picker().getAttribute("aria-label")).not.toBe("Claude 1");
 });
+
+it("portals a settings field with its own label, icon and current check", async () => {
+  await act(async () => root.render(createElement(AccountPicker, {
+    accounts: [{ id: "one", name: "One", icon: createElement("img", { src: "/one.png", alt: "One" }) }, { id: "two", name: "Two" }],
+    viewedId: "one", select: (id: string) => picked.push(id), field: true, label: "Who answers", className: "flex-1", triggerClassName: "bg-inset",
+  })));
+  expect(picker().getAttribute("aria-label")).toBe("Who answers");
+  expect(document.getElementById(picker().getAttribute("aria-describedby")!)?.textContent).toBe("One");
+  expect(picker().classList.contains("bg-inset")).toBe(true);
+  await act(async () => picker().click());
+  const menu = document.querySelector<HTMLElement>('[role="menu"]:not([data-closing])')!;
+  expect(menu.parentElement).toBe(document.body);
+  expect(menu.getAttribute("aria-label")).toBe("Who answers");
+  expect(menu.querySelector('[aria-checked="true"] img')).not.toBeNull();
+  expect(menu.querySelector('[aria-checked="true"] svg.lucide-check')).not.toBeNull();
+  await act(async () => menu.querySelectorAll<HTMLButtonElement>("button")[1]!.click());
+  expect(picked).toEqual(["two"]);
+  expect(document.activeElement).toBe(picker());
+});
+
+it("keeps an empty settings field disabled without adding a label", async () => {
+  await act(async () => root.render(createElement(AccountPicker, {
+    accounts: [], viewedId: "missing", select: (id: string) => picked.push(id), field: true, label: "Change model",
+  })));
+  expect(picker().disabled).toBe(true);
+  expect(picker().textContent).toBe("");
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+it("returns field focus before Tab moves to the next control", async () => {
+  await act(async () => root.render(createElement(AccountPicker, {
+    accounts, viewedId: "acct-1", select: (id: string) => picked.push(id), field: true, label: "Change model",
+  })));
+  await act(async () => picker().click());
+  const option = document.querySelector<HTMLButtonElement>('[role="menu"] [aria-checked="true"]')!;
+  const event = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+  await act(async () => option.dispatchEvent(event));
+  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
+  expect(document.activeElement).toBe(picker());
+  expect(event.defaultPrevented).toBe(false);
+  expect(picked).toEqual([]);
+});

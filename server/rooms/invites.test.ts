@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import { addPerson, closeRoomsDb, createRoom, RoomError, roomPeople } from "./db.ts";
 import {
-  cancelInvite, closeInvitesDb, createInvite, guestByKey, INVITE_TTL_MS, joinRoom, revokeGuestKeys, roomInvites,
+  cancelInvite, closeInvitesDb, createInvite, guestByKey, INVITE_TTL_MS, joinRoom, revokeGuestKeys, roomCode, roomInvites,
 } from "./invites.ts";
 
 const DAY = 24 * 60 * 60_000;
@@ -38,9 +38,9 @@ afterEach(() => {
 
 describe("invites", () => {
   it("creates, lists and cancels, never listing the secret", () => {
-    const { invite, secret } = createInvite(roomId, "Mina", "ask", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     expect(secret).toMatch(/^wki_[A-Za-z0-9_-]{43}$/);
-    expect(roomInvites(roomId)).toEqual([{ id: invite.id, name: "Mina", level: "ask", createdAt: clock, expiresAt: clock + 7 * DAY }]);
+    expect(roomInvites(roomId)).toEqual([{ id: invite.id, name: "Mina", createdAt: clock, expiresAt: clock + 7 * DAY }]);
     expect(cancelInvite(createRoom("Other").id, invite.id)).toBe(false);
     expect(cancelInvite(roomId, invite.id)).toBe(true);
     expect(roomInvites(roomId)).toEqual([]);
@@ -48,26 +48,26 @@ describe("invites", () => {
   });
 
   it("refuses a name the room, its people or a live invite already has", () => {
-    addPerson(roomId, "Jun", "chat", TAKEN);
-    createInvite(roomId, "Mina", "chat", TAKEN);
+    addPerson(roomId, "Jun", TAKEN);
+    createInvite(roomId, "Mina", TAKEN);
     for (const name of ["wink", "JUN", "mina", "everyone", "a@b"]) {
-      expect(() => createInvite(roomId, name, "chat", TAKEN)).toThrow(RoomError);
+      expect(() => createInvite(roomId, name, TAKEN)).toThrow(RoomError);
     }
-    expect(() => createInvite("no-room", "Sora", "chat", TAKEN)).toThrow(expect.objectContaining({ status: 404 }));
+    expect(() => createInvite("no-room", "Sora", TAKEN)).toThrow(expect.objectContaining({ status: 404 }));
   });
 
   it("works once", () => {
-    const { invite, secret } = createInvite(roomId, "Mina", "trusted", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     const joined = joinRoom(invite.id, secret, TAKEN);
-    expect(joined).toMatchObject({ ok: true, roomId, person: { name: "Mina", level: "trusted" } });
+    expect(joined).toMatchObject({ ok: true, roomId, person: { name: "Mina" } });
     expect(joinRoom(invite.id, secret, TAKEN)).toEqual({ ok: false, error: "no-invite" });
     expect(roomPeople(roomId).map((person) => person.name)).toEqual(["Mina"]);
     expect(roomInvites(roomId)).toEqual([]);
   });
 
   it("lasts 7 days", () => {
-    const early = createInvite(roomId, "Mina", "chat", TAKEN);
-    const late = createInvite(roomId, "Jun", "chat", TAKEN);
+    const early = createInvite(roomId, "Mina", TAKEN);
+    const late = createInvite(roomId, "Jun", TAKEN);
     vi.setSystemTime(clock + INVITE_TTL_MS - 1);
     expect(joinRoom(early.invite.id, early.secret, TAKEN)).toMatchObject({ ok: true });
     vi.setSystemTime(clock + INVITE_TTL_MS);
@@ -76,7 +76,7 @@ describe("invites", () => {
   });
 
   it("dies after 5 wrong secrets, counted across restarts", () => {
-    const { invite, secret } = createInvite(roomId, "Mina", "chat", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     for (const wrong of ["", "wki_nope", secret.slice(0, -1), `${secret}x`]) {
       expect(joinRoom(invite.id, wrong, TAKEN)).toEqual({ ok: false, error: "wrong-secret" });
       closeInvitesDb();
@@ -88,22 +88,33 @@ describe("invites", () => {
 
   it("takes 20 joins a minute", () => {
     for (let i = 0; i < 20; i++) expect(joinRoom("nope", "wki_nope", TAKEN)).toEqual({ ok: false, error: "no-invite" });
-    const { invite, secret } = createInvite(roomId, "Mina", "chat", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     expect(joinRoom(invite.id, secret, TAKEN)).toEqual({ ok: false, error: "busy" });
     vi.setSystemTime(clock + 60_000);
     expect(joinRoom(invite.id, secret, TAKEN)).toMatchObject({ ok: true });
   });
 
   it("keeps the invite when the room is full or the name was taken since", () => {
-    const { invite, secret } = createInvite(roomId, "Mina", "chat", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     expect(joinRoom(invite.id, secret, [...TAKEN, "MINA"])).toEqual({ ok: false, error: "name-taken" });
-    for (let i = 0; i < 20; i++) addPerson(roomId, `P${i}`, "chat", TAKEN);
+    for (let i = 0; i < 100; i++) addPerson(roomId, `P${i}`, TAKEN);
     expect(joinRoom(invite.id, secret, TAKEN)).toEqual({ ok: false, error: "room-full" });
     expect(roomInvites(roomId)).toHaveLength(1);
   });
 
+  it("takes people past 20, up to the 100 every joiner's room state parses", () => {
+    for (let i = 0; i < 20; i++) addPerson(roomId, `P${i}`, TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
+    expect(joinRoom(invite.id, secret, TAKEN)).toMatchObject({ ok: true });
+    for (let i = 21; i < 99; i++) addPerson(roomId, `P${i}`, TAKEN);
+    const code = roomCode(roomId);
+    expect(joinRoom(code.id, code.secret, TAKEN, { name: "Joon", device: "pc-joon-0123456789abcdef" })).toMatchObject({ ok: true, person: { name: "Joon" } });
+    expect(roomPeople(roomId)).toHaveLength(100);
+    expect(joinRoom(code.id, code.secret, TAKEN, { name: "Sora", device: "pc-sora-0123456789abcdef" })).toEqual({ ok: false, error: "room-full" });
+  });
+
   it("leaves no key and no person when join fails midway", () => {
-    const { invite, secret } = createInvite(roomId, "Mina", "chat", TAKEN);
+    const { invite, secret } = createInvite(roomId, "Mina", TAKEN);
     const database = raw();
     database.exec("CREATE TRIGGER crash BEFORE INSERT ON guest_keys BEGIN SELECT RAISE(ABORT, 'crash'); END");
     expect(() => joinRoom(invite.id, secret, TAKEN)).toThrow("crash");
@@ -118,7 +129,7 @@ describe("invites", () => {
 
 describe("guest keys", () => {
   const join1 = (name = "Mina") => {
-    const { invite, secret } = createInvite(roomId, name, "ask", TAKEN);
+    const { invite, secret } = createInvite(roomId, name, TAKEN);
     const joined = joinRoom(invite.id, secret, TAKEN);
     if (!joined.ok) throw new Error(joined.error);
     return { ...joined, secret };
@@ -133,7 +144,7 @@ describe("guest keys", () => {
 
   it("stores only hashes", () => {
     const { key, secret } = join1();
-    const pending = createInvite(roomId, "Jun", "chat", TAKEN);
+    const pending = createInvite(roomId, "Jun", TAKEN);
     closeInvitesDb();
     closeRoomsDb();
     const database = raw();

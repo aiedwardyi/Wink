@@ -4,17 +4,21 @@ import { createReadStream } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { MapDiff, MapDiffLine, MapFile } from "../shared/map-pane.ts";
+import { mapEmptyTree } from "../shared/map-empty-tree.mjs";
 
 const LIMIT = 512 * 1024;
 export const MAP_LINE_LIMIT = 500;
 const WHOLE_LIMIT = 5_000;
 const WALK_LIMIT = 5_000;
 const RANGE_LIMIT = 64;
+const LIST_LIMIT = 32 * 1024 * 1024;
+const NEW_FILES = 200;
+const NEW_BYTES = 64 * 1024;
 
-export function mapGit(cwd: string, args: string[]): Promise<string> {
+export function mapGit(cwd: string, args: string[], limit = LIMIT): Promise<string> {
   return new Promise((done, fail) => {
     execFile("git", ["--literal-pathspecs", "-C", cwd, ...args], {
-      windowsHide: true, timeout: 5_000, maxBuffer: LIMIT,
+      windowsHide: true, timeout: 5_000, maxBuffer: limit,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
     }, (error, stdout) => error ? fail(Object.assign(error, { stdout })) : done(stdout));
   });
@@ -24,7 +28,7 @@ export async function mapHead(cwd: string): Promise<string | null> {
   try {
     const head = (await mapGit(cwd, ["rev-parse", "HEAD"])).trim();
     return /^[a-f0-9]{40,64}$/.test(head) ? head : null;
-  } catch { return null; }
+  } catch { return mapEmptyTree((await mapGit(cwd, ["rev-parse", "--show-object-format"]).catch(() => "")).trim()); }
 }
 
 async function fileText(cwd: string, path: string): Promise<{ text: string; capped: boolean; binary: boolean }> {
@@ -60,10 +64,29 @@ async function addedFile(cwd: string, path: string): Promise<MapFile> {
   return result;
 }
 
-export async function mapFiles(cwd: string, base: string, common?: string): Promise<MapFile[]> {
+// The launch commit, until the trunk is merged or rebased in: from then on the trunk's commits are not the worker's.
+export async function mapFork(cwd: string, launch: string): Promise<string> {
+  try {
+    const own = (await mapGit(cwd, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+    const refs = await mapGit(cwd, ["for-each-ref", "--format=%(refname)%00%(symref)%00%(upstream)", "refs/heads/main", "refs/heads/master", "refs/remotes/*/HEAD", "refs/remotes/*/main", "refs/remotes/*/master", ...own ? [own] : []]);
+    const branch = (ref: string) => ref.replace(/^refs\/(?:heads|remotes\/[^/]+)\//, "");
+    const trunk = new Set<string>();
+    for (const [name, symref, upstream] of refs.split("\n").filter(Boolean).map(line => line.split("\0"))) {
+      const ref = name === own ? upstream : symref || name;
+      // A worker on the trunk itself keeps its launch commit: pushing must not empty its list.
+      if (ref && branch(ref) !== branch(own)) trunk.add(ref);
+    }
+    if (!trunk.size) return launch;
+    const fork = (await mapGit(cwd, ["merge-base", "HEAD", ...trunk])).trim();
+    if (!/^[a-f0-9]{40,64}$/.test(fork) || fork === launch) return launch;
+    return await mapGit(cwd, ["merge-base", "--is-ancestor", fork, launch]).then(() => launch, () => fork);
+  } catch { return launch; }
+}
+
+export async function mapFiles(cwd: string, base: string, common?: string): Promise<{ files: MapFile[]; more: number }> {
   const [numstat, untracked, { ranges }] = await Promise.all([
     mapGit(cwd, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, "--"]),
-    mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    mapGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], LIST_LIMIT),
     mapRanges(cwd, [base], RANGE_LIMIT),
   ]);
   // Workers launched at different commits compare on one: each range moves onto the common launch commit's lines.
@@ -81,14 +104,18 @@ export async function mapFiles(cwd: string, base: string, common?: string): Prom
       files.push(file);
     }
   }
-  for (const path of untracked.split("\0").filter(Boolean)) {
+  const fresh = untracked.split("\0").filter(Boolean);
+  let shown = 0;
+  for (let bytes = 0; shown < Math.min(fresh.length, NEW_FILES); shown++) {
+    bytes += fresh[shown].length;
+    if (bytes > NEW_BYTES) break;
     try {
-      const file = await addedFile(cwd, path);
+      const file = await addedFile(cwd, fresh[shown]);
       if (!file.binary) file.ranges = [[1, Math.max(1, file.added)]];
       files.push(file);
     } catch {}
   }
-  return files;
+  return { files, more: fresh.length - shown };
 }
 
 type Hunk = [start: number, count: number, at: number, length: number];
@@ -151,7 +178,7 @@ export async function mapWalkFiles(cwd: string, limit = WALK_LIMIT): Promise<str
 }
 
 export async function mapRepoFiles(cwd: string): Promise<string[]> {
-  return [...new Set((await mapGit(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean))];
+  return [...new Set((await mapGit(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], LIST_LIMIT)).split("\0").filter(Boolean))];
 }
 
 interface MapLatest { path?: string; at: number }

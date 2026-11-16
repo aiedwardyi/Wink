@@ -108,6 +108,18 @@ describe("pair page", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it("draws none of its own sign-in on ?g=1 and hands to the Google sign-in page once", async () => {
+    const assign = vi.spyOn(location, "assign").mockImplementation(() => {});
+    const page = open("/pair?g=1", googlePc());
+    expect(document.getElementById("title").textContent).toBe("");
+    expect(page.help.hidden).toBe(true);
+    expect(page.form.hidden).toBe(true);
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledExactlyOnceWith("/api/phone/google/start"));
+    expect(page.form.hidden).toBe(true);
+    expect(page.google.hidden).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["en", "Google sign-in isn't ready on this PC yet. Use the code."],
     ["ko", "이 PC에서는 아직 Google 로그인을 사용할 수 없습니다. 코드를 사용하세요."],

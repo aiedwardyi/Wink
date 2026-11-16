@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 
-import { createRemoteHosts, REMOTE_PANE_CEILING, remoteArgs, remoteHost, remoteLaunchLine, remoteSlot, remoteSshArgs, sshFailure } from "./terminal-remote.mjs";
+import { createRemoteHosts, remoteArgs, remoteHost, remoteLaunchLine, remoteSlot, remoteSshArgs, sshFailure } from "./terminal-remote.mjs";
 
 const GB = 1024 ** 3;
 const HOSTS = {
@@ -50,10 +50,14 @@ test("picks a free tunnel port per host and counts the panes still starting ther
   assert.deepEqual(remoteSlot("work", panes, at, () => 0), { host: "work", port: 40002, at, starting: 1 });
   assert.deepEqual(remoteSlot("dad", panes, at, () => 0), { host: "dad", port: 40000, at, starting: 1 });
   assert.equal(remoteSlot("work", [], at, (count) => count - 1).port, 48999);
-  assert.equal(REMOTE_PANE_CEILING, 64);
-  const full = Array.from({ length: REMOTE_PANE_CEILING }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
-  assert.throws(() => remoteSlot("work", full, at), /Too many terminals on work \(limit 64\)/);
-  assert.equal(remoteSlot("work", full.slice(1), at, () => 0).port, 40000);
+  const busy = Array.from({ length: 65 }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
+  assert.equal(remoteSlot("work", busy, at, () => 0).port, 40065);
+});
+
+test("a host with every tunnel port in use fails that one open plainly", () => {
+  const full = Array.from({ length: 9_000 }, (_, index) => ({ host: "work", port: 40000 + index, at: 0 }));
+  assert.throws(() => remoteSlot("work", full, 1_000_000), /^Error: All 9000 tunnel ports on work are in use\./);
+  assert.equal(remoteSlot("dad", full, 1_000_000, () => 0).port, 40000);
 });
 
 test("the launch line splices the pane's env at run time and never types a grant", () => {
@@ -66,6 +70,9 @@ test("the launch line splices the pane's env at run time and never types a grant
     "Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue",
     "$env:ORBIT_URL = 'http://localhost:40123'",
     "$env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false'",
+    "$claudeConfig = if ($env:CLAUDE_CONFIG_DIR) { Join-Path $env:CLAUDE_CONFIG_DIR '.claude.json' } else { Join-Path $HOME '.claude.json' }",
+    "$claudeCaveats = Get-Content -Raw -LiteralPath $claudeConfig -ErrorAction SilentlyContinue",
+    "if (-not $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE -and $claudeCaveats -match '\"codeModeCaveatsAcceptedV1\"\\s*:\\s*true' -and $claudeCaveats -match '\"codeModeAutoModeCaveatAcceptedV1\"\\s*:\\s*true') { $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = '1' }",
     "$env:PATH = 'D:\\wink-remote\\bin;' + $env:PATH",
     "$env:ORBIT_SCRATCH = 'D:\\wink-remote\\scratch\\' + $env:ORBIT_PANE",
     "New-Item -ItemType Directory -Force $env:ORBIT_SCRATCH | Out-Null",

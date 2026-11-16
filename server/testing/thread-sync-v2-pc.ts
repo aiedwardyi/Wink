@@ -169,6 +169,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
       case "tick": mock.timers.tick(args.at ?? 0); await sync?.poll(); break;
       case "race": live = false; runningCalls = 0; startAt = 3; break;
       case "flush": value = await sync?.flush(threadId); break;
+      case "settle": value = await sync?.settle(threadId); break;
       case "pull": await sync?.pull(threadId); break;
       case "note": value = sync?.notes(threadId)[0] ?? null; break;
       case "consumeForkByWriter": {

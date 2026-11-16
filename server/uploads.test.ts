@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cloudSyncRoots, createUploads, safeUploadName, UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES, uploadTargetDir, type UploadsOptions } from "./uploads.ts";
+import { cloudSyncRoots, createUploads, safeUploadName, UPLOAD_CHUNK_BYTES, uploadTargetDir, type UploadsOptions } from "./uploads.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -76,9 +76,9 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 }
 
 describe("big-file uploads", () => {
-  it("rejects a file over 10 GiB at create", async () => {
+  it("starts a file over 10 GiB when the disk has room", async () => {
     const { create } = await serve();
-    expect(await create({ name: "huge.mkv", size: UPLOAD_MAX_BYTES + 1 })).toEqual({ status: 413, body: { code: "too_big" } });
+    expect(await create({ name: "huge.mkv", size: 10 * 1024 ** 3 + 1 })).toMatchObject({ status: 201, body: { offset: 0 } });
   });
 
   it("refuses a create that would leave less than 1 GiB free", async () => {
@@ -219,7 +219,7 @@ describe("big-file uploads", () => {
     expect(uploadTargetDir(control, roots, data)).toBe(join(control, "Wink"));
   });
 
-  it("caps a chunk at 8 MiB and open sessions at 4", async () => {
+  it("caps a chunk at 8 MiB and opens any number of sessions", async () => {
     const { base, create, chunk, status } = await serve();
     const { body } = await create({ name: "a.mp4", size: 20 * 1024 ** 2 });
     expect(await chunk(body.id, 0, Buffer.alloc(UPLOAD_CHUNK_BYTES + 1))).toEqual({ status: 413, body: { code: "too_big" } });
@@ -231,7 +231,6 @@ describe("big-file uploads", () => {
     });
     expect(streamed).toBe(413);
     expect((await status(body.id)).offset).toBe(0);
-    for (const name of ["b.mp4", "c.mp4", "d.mp4"]) expect((await create({ name, size: 10 })).status).toBe(201);
-    expect(await create({ name: "e.mp4", size: 10 })).toEqual({ status: 429, body: { code: "busy" } });
+    for (const name of ["b.mp4", "c.mp4", "d.mp4", "e.mp4", "f.mp4", "g.mp4"]) expect((await create({ name, size: 10 })).status).toBe(201);
   });
 });

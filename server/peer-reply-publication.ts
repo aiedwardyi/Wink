@@ -3,6 +3,7 @@ import { asksSender } from "./delegate-askback.ts";
 import type { DelegationReceipt } from "./delegations.ts";
 import type { MailDestination } from "./mail-types.ts";
 import { registerReplyWake } from "./mail.ts";
+import { linkRoomEntry } from "./rooms/mirror.ts";
 
 export function replyDestinations(bus: CommsBus, receipt: DelegationReceipt, statusOnly = false): MailDestination[] {
   const sender = receipt.source && bus.store.bot(receipt.source.botId);
@@ -59,6 +60,7 @@ export function publishPeerReply(bus: CommsBus, receipt: DelegationReceipt, repa
     if (repair && row.comm?.wake) bus.store.patchMessage(destination.threadId, row.id, { comm: { ...row.comm, wake: undefined }, origin: undefined });
     destination.rowId = row.id;
     const room = bus.store.groupByThread(destination.threadId);
+    if (room?.dm) linkRoomEntry(bus.store, room, row);
     if (room) bus.store.patchGroup(room.id, { unread: true });
   }
 }

@@ -3,7 +3,7 @@
 // composer keep the native menu. Same dismiss contract as the sidebar menus.
 // On phones a hold opens it, and Select text hands one message back to the
 // phone's own selection.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, X } from "lucide-react";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
@@ -103,7 +103,7 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   endSelectMode();
   // the row is unselectable until now, and caret hit-testing skips unselectable text
   row.setAttribute("data-select-mode", "");
-  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content]") ?? row;
+  const content = row.querySelector("[data-orbit-message-content], [data-team-room-content], [data-peer-text]") ?? row;
   const box = row.getBoundingClientRect();
   const word = wordAt(content, box.left + held.x, box.top + held.y);
   const sel = window.getSelection();
@@ -192,6 +192,37 @@ export function holdToOpen(open: ((x: number, y: number, opener: HTMLElement) =>
     onTouchCancel: cancelPress,
     onContextMenuCapture: (e: React.MouseEvent<HTMLElement>) => {
       if (press && e.target instanceof Element && !holdsNative(e.target)) e.preventDefault();
+    },
+  };
+}
+
+/** Row props for the message menu: a hold on phones, right-click, and the ContextMenu key. Every message row spreads these. */
+export function messageMenuProps(target: MessageMenuTarget | null, onMessageMenu: (menu: MessageMenuRequest) => void): HTMLAttributes<HTMLElement> {
+  if (!target) return {};
+  return {
+    ...holdToOpen((x, y, opener) => onMessageMenu({ kind: "message", x, y, opener, target })),
+    onContextMenu: (e) => {
+      if (isTouchPrimary() || !(e.target instanceof Element)) return;
+      const kind = contextClickKind(e.target, e.clientX, e.clientY);
+      if (kind === "native") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onMessageMenu(kind === "selection"
+        ? { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, text: window.getSelection()?.toString() ?? "" }
+        : { kind, x: e.clientX, y: e.clientY, opener: e.currentTarget, target });
+    },
+    onKeyDown: (e) => {
+      if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+      if (e.target instanceof Element && keepsNativeMenu(e.target)) return;
+      e.preventDefault();
+      const rect = e.currentTarget.getBoundingClientRect();
+      onMessageMenu({
+        kind: "message",
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        opener: e.currentTarget,
+        target,
+      });
     },
   };
 }
@@ -539,7 +570,7 @@ export function MessageMenu({
           {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      {message.quick?.state !== "answer" && (
+      {message.kind === "text" && message.quick?.state !== "answer" && (
         <button
           type="button"
           role="menuitem"

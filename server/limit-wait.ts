@@ -53,9 +53,10 @@ export class LimitWaits {
     return id ? this.store.get(id)?.messageId : undefined;
   }
 
-  failed(threadId: string, turnId: string | undefined, resetsAt: number | null, messageId: string, requiredWindows: string[]): void {
+  failed(threadId: string, turnId: string | undefined, limit: { resetsAt: number | null; model?: boolean }, messageId: string, requiredWindows: string[]): void {
     const turn = this.turns.get(threadId);
-    if (turn && turn.turnId === turnId) turn.failure = { resetsAt, messageId, requiredWindows };
+    // A model cap leaves the account windows with room, so with no reset of its own nothing can tell when it lifts.
+    if (turn && turn.turnId === turnId && (!limit.model || limit.resetsAt !== null)) turn.failure = { resetsAt: limit.resetsAt, messageId, requiredWindows };
   }
 
   settled(threadId: string, turnId: string | undefined, ok: boolean): void {

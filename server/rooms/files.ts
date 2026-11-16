@@ -6,7 +6,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { pipeline } from "node:stream";
+import { pipeline, type Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 
 import { sniffImageMime } from "../attachments.ts";
@@ -210,7 +210,7 @@ export interface Upload {
 type Received = { ok: true; bytes: number; sha256: string; type: string } | { ok: false; status: number; error: string };
 
 /** Streams the body into `file`, cut at the first byte past a limit. Never buffered whole. */
-function receive(req: IncomingMessage, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
+function receive(req: Readable, file: string, roomId: string, base: number, counted: { bytes: number }, media: boolean): Promise<Received> {
   return new Promise((resolve) => {
     const hash = createHash("sha256");
     const text = new TextDecoder("utf-8", { fatal: true });
@@ -302,16 +302,39 @@ const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up
 export async function saveRoomFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
   const release = holdRoomFiles();
   try {
-    return await saveFile(req, roomId, upload);
+    return await saveFile(req, Number(req.headers["content-length"] ?? 0), roomId, upload);
   } finally {
     release();
   }
 }
 
-async function saveFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
+/** A file on this PC, taken in under the same checks and limits as an upload. */
+export async function copyRoomFile(path: string, roomId: string, upload: Upload): Promise<RoomFile> {
+  // opened before any await, so an unreadable file is a refusal, not an unhandled stream error
+  const handle = await open(path, "r").catch(() => null);
+  const size = handle && await handle.stat().then((info) => (info.isFile() ? info.size : null), () => null);
+  if (!handle || size === null) {
+    await handle?.close();
+    throw statusError(404, "file not found");
+  }
+  const release = holdRoomFiles();
+  try {
+    const kept = withDb((db) => db.prepare(`SELECT ${FILE_COLUMNS} FROM room_files WHERE room_id = ? AND owner = ? AND upload_id = ?`).get(roomId, upload.owner, upload.uploadId) as FileRow | undefined);
+    if (!kept) return await saveFile(handle.createReadStream({ autoClose: false }), size, roomId, upload);
+    // a retry reuses its earlier copy before asking the room for space again
+    const hash = createHash("sha256");
+    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk as Buffer);
+    if (hash.digest("hex") !== kept.sha256) throw statusError(409, "uploadId was used for another file");
+    return publicFile(kept);
+  } finally {
+    await handle.close();
+    release();
+  }
+}
+
+async function saveFile(req: Readable, length: number, roomId: string, upload: Upload): Promise<RoomFile> {
   if (upload.uploadId === null || !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
-  const length = Number(req.headers["content-length"] ?? 0);
   if (length > DOCUMENT_MAX_BYTES) throw statusError(413, tooLarge(DOCUMENT_MAX_BYTES));
   const base = used(roomId);
   const free = ROOM_DISK_BYTES - base - (inflight.get(roomId) ?? 0);

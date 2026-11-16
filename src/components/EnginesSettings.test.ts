@@ -399,6 +399,18 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it("gives Grok Add Account and Sign Out like Codex", async () => {
+    const restore = stage("grok", { install: { login: { args: ["login"], deviceArgs: ["login", "--device-auth"] }, logout: ["logout"], signInCommand: "grok login" } });
+    const { root, row } = await renderList();
+    try {
+      expect(row("grok").textContent).toBe("GrokAdd AccountConnectedSign Out");
+      expect(row("grok").hasAttribute("data-usage-engine")).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
+
   it.each(["en", "ko"] as const)("shows a connected single-account engine's sign-in email under its name (%s)", async (locale) => {
     applyLocale(locale);
     const restores = [
@@ -427,7 +439,7 @@ describe("EnginesSettings friends Connections list", () => {
 
   it.each([false, true])("gives a single-account email the Claude and Codex card row (phone=%s)", async (phone) => {
     vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
-    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
+    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "person@example.test" }, install: { logout: ["logout"] } });
     const { root, row } = await renderList();
     try {
       const email = row("grok").querySelector("[data-account-email]")!;
@@ -634,7 +646,7 @@ describe("EnginesSettings friends Connections list", () => {
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {
       expect(html).toContain(name);
     }
-    expect(html.match(/>Add Account</g)).toHaveLength(2);
+    expect(html.match(/>Add Account</g)).toHaveLength(3);
     expect(html.match(/>Connected</g)).toHaveLength(5);
     expect(html).not.toContain("Details");
     expect(html).not.toContain("Advanced");
